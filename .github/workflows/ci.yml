@@ -119,11 +119,22 @@ jobs:
             . venv/bin/activate
             python3 -m pytest explorer/discopop_explorer
 
+      - name: Project manager unit tests
+        run: |
+            . venv/bin/activate
+            python3 -m unittest -v -k "*test.project_manager.*"
+
       - name: Build and execute C++ unit tests
         run: |
           cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
-          cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"
+          cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
           build_tests/test/unit_tests/DiscoPoP_UT
+          build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
+
+      - name: Instrumentation tests
+        run: |
+            . venv/bin/activate
+            python3 -m unittest -v -k "*test.instrumentation.*"
 
       - name: Profiler gold standard tests
         run: |

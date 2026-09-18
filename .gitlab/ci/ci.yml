@@ -65,10 +65,19 @@ build_install_and_test:
     - . venv/bin/activate
     - python3 -m pytest explorer/discopop_explorer
 
-    # Build and execute C++ unit tests
+    # Project manager unit tests
+    - python3 -m unittest -v -k "*test.project_manager.*"
+
+    # Build and execute the C++ unit tests: the runtime library (DiscoPoP_UT) and the
+    # LLVM pass (DiscoPoP_Pass_UT). Both targets come from -DDP_BUILD_UNITTESTS=1.
     - cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
-    - cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"
+    - cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
     - build_tests/test/unit_tests/DiscoPoP_UT
+    - build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
+
+    # Instrumentation tests. They invoke discopop_cxx, so they need the venv on PATH,
+    # which the `. venv/bin/activate` above provides.
+    - python3 -m unittest -v -k "*test.instrumentation.*"
 
     # Profiler gold standard tests
     - python3 -m unittest -v -k "*test.profiler.*"
@@ -98,10 +107,10 @@ pass_overhead_benchmark:
     # fails if a program does not build or run, or if the instrumented binary stops reproducing
     # the output of the uninstrumented one. The timings themselves are reported, not enforced.
     - venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --json-out pass_overhead_results.json --markdown-out pass_overhead_summary.md
-  after_script:
-    # GitLab has no equivalent of GITHUB_STEP_SUMMARY. The comparison is printed
-    # into the job log and kept as a downloadable artifact instead.
-    - if [ -f pass_overhead_summary.md ]; then cat pass_overhead_summary.md; fi
+  # GitLab has no equivalent of GITHUB_STEP_SUMMARY, and echoing the markdown into the job
+  # log only yields unrendered pipe tables. The run above already prints an aligned plain
+  # text table there; the markdown file stays a downloadable artifact for pasting into a
+  # merge request.
   artifacts:
     when: always
     expire_in: 4 weeks
