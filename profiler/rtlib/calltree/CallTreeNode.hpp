@@ -42,7 +42,6 @@ private:
   shared_ptr<CallTreeNode> parent_ptr;
   CallTreeNode *parent_ptr_raw; // must not be used by threads other than the main for dereferencing. Using for equality
                                 // checks is fine!
-  atomic<unsigned int> *node_count_ptr;
 };
 
 } // namespace __dp
