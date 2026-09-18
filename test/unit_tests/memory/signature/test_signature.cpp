@@ -72,3 +72,76 @@ TEST_F(SignatureTest, testMembershipCheckOnUnusedSlotReturnsZero) {
 
   EXPECT_EQ(sig.membershipCheck(2), 0);
 }
+
+TEST_F(SignatureTest, testUpdateWorksOnASlotThatWasNeverInsertedInto) {
+  __dp::Signature sig(16, 4);
+
+  sig.update(2, 777);
+
+  EXPECT_EQ(sig.membershipCheck(2), 777);
+}
+
+TEST_F(SignatureTest, testByteWideSlotsTruncateToTheLowestByte) {
+  __dp::Signature sig(8, 4);
+
+  sig.insert(0, 0x1234);
+
+  EXPECT_EQ(sig.membershipCheck(0), 0x34);
+}
+
+TEST_F(SignatureTest, testFourByteSlotsKeepAFullWord) {
+  __dp::Signature sig(32, 4);
+
+  sig.insert(0, 0x12345678);
+  EXPECT_EQ(sig.membershipCheck(0), 0x12345678);
+
+  // and still drop everything above the slot size
+  sig.insert(1, 0x1122334455);
+  EXPECT_EQ(sig.membershipCheck(1), 0x22334455);
+}
+
+TEST_F(SignatureTest, testTheHashFoldsTheUpperBytesIn) {
+  __dp::Signature sig(16, 4);
+
+  // the hash is ((elem >> 8) + elem) % numSlot, not elem % numSlot, so 0x100 shares a slot with 1
+  // although the two differ in every low bit
+  sig.insert(1, 1000);
+  EXPECT_EQ(sig.membershipCheck(0x100), 1000);
+
+  sig.insert(0x100, 2000);
+  EXPECT_EQ(sig.membershipCheck(1), 2000);
+}
+
+TEST_F(SignatureTest, testTheNumberOfHashesIsIgnored) {
+  // numOfHash is stored but never read, so a signature asking for several hashes behaves exactly
+  // like the single hash one
+  __dp::Signature one_hash(16, 4, 1);
+  __dp::Signature many_hashes(16, 4, 5);
+
+  one_hash.insert(0, 1234);
+  many_hashes.insert(0, 1234);
+
+  EXPECT_EQ(one_hash.membershipCheck(0), many_hashes.membershipCheck(0));
+  EXPECT_EQ(one_hash.membershipCheck(4), many_hashes.membershipCheck(4));
+}
+
+TEST_F(SignatureTest, testIntersectAlwaysReportsNoIntersection) {
+  __dp::Signature sig(16, 4);
+  __dp::Signature other(16, 4);
+
+  sig.insert(0, 1234);
+  other.insert(0, 1234);
+
+  // the implementation is a stub: even two signatures holding the same value do not intersect
+  EXPECT_FALSE(sig.intersect(other));
+}
+
+TEST_F(SignatureTest, testTheExpectedFalsePositiveRateIsAlwaysZero) {
+  __dp::Signature sig(16, 4);
+
+  sig.insert(0, 1000);
+  sig.insert(4, 2000); // a conflict on the slot of elem 0
+
+  // also a stub, so the rate stays at zero no matter how full the signature is
+  EXPECT_DOUBLE_EQ(sig.expectedFalsePositiveRate(), 0.0);
+}
