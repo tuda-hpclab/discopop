@@ -81,6 +81,8 @@ TEST_F(MRTNodeTest, testAddChild0) {
       ASSERT_EQ(node.get_child(i), nullptr);
     }
   }
+
+  node.delete_child(0);
 }
 
 TEST_F(MRTNodeTest, testAddChild1) {
@@ -109,6 +111,8 @@ TEST_F(MRTNodeTest, testAddChild1) {
       ASSERT_EQ(node.get_child(i), nullptr);
     }
   }
+
+  node.delete_child(3);
 }
 
 TEST_F(MRTNodeTest, testSetMemoryRegionId) {
@@ -123,4 +127,64 @@ TEST_F(MRTNodeTest, testSetMemoryRegionId) {
   node.set_memory_region_id(memory_region_id);
 
   ASSERT_EQ(node.get_memory_region_id(), memory_region_id);
+}
+
+TEST_F(MRTNodeTest, testDeleteChild) {
+  const auto start_addr = 0x1000000000000000LL;
+  const auto end_addr = 0x1FFFFFFFFFFFFFFFLL;
+
+  auto node = __dp::MRTNode(start_addr, end_addr, 1);
+
+  node.add_child(0);
+  node.add_child(3);
+
+  node.delete_child(0);
+
+  ASSERT_EQ(node.get_child(0), nullptr);
+  ASSERT_NE(node.get_child(3), nullptr);
+
+  // a node does not free its children, so the tree has to reach every one of them
+  node.delete_child(3);
+  ASSERT_EQ(node.get_child(3), nullptr);
+
+  // and deleting an empty slot is a no-op rather than a double free
+  node.delete_child(3);
+  ASSERT_EQ(node.get_child(3), nullptr);
+}
+
+TEST_F(MRTNodeTest, testAddChildAfterDeletingIt) {
+  auto node = __dp::MRTNode(0x1000000000000000LL, 0x1FFFFFFFFFFFFFFFLL, 1);
+
+  node.add_child(5);
+  node.delete_child(5);
+
+  // add_child asserts on an occupied slot, so it is only legal again once the slot was cleared
+  node.add_child(5);
+  ASSERT_NE(node.get_child(5), nullptr);
+  ASSERT_EQ(node.get_child(5)->get_first_addr(), 0x1500000000000000LL);
+  ASSERT_EQ(node.get_child(5)->get_last_addr(), 0x15FFFFFFFFFFFFFFLL);
+
+  node.delete_child(5);
+}
+
+TEST_F(MRTNodeTest, testTheLevelHelpersSelectOneNibbleEach) {
+  for (auto level = 0; level < 16; ++level) {
+    const auto mask = get_level_shifting_mask(level);
+    const auto shift = get_shift(level);
+
+    ASSERT_EQ(shift, 60 - level * 4) << level;
+
+    // every level masks out exactly the nibble its shift brings down to the bottom
+    ASSERT_EQ((mask >> shift) & 0xF, 0xF) << level;
+    ASSERT_EQ(mask & ~(static_cast<ADDR>(0xF) << shift), 0) << level;
+  }
+}
+
+TEST_F(MRTNodeTest, testTheLevelHelpersFallBackOutsideTheAddressWidth) {
+  // an address has 16 nibbles, so there is no level 16. Both helpers answer with a sentinel rather
+  // than reading past the end of their switch.
+  for (const auto level : {-1, 16, 17, 1000}) {
+    ASSERT_EQ(get_level_shifting_mask(level), static_cast<ADDR>(0xFFFFFFFFFFFFFFFF)) << level;
+    ASSERT_EQ(get_shift(level), -1) << level;
+  }
 }
