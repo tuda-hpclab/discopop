@@ -42,9 +42,9 @@ void unwind_function_stack(LID lid) {
 }
 
 void write_results(LID lid) {
-#ifdef DP_DEBUG
-  std::cout << "Program terminates at LID " << std::dec << dputil::decodeLID(lid) << ", clearing up" << std::endl;
-#endif
+  if (DP_DEBUG) {
+    std::cout << "Program terminates at LID " << std::dec << dputil::decodeLID(lid) << ", clearing up" << std::endl;
+  }
 
   if (NUM_WORKERS > 0) {
     finalizeParallelization();
@@ -150,9 +150,9 @@ void release_runtime() {
   // from here on, so they can go
   destroy_immortal_globals();
 
-#ifdef DP_DEBUG
-  std::cout << "Program terminated." << std::endl;
-#endif
+  if (DP_DEBUG) {
+    std::cout << "Program terminated." << std::endl;
+  }
 }
 
 } // namespace __dp

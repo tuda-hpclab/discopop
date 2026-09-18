@@ -44,7 +44,7 @@ extern std::uint64_t *numAccesses;
 
 namespace __dp {
 
-extern bool DP_DEBUG; // debug flag
+// DP_DEBUG is declared in DPTypes.hpp, see the note there.
 
 extern Timers *timers;
 

@@ -57,10 +57,10 @@ public:
       lastCallOrInvoke = lastProcessedLine;
     ++FuncStackLevel;
 
-#ifdef DP_DEBUG
-    std::cout << "Entering function LID " << std::dec << dputil::decodeLID(lid) << std::endl;
-    std::cout << "Function stack level = " << std::dec << FuncStackLevel << std::endl;
-#endif
+    if (DP_DEBUG) {
+      std::cout << "Entering function LID " << std::dec << dputil::decodeLID(current_lid) << std::endl;
+      std::cout << "Function stack level = " << std::dec << FuncStackLevel << std::endl;
+    }
 
     BGNFuncList::iterator func = beginFuncs.find(lastCallOrInvoke);
     if (func == beginFuncs.end()) {

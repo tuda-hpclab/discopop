@@ -50,9 +50,9 @@ public:
     if (loops.find(begin_line) == loops.end()) {
       loops.insert(pair<LID, LoopRecord *>(begin_line, new LoopRecord(0, 0, 0)));
     }
-#ifdef DP_DEBUG
-    std::cout << "(" << std::dec << FuncStackLevel << ")Loop " << loop_id << " enters." << std::endl;
-#endif
+    if (DP_DEBUG) {
+      std::cout << "(" << std::dec << function_level << ")Loop " << loop_id << " enters." << std::endl;
+    }
   }
 
   bool is_new_loop(const std::int32_t loop_id) const {
@@ -80,10 +80,11 @@ public:
 #endif
     }
 #endif
-#ifdef DP_DEBUG
-    std::cout << "(" << std::dec << loopStack.top().funcLevel << ")";
-    std::cout << "Loop " << loopStack.top().loopID << " iterates " << loopStack.top().count << " times." << std::endl;
-#endif
+    if (DP_DEBUG) {
+      std::cout << "(" << std::dec << loopStack.top().funcLevel << ")";
+      std::cout << "Loop " << loopStack.top().loopID << " iterates " << loopStack.top().get_count() << " times."
+                << std::endl;
+    }
   }
 
   void clean_function_exit(const std::int32_t function_level, const LID end_line) {

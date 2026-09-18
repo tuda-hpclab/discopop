@@ -44,10 +44,10 @@ void __dp_alloca(LID lid, char *var, ADDR startAddr, ADDR endAddr, int64_t numBy
   // dputil::decodeLID(lid) << " : " << std::hex << startAddr << " - " <<
   // std::hex << endAddr << " -> #allocations: " <<
   // memory_manager->get_number_allocations() << "\n";
-#ifdef DP_DEBUG
-  cout << "alloca: " << var << " (" << allocId << ") @ " << dputil::decodeLID(lid) << " : " << std::hex << startAddr
-       << " - " << std::hex << endAddr << " -> #allocations: " << memory_manager->get_number_allocations() << "\n";
-#endif
+  if (DP_DEBUG) {
+    cout << "alloca: " << var << " (" << allocId << ") @ " << dputil::decodeLID(lid) << " : " << std::hex << startAddr
+         << " - " << std::hex << endAddr << " -> #allocations: " << memory_manager->get_number_allocations() << "\n";
+  }
 #endif
 }
 }
