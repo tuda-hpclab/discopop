@@ -245,7 +245,7 @@ public:
 
     // register Futures in SecondAccessQueue
     SecondAccessQueueElement *saqe =
-        new SecondAccessQueueElement(std::move(buffer->get_entry_future()), std::move(buffer->get_exit_future()));
+        new SecondAccessQueueElement(buffer->get_entry_future(), buffer->get_exit_future());
     secondAccessQueue_ptr->push(saqe);
 
     return buffer;
