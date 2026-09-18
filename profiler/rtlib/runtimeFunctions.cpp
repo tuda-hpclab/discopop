@@ -284,12 +284,13 @@ void initParallelization() {
 
   // create worker threads to process the firstAccessQueue
   for (int64_t i = 0; i < NUM_WORKERS; ++i) {
-    pthread_create(&workers[i], &attr, processFirstAccessQueue, (void *)i);
+    pthread_create(&workers[i], &attr, processFirstAccessQueue, reinterpret_cast<void *>(i));
   }
 
   // create worker thread to process the secondAccessQueue
   secondAccessQueue_worker_thread = new pthread_t();
-  pthread_create(secondAccessQueue_worker_thread, &attr, processSecondAccessQueue, (void *)NUM_WORKERS);
+  pthread_create(secondAccessQueue_worker_thread, &attr, processSecondAccessQueue,
+                 reinterpret_cast<void *>(static_cast<std::intptr_t>(NUM_WORKERS)));
 
   pthread_attr_destroy(&attr);
 }
@@ -432,7 +433,7 @@ void *processFirstAccessQueue(void *arg) {
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
 #endif
 
-  int64_t id = (int64_t)arg;
+  const std::intptr_t id = reinterpret_cast<std::intptr_t>(arg);
   myMap = new depMap();
 
   FirstAccessQueueChunk *current = nullptr;
@@ -532,7 +533,7 @@ void *processSecondAccessQueue(void *arg) {
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
 #endif
 
-  int64_t id = (int64_t)arg;
+  const std::intptr_t id = reinterpret_cast<std::intptr_t>(arg);
   myMap = new depMap();
 
   SecondAccessQueueElement *current = nullptr;
