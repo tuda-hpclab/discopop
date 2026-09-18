@@ -34,6 +34,7 @@ enum class TimerRegion : unsigned int {
   FINALIZE,
   FUNC_ENTRY,
   FUNC_EXIT,
+  INIT,
   LOOP_ENTRY,
   LOOP_EXIT,
   NEW,
@@ -181,6 +182,7 @@ public:
     print(stream, " Write to memory                                 : ", TimerRegion::WRITE);
     stream << '\n';
     print(stream, " Decl                                            : ", TimerRegion::DECL);
+    print(stream, " Init                                            : ", TimerRegion::INIT);
     print(stream, " Finalize                                        : ", TimerRegion::FINALIZE);
     stream << '\n';
 

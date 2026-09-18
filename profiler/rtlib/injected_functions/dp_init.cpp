@@ -52,7 +52,7 @@ void __dp_init() {
   timers = new Timers();
   statistics_profiling_start_time = std::chrono::high_resolution_clock::now();
 #ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
+  const auto timer = Timer(timers, TimerRegion::INIT);
 #endif
   function_manager = new FunctionManager();
   loop_manager = new LoopManager();

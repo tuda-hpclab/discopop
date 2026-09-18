@@ -45,7 +45,7 @@ void __dp_finalize(LID lid) {
   pthread_compatibility_mutex.lock();
 #endif
 #ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_loop_exit");
+  const auto debug_print = make_debug_print("__dp_finalize");
 #endif
 
   {

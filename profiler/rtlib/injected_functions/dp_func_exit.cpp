@@ -49,7 +49,6 @@ void __dp_func_exit(LID lid, int32_t isExit) {
   const auto debug_print = make_debug_print("__dp_func_exit");
 #endif
 #ifdef DP_INTERNAL_TIMER
-  timers->start(TimerRegion::FUNC_EXIT);
   const auto timer = Timer(timers, TimerRegion::FUNC_EXIT);
 #endif
 
