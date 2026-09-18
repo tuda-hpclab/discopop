@@ -1051,3 +1051,16 @@ TEST_F(ScopeManager2Test, testLeavingAScopeThatWasNeverEntered) {
   manager.enterScope("function", 2);
   ASSERT_EQ(manager.number_open_scopes(), 1);
 }
+
+TEST_F(ScopeManager2Test, testTheSecondManagerTakesTheSameArgumentsAsTheFirst) {
+  auto manager = __dp::ScopeManager2{};
+  manager.enterScope("function", 1);
+
+  // the variable name is only there for debugging, and a literal is what the callbacks pass. The
+  // second manager used to take it as char *, which no caller of the first one could satisfy.
+  manager.registerStackWrite(0x1000, 2, "x");
+  manager.registerStackRead(0x2000, 3, "y");
+
+  ASSERT_TRUE(manager.isOwnedByScope(0x1000, false));
+  ASSERT_FALSE(manager.isOwnedByScope(0x2000, false));
+}

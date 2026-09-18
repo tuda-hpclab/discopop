@@ -151,14 +151,14 @@ struct Scope2 {
     first_written.reserve(64);
   }
 
-  void registerStackRead(ADDR address, LID debug_lid, char *debug_var) {
+  void registerStackRead(ADDR address, LID debug_lid, const char *debug_var) {
     const auto not_found = first_written.find(address) == first_written.end();
     if (not_found) {
       first_read.insert(address);
     }
   }
 
-  void registerStackWrite(ADDR address, LID debug_lid, char *debug_var) {
+  void registerStackWrite(ADDR address, LID debug_lid, const char *debug_var) {
     const auto not_found = first_read.find(address) == first_read.end();
     if (not_found) {
       first_written.insert(address);
@@ -197,14 +197,14 @@ struct ScopeManager2 {
     scopeStack.pop_back();
   }
 
-  void registerStackRead(ADDR address, LID debug_lid, char *debug_var) {
+  void registerStackRead(ADDR address, LID debug_lid, const char *debug_var) {
     auto &current_scope = scopeStack.back();
 
     current_scope.registerStackRead(address, debug_lid, debug_var);
     addrToLastAccessScopeID[address] = current_scope.get_id();
   }
 
-  void registerStackWrite(ADDR address, LID debug_lid, char *debug_var) {
+  void registerStackWrite(ADDR address, LID debug_lid, const char *debug_var) {
     auto &current_scope = scopeStack.back();
 
     current_scope.registerStackWrite(address, debug_lid, debug_var);
