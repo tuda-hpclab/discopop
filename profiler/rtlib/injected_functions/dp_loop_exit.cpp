@@ -50,6 +50,8 @@ void __dp_loop_exit(LID lid, int32_t loopID, int32_t instruction_id) {
   loop_manager->exit_loop(lid);
 
 #if DP_STACK_ACCESS_DETECTION
+  // the iteration that was still open goes first, then the loop itself
+  memory_manager->leaveScope("loop_iteration", lid);
   memory_manager->leaveScope("loop", lid);
 #endif
 
