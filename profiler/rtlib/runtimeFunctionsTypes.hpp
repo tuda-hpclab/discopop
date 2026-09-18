@@ -22,6 +22,7 @@
 #include "calltree/CallTreeNode.hpp"
 #endif
 
+#include <atomic>
 #include <cstdint>
 #include <future>
 #include <mutex>
@@ -198,13 +199,16 @@ public:
   SecondAccessQueue(std::size_t arg_max_size) : max_size(arg_max_size) {}
 
   void push(SecondAccessQueueElement *elem) {
-    // spin-lock to prevent endless queue growth
-    while (internal_queue.size() > max_size) {
+    // spin-lock to prevent endless queue growth. Reads the counter rather than the queue: the
+    // queue is only consistent while internal_mtx is held, and it must not be held while
+    // sleeping here.
+    while (queued_elements.load(std::memory_order_relaxed) > max_size) {
       // std::cout << "SAQ: push: sleep." << std::endl;
       usleep(1000);
     }
     const std::lock_guard<std::mutex> lock(internal_mtx);
     internal_queue.push(elem);
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
   }
 
   SecondAccessQueueElement *get() {
@@ -215,6 +219,7 @@ public:
     }
     SecondAccessQueueElement *buffer = internal_queue.front();
     internal_queue.pop();
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
     return buffer;
   }
 
@@ -226,6 +231,8 @@ public:
 private:
   std::queue<SecondAccessQueueElement *> internal_queue;
   std::mutex internal_mtx;
+  // the size of internal_queue, readable without holding internal_mtx
+  std::atomic<std::size_t> queued_elements{0};
   const std::size_t max_size;
 };
 
@@ -233,11 +240,14 @@ class FirstAccessQueue {
 public:
   FirstAccessQueue(std::size_t arg_max_size) : max_size(arg_max_size) {}
 
-  bool can_accept_entries() { return internal_queue.size() < max_size; }
+  // Asked by the profiled thread before every push, without taking the lock, so it reads the
+  // counter instead of the queue: std::queue::size() while a worker is popping is a data race.
+  bool can_accept_entries() { return queued_elements.load(std::memory_order_relaxed) < max_size; }
 
   void push(FirstAccessQueueChunk *elem) {
     const std::lock_guard<std::mutex> lock(internal_mtx);
     internal_queue.push(elem);
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
   }
 
   FirstAccessQueueChunk *get(SecondAccessQueue *secondAccessQueue_ptr) {
@@ -248,6 +258,7 @@ public:
     }
     FirstAccessQueueChunk *buffer = internal_queue.front();
     internal_queue.pop();
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
 
     // register Futures in SecondAccessQueue
     SecondAccessQueueElement *saqe =
@@ -265,6 +276,8 @@ public:
 private:
   std::queue<FirstAccessQueueChunk *> internal_queue;
   std::mutex internal_mtx;
+  // the size of internal_queue, readable without holding internal_mtx
+  std::atomic<std::size_t> queued_elements{0};
   const std::size_t max_size;
 };
 
