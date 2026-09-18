@@ -103,7 +103,7 @@ void CallTree::enter_function(unsigned int function_id) {
     delete prepared_chunk;
     prepared_chunk = ctnqcb.get_prepared_chunk();
   }
-  std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+  std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
   CallTreeNode *new_node_raw = new_node.get();
   new_node_raw->set(std::move(current), current_raw, CallTreeNodeType::Function, function_id, 0);
   current_raw = new_node.get();
@@ -119,7 +119,7 @@ void CallTree::enter_loop(unsigned int loop_id) {
     delete prepared_chunk;
     prepared_chunk = ctnqcb.get_prepared_chunk();
   }
-  std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+  std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
   new_node->set(std::move(current), current_raw, CallTreeNodeType::Loop, loop_id, 0);
   current_raw = new_node.get();
   current = std::move(new_node);
@@ -146,7 +146,7 @@ void CallTree::enter_iteration(unsigned int iteration_id) {
       delete prepared_chunk;
       prepared_chunk = ctnqcb.get_prepared_chunk();
     }
-    std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+    std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
     CallTreeNode *new_node_raw = new_node.get();
     new_node_raw->set(std::move(current), current_raw, CallTreeNodeType::Iteration, loop_id, iteration_id);
     current_raw = new_node.get();
@@ -179,7 +179,7 @@ void CallTree::enter_iteration(unsigned int iteration_id) {
     delete prepared_chunk;
     prepared_chunk = ctnqcb.get_prepared_chunk();
   }
-  std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+  std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
   CallTreeNode *new_node_raw = new_node.get();
   new_node_raw->set(std::move(node_ptr_raw->get_parent_ptr()), parent_ptr_raw, CallTreeNodeType::Iteration, loop_id,
                     iteration_id);
