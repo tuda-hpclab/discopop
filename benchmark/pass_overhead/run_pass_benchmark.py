@@ -537,9 +537,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
+    print("DiscoPoP pass overhead")
     print(f"compiler:   {toolchain.cxx} ({toolchain.cxx_version})")
     print(f"pass:       {toolchain.plugin}")
     print(f"runtime:    {toolchain.rtlib_dir / 'libDiscoPoP_RT.a'}")
+    print(f"flags:      {' '.join(COMMON_COMPILE_FLAGS)}")
     print(f"programs:   {len(programs)}, {arguments.repetitions} measured repetitions each")
     print()
 
@@ -564,6 +566,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     print()
     print(format_table(comparisons))
+    print()
+    print(
+        "Wall clock times depend on the machine they were taken on -- compare them across runs "
+        "of the same machine, not against absolute numbers."
+    )
     print()
 
     if arguments.json_out is not None:

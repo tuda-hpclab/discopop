@@ -51,6 +51,11 @@ This document contains critical information about working with this codebase. Fo
 ### Python end-to-end tests
 - to execute the python end-to-end tests, use 'venv/bin/python -m unittest -v -k "*.end_to_end.*"'
 
+### Further unittest suites
+- `test/project_manager` covers the project manager utilities: `venv/bin/python -m unittest -v -k "*test.project_manager.*"`
+- `test/instrumentation` asserts on the callbacks the LLVM pass inserts; it drives `discopop_cxx`, so the venv has to be *activated* (`. venv/bin/activate`), not just addressed via `venv/bin/python`: `python3 -m unittest -v -k "*test.instrumentation.*"`
+- `test/wip_end_to_end` is work in progress and intentionally not run by CI
+
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
 - install prerequisites via `venv/bin/pip install pytest pytest-cov`
@@ -74,8 +79,8 @@ This document contains critical information about working with this codebase. Fo
 
 ### C++
 #### Profiler
-- the profiler's C++ unit tests (GoogleTest, in `test/unit_tests`) are only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`
-- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT`
+- there are two GoogleTest binaries, both only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`: `DiscoPoP_UT` (runtime library, `test/unit_tests`) and `DiscoPoP_Pass_UT` (LLVM pass, `test/pass_unit_tests`)
+- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
 ### Execute example
