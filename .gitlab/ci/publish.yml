@@ -130,7 +130,7 @@ build_deb_package:
     - cp "$DEB_FILE" discopop.deb
     # GitLab has no release assets of its own: the file goes into the generic
     # package registry and the release below links to it.
-    - curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file discopop.deb "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/discopop/${CI_COMMIT_TAG}/discopop.deb"
+    - 'curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file discopop.deb "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/discopop/${CI_COMMIT_TAG}/discopop.deb"'
   artifacts:
     expire_in: 4 weeks
     paths:
