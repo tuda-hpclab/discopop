@@ -158,10 +158,18 @@ public:
 
   void output(std::ostream &stream) {
     for (const auto &loop : loops) {
+      // A loop that was entered and never left contributes no completed iteration: its record is
+      // created on entry and every counter is raised on exit, so all of them are still zero --
+      // including nEntered, which is what the average is divided by. The assert in
+      // unwind_function_stack() that is meant to rule this state out is compiled out of the
+      // release build, so the division needs the guard rather than the invariant.
+      const std::int32_t entered = loop.second->nEntered;
+      const std::int32_t average_iterations = (entered == 0) ? 0 : (loop.second->total / entered);
+
       stream << dputil::decodeLID(loop.first) << " BGN loop ";
       stream << loop.second->total << ' ';
-      stream << loop.second->nEntered << ' ';
-      stream << static_cast<std::int32_t>(loop.second->total / loop.second->nEntered) << ' ';
+      stream << entered << ' ';
+      stream << average_iterations << ' ';
       stream << loop.second->maxIterationCount << std::endl;
       stream << dputil::decodeLID(loop.second->end) << " END loop" << std::endl;
     }

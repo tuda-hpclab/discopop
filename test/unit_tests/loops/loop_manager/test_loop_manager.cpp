@@ -2,9 +2,34 @@
 
 #include "../../../../profiler/rtlib/loop/LoopManager.hpp"
 
+#include <algorithm>
+#include <sstream>
+#include <string>
+#include <vector>
+
 // Tests for old version (i.e., capturing functionality)
 
 class LoopManagerTest : public ::testing::Test {};
+
+namespace {
+
+// output() walks an unordered_map, so the order of the records is not part of its contract.
+std::vector<std::string> sorted_output_lines(__dp::LoopManager &lm) {
+  std::ostringstream stream;
+  lm.output(stream);
+
+  std::vector<std::string> lines;
+  std::istringstream reader{stream.str()};
+  std::string line;
+  while (std::getline(reader, line)) {
+    lines.push_back(line);
+  }
+
+  std::sort(lines.begin(), lines.end());
+  return lines;
+}
+
+} // namespace
 
 TEST_F(LoopManagerTest, testInitialization) {
   auto lm = __dp::LoopManager();
@@ -253,4 +278,74 @@ TEST_F(LoopManagerTest, testCorrectFuncLevel) {
   ASSERT_EQ(loop_9.funcLevel, 7);
   ASSERT_EQ(loop_12.funcLevel, 104);
   ASSERT_EQ(loop_15.funcLevel, 103);
+}
+
+TEST_F(LoopManagerTest, testOutputWithoutLoops) {
+  auto lm = __dp::LoopManager();
+
+  ASSERT_TRUE(sorted_output_lines(lm).empty());
+}
+
+TEST_F(LoopManagerTest, testOutputSingleEntry) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.exit_loop(12);
+
+  // <begin> BGN loop <total> <entered> <average> <maximum>
+  const std::vector<std::string> expected{"0:12 END loop", "0:3 BGN loop 3 1 3 3"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testOutputSeveralEntries) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.exit_loop(10);
+
+  // the same loop is entered a second time and runs longer
+  lm.create_new_loop(1, 2, 3);
+  for (auto i = 0; i < 5; ++i) {
+    lm.iterate_loop(1);
+  }
+  lm.exit_loop(10);
+
+  // 7 iterations across 2 entries, so 3 on average (integer division), at most 5 in one entry
+  const std::vector<std::string> expected{"0:10 END loop", "0:3 BGN loop 7 2 3 5"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testOutputSeveralLoops) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  lm.create_new_loop(1, 5, 6);
+  lm.iterate_loop(1);
+  lm.exit_loop(9);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.exit_loop(12);
+
+  // the inner loop runs once, the outer one twice: only the innermost entry is iterated
+  const std::vector<std::string> expected{"0:12 END loop", "0:3 BGN loop 2 1 2 2", "0:6 BGN loop 1 1 1 1",
+                                          "0:9 END loop"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testOutputLoopThatWasNeverLeft) {
+  auto lm = __dp::LoopManager();
+
+  // entered, iterated, never exited -- nEntered stays 0, which the average must not be divided by
+  lm.create_new_loop(1, 2, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+
+  // the end line is unknown, which decodeLID reports as '*'
+  const std::vector<std::string> expected{"* END loop", "0:3 BGN loop 0 0 0 0"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
 }
