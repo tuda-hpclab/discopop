@@ -39,6 +39,7 @@ target_sources(
   memory/mrtnode/test_mrtnode.cpp
   memory/perfect_shadow/test_perfect_shadow.cpp
   memory/scope/test_scope.cpp
+  memory/shadow_memory/test_shadow_memory.cpp
   memory/signature/test_signature.cpp
   calltree/call_tree/test_call_tree.cpp
   calltree/call_tree_node/test_call_tree_node.cpp
