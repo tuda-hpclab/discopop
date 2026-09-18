@@ -2,9 +2,46 @@
 
 #include "../../../../profiler/rtlib/loop/LoopTable.hpp"
 
+#include <iostream>
+#include <sstream>
+#include <string>
+
 // Tests for old version (i.e., capturing functionality)
 
 class LoopTableTest : public ::testing::Test {};
+
+namespace {
+
+// The debug output of the loop table goes to std::cout and is only written when DP_DEBUG is set,
+// which is off for every other test. Both helpers put back what they found.
+class CoutCapture {
+public:
+  CoutCapture() : previous(std::cout.rdbuf(buffer.rdbuf())) {}
+  ~CoutCapture() { std::cout.rdbuf(previous); }
+
+  CoutCapture(const CoutCapture &) = delete;
+  CoutCapture &operator=(const CoutCapture &) = delete;
+
+  std::string str() const { return buffer.str(); }
+
+private:
+  std::ostringstream buffer;
+  std::streambuf *previous;
+};
+
+class DebugFlag {
+public:
+  explicit DebugFlag(bool value) : previous(__dp::DP_DEBUG) { __dp::DP_DEBUG = value; }
+  ~DebugFlag() { __dp::DP_DEBUG = previous; }
+
+  DebugFlag(const DebugFlag &) = delete;
+  DebugFlag &operator=(const DebugFlag &) = delete;
+
+private:
+  const bool previous;
+};
+
+} // namespace
 
 TEST_F(LoopTableTest, testInitialization) {
   const auto lt = __dp::LoopTable{};
@@ -446,4 +483,78 @@ TEST_F(LoopTableTest, testUpdateLidSize6) {
   ASSERT_EQ(expected_lid_6, lt.update_lid(lid_6));
   ASSERT_EQ(expected_lid_7, lt.update_lid(lid_7));
   ASSERT_EQ(expected_lid_8, lt.update_lid(lid_8));
+}
+
+TEST_F(LoopTableTest, testNonConstTop) {
+  auto lt = __dp::LoopTable{};
+  lt.push(__dp::LoopTableEntry{1, 2, 3, 4});
+
+  lt.non_const_top().increment_count();
+
+  ASSERT_EQ(lt.top().get_count(), 4);
+}
+
+TEST_F(LoopTableTest, testCorrectFunctionLevelKeepsAMatchingLevel) {
+  auto lt = __dp::LoopTable{};
+  const auto entry = __dp::LoopTableEntry{1, 2, 3, 4};
+  lt.push(entry);
+
+  const DebugFlag debug{true};
+  const CoutCapture capture{};
+
+  lt.correct_func_level(1);
+
+  ASSERT_EQ(lt.top(), entry);
+  ASSERT_TRUE(capture.str().empty());
+}
+
+TEST_F(LoopTableTest, testCorrectFunctionLevelReportsTheChange) {
+  auto lt = __dp::LoopTable{};
+  lt.push(__dp::LoopTableEntry{1, 2, 3, 4});
+
+  const DebugFlag debug{true};
+  const CoutCapture capture{};
+
+  lt.correct_func_level(7);
+
+  ASSERT_EQ(lt.top().funcLevel, 7);
+  ASSERT_EQ(capture.str(), "WARNING: changing funcLevel of Loop 2 from 1 to 7\n");
+}
+
+TEST_F(LoopTableTest, testDebugOutputOfAnEmptyTable) {
+  const auto lt = __dp::LoopTable{};
+
+  const DebugFlag debug{true};
+  const CoutCapture capture{};
+
+  lt.debug_output();
+
+  ASSERT_EQ(capture.str(), "Loop Stack is empty.\n");
+}
+
+TEST_F(LoopTableTest, testDebugOutputOfTheTopEntry) {
+  auto lt = __dp::LoopTable{};
+  lt.push(__dp::LoopTableEntry{1, 2, 3, 4});
+  lt.push(__dp::LoopTableEntry{5, 6, 7, 8});
+
+  const DebugFlag debug{true};
+  const CoutCapture capture{};
+
+  lt.debug_output();
+
+  ASSERT_EQ(capture.str(), "TOP: (5)Loop 6.\n");
+}
+
+TEST_F(LoopTableTest, testDebugOutputStaysSilentWithoutTheFlag) {
+  auto lt = __dp::LoopTable{};
+  lt.push(__dp::LoopTableEntry{1, 2, 3, 4});
+
+  const DebugFlag debug{false};
+  const CoutCapture capture{};
+
+  lt.debug_output();
+  lt.correct_func_level(7);
+
+  ASSERT_EQ(lt.top().funcLevel, 7);
+  ASSERT_TRUE(capture.str().empty());
 }
