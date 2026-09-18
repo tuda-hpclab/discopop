@@ -955,3 +955,57 @@ TEST_F(ScopeManager2Test, testPositiveChange) {
   ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(32));
   ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(64));
 }
+
+TEST_F(ScopeManagerTest, testNumberOpenScopes) {
+  auto manager = __dp::ScopeManager{};
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 1);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+
+  manager.enterScope("loop", 2);
+  manager.enterScope("loop_iteration", 3);
+  ASSERT_EQ(manager.number_open_scopes(), 3);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 3);
+
+  manager.leaveScope("loop_iteration", 4);
+  ASSERT_EQ(manager.number_open_scopes(), 2);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 2);
+
+  manager.leaveScope("loop", 5);
+  manager.leaveScope("function", 6);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  // the type a scope is left with is never compared against the one it was entered with, so the
+  // manager cannot tell a mismatched pair from a matching one
+  manager.enterScope("loop", 7);
+  manager.leaveScope("function", 8);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+}
+
+TEST_F(ScopeManager2Test, testNumberOpenScopes) {
+  auto manager = __dp::ScopeManager2{};
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 1);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+
+  manager.enterScope("loop", 2);
+  manager.enterScope("loop_iteration", 3);
+  ASSERT_EQ(manager.number_open_scopes(), 3);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 3);
+
+  manager.leaveScope("loop_iteration", 4);
+  ASSERT_EQ(manager.number_open_scopes(), 2);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 2);
+
+  manager.leaveScope("loop", 5);
+  manager.leaveScope("function", 6);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("loop", 7);
+  manager.leaveScope("function", 8);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+}
