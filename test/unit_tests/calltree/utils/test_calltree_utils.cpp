@@ -172,3 +172,17 @@ TEST_F(CallTreeUtilsProcessQueueElementTest, testARootOnBothSidesYieldsNothing) 
   EXPECT_TRUE(metadata.intra_call_dependencies.empty());
   EXPECT_TRUE(metadata.inter_call_dependencies.empty());
 }
+
+TEST_F(CallTreeUtilsProcessQueueElementTest, testTwoParentlessIterationsAreNotPairedUp) {
+  // iterations whose ancestry is cut off. The call tree never builds those, but the two null
+  // parents compare equal, so the loop check behind it must not follow them.
+  auto sink_iteration = std::make_shared<__dp::CallTreeNode>(nullptr, nullptr, __dp::CallTreeNodeType::Iteration, 2, 1);
+  auto source_iteration =
+      std::make_shared<__dp::CallTreeNode>(nullptr, nullptr, __dp::CallTreeNodeType::Iteration, 2, 2);
+
+  auto element = __dp::MetaDataQueueElement(__dp::RAW, 100, 50, "x", 0, sink_iteration, source_iteration);
+  const auto metadata = __dp::processQueueElement(std::move(element));
+
+  EXPECT_TRUE(metadata.inter_iteration_dependencies.empty());
+  EXPECT_TRUE(metadata.intra_iteration_dependencies.empty());
+}
