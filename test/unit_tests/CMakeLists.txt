@@ -44,6 +44,7 @@ target_sources(
   calltree/call_tree/test_call_tree.cpp
   calltree/call_tree_node/test_call_tree_node.cpp
   calltree/metadata_queue/test_metadata_queue.cpp
+  calltree/metadata_queue_element/test_metadata_queue_element.cpp
   calltree/dependency_metadata/test_dependency_metadata.cpp
   calltree/utils/test_calltree_utils.cpp
   access_queues/test_first_access_queue_chunk.cpp
