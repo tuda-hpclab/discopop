@@ -111,16 +111,25 @@ void process_registered_bb_deps() {
       line.erase(0, 1);
       while (regex_search(line, res2, r2)) {
         std::string s(res2[0]);
-        regex_search(s, res3, r3);
+        line = res2.suffix();
+
+        // skip an entry that names no instruction. A failed search leaves an empty match behind, so
+        // this used to collect the dependency under an empty key -- and outputDeps() writes every key
+        // it finds, which put a line starting with " NOM " into the results.
+        if (!regex_search(s, res3, r3)) {
+          continue;
+        }
         std::string k(res3[0]);
-        regex_search(s, res3, r4);
+        // and one that names no dependency type has nothing to say about that instruction
+        if (!regex_search(s, res3, r4)) {
+          continue;
+        }
         std::string v(res3[0]);
         if (outPutDeps->count(k) == 0) {
           std::unordered_set<std::string> depSet;
           (*outPutDeps)[k] = depSet;
         }
         (*outPutDeps)[k].insert(v);
-        line = res2.suffix();
       }
     }
   }

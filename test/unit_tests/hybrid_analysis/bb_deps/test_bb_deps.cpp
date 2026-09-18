@@ -192,3 +192,37 @@ TEST_F(BasicBlockDepsTest, testAnEntryWithoutDependenciesContributesNothing) {
 
   EXPECT_TRUE(collected_dependencies.empty());
 }
+
+// The two searches below used to be run without looking at whether they matched. An empty match
+// reads back as an empty string, so an entry naming no instruction was collected under the empty
+// key -- and outputDeps() writes out every key it finds, so that reached the results as a line
+// beginning with " NOM ".
+TEST_F(BasicBlockDepsTest, testAnEntryWithoutAnInstructionIdIsSkipped) {
+  register_string("0=no numbers in here");
+  reported_basic_blocks.insert(0);
+
+  __dp::process_registered_bb_deps();
+
+  EXPECT_TRUE(collected_dependencies.empty());
+}
+
+TEST_F(BasicBlockDepsTest, testAnEntryWithoutADependencyTypeIsSkipped) {
+  register_string("0=1 NOM something else entirely");
+  reported_basic_blocks.insert(0);
+
+  __dp::process_registered_bb_deps();
+
+  EXPECT_TRUE(collected_dependencies.empty());
+}
+
+// and neither of them takes the readable entries of the same basic block down with it
+TEST_F(BasicBlockDepsTest, testTheReadableEntriesOfTheSameBlockAreStillCollected) {
+  register_string("0=no numbers in here,1 NOM something else entirely,2 NOM RAW 3|x(4)");
+  reported_basic_blocks.insert(0);
+
+  __dp::process_registered_bb_deps();
+
+  ASSERT_EQ(collected_dependencies.size(), 1u);
+  ASSERT_EQ(collected_dependencies.count("2"), 1u);
+  EXPECT_EQ(collected_dependencies["2"], __dp::stringDepMap::mapped_type{"RAW 3|x(4)"});
+}
