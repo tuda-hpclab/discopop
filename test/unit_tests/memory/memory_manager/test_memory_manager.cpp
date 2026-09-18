@@ -3,6 +3,8 @@
 #include "../../../../profiler/rtlib/memory/MemoryManager.hpp"
 
 #include <cstdint>
+#include <sstream>
+#include <string>
 #include <vector>
 
 // Tests for old version (i.e., capturing functionality)
@@ -998,4 +1000,63 @@ TEST_F(MemoryManagerTest, testAllocate2) {
   const auto stack_addresses = manager.pop_last_stack_address();
   ASSERT_EQ(stack_addresses.first, start_address_1);
   ASSERT_EQ(stack_addresses.second, end_address_2);
+}
+
+TEST_F(MemoryManagerTest, testNumberOpenScopes) {
+  auto manager = __dp::MemoryManager{};
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 1);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 1);
+
+  manager.enterScope("loop", 2);
+  ASSERT_EQ(manager.number_open_scopes(), 2);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 2);
+
+  manager.leaveScope("loop", 3);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 1);
+
+  // the ids keep counting up, a scope entered later never reuses the one that was just left
+  manager.enterScope("loop", 4);
+  ASSERT_EQ(manager.number_open_scopes(), 2);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 3);
+
+  manager.leaveScope("loop", 5);
+  manager.leaveScope("function", 6);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+}
+
+TEST_F(MemoryManagerTest, testOutputMemoryRegionsOfAnEmptyManager) {
+  auto manager = __dp::MemoryManager{};
+
+  std::ostringstream stream;
+  manager.output_memory_regions(stream);
+
+  ASSERT_TRUE(stream.str().empty());
+}
+
+TEST_F(MemoryManagerTest, testOutputMemoryRegions) {
+  auto manager = __dp::MemoryManager{};
+
+  // the dummy region carries no line id, and decodeLID writes a star for that
+  manager.allocate_dummy_region();
+
+  // file 3, line 100
+  const auto lid = static_cast<LID>(3 * MAXLNO + 100);
+  manager.allocate_memory(lid, 0x2000'0000'0000'0000LL, 0x2000'0000'0000'0FFFLL, 0x1000, 0x100);
+
+  // the same line, but with loop metadata in the upper bytes: the output drops it
+  const auto lid_with_metadata = static_cast<LID>(0x00FF'0007'0000'0000LL) | lid;
+  manager.allocate_memory(lid_with_metadata, 0x3000'0000'0000'0000LL, 0x3000'0000'0000'00FFLL, 0x100, 0x10);
+
+  std::ostringstream stream;
+  manager.output_memory_regions(stream);
+
+  // line id, region identifier and the number of bytes -- the addresses and the element count are
+  // not part of the file. The dummy region does not consume an identifier, so the first real
+  // allocation is region 1.
+  ASSERT_EQ(stream.str(), "* %%dummy%% 0\n3:100 1 4096\n3:100 2 256\n");
 }
