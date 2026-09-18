@@ -195,3 +195,55 @@ TEST_F(CallTreeTest, testImmediateFuncExit) {
   // check for segfaults
   ASSERT_TRUE(true);
 }
+
+TEST_F(CallTreeLivingNodeCountTest, testTheNodeCountStaysZeroWhileTheCounterIsOff) {
+  // call_tree_node_count is a null pointer unless someone switches it on, and nothing in the
+  // runtime does
+  ASSERT_EQ(__dp::call_tree_node_count, nullptr);
+
+  auto ct = __dp::CallTree();
+  ct.enter_function(42);
+  ct.enter_loop(43);
+  ct.enter_iteration(1);
+
+  // so the tree reports no nodes at all, however many it is holding
+  ASSERT_EQ(ct.get_node_count(), 0u);
+  ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Iteration);
+}
+
+TEST_F(CallTreeLivingNodeCountTest, testTheGarbageOfManyCallsIsHandedToTheManagerThreads) {
+  {
+    auto ct = __dp::CallTree();
+
+    // every exit hands the node that was current to the garbage chunk. Once the chunk is full it
+    // goes to the manager threads, which is the path CT_GARBAGE_COLLECTION_CHUNK_SIZE guards.
+    for (unsigned int i = 0; i < static_cast<unsigned int>(CT_GARBAGE_COLLECTION_CHUNK_SIZE) + 100; ++i) {
+      ct.enter_function(i);
+      ct.exit_function();
+    }
+
+    ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Root);
+  }
+
+  // nothing survives the tree, neither the offloaded chunks nor the one that was still filling up
+  ASSERT_EQ(living_nodes.load(), 0u);
+}
+
+TEST_F(CallTreeTest, testImmediateLoopExit) {
+  auto ct = __dp::CallTree();
+  ct.exit_loop();
+
+  // there was no loop to leave, so the walk runs off the root and the tree is left without a
+  // current node
+  ASSERT_EQ(ct.get_current_node_ptr(), nullptr);
+
+  // the guards in the exits keep that from turning into a dereference of a null pointer
+  ct.exit_loop();
+  ct.exit_function();
+  ASSERT_EQ(ct.get_current_node_ptr(), nullptr);
+
+  // and entering a function starts a new chain, parentless
+  ct.enter_function(42);
+  ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Function);
+  ASSERT_EQ(ct.get_current_node_ptr()->get_parent_ptr(), nullptr);
+}
