@@ -13,6 +13,8 @@
 #   .gitlab/ci/publish.yml  <- .github/workflows/publish*.yml
 
 stages:
+  - lint
+  - build
   - test
   - benchmark
   - gate

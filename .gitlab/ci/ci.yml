@@ -12,6 +12,14 @@
 # on its own runner. On GitLab the container is the job's `image:` and the runner
 # is selected by tags. If the runners of this instance require an explicit tag,
 # uncomment the `default:` block below and fill it in.
+#
+# The pipeline is split into four categories, mirroring the GitHub workflow:
+#
+#   lint       static checks that do not depend on the target platform, run once
+#   build      one job per platform, creating the venv and the C++ test binaries
+#              and handing both to the test jobs as an artifact
+#   test       one job per test suite and platform, each restoring that build
+#   benchmark  performance comparisons, independent of the build artifact
 
 # default:
 #   tags:
@@ -23,26 +31,60 @@ variables:
   DP_APT_DEPS: "python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
 
 # GitHub generated the matrix in a separate `create_matrix` job. Both branches of
-# its condition produced the same two entries, so the matrix is inlined here.
-build_install_and_test:
+# its condition produced the same two entries, so the matrix is inlined here and
+# shared between the build and test jobs through a YAML anchor - adding a platform
+# means editing this block only.
+.dp_matrix: &dp_matrix
+  matrix:
+    - ID: "debian-stable"
+      BASE_IMAGE: "debian:stable"
+    - ID: "ubuntu-24-04"
+      BASE_IMAGE: "ubuntu:24.04"
+
+# Shared by every test job. `needs: [build]` pulls in the artifacts of *all* build
+# matrix instances - GitLab cannot express "the instance with my own ID", because
+# `needs:parallel:matrix` takes literals, not variables. Naming the tarballs after
+# the ID keeps them from colliding, and each job unpacks only its own; the price
+# is that the other platform's tarball is downloaded and ignored.
+#
+# The tarballs exist because GitLab artifacts do not carry symlinks, which a venv
+# is full of. The venv's shebangs are absolute, which holds as long as every job
+# uses the same builds directory - true for jobs on the same runner.
+.dp_test:
   stage: test
   image: $BASE_IMAGE
-  parallel:
-    matrix:
-      - ID: "debian-stable"
-        BASE_IMAGE: "debian:stable"
-      - ID: "ubuntu-24-04"
-        BASE_IMAGE: "ubuntu:24.04"
+  parallel: *dp_matrix
+  needs:
+    - job: build
   before_script:
-    # Install Prerequisites
+    - apt update
+    - apt install -y $DP_APT_DEPS
+    - tar -xzf "venv-$ID.tar.gz"
+    - tar -xzf "build_tests-$ID.tar.gz"
+    - rm -f venv-*.tar.gz build_tests-*.tar.gz
+    # all script lines share one shell, so the venv stays active for every step
+    - . venv/bin/activate
+
+# ------------------------------------------------------------------- lint -----
+# License tags, types and formatting do not depend on the target platform, so
+# these run once instead of once per matrix entry. `needs: []` starts the job
+# immediately rather than at the beginning of its stage.
+lint:
+  stage: lint
+  image: ubuntu:24.04
+  needs: []
+  before_script:
     - apt update
     - apt install -y $DP_APT_DEPS
   script:
-    # Check all files for DiscoPoP License tag
+    # Check all files for DiscoPoP License tag. Runs before the venv exists,
+    # otherwise find would walk the installed packages.
     # invoked via `bash`: the executable bit is currently missing on this branch
     - bash ./scripts/dev/check-license.sh $(find . -type f)
 
-    # Setup venv and install DiscoPoP
+    # Setup venv and install DiscoPoP. pytest is needed by mypy, not by this job:
+    # conftest.py and the test_*.py files below explorer/discopop_explorer are
+    # part of mypy's `files` and import it.
     - rm -rf venv
     - python3 -m venv venv
     - venv/bin/pip install -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
@@ -60,34 +102,85 @@ build_install_and_test:
     # Check formatting of DiscoPoP Hotspot Detection
     - venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
 
-    # Python unit tests (discopop_explorer). Unlike GitHub, all script lines share
-    # one shell, so the venv stays active for the steps that follow.
-    - . venv/bin/activate
-    - python3 -m pytest explorer/discopop_explorer
+# ------------------------------------------------------------------ build -----
+# Compiles everything once per platform and publishes the result, so that the
+# test jobs do not have to rebuild the LLVM pass six times each.
+build:
+  stage: build
+  image: $BASE_IMAGE
+  parallel: *dp_matrix
+  needs: []
+  before_script:
+    - apt update
+    - apt install -y $DP_APT_DEPS
+  script:
+    # Setup venv and install DiscoPoP
+    - rm -rf venv
+    - python3 -m venv venv
+    - venv/bin/pip install -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+    - venv/bin/pip install pytest
 
-    # Project manager unit tests
-    - python3 -m unittest -v -k "*test.project_manager.*"
-
-    # Build and execute the C++ unit tests: the runtime library (DiscoPoP_UT) and the
+    # Build the C++ unit test binaries: the runtime library (DiscoPoP_UT) and the
     # LLVM pass (DiscoPoP_Pass_UT). Both targets come from -DDP_BUILD_UNITTESTS=1.
     - cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
     - cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
+
+    # Pack the build. Only the two binaries are kept, not the whole build tree.
+    - tar -czf "venv-$ID.tar.gz" venv
+    - tar -czf "build_tests-$ID.tar.gz" build_tests/test/unit_tests/DiscoPoP_UT build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - venv-$ID.tar.gz
+      - build_tests-$ID.tar.gz
+
+# ------------------------------------------------------------------- test -----
+test:explorer-unit:
+  extends: .dp_test
+  script:
+    # Python unit tests (discopop_explorer)
+    - python3 -m pytest explorer/discopop_explorer
+
+test:project-manager:
+  extends: .dp_test
+  script:
+    # Project manager unit tests
+    - python3 -m unittest -v -k "*test.project_manager.*"
+
+test:cpp-unit:
+  extends: .dp_test
+  script:
+    # Runtime library unit tests
     - build_tests/test/unit_tests/DiscoPoP_UT
+    # LLVM pass unit tests
     - build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
 
-    # Instrumentation tests. They invoke discopop_cxx, so they need the venv on PATH,
-    # which the `. venv/bin/activate` above provides.
+test:instrumentation:
+  extends: .dp_test
+  script:
+    # Instrumentation tests. They invoke discopop_cxx, so they need the venv on
+    # PATH, which the `. venv/bin/activate` of .dp_test provides.
     - python3 -m unittest -v -k "*test.instrumentation.*"
 
+test:profiler-gold-standard:
+  extends: .dp_test
+  script:
     # Profiler gold standard tests
     - python3 -m unittest -v -k "*test.profiler.*"
 
+test:end-to-end:
+  extends: .dp_test
+  script:
     # Python end-to-end-tests
     - python3 -m unittest -v -k "*.end_to_end.*"
 
+# -------------------------------------------------------------- benchmark -----
+# Independent of the build artifact: the benchmark drives clang directly and
+# needs a venv that holds only the profiler, installed without -e.
 pass_overhead_benchmark:
   stage: benchmark
   image: ubuntu:24.04
+  needs: []
   before_script:
     # Install Prerequisites (same set as above, minus python3-tk)
     - apt update
@@ -118,13 +211,30 @@ pass_overhead_benchmark:
       - pass_overhead_results.json
       - pass_overhead_summary.md
 
+# ------------------------------------------------------------------- gate -----
+# The single job to require in the merge request settings, so that the list of
+# jobs above can change without touching the project configuration.
 checks_successful:
   stage: gate
   image: debian:stable-slim
   variables:
     GIT_STRATEGY: none
   needs:
-    - job: build_install_and_test
+    - job: lint
+      artifacts: false
+    - job: build
+      artifacts: false
+    - job: test:explorer-unit
+      artifacts: false
+    - job: test:project-manager
+      artifacts: false
+    - job: test:cpp-unit
+      artifacts: false
+    - job: test:instrumentation
+      artifacts: false
+    - job: test:profiler-gold-standard
+      artifacts: false
+    - job: test:end-to-end
       artifacts: false
     - job: pass_overhead_benchmark
       artifacts: false
