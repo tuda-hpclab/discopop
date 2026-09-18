@@ -25,6 +25,13 @@ namespace __dp {
 extern "C" {
 
 void __dp_taken_branch_counter_output() {
+  // __dp_incr_taken_branch_counter is only called when the pass was built with
+  // DP_BRANCH_TRACKING. Without it there is nothing to report, and writing an empty
+  // cu_taken_branch_counter_output.txt would claim that every branch went untaken.
+  if (cuec.empty()) {
+    return;
+  }
+
   std::cout << "Outputting instrumentation results (taken branches)... ";
 
   std::ofstream ofile;

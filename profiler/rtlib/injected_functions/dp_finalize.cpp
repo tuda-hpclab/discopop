@@ -20,6 +20,8 @@
 #include "../../share/include/timer.hpp"
 
 #include "dp_func_exit.hpp"
+#include "dp_loop_output.hpp"
+#include "dp_taken_branch_counter_output.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -88,6 +90,14 @@ void __dp_finalize(LID lid) {
     loop_manager->output(*out);
   };
   output_loops();
+
+  // The iteration counters and the taken branch counters used to be dumped from a call the pass
+  // put in front of main's return. That missed every iteration and branch of the global
+  // destructors, and was lost entirely when the target left through exit(). Both dumps belong
+  // here, where the runtime knows the target is done -- and where the managers they read are
+  // still alive.
+  __dp_loop_output();
+  __dp_taken_branch_counter_output();
 
   const auto output_functions = []() {
 #ifdef DP_RTLIB_VERBOSE

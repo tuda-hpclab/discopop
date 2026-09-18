@@ -1,10 +1,10 @@
 """Tests for the loop iteration counters the pass inserts.
 
 Next to the loop entry and exit callbacks, the pass puts a ``__dp_loop_incr`` into the body of
-every loop and a single ``__dp_loop_output`` into ``main``, which writes the collected counts out.
-The counts tell the later phases how often a loop actually ran, which is what makes a suggestion
-worth acting on or not, and they are keyed by the same loop ids that ``loop_meta.txt`` maps to
-source lines -- so the ids in the IR and in that file have to agree.
+every loop; the collected counts are written out by ``__dp_finalize``. The counts tell the later
+phases how often a loop actually ran, which is what makes a suggestion worth acting on or not, and
+they are keyed by the same loop ids that ``loop_meta.txt`` maps to source lines -- so the ids in
+the IR and in that file have to agree.
 """
 
 from typing import List, Tuple
@@ -78,19 +78,9 @@ class TestLoopCounters(InstrumentationTestCase):
         recorded = {line for _, line in self.entered_loops()}
         self.assertEqual(set(lines.values()), recorded, f"expected the loops at {lines}, recorded {recorded}")
 
-    def test_the_counters_are_dumped_once_from_main(self) -> None:
-        self.assertCallbackCount("__dp_loop_output", 1)
-        self.assertEqual("main", self.program.calls("__dp_loop_output")[0].function)
-
-    def test_the_counters_are_dumped_at_the_end_of_main(self) -> None:
-        # The runtime is torn down from a .fini_array entry, so there is no __dp_finalize left in
-        # the IR to place the dump in front of. It goes immediately before main's return instead,
-        # which is still well before the loop manager is destroyed.
-        dump = self.program.calls("__dp_loop_output")[0]
-        following = self.program.next_instruction(dump)
-        self.assertIsNotNone(following, "__dp_loop_output is the last instruction of main")
-        assert following is not None
-        self.assertTrue(
-            following.text.startswith("ret"),
-            f"__dp_loop_output is followed by '{following.text}' instead of main's return",
-        )
+    def test_the_counters_are_not_dumped_from_the_instrumented_code(self) -> None:
+        # The dump used to sit in front of main's return. There it missed whatever the global
+        # destructors did, it never ran when the target left through exit(), and a module without
+        # main had nowhere to put it. __dp_finalize does it now, so the pass inserts nothing.
+        self.assertCallbackCount("__dp_loop_output", 0)
+        self.assertCallbackCount("__dp_taken_branch_counter_output", 0)
