@@ -102,23 +102,6 @@ struct Dep {
   std::int64_t AAvar;
 };
 
-struct compDep {
-  bool operator()(const Dep &a, const Dep &b) const {
-    if (a.type < b.type) {
-      return true;
-    } else if (a.type == b.type && a.depOn < b.depOn) {
-      return true;
-    }
-    // comparison between string is very time-consuming. So just compare
-    // variable names according to address (we only need to distinguish them)
-    else if (a.type == b.type && a.depOn == b.depOn && ((size_t)a.var < (size_t)b.var)) {
-      return true;
-    }
-
-    return false;
-  }
-};
-
 struct eqDep {
   bool operator()(const Dep &a, const Dep &b) const {
     if (a.type != b.type) {
