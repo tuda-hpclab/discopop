@@ -684,6 +684,7 @@ void finalizeSingleThreadedExecution() {
   }
 
   delete singleThreadedExecutionSMem;
+  singleThreadedExecutionSMem = nullptr;
   mergeDeps();
 
   if (DP_DEBUG) {
