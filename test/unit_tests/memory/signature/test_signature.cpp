@@ -145,3 +145,15 @@ TEST_F(SignatureTest, testTheExpectedFalsePositiveRateIsAlwaysZero) {
   // also a stub, so the rate stays at zero no matter how full the signature is
   EXPECT_DOUBLE_EQ(sig.expectedFalsePositiveRate(), 0.0);
 }
+
+TEST_F(SignatureTest, testSevenByteSlotsAreAsWideAsASlotGets) {
+  // this is the width the runtime uses: SIG_ELEM_BIT is 56
+  auto signature = __dp::Signature{56, 4, 1};
+
+  ASSERT_EQ(signature.insert(1, 0x12345678ABCDEFLL), 0);
+  ASSERT_EQ(signature.membershipCheck(1), 0x12345678ABCDEFLL);
+
+  // an eighth byte does not fit and is dropped, exactly as the narrower slots drop theirs
+  signature.update(2, static_cast<sigElement>(0xFF12345678ABCDEFULL));
+  ASSERT_EQ(signature.membershipCheck(2), 0x12345678ABCDEFLL);
+}

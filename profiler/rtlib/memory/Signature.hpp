@@ -25,7 +25,11 @@ class Signature {
 public:
   Signature(std::int32_t slotSize, std::int32_t size, std::int32_t numOfHash = 1)
       : sigSlotSize(slotSize), numSlot(size), numHash(numOfHash) {
-    assert((slotSize % 8 == 0) && (slotSize <= 32 && slotSize >= 8) && "slotSize must be byte aligned!");
+    // Seven bytes is as wide as a slot can get: insert() and membershipCheck() assemble the value
+    // in a sigElement, which is signed, so an eighth byte would run into the sign bit. The bound
+    // used to be 32, which the shipped SIG_ELEM_BIT of 56 violates -- a debug build would abort
+    // here for the width the runtime asks for.
+    assert((slotSize % 8 == 0) && (slotSize <= 56 && slotSize >= 8) && "slotSize must be byte aligned!");
     sigSlotSizeInByte = sigSlotSize / 8;
     sigSizeInByte = sigSlotSizeInByte * numSlot;
 
