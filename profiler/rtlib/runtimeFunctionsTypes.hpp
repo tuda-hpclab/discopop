@@ -64,14 +64,14 @@ typedef enum {
 
 struct AccessInfo {
   AccessInfo(bool isRead, LID lid, char *var, std::int64_t AAvar, ADDR addr, bool skip = false)
-      : isRead(isRead), lid(lid), var(var), AAvar(AAvar), addr(addr), skip(skip) {
+      : isRead(isRead), skip(skip), lid(lid), var(var), AAvar(AAvar), addr(addr) {
 #if DP_CALLTREE_PROFILING
     call_tree_node_ptr = nullptr;
     calculate_dependency_metadata = true;
 #endif
   }
 
-  AccessInfo() : isRead(false), lid(0), var(""), AAvar(0), addr(0), skip(false) {
+  AccessInfo() : isRead(false), skip(false), lid(0), var(""), AAvar(0), addr(0) {
 #if DP_CALLTREE_PROFILING
     call_tree_node_ptr = nullptr;
     calculate_dependency_metadata = true;
