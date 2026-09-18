@@ -188,3 +188,26 @@ TEST_F(MRTNodeTest, testTheLevelHelpersFallBackOutsideTheAddressWidth) {
     ASSERT_EQ(get_shift(level), -1) << level;
   }
 }
+
+TEST_F(MRTNodeTest, testTheNibbleMacroOnlyAgreesWithTheLevelHelpersBelowTheSignBit) {
+  // get_char_at_level is a second formulation of the nibble get_child_index reads out of an address
+  // through the two level helpers. Nothing in the tree uses it.
+  const auto addresses = {0x0LL, 0x1234567890ABCDEFLL, 0x0FEDCBA987654321LL, 0x7FFFFFFFFFFFFFFFLL};
+
+  for (const auto address : addresses) {
+    for (auto level = 0; level < 16; ++level) {
+      const auto by_macro = get_char_at_level(address, level);
+      const auto by_helpers = (address & get_level_shifting_mask(level)) >> get_shift(level);
+
+      ASSERT_EQ(by_macro, by_helpers) << std::hex << address << " @ " << std::dec << level;
+    }
+  }
+
+  // above it the two part ways: the macro masks the nibble out, while the helpers shift a negative
+  // masked address arithmetically and sign extend it. This is why the root of the tree spans
+  // [0, 0x7FFFFFFFFFFFFFFF] and no address with the top bit set ever reaches get_child_index.
+  const auto negative_address = static_cast<ADDR>(0x8000000000000000ULL);
+
+  ASSERT_EQ(get_char_at_level(negative_address, 0), 8);
+  ASSERT_EQ((negative_address & get_level_shifting_mask(0)) >> get_shift(0), -8);
+}
