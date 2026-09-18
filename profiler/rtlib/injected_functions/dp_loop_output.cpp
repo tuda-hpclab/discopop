@@ -54,7 +54,7 @@ void __dp_loop_output() {
   ofile.open(profiler_output_path("loop_counter_output.txt"));
   const auto &loop_counters = loop_manager->get_loop_counters();
 
-  for (auto i = 1; i < loop_counters.size(); ++i) {
+  for (std::size_t i = 1; i < loop_counters.size(); ++i) {
     loop_info_t &loop_info = loop_infos[i];
     ofile << loop_info.file_id_ << " ";
     ofile << loop_info.line_nr_ << " ";
