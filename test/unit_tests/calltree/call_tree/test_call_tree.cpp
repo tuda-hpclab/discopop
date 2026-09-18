@@ -19,6 +19,33 @@ class CallTreeTest : public ::testing::Test {
   }
 };
 
+// call_tree_node_count counts the nodes of the tree itself. call_tree_total_living_node_count
+// counts every CallTreeNode that exists, the prepared ones the tree has not taken into use yet
+// included, so it is the one that shows whether anything is left behind.
+class CallTreeLivingNodeCountTest : public ::testing::Test {
+protected:
+  void SetUp() override { __dp::call_tree_total_living_node_count = &living_nodes; }
+  void TearDown() override { __dp::call_tree_total_living_node_count = nullptr; }
+
+  std::atomic<unsigned int> living_nodes{0};
+};
+
+TEST_F(CallTreeLivingNodeCountTest, testATreeLeavesNoNodeBehind) {
+  {
+    auto ct = __dp::CallTree();
+    ct.enter_function(42);
+    ct.enter_loop(43);
+    ct.enter_iteration(1);
+    ct.exit_function();
+
+    // a whole prepared chunk belongs to the tree, plus whatever the manager threads have put into
+    // the pool, so the count is far above the number of nodes that are actually in the tree
+    ASSERT_GE(living_nodes.load(), static_cast<unsigned int>(CTNQC_CHUNK_SIZE));
+  }
+
+  ASSERT_EQ(living_nodes.load(), 0u);
+}
+
 TEST_F(CallTreeTest, testConstructor) {
   auto ct = __dp::CallTree();
 

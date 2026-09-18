@@ -124,3 +124,17 @@ TEST_F(CallTreePreparedNodeBufferTest, testThePoolStopsAtTheRequestedSize) {
 
   ASSERT_EQ(living_nodes.load(), 0u);
 }
+
+TEST_F(CallTreePreparedNodeBufferTest, testThePoolFreesWhatIsLeftInIt) {
+  {
+    auto buffer = __dp::CallTreeNodeQueueChunkBuffer{2};
+    buffer.prepare_chunk_if_required();
+    buffer.prepare_chunk_if_required();
+
+    ASSERT_EQ(living_nodes.load(), 2 * chunk_size);
+  }
+
+  // a chunk that was prepared but never handed out is owned by the pool alone, so nobody else can
+  // free it
+  ASSERT_EQ(living_nodes.load(), 0u);
+}

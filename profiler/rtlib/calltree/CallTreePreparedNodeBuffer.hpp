@@ -58,6 +58,15 @@ class CallTreeNodeQueueChunkBuffer {
 public:
   CallTreeNodeQueueChunkBuffer(std::size_t arg_size) : size(arg_size) {}
 
+  ~CallTreeNodeQueueChunkBuffer() {
+    // the chunks in the pool have been prepared but never handed out, so nobody else can free them
+    const std::lock_guard<std::mutex> lock(internal_mtx);
+    while (!internal_queue.empty()) {
+      delete internal_queue.front();
+      internal_queue.pop();
+    }
+  }
+
   inline void prepare_chunk_if_required() {
     bool chunk_required = false;
     {

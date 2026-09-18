@@ -51,6 +51,10 @@ CallTree::~CallTree() {
 
   pthread_join(calltree_thread, NULL);
   pthread_join(calltree_thread_2, NULL);
+
+  // the nodes left in the chunk the tree was taking from are owned by nobody else
+  delete prepared_chunk;
+
   std::cout << "Joined calltree_threads" << std::endl;
 }
 
