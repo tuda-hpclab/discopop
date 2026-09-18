@@ -28,7 +28,8 @@ CallTreeNode::CallTreeNode() {
 
 CallTreeNode::CallTreeNode(shared_ptr<CallTreeNode> parent_ptr, CallTreeNode *parent_ptr_raw, CallTreeNodeType type,
                            unsigned int loop_or_function_id, unsigned int arg_iteration_id)
-    : parent_ptr(parent_ptr), parent_ptr_raw(parent_ptr_raw), type(type), loop_or_function_id(loop_or_function_id) {
+    : type(type), loop_or_function_id(loop_or_function_id), parent_ptr(parent_ptr),
+      parent_ptr_raw(parent_ptr_raw) {
   if (type == CallTreeNodeType::Iteration) {
     iteration_id = arg_iteration_id;
   } else {
