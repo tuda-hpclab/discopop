@@ -14,8 +14,7 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include "../static_callstate_transitions/utils.hpp"
 
@@ -33,19 +32,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_exit(LID lid, int32_t loopID, int32_t instruction_id) {
-  if (!profiling_active()) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_loop_exit");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::LOOP_EXIT);
-#endif
+  DP_CALLBACK_SCOPE(LOOP_EXIT);
 
   // __dp_loop_exit() can be called without __dp_loop_entry()
   // being called. This can happen when a loop is encapsulated

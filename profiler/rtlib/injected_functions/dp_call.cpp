@@ -14,8 +14,7 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 #include "../static_callstate_transitions/utils.hpp"
 
 #include <cstdint>
@@ -32,19 +31,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_call(LID instructionID, int8_t isLibraryFunction) {
-  if (!profiling_active()) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_call");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::CALL);
-#endif
+  DP_CALLBACK_SCOPE(CALL);
 
   function_manager->log_call(instructionID);
 

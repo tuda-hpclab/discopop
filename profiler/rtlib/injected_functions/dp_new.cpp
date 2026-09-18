@@ -14,8 +14,7 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -31,19 +30,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_new(LID lid, ADDR startAddr, ADDR endAddr, int64_t numBytes) {
-  if (!profiling_active()) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_new");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::NEW);
-#endif
+  DP_CALLBACK_SCOPE(NEW);
 
 #if DP_MEMORY_REGION_DEALIASING
   // calculate endAddr of memory region

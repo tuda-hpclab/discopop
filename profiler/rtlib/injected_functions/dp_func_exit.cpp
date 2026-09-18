@@ -15,8 +15,7 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include "../static_callstate_transitions/utils.hpp"
 
@@ -42,15 +41,7 @@ void __dp_func_exit(LID lid, int32_t isExit) {
     return;
   }
 
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  pthread_compatibility_mutex.lock();
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_func_exit");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::FUNC_EXIT);
-#endif
+  DP_CALLBACK_SCOPE(FUNC_EXIT);
 
   loop_manager->clean_function_exit(function_manager->get_current_stack_level(), lid);
 
@@ -63,18 +54,15 @@ void __dp_func_exit(LID lid, int32_t isExit) {
   const auto last_addresses = memory_manager->pop_last_stack_address();
 #endif
 
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  pthread_compatibility_mutex.unlock();
-#endif
+  // clearStackAccesses goes through __dp_read / __dp_write, which take the lock themselves
+  dp_scope.unlock();
 
 #if DP_STACK_ACCESS_DETECTION
   clearStackAccesses(last_addresses.first,
                      last_addresses.second); // insert accesses with LID 0 to the queues
 #endif
 
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  pthread_compatibility_mutex.lock();
-#endif
+  dp_scope.relock();
 
 #if DP_STACK_ACCESS_DETECTION
   memory_manager->leaveScope("function", lid);
@@ -93,9 +81,8 @@ void __dp_func_exit(LID lid, int32_t isExit) {
     cout << "Exiting fucntion LID " << std::dec << dputil::decodeLID(lid) << endl;
     cout << "Function stack level = " << std::dec << function_manager->get_current_stack_level() << endl;
   }
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  pthread_compatibility_mutex.unlock();
-#endif
+  // released before the last statement, as the hand written unlock() here was
+  dp_scope.unlock();
 
   update_callstate_from_func_exit(1); // 1 is the dummy instruction id for leaving a function
 }

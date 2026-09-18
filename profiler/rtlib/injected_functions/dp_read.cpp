@@ -15,8 +15,7 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -36,19 +35,7 @@ void __dp_read(LID lid, ADDR addr, char *var, ADDR lastaddr, int64_t count) {
 void __dp_read(LID lid, ADDR addr, const char *var) {
 #endif
 
-  if (!profiling_active()) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_read");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::READ);
-#endif
+  DP_CALLBACK_SCOPE(READ);
 
   // For tracking function call or invoke
 #ifdef SKIP_DUP_INSTR

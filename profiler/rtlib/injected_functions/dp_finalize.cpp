@@ -16,6 +16,7 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
+#include "../callback_scope.hpp"
 #include "../../share/include/debug_print.hpp"
 #include "../../share/include/timer.hpp"
 
@@ -43,8 +44,12 @@ void __dp_finalize(LID lid) {
   if (!profiling_active()) {
     return;
   }
+
+  // The only callback that does not use DP_CALLBACK_SCOPE: its timer prints the whole report when
+  // it is destroyed, so it has to be gone before the Timers instance it points to is released at
+  // the very end -- which is what the inner scope below is for.
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  pthread_compatibility_mutex.lock();
+  std::unique_lock<std::mutex> lock(pthread_compatibility_mutex);
 #endif
 #ifdef DP_RTLIB_VERBOSE
   const auto debug_print = make_debug_print("__dp_finalize");
@@ -52,23 +57,20 @@ void __dp_finalize(LID lid) {
 
   {
 #ifdef DP_INTERNAL_TIMER
-    // This one prints the whole timer report when it is destroyed, so it has to be gone before
-    // the Timers instance it points to is released below. Hence the scope around the body.
     const auto timer = Timer(timers, TimerRegion::FINALIZE, true);
 #endif
 
-    // release mutex so it can be re-aquired in the called __dp_func_exit
+    // release the lock so it can be re-aquired in the called __dp_func_exit
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
-    pthread_compatibility_mutex.unlock();
+    lock.unlock();
 #endif
 
     while (function_manager->get_current_stack_level() >= 0) {
       __dp_func_exit(lid, 1);
     }
 
-    // use lock_guard here, since no other mutex-aquiring function is called
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
-    std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
+    lock.lock();
 #endif
 
     // Returning from main or exit from somewhere, clear up everything.
@@ -85,17 +87,10 @@ void __dp_finalize(LID lid) {
       finalizeSingleThreadedExecution();
     }
 
-    const auto output_loops = []() {
-#ifdef DP_RTLIB_VERBOSE
-      const auto debug_print = make_debug_print("outputLoops");
-#endif
-#ifdef DP_INTERNAL_TIMER
-      const auto timer = Timer(timers, TimerRegion::OUTPUT_LOOPS);
-#endif
-
+    {
+      DP_TIMED_SECTION(OUTPUT_LOOPS, "outputLoops");
       loop_manager->output(*out);
-    };
-    output_loops();
+    }
 
     // The iteration counters and the taken branch counters used to be dumped from a call the pass
     // put in front of main's return. That missed every iteration and branch of the global
@@ -105,31 +100,18 @@ void __dp_finalize(LID lid) {
     __dp_loop_output();
     __dp_taken_branch_counter_output();
 
-    const auto output_functions = []() {
-#ifdef DP_RTLIB_VERBOSE
-      const auto debug_print = make_debug_print("outputFunc");
-#endif
-#ifdef DP_INTERNAL_TIMER
-      const auto timer = Timer(timers, TimerRegion::OUTPUT_FUNCS);
-#endif
+    {
+      DP_TIMED_SECTION(OUTPUT_FUNCS, "outputFunc");
       function_manager->output_functions(*out);
-    };
-    output_functions();
+    }
 
-    const auto output_allocations = []() {
-#ifdef DP_RTLIB_VERBOSE
-      const auto debug_print = make_debug_print("outputAllocations");
-#endif
-#ifdef DP_INTERNAL_TIMER
-      const auto timer = Timer(timers, TimerRegion::OUTPUT_ALLOCATIONS);
-#endif
-
+    {
+      DP_TIMED_SECTION(OUTPUT_ALLOCATIONS, "outputAllocations");
       auto allocationsFileStream = ofstream(profiler_output_path("memory_regions.txt"), ios::out);
 #if DP_MEMORY_REGION_DEALIASING
       memory_manager->output_memory_regions(allocationsFileStream);
 #endif
-    };
-    output_allocations();
+    }
 
     // hybrid analysis
     // the dependencies of the omitted instructions first: their basic blocks are

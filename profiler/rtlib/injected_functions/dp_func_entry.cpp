@@ -15,8 +15,7 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include "../static_callstate_transitions/utils.hpp"
 
@@ -34,24 +33,11 @@ namespace __dp {
 extern "C" {
 
 void __dp_func_entry(LID lid, int32_t isStart) {
-  if (!profiling_active()) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_func_entry");
-#endif
+  DP_CALLBACK_SCOPE(FUNC_ENTRY);
 
   // The runtime is up before the first callback: it is brought up from .init_array, see
   // dp_init.cpp. No lazy initialization is needed here.
   function_manager->register_function_start(lid);
-
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
-#endif
 
 #if DP_STACK_ACCESS_DETECTION
   memory_manager->enter_new_function();

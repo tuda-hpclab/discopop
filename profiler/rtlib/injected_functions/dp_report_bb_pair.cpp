@@ -14,8 +14,7 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -31,19 +30,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_report_bb_pair(int32_t semaphore, uint32_t bbIndex) {
-  if (!profiling_active()) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_report_bb_pair");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::REPORT_BB_PAIR);
-#endif
+  DP_CALLBACK_SCOPE(REPORT_BB_PAIR);
 
   if (semaphore) {
     bbList->insert(bbIndex);
