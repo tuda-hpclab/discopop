@@ -48,7 +48,7 @@ public:
 
   void register_function_end(const LID current_lid) { endFuncs.insert(current_lid); }
 
-  std::int32_t get_current_stack_level() { return FuncStackLevel; }
+  std::int32_t get_current_stack_level() const { return FuncStackLevel; }
 
   void register_function_start(const LID current_lid) {
     // Process ordinary function call/invoke.
@@ -72,7 +72,7 @@ public:
     }
   }
 
-  void output_functions(std::ostream &stream) {
+  void output_functions(std::ostream &stream) const {
     for (const auto &func_begin : beginFuncs) {
       for (auto fb : func_begin.second) {
         stream << dputil::decodeLID(func_begin.first) << " BGN func ";

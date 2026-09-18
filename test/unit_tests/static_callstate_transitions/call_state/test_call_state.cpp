@@ -62,3 +62,32 @@ TEST_F(CallStateTest, testImplicitReturnTransitionIsSeparateFromRegularTransitio
   EXPECT_EQ(source.get_implicit_return_transition_target(), &return_target);
   EXPECT_EQ(source.get_transition_target(1), &regular_target);
 }
+
+// utils.cpp only ever reads a state it has reached, so none of that has to go through a mutable
+// reference
+TEST_F(CallStateTest, testAStateCanBeReadThroughAConstReference) {
+  CallState source(1);
+  CallState target(2);
+  CallState return_target(3);
+  source.register_transition(10, &target);
+  source.register_implicit_return_transition(&return_target);
+
+  const CallState &reference = source;
+
+  EXPECT_EQ(reference.get_id(), 1);
+  EXPECT_EQ(reference.get_transition_target(10), &target);
+  EXPECT_EQ(reference.get_transition_target(11), nullptr);
+  EXPECT_EQ(reference.get_implicit_return_transition_target(), &return_target);
+}
+
+// looking a trigger up must not add it: the transitions of a state are what the input file listed
+TEST_F(CallStateTest, testLookingUpAnUnknownTriggerDoesNotAddIt) {
+  CallState source(1);
+  CallState target(2);
+  source.register_transition(10, &target);
+
+  ASSERT_EQ(source.get_transition_target(11), nullptr);
+
+  EXPECT_EQ(source.get_transition_target(10), &target);
+  EXPECT_EQ(source.get_transition_target(11), nullptr);
+}

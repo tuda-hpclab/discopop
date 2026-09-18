@@ -172,3 +172,20 @@ TEST_F(FunctionManagerTest, testTheOutputIsOneLinePerEntry) {
   EXPECT_EQ(out.str(), dputil::decodeLID(5) + " BGN func " + dputil::decodeLID(100) + "\n" + dputil::decodeLID(200) +
                            " END func\n");
 }
+
+// __dp_func_exit and unwind_function_stack() only read the level, and writing the results only
+// reads the two lists
+TEST_F(FunctionManagerTest, testAManagerCanBeReadThroughAConstReference) {
+  auto fm = __dp::FunctionManager{};
+  fm.log_call(5);
+  fm.register_function_start(100);
+  fm.register_function_end(200);
+
+  const __dp::FunctionManager &reference = fm;
+
+  EXPECT_EQ(reference.get_current_stack_level(), 1);
+
+  std::ostringstream out;
+  reference.output_functions(out);
+  EXPECT_NE(out.str().find(dputil::decodeLID(5) + " BGN func " + dputil::decodeLID(100)), std::string::npos);
+}
