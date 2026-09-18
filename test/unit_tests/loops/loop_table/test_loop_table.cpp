@@ -25,7 +25,10 @@ TEST_F(LoopTableTest, testPushBack) {
   lt.push(__dp::LoopTableEntry{1, 2, 3, 0});
   ASSERT_EQ(lt.size(), 1);
   ASSERT_FALSE(lt.empty());
-  for (auto lid = 0; lid < 10 && lid != 2; ++lid) {
+  for (auto lid = 0; lid < 10; ++lid) {
+    if (lid == 2) {
+      continue;
+    }
     ASSERT_TRUE(lt.is_single_exit(lid));
   }
   ASSERT_FALSE(lt.is_single_exit(2));
@@ -33,7 +36,10 @@ TEST_F(LoopTableTest, testPushBack) {
   lt.push(__dp::LoopTableEntry{4, 5, 6, 0});
   ASSERT_EQ(lt.size(), 2);
   ASSERT_FALSE(lt.empty());
-  for (auto lid = 0; lid < 10 && lid != 5; ++lid) {
+  for (auto lid = 0; lid < 10; ++lid) {
+    if (lid == 5) {
+      continue;
+    }
     ASSERT_TRUE(lt.is_single_exit(lid));
   }
   ASSERT_FALSE(lt.is_single_exit(5));
