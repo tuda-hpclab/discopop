@@ -1060,3 +1060,58 @@ TEST_F(MemoryManagerTest, testOutputMemoryRegions) {
   // allocation is region 1.
   ASSERT_EQ(stream.str(), "* %%dummy%% 0\n3:100 1 4096\n3:100 2 256\n");
 }
+
+TEST_F(MemoryManagerTest, testAStackRangeIsWidenedByEveryAllocationOfTheFunction) {
+  auto manager = __dp::MemoryManager{};
+  manager.enter_new_function();
+
+  manager.allocate_stack_memory(1, 0x1000, 0x1FFF, 0x1000, 0x10);
+
+  ASSERT_TRUE(manager.is_stack_access(0x1000));
+  ASSERT_TRUE(manager.is_stack_access(0x1FFF));
+  ASSERT_FALSE(manager.is_stack_access(0x0FFF));
+  ASSERT_FALSE(manager.is_stack_access(0x2000));
+
+  // a further allocation pushes both ends outwards
+  manager.allocate_stack_memory(2, 0x0500, 0x2FFF, 0x2B00, 0x10);
+
+  ASSERT_TRUE(manager.is_stack_access(0x0500));
+  ASSERT_TRUE(manager.is_stack_access(0x2FFF));
+
+  const auto range = manager.pop_last_stack_address();
+  ASSERT_EQ(range.first, 0x0500);
+  ASSERT_EQ(range.second, 0x2FFF);
+
+  // and the range goes away with the function it belonged to
+  ASSERT_FALSE(manager.is_stack_access(0x1000));
+}
+
+TEST_F(MemoryManagerTest, testAStackAllocationWithoutAFunctionIsNotRecorded) {
+  auto manager = __dp::MemoryManager{};
+
+  // nothing has entered a function, so there is no range to widen -- reading the top of the empty
+  // stack here is what the guard prevents
+  manager.allocate_stack_memory(1, 0x1000, 0x1FFF, 0x1000, 0x10);
+
+  ASSERT_FALSE(manager.is_stack_access(0x1500));
+}
+
+TEST_F(MemoryManagerTest, testLeavingAFunctionThatWasNeverEnteredYieldsAnEmptyRange) {
+  auto manager = __dp::MemoryManager{};
+
+  const auto range = manager.pop_last_stack_address();
+
+  ASSERT_EQ(range.first, 0);
+  ASSERT_EQ(range.second, 0);
+}
+
+TEST_F(MemoryManagerTest, testAStackAllocationWithoutAnElementCountLeavesTheRangeAlone) {
+  auto manager = __dp::MemoryManager{};
+  manager.enter_new_function();
+
+  // a negative element count marks an allocation whose element size is unknown, and those stay out
+  // of the range
+  manager.allocate_stack_memory(1, 0x1000, 0x1FFF, 0x1000, -1);
+
+  ASSERT_FALSE(manager.is_stack_access(0x1500));
+}
