@@ -24,6 +24,17 @@ permissions:
   pages: write
   id-token: write
 
+# The pipeline is split into four categories:
+#
+#   lint       static checks that do not depend on the target platform, run once
+#   build      one job per platform, creating the venv and the C++ test binaries
+#              and handing both to the test jobs as an artifact
+#   test       one job per test suite and platform, each restoring that build
+#   benchmark  performance comparisons, independent of the build artifact
+#
+# A matrix entry's id doubles as the artifact suffix, so it must not contain
+# characters that actions/upload-artifact rejects - ":" among them.
+
 jobs:
 # used for eventual multiple operating system testing
   create_matrix:
@@ -37,7 +48,7 @@ jobs:
         shell: bash
         run: |
           matrix='{"include":[
-            {"id":"debian:stable",
+            {"id":"debian-stable",
              "base_image":"debian:stable",
              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
             },
@@ -49,7 +60,7 @@ jobs:
 
           if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
             matrix='{"include":[
-              {"id":"debian:stable",
+              {"id":"debian-stable",
               "base_image":"debian:stable",
               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
               },
@@ -67,30 +78,31 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
 
-  build_install_and_test:
+  # ---------------------------------------------------------------- lint -----
+  # License tags, types and formatting do not depend on the target platform,
+  # so these run once instead of once per matrix entry.
+  lint:
     runs-on: self-hosted
     container:
-      image: ${{ matrix.base_image }}
-    name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
-    needs: [create_matrix]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
-
+      image: ubuntu:24.04
+    name: "Lint: license, types and formatting"
     steps:
       - name: Install Prerequisites
         run: |
-          ${{ matrix.install_deps_cmd}}
+          export DEBIAN_FRONTEND=noninteractive
+          apt update
+          apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
 
       - name: Checkout Repository
         uses: actions/checkout@v3
-#        with:
-#          submodules: recursive
 
+      # runs before the venv exists, otherwise find would walk the installed packages
       - name: Check all files for DiscoPoP License tag
         run: |
           ./scripts/dev/check-license.sh $(find . -type f)
 
+      # pytest is needed by mypy, not by this job: conftest.py and the test_*.py files
+      # below explorer/discopop_explorer are part of mypy's `files` and import it.
       - name: Setup venv and install DiscoPoP
         run: |
           rm -rf venv
@@ -114,41 +126,244 @@ jobs:
         run: |
             venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
 
+
+  # --------------------------------------------------------------- build -----
+  # Compiles everything once per platform and publishes the result, so that the
+  # test jobs do not have to rebuild the LLVM pass six times each.
+  #
+  # The venv is tarred rather than uploaded as is: actions/upload-artifact drops
+  # the executable bit and resolves symlinks, both of which a venv needs. Its
+  # shebangs are absolute, which holds as long as every job checks the
+  # repository out to the same workspace path - guaranteed for container jobs.
+  build:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Build (${{ matrix.id }})"
+    needs: [create_matrix]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup venv and install DiscoPoP
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          venv/bin/pip install pytest
+
+      - name: Build the C++ unit test binaries
+        run: |
+          cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
+          cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
+
+      - name: Pack the build
+        run: |
+          tar -czf venv.tar.gz venv
+          tar -czf build_tests.tar.gz \
+            build_tests/test/unit_tests/DiscoPoP_UT \
+            build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+          path: |
+            venv.tar.gz
+            build_tests.tar.gz
+          retention-days: 1
+
+
+  # ---------------------------------------------------------------- test -----
+  test_explorer_unit:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Test: explorer unit tests (${{ matrix.id }})"
+    needs: [create_matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+      - name: Unpack the build
+        run: |
+          tar -xzf venv.tar.gz
+          tar -xzf build_tests.tar.gz
+          rm -f venv.tar.gz build_tests.tar.gz
       - name: Python unit tests (discopop_explorer)
         run: |
             . venv/bin/activate
             python3 -m pytest explorer/discopop_explorer
 
+  test_project_manager:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Test: project manager (${{ matrix.id }})"
+    needs: [create_matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+      - name: Unpack the build
+        run: |
+          tar -xzf venv.tar.gz
+          tar -xzf build_tests.tar.gz
+          rm -f venv.tar.gz build_tests.tar.gz
       - name: Project manager unit tests
         run: |
             . venv/bin/activate
             python3 -m unittest -v -k "*test.project_manager.*"
 
-      - name: Build and execute C++ unit tests
+  test_cpp_unit:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Test: C++ unit tests (${{ matrix.id }})"
+    needs: [create_matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Install Prerequisites
         run: |
-          cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
-          cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
+          ${{ matrix.install_deps_cmd}}
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+      - name: Unpack the build
+        run: |
+          tar -xzf venv.tar.gz
+          tar -xzf build_tests.tar.gz
+          rm -f venv.tar.gz build_tests.tar.gz
+      - name: Runtime library unit tests
+        run: |
           build_tests/test/unit_tests/DiscoPoP_UT
+      - name: LLVM pass unit tests
+        run: |
           build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
 
+  test_instrumentation:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Test: instrumentation (${{ matrix.id }})"
+    needs: [create_matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+      - name: Unpack the build
+        run: |
+          tar -xzf venv.tar.gz
+          tar -xzf build_tests.tar.gz
+          rm -f venv.tar.gz build_tests.tar.gz
       - name: Instrumentation tests
         run: |
             . venv/bin/activate
             python3 -m unittest -v -k "*test.instrumentation.*"
 
+  test_profiler_gold_standard:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Test: profiler gold standard (${{ matrix.id }})"
+    needs: [create_matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+      - name: Unpack the build
+        run: |
+          tar -xzf venv.tar.gz
+          tar -xzf build_tests.tar.gz
+          rm -f venv.tar.gz build_tests.tar.gz
       - name: Profiler gold standard tests
         run: |
             . venv/bin/activate
             python3 -m unittest -v -k "*test.profiler.*"
 
+  test_end_to_end:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Test: end-to-end (${{ matrix.id }})"
+    needs: [create_matrix, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.id }}
+      - name: Unpack the build
+        run: |
+          tar -xzf venv.tar.gz
+          tar -xzf build_tests.tar.gz
+          rm -f venv.tar.gz build_tests.tar.gz
       - name: Python end-to-end-tests
         run: |
             . venv/bin/activate
             python3 -m unittest -v -k "*.end_to_end.*"
 
 
-
-  pass_overhead_benchmark:
+  # ----------------------------------------------------------- benchmark -----
+  # Independent of the build artifact: the benchmark drives clang directly and
+  # needs a venv that holds only the profiler, installed without -e.
+  benchmark_pass_overhead:
     runs-on: self-hosted
     container:
       image: ubuntu:24.04
@@ -192,10 +407,23 @@ jobs:
             cat pass_overhead_summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
+
+  # ----------------------------------------------------------------- gate ----
+  # The single status check to require in the branch protection rules, so that
+  # the list of jobs above can change without touching the repository settings.
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test, pass_overhead_benchmark]
+    needs:
+      - lint
+      - build
+      - test_explorer_unit
+      - test_project_manager
+      - test_cpp_unit
+      - test_instrumentation
+      - test_profiler_gold_standard
+      - test_end_to_end
+      - benchmark_pass_overhead
     if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     steps:
       - name: Report
