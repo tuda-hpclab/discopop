@@ -16,6 +16,8 @@
 
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 
 namespace __dp {
 
@@ -140,8 +142,19 @@ void initialize_current_callpath_state() {
   int32_t current_callpath_state_id = 0;
   bool initial_state_found = false;
   while (std::getline(file, line)) {
-    current_callpath_state_id = stoi(line);
-    initial_state_found = true;
+    // a line that is not a number is skipped rather than thrown over: this runs from __dp_init,
+    // where an escaping exception takes the instrumented program down
+    try {
+      std::size_t consumed = 0;
+      const int32_t parsed = std::stoi(line, &consumed);
+      if (consumed == 0) {
+        continue;
+      }
+      current_callpath_state_id = parsed;
+      initial_state_found = true;
+    } catch (const std::logic_error &) {
+      continue;
+    }
   }
   if (!initial_state_found) {
     std::cerr << "DiscoPoP: could not read an initial call state from " << path

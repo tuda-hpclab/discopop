@@ -265,3 +265,22 @@ TEST_F(CallStateTransitionsUtilsTest, testLeavingMoreFunctionsThanWereEnteredKee
 
   EXPECT_EQ(__dp::calls_without_executed_transitions.size(), 1u);
 }
+
+// the same for the initial state: a line that is not a number is skipped, not thrown over
+TEST_F(InitializeCurrentCallpathStateTest, testALineThatIsNotANumberIsSkipped) {
+  write_initial_state("not a state id\n7\n");
+
+  ASSERT_NO_THROW(__dp::initialize_current_callpath_state());
+
+  ASSERT_NE(__dp::current_callpath_state, nullptr);
+  EXPECT_EQ(__dp::current_callpath_state->get_id(), 7);
+}
+
+TEST_F(InitializeCurrentCallpathStateTest, testAFileWithNothingUsableFallsBackToTheDefinedState) {
+  write_initial_state("not a state id\n");
+
+  ASSERT_NO_THROW(__dp::initialize_current_callpath_state());
+
+  ASSERT_NE(__dp::current_callpath_state, nullptr);
+  EXPECT_EQ(__dp::current_callpath_state->get_id(), 0);
+}

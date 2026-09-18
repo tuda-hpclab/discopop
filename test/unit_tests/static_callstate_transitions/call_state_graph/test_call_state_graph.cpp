@@ -145,3 +145,37 @@ TEST_F(CallStateGraphParsingTest, testBothFilesEndUpInTheSameGraph) {
   EXPECT_EQ(entered->get_id(), 2);
   EXPECT_EQ(entered->get_implicit_return_transition_target(), graph.get_or_register_node(1));
 }
+
+// The constructor runs from __dp_init, so it must get through its input without throwing. A field
+// that is not a number used to escape as std::invalid_argument from stoi and take the instrumented
+// program down before it had started.
+TEST_F(CallStateGraphParsingTest, testALineWithAFieldThatIsNotANumberIsSkipped) {
+  write_input("callpath_state_transitions.txt", "x 10 2\n1 y 2\n1 10 z\n2 20 3\n");
+
+  ASSERT_NO_THROW({
+    CallStateGraph graph;
+
+    EXPECT_EQ(graph.get_or_register_node(1)->get_transition_target(10), nullptr);
+    EXPECT_EQ(graph.get_or_register_node(2)->get_transition_target(20), graph.get_or_register_node(3));
+  });
+}
+
+TEST_F(CallStateGraphParsingTest, testAnIdTooLargeForTheStateTypeIsSkipped) {
+  write_input("callpath_state_transitions.txt", "99999999999999999999 10 2\n1 10 2\n");
+
+  ASSERT_NO_THROW({
+    CallStateGraph graph;
+
+    EXPECT_EQ(graph.get_or_register_node(1)->get_transition_target(10), graph.get_or_register_node(2));
+  });
+}
+
+TEST_F(CallStateGraphParsingTest, testTheReturnTargetsFileSurvivesAMalformedLineAsWell) {
+  write_input("callpath_state_return_targets.txt", "x 1\n3 y\n3 1\n");
+
+  ASSERT_NO_THROW({
+    CallStateGraph graph;
+
+    EXPECT_EQ(graph.get_or_register_node(3)->get_implicit_return_transition_target(), graph.get_or_register_node(1));
+  });
+}
