@@ -79,14 +79,14 @@ void CallTreeNode::set(shared_ptr<CallTreeNode> &&arg_parent_ptr, CallTreeNode *
   iteration_id = arg_iteration_id;
 }
 
-shared_ptr<CallTreeNode> CallTreeNode::get_parent_ptr() { return parent_ptr; }
+shared_ptr<CallTreeNode> CallTreeNode::get_parent_ptr() const { return parent_ptr; }
 
-CallTreeNode *CallTreeNode::get_parent_ptr_raw() { return parent_ptr_raw; }
+CallTreeNode *CallTreeNode::get_parent_ptr_raw() const { return parent_ptr_raw; }
 
-CallTreeNodeType CallTreeNode::get_node_type() { return type; }
+CallTreeNodeType CallTreeNode::get_node_type() const { return type; }
 
-unsigned int CallTreeNode::get_loop_or_function_id() { return loop_or_function_id; }
+unsigned int CallTreeNode::get_loop_or_function_id() const { return loop_or_function_id; }
 
-unsigned int CallTreeNode::get_iteration_id() { return iteration_id; }
+unsigned int CallTreeNode::get_iteration_id() const { return iteration_id; }
 
 } // namespace __dp

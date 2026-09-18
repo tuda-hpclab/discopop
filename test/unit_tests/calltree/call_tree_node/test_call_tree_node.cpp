@@ -98,8 +98,8 @@ TEST_F(CallTreeNodeTest, testEqualityIgnoresTheIterationNumber) {
 
   // two iterations of the same loop under the same parent compare equal, which is what the comment
   // in the operator announces
-  auto first = __dp::CallTreeNode(nullptr, &parent, __dp::CallTreeNodeType::Iteration, 2, 1);
-  auto second = __dp::CallTreeNode(nullptr, &parent, __dp::CallTreeNodeType::Iteration, 2, 7);
+  const auto first = __dp::CallTreeNode(nullptr, &parent, __dp::CallTreeNodeType::Iteration, 2, 1);
+  const auto second = __dp::CallTreeNode(nullptr, &parent, __dp::CallTreeNodeType::Iteration, 2, 7);
 
   ASSERT_NE(first.get_iteration_id(), second.get_iteration_id());
   ASSERT_TRUE(first == second);
@@ -150,4 +150,16 @@ TEST_F(CallTreeNodeTest, testSetKeepsTheIterationNumberOfAnyType) {
 
   ASSERT_EQ(node.get_iteration_id(), 7);
   ASSERT_EQ(__dp::CallTreeNode(nullptr, nullptr, __dp::CallTreeNodeType::Function, 1, 7).get_iteration_id(), 0);
+}
+
+TEST_F(CallTreeNodeTest, testANodeCanBeReadThroughAConstReference) {
+  auto parent = __dp::CallTreeNode();
+  const auto node = __dp::CallTreeNode(nullptr, &parent, __dp::CallTreeNodeType::Iteration, 2, 7);
+  const __dp::CallTreeNode &reference = node;
+
+  ASSERT_EQ(reference.get_node_type(), __dp::CallTreeNodeType::Iteration);
+  ASSERT_EQ(reference.get_loop_or_function_id(), 2);
+  ASSERT_EQ(reference.get_iteration_id(), 7);
+  ASSERT_EQ(reference.get_parent_ptr(), nullptr);
+  ASSERT_EQ(reference.get_parent_ptr_raw(), &parent);
 }

@@ -29,7 +29,7 @@ bool MetaDataQueueElement::operator==(const MetaDataQueueElement &other) const {
          (source_ctn->get_iteration_id() == other.source_ctn->get_iteration_id());
 }
 
-string MetaDataQueueElement::toString() {
+string MetaDataQueueElement::toString() const {
   string result = "MDQE( ";
   switch (type) {
   case RAW:

@@ -40,7 +40,7 @@ public:
   hashset<unsigned int> inter_iteration_dependencies;
   hashset<unsigned int> sink_ancestors;
   hashset<unsigned int> source_ancestors;
-  string toString();
+  string toString() const;
 };
 
 } // namespace __dp
