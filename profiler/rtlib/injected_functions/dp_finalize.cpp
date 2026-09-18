@@ -75,7 +75,6 @@ void __dp_finalize(LID lid) {
   } else {
     finalizeSingleThreadedExecution();
   }
-  std::cout << "Returned from finalizeParallelization" << std::endl;
 
   const auto output_loops = []() {
 #ifdef DP_RTLIB_VERBOSE
@@ -189,20 +188,9 @@ void __dp_finalize(LID lid) {
   // output elapsed time for profiling
   std::chrono::milliseconds time_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::high_resolution_clock::now() - statistics_profiling_start_time);
-#ifdef __linux__
-  // try to get an output file name w.r.t. the target application
-  // if it is not available, fall back to "Output.txt"
-  char *selfPath = new char[PATH_MAX];
-  if (selfPath != nullptr) {
-    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-    tmp2 += "/statistics/profiling_time.txt";
-    std::ofstream stats_file;
-    stats_file.open(tmp2.data(), ios::out);
-    stats_file << std::to_string(time_elapsed.count()) << " ms\n";
-    stats_file.flush();
-    stats_file.close();
-  }
-#endif
+  auto stats_file = ofstream(std::string(getenv("DOT_DISCOPOP_PROFILER")) + "/statistics/profiling_time.txt", ios::out);
+  stats_file << std::to_string(time_elapsed.count()) << " ms\n";
+  stats_file.close();
 
   dpInited = false;
   targetTerminated = true; // mark the target program has returned from main()
