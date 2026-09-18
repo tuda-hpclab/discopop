@@ -31,7 +31,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_new(LID lid, ADDR startAddr, ADDR endAddr, int64_t numBytes) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

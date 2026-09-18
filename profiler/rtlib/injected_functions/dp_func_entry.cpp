@@ -34,10 +34,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_func_entry(LID lid, int32_t isStart) {
-  if (targetTerminated) {
-    // prevent deleting generated results after the main function has been
-    // exited. This might happen, e.g., if a destructor of a global struct is
-    // called after exiting the main function.
+  if (!profiling_active()) {
     return;
   }
 
@@ -49,8 +46,7 @@ void __dp_func_entry(LID lid, int32_t isStart) {
 #endif
 
   // The runtime is up before the first callback: it is brought up from .init_array, see
-  // dp_init.cpp. No lazy initialization is needed here, and the second targetTerminated
-  // check the lazy path carried was unreachable behind the early return above.
+  // dp_init.cpp. No lazy initialization is needed here.
   function_manager->register_function_start(lid);
 
 #ifdef DP_INTERNAL_TIMER

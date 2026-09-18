@@ -37,7 +37,7 @@ void __dp_write(LID lid, ADDR addr, char *var, ADDR lastaddr, int64_t count) {
 void __dp_write(LID lid, ADDR addr, const char *var) {
 #endif
 
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

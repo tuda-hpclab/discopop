@@ -38,7 +38,9 @@ namespace __dp {
 extern "C" {
 
 void __dp_finalize(LID lid) {
-  if (targetTerminated) {
+  // Reached twice when the target leaves through a function that does not return to main: once
+  // from the call the pass puts in front of it, and once from the .fini_array entry.
+  if (!profiling_active()) {
     return;
   }
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
@@ -196,8 +198,7 @@ void __dp_finalize(LID lid) {
     stats_file << std::to_string(time_elapsed.count()) << " ms\n";
     stats_file.close();
 
-    dpInited = false;
-    targetTerminated = true; // mark the target program has returned from main()
+    runtime_state = RuntimeState::Terminated;
 
     // last use of the manually managed globals is behind us, and every callback returns early
     // from here on, so they can go

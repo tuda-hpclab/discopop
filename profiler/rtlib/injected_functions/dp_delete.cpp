@@ -31,7 +31,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_delete(LID lid, ADDR startAddr) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

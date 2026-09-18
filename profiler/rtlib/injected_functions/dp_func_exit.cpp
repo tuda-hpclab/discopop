@@ -34,10 +34,10 @@ namespace __dp {
 extern "C" {
 
 void __dp_func_exit(LID lid, int32_t isExit) {
-  if (targetTerminated) {
+  if (!profiling_active()) {
     if (DP_DEBUG) {
       cout << "Exiting function LID " << std::dec << dputil::decodeLID(lid);
-      cout << " but target program has returned from main(). Destructors?" << endl;
+      cout << " but the runtime is not running. Destructors?" << endl;
     }
     return;
   }

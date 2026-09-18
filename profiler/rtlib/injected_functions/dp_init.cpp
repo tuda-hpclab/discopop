@@ -41,7 +41,10 @@ namespace __dp {
 extern "C" {
 
 void __dp_init() {
-  if (dpInited) {
+  // Anything but NotInitialized: either the runtime is already up, or it has already written its
+  // results and released everything. The latter used to pass this check, because the flag it read
+  // was cleared again in __dp_finalize.
+  if (runtime_state != RuntimeState::NotInitialized) {
     return;
   }
 
@@ -96,7 +99,7 @@ void __dp_init() {
   if (DP_DEBUG) {
     cout << "DP initialized." << endl;
   }
-  dpInited = true;
+  runtime_state = RuntimeState::Running;
   if (NUM_WORKERS > 0) {
     initParallelization();
   } else {
@@ -124,7 +127,7 @@ namespace {
 __attribute__((constructor(101))) void dp_runtime_startup() { __dp_init(); }
 
 __attribute__((destructor(101))) void dp_runtime_shutdown() {
-  if (!dpInited) {
+  if (!profiling_active()) {
     // Either nothing was profiled, or __dp_finalize already ran because the target left through a
     // function that does not return to main.
     return;

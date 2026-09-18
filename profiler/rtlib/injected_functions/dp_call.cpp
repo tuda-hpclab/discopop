@@ -32,7 +32,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_call(LID instructionID, int8_t isLibraryFunction) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

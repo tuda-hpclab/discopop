@@ -33,7 +33,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_entry(LID lid, int32_t loopID, int32_t instruction_id) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

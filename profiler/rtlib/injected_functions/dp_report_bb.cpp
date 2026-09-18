@@ -31,7 +31,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_report_bb(uint32_t bbIndex) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

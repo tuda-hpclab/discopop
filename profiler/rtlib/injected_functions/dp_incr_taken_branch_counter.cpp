@@ -20,7 +20,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_incr_taken_branch_counter(char *source_and_target, int cmp_res, int active_on) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 
