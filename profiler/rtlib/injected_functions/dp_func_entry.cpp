@@ -20,13 +20,6 @@
 
 #include "../static_callstate_transitions/utils.hpp"
 
-#include "dp_init.hpp"
-
-#ifdef __linux__
-#include <linux/limits.h>
-#endif
-
-#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
@@ -55,19 +48,10 @@ void __dp_func_entry(LID lid, int32_t isStart) {
   const auto debug_print = make_debug_print("__dp_func_entry");
 #endif
 
-  if (!dpInited) {
-    // Safety net. The runtime is normally brought up from .init_array, long before the
-    // first callback, see dp_init.cpp -- this covers a build in which that constructor
-    // did not make it into the link.
-    __dp_init();
-  } else if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "Entering function LID " << std::dec << dputil::decodeLID(lid);
-      cout << " but target program has returned from main(). Destructors?" << endl;
-    }
-  } else {
-    function_manager->register_function_start(lid);
-  }
+  // The runtime is up before the first callback: it is brought up from .init_array, see
+  // dp_init.cpp. No lazy initialization is needed here, and the second targetTerminated
+  // check the lazy path carried was unreachable behind the early return above.
+  function_manager->register_function_start(lid);
 
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);

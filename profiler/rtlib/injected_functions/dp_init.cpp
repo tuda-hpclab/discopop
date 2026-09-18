@@ -151,6 +151,10 @@ namespace {
 // matching .fini_array entry is processed after every handler registered with __cxa_atexit, which
 // is where the destructors of those objects live -- so __dp_finalize sees the accesses they make.
 // Priorities below 101 are reserved for the implementation.
+//
+// Since no instrumented code calls __dp_init any more, nothing references this translation unit,
+// and the linker would drop it from the static runtime archive together with the two entries
+// below. The link wrappers in profiler/scripts therefore request __dp_init with -u.
 __attribute__((constructor(101))) void dp_runtime_startup() { __dp_init(); }
 
 __attribute__((destructor(101))) void dp_runtime_shutdown() {
