@@ -50,14 +50,6 @@ void __dp_read(LID lid, ADDR addr, const char *var) {
   const auto timer = Timer(timers, TimerRegion::READ);
 #endif
 
-  if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "__dp_read() is not executed since target program has returned "
-              "from main()."
-           << endl;
-    }
-    return;
-  }
   // For tracking function call or invoke
 #ifdef SKIP_DUP_INSTR
   if (lastaddr == addr && count >= 2) {

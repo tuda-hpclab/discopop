@@ -48,18 +48,6 @@ void __dp_finalize(LID lid) {
   const auto timer = Timer(timers, TimerRegion::FINALIZE, true);
 #endif
 
-  if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "__dp_finalize() has been called before. Doing nothing this time "
-              "to avoid double free."
-           << endl;
-    }
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-    pthread_compatibility_mutex.unlock();
-#endif
-    return;
-  }
-
   // release mutex so it can be re-aquired in the called __dp_func_exit
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
   pthread_compatibility_mutex.unlock();

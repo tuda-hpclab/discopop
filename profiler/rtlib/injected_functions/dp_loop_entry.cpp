@@ -47,15 +47,6 @@ void __dp_loop_entry(LID lid, int32_t loopID, int32_t instruction_id) {
   const auto timer = Timer(timers, TimerRegion::LOOP_ENTRY);
 #endif
 
-  if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "__dp_loop_entry() is not executed since target program has "
-              "returned from main()."
-           << endl;
-    }
-    return;
-  }
-
   const auto function_stack_level = function_manager->get_current_stack_level();
   const auto is_new_loop = loop_manager->is_new_loop(loopID);
 

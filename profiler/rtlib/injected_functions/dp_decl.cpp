@@ -51,14 +51,6 @@ void __dp_decl(LID lid, ADDR addr, char *var) {
   const auto timer = Timer(timers, TimerRegion::DECL);
 #endif
 
-  if (targetTerminated) {
-    if (DP_DEBUG) {
-      std::cout << "__dp_write() is not executed since target program has "
-                   "returned from main().\n";
-    }
-    return;
-  }
-
 #ifdef SKIP_DUP_INSTR
   if (lastaddr == addr && count >= 2) {
     return;

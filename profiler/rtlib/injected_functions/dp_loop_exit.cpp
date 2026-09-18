@@ -47,15 +47,6 @@ void __dp_loop_exit(LID lid, int32_t loopID, int32_t instruction_id) {
   const auto timer = Timer(timers, TimerRegion::LOOP_EXIT);
 #endif
 
-  if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "__dp_loop_exit() is not executed since target program has "
-              "returned from main()."
-           << endl;
-    }
-    return;
-  }
-
   // __dp_loop_exit() can be called without __dp_loop_entry()
   // being called. This can happen when a loop is encapsulated
   // by an "if" structure, and the condition of "if" fails
