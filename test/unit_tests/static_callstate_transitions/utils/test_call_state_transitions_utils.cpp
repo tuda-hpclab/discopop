@@ -249,3 +249,19 @@ TEST_F(InitializeCurrentCallpathStateTest, testTheFallbackStateSimplyDoesNotMove
   ASSERT_NE(__dp::current_callpath_state, nullptr);
   EXPECT_EQ(__dp::current_callpath_state->get_id(), 0);
 }
+
+// unwind_function_stack() calls __dp_func_exit until the function stack level has passed zero, so a
+// target can leave more functions than __dp_call ever announced. Every successful return pops an
+// entry, including the base entry initialize_current_callpath_state() pushed. Popping that one as
+// well used to leave the vector with its end before its start, its size() reading back as
+// 18446744073709551615, and every later back() or [size() - 1] out of bounds.
+TEST_F(CallStateTransitionsUtilsTest, testLeavingMoreFunctionsThanWereEnteredKeepsTheCallDepthStack) {
+  graph->register_implicit_return_transition(1, 2);
+  graph->register_implicit_return_transition(2, 1);
+
+  __dp::update_callstate_from_func_exit(1);
+  __dp::update_callstate_from_func_exit(1);
+  __dp::update_callstate_from_call(999);
+
+  EXPECT_EQ(__dp::calls_without_executed_transitions.size(), 1u);
+}

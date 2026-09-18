@@ -20,6 +20,12 @@
 namespace __dp {
 
 void update_callstate_from_call(int32_t instructionID) {
+  // initialize_current_callpath_state() pushes the base entry this reads, and a target that never
+  // reached it has no call state to keep either
+  if (calls_without_executed_transitions.empty()) {
+    return;
+  }
+
   // check if callstate update is currently disabled
   if (calls_without_executed_transitions.back() != 0) {
     // disabled, increment counter
@@ -52,6 +58,12 @@ void update_callstate_from_call(int32_t instructionID) {
 }
 
 void update_callstate_from_func_exit(int32_t instructionID) {
+  // initialize_current_callpath_state() pushes the base entry this reads, and a target that never
+  // reached it has no call state to keep either
+  if (calls_without_executed_transitions.empty()) {
+    return;
+  }
+
   // check if callstate update is currently disabled
   if (calls_without_executed_transitions.back() > 0) {
     // disabled, decrease counter
@@ -68,7 +80,13 @@ void update_callstate_from_func_exit(int32_t instructionID) {
     // transition found
     // update current callstate
     current_callpath_state = transition_target;
-    calls_without_executed_transitions.pop_back();
+    // The base entry stays. unwind_function_stack() calls __dp_func_exit until the function stack
+    // level has passed zero, so a target leaves more functions than __dp_call ever announced; popping
+    // past the base entry used to leave the vector with its end before its start, where size() reads
+    // back as SIZE_MAX and every later back() or [size() - 1] is out of bounds.
+    if (calls_without_executed_transitions.size() > 1) {
+      calls_without_executed_transitions.pop_back();
+    }
   } else {
     // no transition found
     // issue an error message
@@ -79,6 +97,12 @@ void update_callstate_from_func_exit(int32_t instructionID) {
 }
 
 void update_callstate(int32_t instructionID) {
+  // initialize_current_callpath_state() pushes the base entry this reads, and a target that never
+  // reached it has no call state to keep either
+  if (calls_without_executed_transitions.empty()) {
+    return;
+  }
+
   // check if callstate update is currently disabled
   if (calls_without_executed_transitions.back() != 0) {
     // disabled
