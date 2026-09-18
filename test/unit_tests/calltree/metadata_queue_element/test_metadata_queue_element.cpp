@@ -129,3 +129,47 @@ TEST_F(MetaDataQueueElementTest, testTheHashFollowsTheComparison) {
       __dp::MetaDataQueueElement(__dp::RAW, 100, 50, variable_name, 43, other_sink_node, other_source_node);
   ASSERT_NE(hasher(element), hasher(different));
 }
+
+TEST_F(MetaDataQueueElementTest, testToString) {
+  auto sink_node = makeNode(__dp::CallTreeNodeType::Iteration, 2, 7);
+  auto source_node = makeNode(__dp::CallTreeNodeType::Function, 5, 0);
+
+  // file 3 line 100 and file 4 line 200, in the form decodeLID writes them
+  auto element = __dp::MetaDataQueueElement(__dp::RAW, 3 * MAXLNO + 100, 4 * MAXLNO + 200, variable_name, 42, sink_node,
+                                            source_node);
+
+  ASSERT_EQ(element.toString(), "MDQE( RAW 3:100 - 4:200 x 42 sink_ctn: 2 it: 7 source_ctn: 5 it: 0 )");
+}
+
+TEST_F(MetaDataQueueElementTest, testToStringWritesTheVariableIdAsANumber) {
+  auto sink_node = makeNode(__dp::CallTreeNodeType::Function, 1, 0);
+  auto source_node = makeNode(__dp::CallTreeNodeType::Function, 2, 0);
+
+  // the id of an ambiguously aliased variable is an arbitrary 64 bit number, not an offset into
+  // anything
+  auto element = __dp::MetaDataQueueElement(__dp::RAW, 0, 0, variable_name, 123456789012345LL, sink_node, source_node);
+
+  ASSERT_NE(element.toString().find(" x 123456789012345 "), std::string::npos);
+}
+
+TEST_F(MetaDataQueueElementTest, testToStringNamesOnlyTheThreeDependencyTypesItKnows) {
+  auto sink_node = makeNode(__dp::CallTreeNodeType::Function, 1, 0);
+  auto source_node = makeNode(__dp::CallTreeNodeType::Function, 2, 0);
+
+  auto raw = __dp::MetaDataQueueElement(__dp::RAW, 0, 0, variable_name, 0, sink_node, source_node);
+  auto war = __dp::MetaDataQueueElement(__dp::WAR, 0, 0, variable_name, 0, sink_node, source_node);
+  auto waw = __dp::MetaDataQueueElement(__dp::WAW, 0, 0, variable_name, 0, sink_node, source_node);
+
+  ASSERT_EQ(raw.toString().substr(0, 10), "MDQE( RAW ");
+  ASSERT_EQ(war.toString().substr(0, 10), "MDQE( WAR ");
+  ASSERT_EQ(waw.toString().substr(0, 10), "MDQE( WAW ");
+
+  // every other type falls through the switch without a name, INIT and the inter-iteration types
+  // among them. DependencyMetadata::toString() does spell INIT out, so the two disagree. The star
+  // that follows is decodeLID writing the sink location 0.
+  auto init = __dp::MetaDataQueueElement(__dp::INIT, 0, 0, variable_name, 0, sink_node, source_node);
+  auto inter_iteration = __dp::MetaDataQueueElement(__dp::RAW_II_0, 0, 0, variable_name, 0, sink_node, source_node);
+
+  ASSERT_EQ(init.toString().substr(0, 8), "MDQE( * ");
+  ASSERT_EQ(inter_iteration.toString().substr(0, 8), "MDQE( * ");
+}
