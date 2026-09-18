@@ -138,3 +138,23 @@ TEST_F(CallTreePreparedNodeBufferTest, testThePoolFreesWhatIsLeftInIt) {
   // free it
   ASSERT_EQ(living_nodes.load(), 0u);
 }
+
+TEST_F(CallTreePreparedNodeBufferTest, testACopiedNodeIsCountedAsWell) {
+  auto node = __dp::CallTreeNode();
+  ASSERT_EQ(living_nodes.load(), 1u);
+
+  {
+    // the destructor lowers the count for every node, so a copy has to raise it -- otherwise the
+    // count drops below zero and wraps, because it is unsigned
+    const auto copy = node;
+    ASSERT_EQ(living_nodes.load(), 2u);
+  }
+
+  ASSERT_EQ(living_nodes.load(), 1u);
+
+  // assignment replaces what a node holds without creating or destroying one, so it leaves the
+  // count alone
+  node = __dp::CallTreeNode(nullptr, nullptr, __dp::CallTreeNodeType::Function, 1, 0);
+  ASSERT_EQ(living_nodes.load(), 1u);
+  ASSERT_EQ(node.get_node_type(), __dp::CallTreeNodeType::Function);
+}

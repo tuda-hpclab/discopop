@@ -28,13 +28,22 @@ CallTreeNode::CallTreeNode() {
 
 CallTreeNode::CallTreeNode(shared_ptr<CallTreeNode> parent_ptr, CallTreeNode *parent_ptr_raw, CallTreeNodeType type,
                            unsigned int loop_or_function_id, unsigned int arg_iteration_id)
-    : type(type), loop_or_function_id(loop_or_function_id), parent_ptr(parent_ptr),
-      parent_ptr_raw(parent_ptr_raw) {
+    : type(type), loop_or_function_id(loop_or_function_id), parent_ptr(parent_ptr), parent_ptr_raw(parent_ptr_raw) {
   if (type == CallTreeNodeType::Iteration) {
     iteration_id = arg_iteration_id;
   } else {
     iteration_id = 0;
   }
+  if (call_tree_total_living_node_count) {
+    *call_tree_total_living_node_count += 1;
+  }
+}
+
+// The destructor lowers the count for every node that goes away, so every way of creating one has
+// to raise it -- a copy included, or the count runs below zero.
+CallTreeNode::CallTreeNode(const CallTreeNode &other)
+    : type(other.type), loop_or_function_id(other.loop_or_function_id), iteration_id(other.iteration_id),
+      parent_ptr(other.parent_ptr), parent_ptr_raw(other.parent_ptr_raw) {
   if (call_tree_total_living_node_count) {
     *call_tree_total_living_node_count += 1;
   }

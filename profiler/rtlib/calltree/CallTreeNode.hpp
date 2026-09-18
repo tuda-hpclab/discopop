@@ -25,6 +25,8 @@ public:
   CallTreeNode();
   CallTreeNode(shared_ptr<CallTreeNode> parent_ptr, CallTreeNode *parent_ptr_raw, CallTreeNodeType type,
                unsigned int loop_or_function_id, unsigned int iteration_id);
+  CallTreeNode(const CallTreeNode &other);
+  CallTreeNode &operator=(const CallTreeNode &other) = default;
   ~CallTreeNode();
   bool operator==(const CallTreeNode &other) const;
   shared_ptr<CallTreeNode> get_parent_ptr();
