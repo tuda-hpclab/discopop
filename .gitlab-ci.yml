@@ -1,0 +1,38 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+# GitLab CI configuration, translated from .github/workflows/.
+# The split mirrors the GitHub workflow files:
+#   .gitlab/ci/ci.yml       <- .github/workflows/ci.yml
+#   .gitlab/ci/pages.yml    <- .github/workflows/update_wiki.yml
+#   .gitlab/ci/publish.yml  <- .github/workflows/publish*.yml
+
+stages:
+  - test
+  - benchmark
+  - gate
+  - deploy
+  - publish
+  - release
+
+# GitHub needed an explicit branch list for `on: push` (which is why pushes to a
+# branch that was not listed never started a pipeline). GitLab does not: this
+# runs on every branch and on every merge request. The second rule keeps a branch
+# with an open merge request from producing two pipelines for the same commit.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+include:
+  - local: .gitlab/ci/ci.yml
+  - local: .gitlab/ci/pages.yml
+  - local: .gitlab/ci/publish.yml

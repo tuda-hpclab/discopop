@@ -1,0 +1,158 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+# Translated from .github/workflows/publish.yml, publish_prerelease.yml and the
+# per-package publish_*.yml workflows.
+#
+# SAFETY: every job in this file additionally requires the CI/CD variable
+# ENABLE_PUBLISHING to be set to "true". Without it a pushed version tag does
+# nothing. This repository is a fork, and an accidental tag push must not upload
+# a release to the shared PyPI projects. Set the variable in
+# Settings -> CI/CD -> Variables once uploads really are wanted.
+#
+# AUTHENTICATION: GitHub used PyPI Trusted Publishing (OIDC, no stored secret).
+# PyPI's GitLab trusted publisher supports gitlab.com only, not self-managed
+# instances, so these jobs use an API token instead. Store it as a masked,
+# protected CI/CD variable named PYPI_API_TOKEN.
+
+.pypi_publish:
+  stage: publish
+  image: python:3.11
+  variables:
+    # GitHub pinned Python 3.8 here, which is end-of-life and no longer receives
+    # image updates; 3.11 builds the same sdists/wheels.
+    TWINE_USERNAME: "__token__"
+    TWINE_PASSWORD: "$PYPI_API_TOKEN"
+    BUILD_ARGS: ""
+  script:
+    - pip install build twine
+    - python -m build $BUILD_ARGS "$PACKAGE_DIR"
+    - twine upload "$PACKAGE_DIR"/dist/*
+
+# the two packages whose GitHub workflow installed a clang before building
+.pypi_publish_with_clang:
+  extends: .pypi_publish
+  before_script:
+    # GitHub asked for clang-20 on a plain ubuntu-22.04 runner, where that package
+    # does not exist in the default sources. The rest of the project builds against
+    # clang-19, so the distribution default is used here. Only sdists are built,
+    # so a compiler is most likely not needed at all.
+    - apt-get update
+    - apt-get install -y clang
+
+publish_explorer:
+  extends: .pypi_publish
+  variables:
+    PACKAGE_DIR: "explorer"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^explorer_v/ && $ENABLE_PUBLISHING == "true"
+
+publish_gui:
+  extends: .pypi_publish
+  variables:
+    PACKAGE_DIR: "GUI"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^gui_v/ && $ENABLE_PUBLISHING == "true"
+
+publish_library:
+  extends: .pypi_publish
+  variables:
+    PACKAGE_DIR: "library"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^library_v/ && $ENABLE_PUBLISHING == "true"
+
+publish_mcp_server:
+  extends: .pypi_publish
+  variables:
+    PACKAGE_DIR: "mcp_server"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^mcp_server_v/ && $ENABLE_PUBLISHING == "true"
+
+publish_profiler:
+  extends: .pypi_publish_with_clang
+  variables:
+    PACKAGE_DIR: "profiler"
+    BUILD_ARGS: "--sdist"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^profiler_v/ && $ENABLE_PUBLISHING == "true"
+
+publish_hotspot_detection:
+  extends: .pypi_publish_with_clang
+  variables:
+    PACKAGE_DIR: "hotspot_detection"
+    BUILD_ARGS: "--sdist"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^hotspot_detection_v/ && $ENABLE_PUBLISHING == "true"
+
+# .github/workflows/publish_prerelease.yml -- v1.2.3a4 / b4 / dev4
+publish_prerelease:
+  extends: .pypi_publish
+  variables:
+    PACKAGE_DIR: "."
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(a|b|dev)[0-9]+$/ && $ENABLE_PUBLISHING == "true"
+
+# .github/workflows/publish.yml -- stable v1.2.3 tags: PyPI upload, .deb build
+# and a release. GitHub's `python setup.py sdist` no longer works here, there is
+# no setup.py at the repository root any more; `python -m build` replaces it.
+publish_discopop:
+  extends: .pypi_publish
+  variables:
+    PACKAGE_DIR: "."
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $ENABLE_PUBLISHING == "true"
+
+build_deb_package:
+  stage: publish
+  image: ubuntu:24.04
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $ENABLE_PUBLISHING == "true"
+  before_script:
+    - apt update
+    - apt install -y git curl python3 python3-pip python3-venv build-essential make cmake llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+  script:
+    # Ensure tagged commit is on master
+    - git fetch origin master --depth=1
+    - |
+      if ! git merge-base --is-ancestor "$CI_COMMIT_SHA" origin/master; then
+        echo "Tag ${CI_COMMIT_TAG} is not on master. Skipping release."
+        exit 1
+      fi
+    # Build Debian Package. The script moved to scripts/dev/ since the GitHub
+    # workflow was written, which still calls it in the repository root.
+    - bash scripts/dev/create_package.sh -r
+    - DEB_FILE=$(ls packages/*.deb)
+    - cp "$DEB_FILE" discopop.deb
+    # GitLab has no release assets of its own: the file goes into the generic
+    # package registry and the release below links to it.
+    - curl --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file discopop.deb "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/discopop/${CI_COMMIT_TAG}/discopop.deb"
+  artifacts:
+    expire_in: 4 weeks
+    paths:
+      - discopop.deb
+
+# GitHub created the release as a draft. GitLab releases have no draft state, so
+# this one is published immediately once ENABLE_PUBLISHING is set.
+create_release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build_deb_package
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $ENABLE_PUBLISHING == "true"
+  script:
+    - echo "Creating release for ${CI_COMMIT_TAG}"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Version $CI_COMMIT_TAG"
+    description: "Automated release for $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: "discopop.deb"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/discopop/${CI_COMMIT_TAG}/discopop.deb"

@@ -1,0 +1,123 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+# Translated from .github/workflows/ci.yml ("DiscoPoP CI").
+#
+# GitHub combined `runs-on: self-hosted` with `container:` to start a container
+# on its own runner. On GitLab the container is the job's `image:` and the runner
+# is selected by tags. If the runners of this instance require an explicit tag,
+# uncomment the `default:` block below and fill it in.
+
+# default:
+#   tags:
+#     - docker
+
+variables:
+  DEBIAN_FRONTEND: "noninteractive"
+  # identical to the "install_deps_cmd" entries of the GitHub build matrix
+  DP_APT_DEPS: "python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+
+# GitHub generated the matrix in a separate `create_matrix` job. Both branches of
+# its condition produced the same two entries, so the matrix is inlined here.
+build_install_and_test:
+  stage: test
+  image: $BASE_IMAGE
+  parallel:
+    matrix:
+      - ID: "debian-stable"
+        BASE_IMAGE: "debian:stable"
+      - ID: "ubuntu-24-04"
+        BASE_IMAGE: "ubuntu:24.04"
+  before_script:
+    # Install Prerequisites
+    - apt update
+    - apt install -y $DP_APT_DEPS
+  script:
+    # Check all files for DiscoPoP License tag
+    # invoked via `bash`: the executable bit is currently missing on this branch
+    - bash ./scripts/dev/check-license.sh $(find . -type f)
+
+    # Setup venv and install DiscoPoP
+    - rm -rf venv
+    - python3 -m venv venv
+    - venv/bin/pip install -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+    - venv/bin/pip install pytest
+
+    # Run MyPy Type Checking
+    - venv/bin/python3 -m mypy --config-file=mypy.ini
+
+    # Check formatting of DiscoPoP Explorer
+    - venv/bin/python3 -m black -l 120 --check explorer
+
+    # Check formatting of DiscoPoP Library
+    - venv/bin/python3 -m black -l 120 --check library
+
+    # Check formatting of DiscoPoP Hotspot Detection
+    - venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
+
+    # Python unit tests (discopop_explorer). Unlike GitHub, all script lines share
+    # one shell, so the venv stays active for the steps that follow.
+    - . venv/bin/activate
+    - python3 -m pytest explorer/discopop_explorer
+
+    # Build and execute C++ unit tests
+    - cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
+    - cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"
+    - build_tests/test/unit_tests/DiscoPoP_UT
+
+    # Profiler gold standard tests
+    - python3 -m unittest -v -k "*test.profiler.*"
+
+    # Python end-to-end-tests
+    - python3 -m unittest -v -k "*.end_to_end.*"
+
+pass_overhead_benchmark:
+  stage: benchmark
+  image: ubuntu:24.04
+  before_script:
+    # Install Prerequisites (same set as above, minus python3-tk)
+    - apt update
+    - apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+  script:
+    # only the profiler is needed: the benchmark drives clang directly, it does not run the
+    # explorer. Note the missing -e, without which LLVMDiscoPoP.so does not end up in the venv.
+    - rm -rf venv
+    - python3 -m venv venv
+    - venv/bin/pip install ./profiler
+    - venv/bin/pip install black mypy
+
+    # Check formatting and types of the benchmark driver
+    - venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead
+    - venv/bin/python3 -m mypy --config-file=mypy.ini benchmark/pass_overhead/run_pass_benchmark.py
+
+    # fails if a program does not build or run, or if the instrumented binary stops reproducing
+    # the output of the uninstrumented one. The timings themselves are reported, not enforced.
+    - venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --json-out pass_overhead_results.json --markdown-out pass_overhead_summary.md
+  after_script:
+    # GitLab has no equivalent of GITHUB_STEP_SUMMARY. The comparison is printed
+    # into the job log and kept as a downloadable artifact instead.
+    - if [ -f pass_overhead_summary.md ]; then cat pass_overhead_summary.md; fi
+  artifacts:
+    when: always
+    expire_in: 4 weeks
+    paths:
+      - pass_overhead_results.json
+      - pass_overhead_summary.md
+
+checks_successful:
+  stage: gate
+  image: debian:stable-slim
+  variables:
+    GIT_STRATEGY: none
+  needs:
+    - job: build_install_and_test
+      artifacts: false
+    - job: pass_overhead_benchmark
+      artifacts: false
+  script:
+    - echo "All checks successful!"
