@@ -43,6 +43,7 @@ target_sources(
   memory/signature/test_signature.cpp
   calltree/call_tree/test_call_tree.cpp
   calltree/call_tree_node/test_call_tree_node.cpp
+  calltree/prepared_node_buffer/test_prepared_node_buffer.cpp
   calltree/metadata_queue/test_metadata_queue.cpp
   calltree/metadata_queue_element/test_metadata_queue_element.cpp
   calltree/dependency_metadata/test_dependency_metadata.cpp
