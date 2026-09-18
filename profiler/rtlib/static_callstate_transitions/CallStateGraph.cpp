@@ -39,7 +39,9 @@ bool parse_id(const std::string &text, std::int32_t &result) {
 } // namespace
 
 CallStateGraph::CallStateGraph() {
-  auto start_time = std::chrono::high_resolution_clock::now();
+#ifdef DP_RTLIB_VERBOSE
+  const auto start_time = std::chrono::high_resolution_clock::now();
+#endif
   // open input file
   const std::string tmp_2 = __dp::profiler_output_path("callpath_state_transitions.txt");
   // create graph by parsing the file line by line
@@ -107,20 +109,29 @@ CallStateGraph::CallStateGraph() {
     }
     register_implicit_return_transition(source_callstate_id, target_callstate_id);
   }
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+#ifdef DP_RTLIB_VERBOSE
+  // The instrumented program writes its own output to this stream, so a measurement of the runtime's
+  // own startup does not belong there unconditionally. It stays behind the switch the rest of the
+  // runtime keeps its diagnostics behind.
+  const auto end_time = std::chrono::high_resolution_clock::now();
+  const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[CallStateGraph()]: " << ((double)duration.count() / 1000.0) << "s" << std::endl;
+#endif
 }
 
 CallStateGraph::~CallStateGraph() {
-  auto start_time = std::chrono::high_resolution_clock::now();
+#ifdef DP_RTLIB_VERBOSE
+  const auto start_time = std::chrono::high_resolution_clock::now();
+#endif
   // delete nodes
   for (auto pair : node_map) {
     delete pair.second;
   }
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+#ifdef DP_RTLIB_VERBOSE
+  const auto end_time = std::chrono::high_resolution_clock::now();
+  const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[~CallStateGraph()]: " << ((double)duration.count() / 1000.0) << "s" << std::endl;
+#endif
 }
 
 CallState *CallStateGraph::get_or_register_node(std::int32_t call_state_id) {

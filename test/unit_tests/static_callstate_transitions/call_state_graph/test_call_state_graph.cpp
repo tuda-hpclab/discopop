@@ -179,3 +179,19 @@ TEST_F(CallStateGraphParsingTest, testTheReturnTargetsFileSurvivesAMalformedLine
     EXPECT_EQ(graph.get_or_register_node(3)->get_implicit_return_transition_target(), graph.get_or_register_node(1));
   });
 }
+
+// Whatever the runtime prints lands in the output of the program being profiled, between that
+// program's own lines. Building and tearing down the graph used to time itself and report the
+// result on stdout on every single run.
+TEST_F(CallStateGraphParsingTest, testBuildingTheGraphWritesNothingToStandardOutput) {
+  write_input("callpath_state_transitions.txt", "1 10 2\n");
+  write_input("callpath_state_return_targets.txt", "2 1\n");
+
+  ::testing::internal::CaptureStdout();
+  {
+    CallStateGraph graph;
+  }
+  const std::string output = ::testing::internal::GetCapturedStdout();
+
+  EXPECT_EQ(output, "");
+}
