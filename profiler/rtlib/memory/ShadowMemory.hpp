@@ -30,43 +30,47 @@ public:
     sigWrite = new Signature(slotSize, size, numHash);
   }
 
-  ~ShadowMemory() {
+  ~ShadowMemory() override {
     delete sigRead;
     delete sigWrite;
   }
 
-  inline sigElement testInRead(std::int64_t memAddr) { return sigRead->membershipCheck(memAddr); }
+  inline sigElement testInRead(std::int64_t memAddr) override { return sigRead->membershipCheck(memAddr); }
 
-  inline sigElement testInWrite(std::int64_t memAddr) { return sigWrite->membershipCheck(memAddr); }
+  inline sigElement testInWrite(std::int64_t memAddr) override { return sigWrite->membershipCheck(memAddr); }
 
-  inline sigElement insertToRead(std::int64_t memAddr, sigElement value) { return sigRead->insert(memAddr, value); }
+  inline sigElement insertToRead(std::int64_t memAddr, sigElement value) override {
+    return sigRead->insert(memAddr, value);
+  }
 
-  inline sigElement insertToWrite(std::int64_t memAddr, sigElement value) { return sigWrite->insert(memAddr, value); }
+  inline sigElement insertToWrite(std::int64_t memAddr, sigElement value) override {
+    return sigWrite->insert(memAddr, value);
+  }
 
-  inline void updateInRead(std::int64_t memAddr, sigElement newValue) { sigRead->update(memAddr, newValue); }
+  inline void updateInRead(std::int64_t memAddr, sigElement newValue) override { sigRead->update(memAddr, newValue); }
 
-  inline void updateInWrite(std::int64_t memAddr, sigElement newValue) { sigWrite->update(memAddr, newValue); }
+  inline void updateInWrite(std::int64_t memAddr, sigElement newValue) override { sigWrite->update(memAddr, newValue); }
 
-  inline void removeFromRead(std::int64_t memAddr) { sigRead->remove(memAddr); }
+  inline void removeFromRead(std::int64_t memAddr) override { sigRead->remove(memAddr); }
 
-  inline void removeFromWrite(std::int64_t memAddr) { sigWrite->remove(memAddr); }
+  inline void removeFromWrite(std::int64_t memAddr) override { sigWrite->remove(memAddr); }
 
-  inline std::unordered_set<ADDR> getAddrsInRange(std::int64_t startAddr, std::int64_t endAddr) {
+  inline std::unordered_set<ADDR> getAddrsInRange(std::int64_t startAddr, std::int64_t endAddr) override {
     // not possible for Shadow, since not all addresses are kept
     std::unordered_set<ADDR> result;
     return result;
   }
 
   // a signature does not keep the addresses it was given, so it cannot list them back
-  inline std::vector<std::pair<std::int64_t, sigElement>> getReadKVPairs() {
+  inline std::vector<std::pair<std::int64_t, sigElement>> getReadKVPairs() override {
     throw std::logic_error("NOT IMPLEMENTED!");
   }
 
-  inline std::vector<std::pair<std::int64_t, sigElement>> getWriteKVPairs() {
+  inline std::vector<std::pair<std::int64_t, sigElement>> getWriteKVPairs() override {
     throw std::logic_error("NOT IMPLEMENTED!");
   }
 
-  inline void print() {}
+  inline void print() override {}
 
 private:
   Signature *sigRead;
