@@ -54,8 +54,6 @@ CallTree::~CallTree() {
 
   // the nodes left in the chunk the tree was taking from are owned by nobody else
   delete prepared_chunk;
-
-  std::cout << "Joined calltree_threads" << std::endl;
 }
 
 unsigned int CallTree::get_node_count() {
@@ -244,7 +242,6 @@ void CallTree::exit_loop() {
 }
 
 void *manage_calltree(void *arg) {
-  std::cout << "Hello world from CallTree manager thread!" << std::endl;
   CallTree *call_tree_ptr = (CallTree *)arg;
   while (!calltree_thread_stop) {
     call_tree_ptr->ctnqcb.prepare_chunk_if_required();
