@@ -76,7 +76,7 @@ struct ScopeManager {
 
     // check for first_writes in previous scopes (i.e.: search for the "owner"
     // of the stack variable)
-    int idx = 0;
+    std::size_t idx = 0;
     for (auto scope : scopeStack) {
       if (scope.get_first_write().count(addr) > 0) {
         if (idx == scopeStack.size() - 1) {
@@ -197,7 +197,7 @@ struct ScopeManager2 {
 
     // check for first_writes in previous scopes (i.e.: search for the "owner"
     // of the stack variable)
-    int idx = 0;
+    std::size_t idx = 0;
     for (auto scope : scopeStack) {
       if (scope.get_first_write().count(addr) > 0) {
         if (idx == scopeStack.size() - 1) {
