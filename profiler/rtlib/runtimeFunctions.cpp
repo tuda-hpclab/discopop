@@ -76,15 +76,8 @@ void addDep(depType type, LID curr, LID depOn, const char *var, std::int64_t AAv
   // Remove metadata to preserve result correctness and add metadata to `Dep`
   // object
 
-  // register dependency
-  depMap::iterator posInDeps = myMap->find(curr);
-  if (posInDeps == myMap->end()) {
-    depSet *tmp_depSet = new depSet();
-    tmp_depSet->insert(Dep(type, depOn, var, AAvar));
-    myMap->insert(std::pair<LID, depSet *>(curr, tmp_depSet));
-  } else {
-    posInDeps->second->insert(Dep(type, depOn, var, AAvar));
-  }
+  // register dependency. operator[] creates the set when the lid is seen for the first time.
+  (*myMap)[curr].insert(Dep(type, depOn, var, AAvar));
 
 #if DP_CALLTREE_PROFILING
   // register dependency for call_tree based metadata calculation
@@ -159,7 +152,7 @@ void generateStringDepMap() {
       string unpacked_lid = to_string(dline_first_instID) + "@" +
                             to_string(dline_first_callpathStateID); // use instructionID instead of lineID
       unordered_set<string> lineDeps;
-      for (auto &d : *(dline.second)) {
+      for (auto &d : dline.second) {
         string dep = "";
         switch (d.type) {
         case RAW:
@@ -195,7 +188,6 @@ void generateStringDepMap() {
       } else {
         (*outPutDeps)[unpacked_lid].insert(lineDeps.begin(), lineDeps.end());
       }
-      delete dline.second;
     }
   }
 }
@@ -331,28 +323,17 @@ string getMemoryRegionIdFromAddr(string fallback, ADDR addr) {
 }
 
 void mergeDeps() {
-  depSet *tmp_depSet = nullptr; // pointer to the current processing set of dps
-  depMap::iterator globalPos;   // position of the current processing lid in allDeps
-
   allDepsLock.lock();
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::MERGE_DEPS);
 #endif
 
   for (auto &dep : *myMap) {
-    // if a lid occurs the first time, then add it in to the global hash table.
-    // Otherwise just take the associated set of dps.
-    globalPos = allDeps->find(dep.first);
-    if (globalPos == allDeps->end()) {
-      tmp_depSet = new depSet();
-      (*allDeps)[dep.first] = tmp_depSet;
-    } else {
-      tmp_depSet = globalPos->second;
-    }
-
-    // merge the associated set with current lid into the global hash table
-    for (auto &d : *(dep.second)) {
-      tmp_depSet->insert(d);
+    // if a lid occurs the first time, operator[] adds its set to the global hash table;
+    // otherwise the set that is already there is extended.
+    depSet &global_deps = (*allDeps)[dep.first];
+    for (auto &d : dep.second) {
+      global_deps.insert(d);
     }
   }
   allDepsLock.unlock();
@@ -531,6 +512,9 @@ void *processFirstAccessQueue(void *arg) {
   // delete local_dependency_metadata_results;
 #endif
 
+  delete myMap;
+  myMap = nullptr;
+
   if (DP_DEBUG) {
 #ifdef __linux__
     cout << "thread " << id << " on core " << sched_getcpu() << " exits... \n";
@@ -628,6 +612,9 @@ void *processSecondAccessQueue(void *arg) {
 
   mergeDeps();
 
+  delete myMap;
+  myMap = nullptr;
+
   if (DP_DEBUG) {
 #ifdef __linux__
     cout << "thread " << id << " processing secondAccessQueue on core " << sched_getcpu() << " exits... \n";
@@ -686,6 +673,8 @@ void finalizeSingleThreadedExecution() {
   delete singleThreadedExecutionSMem;
   singleThreadedExecutionSMem = nullptr;
   mergeDeps();
+  delete myMap;
+  myMap = nullptr;
 
   if (DP_DEBUG) {
     std::cout << "END: finalize Single Threaded Execution... \n";

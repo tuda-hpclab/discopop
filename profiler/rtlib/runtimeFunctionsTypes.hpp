@@ -146,7 +146,10 @@ public:
 };
 
 typedef std::unordered_set<Dep, DepHasher, eqDep> depSet;
-typedef std::unordered_map<LID, depSet *> depMap;
+// The sets are held by value. As owning raw pointers they outlived every map they were stored
+// in: the per-thread map is cleared once per processed chunk, which dropped the pointers and
+// leaked one set per dependency source line and chunk for the whole run.
+typedef std::unordered_map<LID, depSet> depMap;
 
 // Hybrid anaysis
 typedef std::unordered_map<std::string, std::unordered_set<std::string>> stringDepMap;
