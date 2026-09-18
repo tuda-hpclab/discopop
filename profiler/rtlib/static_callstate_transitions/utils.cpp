@@ -14,6 +14,9 @@
 #include "../output_paths.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
+#include <fstream>
+#include <iostream>
+
 namespace __dp {
 
 void update_callstate_from_call(int32_t instructionID) {
@@ -103,11 +106,22 @@ void update_callstate(int32_t instructionID) {
 void initialize_current_callpath_state() {
   // open input file
   // create graph by parsing the file line by line
-  std::ifstream file(profiler_output_path("initial_stateID.txt"));
+  const std::string path = profiler_output_path("initial_stateID.txt");
+  std::ifstream file(path);
   std::string line;
-  int32_t current_callpath_state_id;
+  // The pass writes this file only once it has found a call path labelled "main" (see
+  // DiscoPoP::save_initial_path), so it can be missing or empty -- and then the id below used to be
+  // read without ever having been written, which sends a garbage state into the graph. State 0 is
+  // the defined fallback: it has no transitions, so the reported call state simply stays put.
+  int32_t current_callpath_state_id = 0;
+  bool initial_state_found = false;
   while (std::getline(file, line)) {
     current_callpath_state_id = stoi(line);
+    initial_state_found = true;
+  }
+  if (!initial_state_found) {
+    std::cerr << "DiscoPoP: could not read an initial call state from " << path
+              << ". Reported call states will be incorrect!\n";
   }
   current_callpath_state = call_state_graph->get_or_register_node(current_callpath_state_id);
   calls_without_executed_transitions.push_back(0);

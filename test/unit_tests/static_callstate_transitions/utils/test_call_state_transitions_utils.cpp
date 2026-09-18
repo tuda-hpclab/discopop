@@ -217,3 +217,35 @@ TEST_F(InitializeCurrentCallpathStateTest, testTheLastIdInTheFileWins) {
   ASSERT_NE(__dp::current_callpath_state, nullptr);
   EXPECT_EQ(__dp::current_callpath_state->get_id(), 7);
 }
+
+// A missing or empty file is the normal outcome for a target whose call path tree holds no "main",
+// because the pass writes the id only when it finds one. The id used to be read uninitialized in
+// that case -- g++ -Wmaybe-uninitialized points straight at it. The fallback reports itself on
+// stderr; that output is expected here.
+TEST_F(InitializeCurrentCallpathStateTest, testAMissingFileLeavesTheInitialStateDefined) {
+  __dp::initialize_current_callpath_state();
+
+  ASSERT_NE(__dp::current_callpath_state, nullptr);
+  EXPECT_EQ(__dp::current_callpath_state->get_id(), 0);
+  ASSERT_EQ(__dp::calls_without_executed_transitions.size(), 1u);
+  EXPECT_EQ(__dp::calls_without_executed_transitions.back(), 0u);
+}
+
+TEST_F(InitializeCurrentCallpathStateTest, testAnEmptyFileLeavesTheInitialStateDefined) {
+  write_initial_state("");
+
+  __dp::initialize_current_callpath_state();
+
+  ASSERT_NE(__dp::current_callpath_state, nullptr);
+  EXPECT_EQ(__dp::current_callpath_state->get_id(), 0);
+}
+
+// a state without transitions is a state the call path never leaves
+TEST_F(InitializeCurrentCallpathStateTest, testTheFallbackStateSimplyDoesNotMove) {
+  __dp::initialize_current_callpath_state();
+
+  __dp::update_callstate(10);
+
+  ASSERT_NE(__dp::current_callpath_state, nullptr);
+  EXPECT_EQ(__dp::current_callpath_state->get_id(), 0);
+}
