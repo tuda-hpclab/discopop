@@ -57,9 +57,9 @@ TEST_F(DependencyMetadataTest, testToStringContainsTypeAndDependencies) {
 }
 
 TEST_F(DependencyMetadataTest, testDefaultConstructionLeavesNoDependencies) {
-  // the default constructor has no caller in the runtime. The six sets come up empty because they
-  // are class types; the scalars next to them are left uninitialised, so nothing here reads them.
-  const auto metadata = __dp::DependencyMetadata();
+  // the default constructor has no caller in the runtime, but what it produces has to be safe to
+  // print, so every member has a value
+  auto metadata = __dp::DependencyMetadata();
 
   EXPECT_TRUE(metadata.intra_call_dependencies.empty());
   EXPECT_TRUE(metadata.intra_iteration_dependencies.empty());
@@ -67,6 +67,14 @@ TEST_F(DependencyMetadataTest, testDefaultConstructionLeavesNoDependencies) {
   EXPECT_TRUE(metadata.inter_iteration_dependencies.empty());
   EXPECT_TRUE(metadata.sink_ancestors.empty());
   EXPECT_TRUE(metadata.source_ancestors.empty());
+
+  EXPECT_EQ(metadata.type, __dp::RAW);
+  EXPECT_EQ(metadata.sink, 0);
+  EXPECT_EQ(metadata.source, 0);
+  EXPECT_STREQ(metadata.var, "");
+  EXPECT_EQ(metadata.AAvar, 0);
+
+  EXPECT_EQ(metadata.toString(), "RAW * *  0 IAC[] IAI[] IEC[] IEI[] SINK_ANC[] SOURCE_ANC[] ");
 }
 
 TEST_F(DependencyMetadataTest, testTheHashFollowsTheComparison) {
