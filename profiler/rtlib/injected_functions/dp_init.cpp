@@ -14,6 +14,7 @@
 
 #include "../DPTypes.hpp"
 
+#include "../output_paths.hpp"
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
@@ -77,15 +78,15 @@ void __dp_init() {
   memory_manager->allocate_dummy_region();
 
   // This is the first thing to run in an instrumented program, so it is also where the output
-  // directory is pinned down: everything that writes a result file later reads these two
-  // variables and can rely on them being set.
+  // directory is pinned down. Everything in the runtime that writes a result file reaches it
+  // through profiler_output_path() afterwards, see output_paths.hpp.
   if (getenv("DOT_DISCOPOP") == nullptr) {
     setenv("DOT_DISCOPOP", ".discopop", 1);
   }
   const std::string profiler_directory = std::string(getenv("DOT_DISCOPOP")) + "/profiler";
   setenv("DOT_DISCOPOP_PROFILER", profiler_directory.c_str(), 1);
 
-  out->open((profiler_directory + "/dynamic_dependencies.txt").c_str(), ios::out);
+  out->open(profiler_output_path("dynamic_dependencies.txt").c_str(), ios::out);
   assert(out->is_open() && "Cannot open a file to output dependences.\n");
 
   // Static callPath tracing

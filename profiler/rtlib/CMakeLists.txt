@@ -12,6 +12,7 @@
 
 # Runtime library sources and build flags.
 set(DiscoPoP_SOURCES
+        output_paths.cpp
         runtimeFunctions.cpp
         runtimeFunctionsGlobals.cpp
 

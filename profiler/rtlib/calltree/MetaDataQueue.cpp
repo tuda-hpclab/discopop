@@ -13,6 +13,7 @@
 #include "MetaDataQueue.hpp"
 
 #include "../../share/include/timer.hpp"
+#include "../output_paths.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
 namespace __dp {
@@ -84,10 +85,8 @@ void MetaDataQueue::blocking_finalize_queue() {
   std::ifstream ifile;
   std::string line;
   std::ofstream ofile;
-  std::string tmp(getenv("DOT_DISCOPOP_PROFILER"));
   // output information about the loops
-  tmp += "/dependency_metadata.txt";
-  ofile.open(tmp.data());
+  ofile.open(profiler_output_path("dependency_metadata.txt"));
   ofile << "# IAC : intra-call-dependency \n";
   ofile << "# IAI : intra-iteration-dependency \n";
   ofile << "# IEC : inter-call-dependency \n";

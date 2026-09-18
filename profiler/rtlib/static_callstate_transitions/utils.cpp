@@ -11,6 +11,7 @@
  */
 
 #include "utils.hpp"
+#include "../output_paths.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
 namespace __dp {
@@ -101,10 +102,8 @@ void update_callstate(int32_t instructionID) {
 
 void initialize_current_callpath_state() {
   // open input file
-  std::string tmp(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp += "/initial_stateID.txt";
   // create graph by parsing the file line by line
-  std::ifstream file(tmp);
+  std::ifstream file(profiler_output_path("initial_stateID.txt"));
   std::string line;
   int32_t current_callpath_state_id;
   while (std::getline(file, line)) {

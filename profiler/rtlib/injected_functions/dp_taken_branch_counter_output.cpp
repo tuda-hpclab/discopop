@@ -12,6 +12,7 @@
 
 #include "../DPTypes.hpp"
 
+#include "../output_paths.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
 #include <fstream>
@@ -29,9 +30,7 @@ void __dp_taken_branch_counter_output() {
   std::ofstream ofile;
 
   // output information about the loops
-  std::string tmp(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp += "/cu_taken_branch_counter_output.txt";
-  ofile.open(tmp.data());
+  ofile.open(profiler_output_path("cu_taken_branch_counter_output.txt"));
 
   for (auto pair : cuec) {
     ofile << pair.first << ";" << pair.second << "\n";

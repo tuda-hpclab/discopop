@@ -12,6 +12,7 @@
 
 #include "../DPTypes.hpp"
 
+#include "../output_paths.hpp"
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
@@ -107,24 +108,7 @@ void __dp_finalize(LID lid) {
     const auto timer = Timer(timers, TimerRegion::OUTPUT_ALLOCATIONS);
 #endif
 
-    const auto prepare_environment = []() {
-      // prepare environment variables
-      const char *discopop_env = getenv("DOT_DISCOPOP");
-      if (discopop_env == NULL) {
-
-        // DOT_DISCOPOP needs to be initialized
-        setenv("DOT_DISCOPOP", ".discopop", 1);
-        discopop_env = ".discopop";
-      }
-
-      auto discopop_profiler_str = std::string(discopop_env) + "/profiler";
-      setenv("DOT_DISCOPOP_PROFILER", discopop_profiler_str.data(), 1);
-
-      return discopop_profiler_str + "/memory_regions.txt";
-    };
-    const auto path = prepare_environment();
-
-    auto allocationsFileStream = ofstream(path, ios::out);
+    auto allocationsFileStream = ofstream(profiler_output_path("memory_regions.txt"), ios::out);
 #if DP_MEMORY_REGION_DEALIASING
     memory_manager->output_memory_regions(allocationsFileStream);
 #endif
@@ -160,10 +144,7 @@ void __dp_finalize(LID lid) {
   std::ifstream ifile;
   std::string line;
   std::ofstream ofile;
-  std::string tmp(getenv("DOT_DISCOPOP_PROFILER"));
-  // output information about the loops
-  tmp += "/dependency_metadata.txt";
-  ofile.open(tmp.data());
+  ofile.open(profiler_output_path("dependency_metadata.txt"));
   ofile << "# IAC : intra-call-dependency \n";
   ofile << "# IAI : intra-iteration-dependency \n";
   ofile << "# IEC : inter-call-dependency \n";
@@ -188,7 +169,7 @@ void __dp_finalize(LID lid) {
   // output elapsed time for profiling
   std::chrono::milliseconds time_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::high_resolution_clock::now() - statistics_profiling_start_time);
-  auto stats_file = ofstream(std::string(getenv("DOT_DISCOPOP_PROFILER")) + "/statistics/profiling_time.txt", ios::out);
+  auto stats_file = ofstream(profiler_output_path("statistics/profiling_time.txt"), ios::out);
   stats_file << std::to_string(time_elapsed.count()) << " ms\n";
   stats_file.close();
 

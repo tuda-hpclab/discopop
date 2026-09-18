@@ -11,6 +11,9 @@
  */
 
 #include "CallStateGraph.hpp"
+
+#include "../output_paths.hpp"
+
 #include <chrono>
 #include <fstream>
 #include <string>
@@ -18,8 +21,7 @@
 CallStateGraph::CallStateGraph() {
   auto start_time = std::chrono::high_resolution_clock::now();
   // open input file
-  std::string tmp_2(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp_2 += "/callpath_state_transitions.txt";
+  const std::string tmp_2 = __dp::profiler_output_path("callpath_state_transitions.txt");
   // create graph by parsing the file line by line
   std::ifstream file(tmp_2);
   if (!file) {
@@ -55,8 +57,7 @@ CallStateGraph::CallStateGraph() {
   // Transitions triggered by the dummy "return" instruction id are stored separately and without
   // that id (see DiscoPoP::save_path_state_transitions). Without them no function return updates
   // the call state, so a missing file must not pass silently.
-  std::string tmp_3(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp_3 += "/callpath_state_return_targets.txt";
+  const std::string tmp_3 = __dp::profiler_output_path("callpath_state_return_targets.txt");
   std::ifstream return_targets_file(tmp_3);
   if (!return_targets_file) {
     std::cerr << "DiscoPoP: could not open " << tmp_3 << ". Reported call states will be incorrect!\n";
