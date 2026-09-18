@@ -24,12 +24,10 @@
 
 #include "../static_callstate_transitions/utils.hpp"
 
-#ifdef __linux__
-#include <linux/limits.h>
-#endif
-
+#include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -78,54 +76,21 @@ void __dp_init() {
 
   memory_manager->allocate_dummy_region();
 
-#ifdef __linux__
-  // try to get an output file name w.r.t. the target application
-  // if it is not available, fall back to "Output.txt"
-  char *selfPath = new char[PATH_MAX];
-  if (selfPath != nullptr) {
-    if (readlink("/proc/self/exe", selfPath, PATH_MAX - 1) == -1) {
-      delete[] selfPath;
-      selfPath = nullptr;
-      out->open("Output.txt", ios::out);
-    }
-    // out->open(string(selfPath) + "_dep.txt", ios::out);  # results in the
-    // old <prog>_dep.txt
-    //  prepare environment variables
-    char const *tmp = getenv("DOT_DISCOPOP");
-    if (tmp == NULL) {
-      // DOT_DISCOPOP needs to be initialized
-      setenv("DOT_DISCOPOP", ".discopop", 1);
-    }
-    std::string tmp_str(getenv("DOT_DISCOPOP"));
-    setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-    tmp2 += "/dynamic_dependencies.txt";
-
-    out->open(tmp2.data(), ios::out);
-
-    // Static callPath tracing
-    call_state_graph = new CallStateGraph();
-    initialize_current_callpath_state();
+  // This is the first thing to run in an instrumented program, so it is also where the output
+  // directory is pinned down: everything that writes a result file later reads these two
+  // variables and can rely on them being set.
+  if (getenv("DOT_DISCOPOP") == nullptr) {
+    setenv("DOT_DISCOPOP", ".discopop", 1);
   }
-#else
-  // Non-Linux: replicate the env-var + output-file + call-state setup from
-  // the Linux path above, but without /proc/self/exe (POSIX only).
-  {
-    char const *tmp = getenv("DOT_DISCOPOP");
-    if (tmp == NULL) {
-      setenv("DOT_DISCOPOP", ".discopop", 1);
-    }
-    std::string tmp_str(getenv("DOT_DISCOPOP"));
-    setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-    tmp2 += "/dynamic_dependencies.txt";
-    out->open(tmp2.data(), ios::out);
+  const std::string profiler_directory = std::string(getenv("DOT_DISCOPOP")) + "/profiler";
+  setenv("DOT_DISCOPOP_PROFILER", profiler_directory.c_str(), 1);
 
-    call_state_graph = new CallStateGraph();
-    initialize_current_callpath_state();
-  }
-#endif
+  out->open((profiler_directory + "/dynamic_dependencies.txt").c_str(), ios::out);
   assert(out->is_open() && "Cannot open a file to output dependences.\n");
+
+  // Static callPath tracing
+  call_state_graph = new CallStateGraph();
+  initialize_current_callpath_state();
 
   if (DP_DEBUG) {
     cout << "DP initialized." << endl;
