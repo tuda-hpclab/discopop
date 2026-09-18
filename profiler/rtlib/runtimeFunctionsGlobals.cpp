@@ -13,6 +13,7 @@
 #include "runtimeFunctionsGlobals.hpp"
 
 #include "Immortal.hpp"
+#include "hybrid_analysis/bb_deps.hpp"
 #include "runtimeFunctions.hpp"
 
 bool USE_PERFECT = true;

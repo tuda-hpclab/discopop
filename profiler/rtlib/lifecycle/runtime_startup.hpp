@@ -14,11 +14,12 @@
 
 namespace __dp {
 
-/******* Instrumentation function *******/
+/******* Runtime startup *******/
 extern "C" {
 
-// Brings the runtime up. Runs from .init_array before the first global constructor of the target,
-// see dp_init.cpp; __dp_func_entry calls it as well, as a safety net.
+// Brings the runtime up. Not an instrumented callback: the pass inserts no call to it. It runs
+// from the .init_array entry in runtime_startup.cpp, before the first global constructor of the
+// target program.
 void __dp_init();
 }
 

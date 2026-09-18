@@ -10,7 +10,7 @@
  *
  */
 
-#include "dp_init.hpp"
+#include "runtime_startup.hpp"
 
 #include "../DPTypes.hpp"
 
@@ -18,7 +18,7 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "dp_finalize.hpp"
+#include "../injected_functions/dp_finalize.hpp"
 
 #include "../../share/include/debug_print.hpp"
 #include "../../share/include/timer.hpp"
@@ -37,7 +37,7 @@ using namespace std;
 
 namespace __dp {
 
-/******* Instrumentation function *******/
+/******* Runtime startup *******/
 extern "C" {
 
 void __dp_init() {
@@ -123,7 +123,9 @@ namespace {
 //
 // Since no instrumented code calls __dp_init any more, nothing references this translation unit,
 // and the linker would drop it from the static runtime archive together with the two entries
-// below. The link wrappers in profiler/scripts therefore request __dp_init with -u.
+// below -- without any diagnostic; the profiled program would simply never start the runtime.
+// The link wrappers in profiler/scripts therefore request __dp_init with -u, which is why that
+// symbol and these two entries have to stay in the same file.
 __attribute__((constructor(101))) void dp_runtime_startup() { __dp_init(); }
 
 __attribute__((destructor(101))) void dp_runtime_shutdown() {

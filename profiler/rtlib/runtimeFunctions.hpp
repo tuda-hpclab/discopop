@@ -33,15 +33,6 @@ void outputDeps();
 
 void generateStringDepMap();
 
-// merges the dependencies handed over by __dp_add_bb_deps into the collected
-// dependencies. Runs at termination, since it is only then known which of the
-// conditionally taken basic blocks the registered dependencies belong to were
-// actually executed.
-void process_registered_bb_deps();
-// Releases the strings registered by __dp_add_bb_deps. Called from
-// destroy_immortal_globals(), once process_registered_bb_deps() has consumed them.
-void release_registered_bb_deps();
-
 void readRuntimeInfo();
 
 void initParallelization();

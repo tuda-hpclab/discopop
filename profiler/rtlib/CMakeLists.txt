@@ -35,7 +35,6 @@ set(DiscoPoP_SOURCES
         injected_functions/dp_func_entry.cpp
         injected_functions/dp_func_exit.cpp
         injected_functions/dp_incr_taken_branch_counter.cpp
-        injected_functions/dp_init.cpp
         injected_functions/dp_loop_entry.cpp
         injected_functions/dp_loop_exit.cpp
         injected_functions/dp_loop_incr.cpp
@@ -46,6 +45,11 @@ set(DiscoPoP_SOURCES
         injected_functions/dp_report_bb_pair.cpp
         injected_functions/dp_taken_branch_counter_output.cpp
         injected_functions/dp_write.cpp
+
+        hybrid_analysis/bb_deps.cpp
+
+        lifecycle/runtime_startup.cpp
+        lifecycle/runtime_shutdown.cpp
 
         static_callstate_transitions/CallState.cpp
         static_callstate_transitions/CallStateGraph.cpp
