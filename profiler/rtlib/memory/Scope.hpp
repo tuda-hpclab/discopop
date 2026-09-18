@@ -59,7 +59,15 @@ struct ScopeManager {
 
   void enterScope(std::string type, LID debug_lid) { scopeStack.push_back(Scope(next_scope_id++)); }
 
-  void leaveScope(std::string type, LID debug_lid) { scopeStack.pop_back(); }
+  // the type is not compared against the one the scope was entered with, so leaving a scope pops
+  // whatever is on top -- but never off the end of an empty stack
+  void leaveScope(std::string type, LID debug_lid) {
+    if (scopeStack.empty()) {
+      return;
+    }
+
+    scopeStack.pop_back();
+  }
 
   void registerStackRead(ADDR address, LID debug_lid, const char *debug_var) {
     scopeStack.back().registerStackRead(address, debug_lid, debug_var);
@@ -111,15 +119,20 @@ struct ScopeManager {
   bool positiveScopeChangeOccuredSinceLastAccess(ADDR addr) {
     // positive Scope change --> current scope id higher than the id during the
     // last access
-    if (!addrToLastAccessScopeID[addr]) {
+    //
+    // Asking through operator[] would add an entry for every address that has never been accessed,
+    // so a query would make the map grow instead of only an access. ScopeManager2 uses find() for
+    // the same reason.
+    const auto iterator = addrToLastAccessScopeID.find(addr);
+    if (iterator == addrToLastAccessScopeID.end()) {
       return true;
     }
 
-    if (addrToLastAccessScopeID[addr] < scopeStack.back().get_id()) {
+    if (!iterator->second) {
       return true;
     }
 
-    return false;
+    return iterator->second < scopeStack.back().get_id();
   }
 
 private:
@@ -176,7 +189,13 @@ struct ScopeManager2 {
 
   void enterScope(const char *type, LID debug_lid) { scopeStack.emplace_back(next_scope_id++); }
 
-  void leaveScope(const char *type, LID debug_lid) { scopeStack.pop_back(); }
+  void leaveScope(const char *type, LID debug_lid) {
+    if (scopeStack.empty()) {
+      return;
+    }
+
+    scopeStack.pop_back();
+  }
 
   void registerStackRead(ADDR address, LID debug_lid, char *debug_var) {
     auto &current_scope = scopeStack.back();

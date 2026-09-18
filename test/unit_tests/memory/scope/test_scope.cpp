@@ -1009,3 +1009,45 @@ TEST_F(ScopeManager2Test, testNumberOpenScopes) {
   manager.leaveScope("function", 8);
   ASSERT_EQ(manager.number_open_scopes(), 0);
 }
+
+TEST_F(ScopeManagerTest, testLeavingAScopeThatWasNeverEntered) {
+  auto manager = __dp::ScopeManager{};
+
+  manager.leaveScope("function", 1);
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  // and the manager still works afterwards
+  manager.enterScope("function", 2);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+}
+
+TEST_F(ScopeManagerTest, testTheScopeChangeIsMeasuredAgainstTheLastAccess) {
+  auto manager = __dp::ScopeManager{};
+  manager.enterScope("function", 1);
+
+  // an address nothing has ever touched has no last access, so anything counts as a change
+  ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(0x1000));
+
+  // an address accessed in the current scope has not seen one
+  manager.registerStackWrite(0x2000, 2, "x");
+  ASSERT_FALSE(manager.positiveScopeChangeOccuredSinceLastAccess(0x2000));
+
+  manager.enterScope("loop", 3);
+  ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(0x2000));
+
+  // the answer for an unknown address is the same whether the map holds a zero for it or nothing
+  // at all, which is why only the growth of the map tells the two apart
+  ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(0x1000));
+}
+
+TEST_F(ScopeManager2Test, testLeavingAScopeThatWasNeverEntered) {
+  auto manager = __dp::ScopeManager2{};
+
+  manager.leaveScope("function", 1);
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 2);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+}
