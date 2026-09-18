@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
 
 using namespace std;
 
@@ -56,13 +57,14 @@ public:
     return result;
   }
 
+  // a signature does not keep the addresses it was given, so it cannot list them back
   inline std::vector<std::pair<std::int64_t, sigElement>> getReadKVPairs() {
-    throw new std::string("NOT IMPLEMENTED!");
+    throw std::logic_error("NOT IMPLEMENTED!");
   }
 
   inline std::vector<std::pair<std::int64_t, sigElement>> getWriteKVPairs() {
-    throw new std::string("NOT IMPLEMENTED!");
-  };
+    throw std::logic_error("NOT IMPLEMENTED!");
+  }
 
   inline void print() {}
 

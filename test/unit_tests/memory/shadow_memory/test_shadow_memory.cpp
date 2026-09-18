@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 // ShadowMemory is the AbstractShadow implementation backed by two Signatures, one for reads and one
@@ -137,22 +138,18 @@ TEST_F(ShadowMemoryTest, testTheKeyValueAccessorsAreNotImplemented) {
   shadow.insertToRead(1, 111);
   shadow.insertToWrite(2, 222);
 
-  // both accessors throw a pointer to a heap allocated string, which is why the handlers below have
-  // to delete it
   try {
     shadow.getReadKVPairs();
     FAIL() << "getReadKVPairs() is expected to throw";
-  } catch (const std::string *message) {
-    EXPECT_EQ(*message, "NOT IMPLEMENTED!");
-    delete message;
+  } catch (const std::logic_error &error) {
+    EXPECT_STREQ(error.what(), "NOT IMPLEMENTED!");
   }
 
   try {
     shadow.getWriteKVPairs();
     FAIL() << "getWriteKVPairs() is expected to throw";
-  } catch (const std::string *message) {
-    EXPECT_EQ(*message, "NOT IMPLEMENTED!");
-    delete message;
+  } catch (const std::logic_error &error) {
+    EXPECT_STREQ(error.what(), "NOT IMPLEMENTED!");
   }
 }
 
