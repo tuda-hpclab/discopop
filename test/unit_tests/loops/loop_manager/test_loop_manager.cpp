@@ -349,3 +349,30 @@ TEST_F(LoopManagerTest, testOutputLoopThatWasNeverLeft) {
   const std::vector<std::string> expected{"* END loop", "0:3 BGN loop 0 0 0 0"};
   ASSERT_EQ(sorted_output_lines(lm), expected);
 }
+
+TEST_F(LoopManagerTest, testGetCurrentLoopId) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  ASSERT_EQ(lm.get_current_loop_id(), 2);
+
+  lm.create_new_loop(1, 5, 6);
+  ASSERT_EQ(lm.get_current_loop_id(), 5);
+
+  lm.exit_loop(9);
+  ASSERT_EQ(lm.get_current_loop_id(), 2);
+}
+
+TEST_F(LoopManagerTest, testGetCurrentLoopIdWithoutLoop) {
+  auto lm = __dp::LoopManager();
+
+  ASSERT_TRUE(lm.empty());
+  ASSERT_EQ(lm.get_current_loop_id(), -1);
+
+  // and again after the only loop has been left
+  lm.create_new_loop(1, 2, 3);
+  lm.exit_loop(9);
+
+  ASSERT_TRUE(lm.empty());
+  ASSERT_EQ(lm.get_current_loop_id(), -1);
+}

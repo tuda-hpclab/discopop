@@ -152,7 +152,10 @@ public:
 
   void correct_func_level(const std::int32_t function_level) { loopStack.correct_func_level(function_level); }
 
-  std::int32_t get_current_loop_id() { return loopStack.top().loopID; }
+  // -1 when no loop is on the stack. __dp_loop_exit asks for the id in its "ignored single exit"
+  // branch, and is_single_exit() takes that branch for an empty stack as well -- reading top()
+  // there is a read past the end of the loop stack.
+  std::int32_t get_current_loop_id() const { return loopStack.empty() ? -1 : loopStack.top().loopID; }
 
   bool empty() { return loopStack.empty(); }
 
