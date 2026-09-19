@@ -360,6 +360,36 @@ jobs:
             python3 -m unittest -v -k "*.end_to_end.*"
 
 
+  # ------------------------------------------------------------ coverage -----
+  # Builds its own instrumented copy of the runtime library, so it cannot reuse
+  # the build artifact. Reports only; the number is not gated.
+  coverage_rtlib:
+    runs-on: self-hosted
+    container:
+      image: ubuntu:24.04
+    name: "Coverage: runtime library unit tests"
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update
+          apt install -y python3 build-essential make cmake git llvm-19 llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Measure the coverage of the runtime library
+        run: |
+          ./scripts/dev/run_rtlib_coverage.sh --markdown-out rtlib_coverage_summary.md
+
+      - name: Add the report to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f rtlib_coverage_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat rtlib_coverage_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+
   # ----------------------------------------------------------- benchmark -----
   # Independent of the build artifact: the benchmark drives clang directly and
   # needs a venv that holds only the profiler, installed without -e.
