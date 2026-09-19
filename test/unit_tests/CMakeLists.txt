@@ -64,6 +64,7 @@ target_sources(
   runtime_functions/test_runtime_functions.cpp
   runtime_functions/test_single_threaded_execution.cpp
   runtime_functions/test_read_runtime_info.cpp
+  lifecycle/test_runtime_shutdown.cpp
   static_callstate_transitions/call_state/test_call_state.cpp
   static_callstate_transitions/call_state_graph/test_call_state_graph.cpp
   static_callstate_transitions/utils/test_call_state_transitions_utils.cpp
