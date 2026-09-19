@@ -57,6 +57,7 @@ target_sources(
   functions/function_manager/test_function_manager.cpp
   hybrid_analysis/bb_deps/test_bb_deps.cpp
   utils/dputil/test_dputil.cpp
+  output_paths/test_output_paths.cpp
   static_callstate_transitions/call_state/test_call_state.cpp
   static_callstate_transitions/call_state_graph/test_call_state_graph.cpp
   static_callstate_transitions/utils/test_call_state_transitions_utils.cpp
