@@ -144,3 +144,8 @@ add_subdirectory(DiscoPoP)
 add_subdirectory(rtlib)
 
 add_subdirectory(scripts)
+
+# compile simple-alias-detection
+#exec_program(${CMAKE_CURRENT_SOURCE_DIR}/simple-alias-detection/compile.sh
+#    ARGS ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
+#)

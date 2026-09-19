@@ -133,8 +133,3 @@ endif()
 # end of compiler flags
 
 install(TARGETS DiscoPoP_RT ARCHIVE DESTINATION discopop-profiler.libs)
-
-# compile simple-alias-detection
-#exec_program(${CMAKE_CURRENT_SOURCE_DIR}/simple-alias-detection/compile.sh
-#    ARGS ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
-#)
