@@ -108,7 +108,19 @@ PROFRAW="${BUILD_DIR}/rtlib.profraw"
 PROFDATA_FILE="${BUILD_DIR}/rtlib.profdata"
 
 rm -f "$PROFRAW" "$PROFDATA_FILE"
-LLVM_PROFILE_FILE="$PROFRAW" "$TEST_BINARY"
+
+# A failing test still produces a complete profile, and this is not the job that gates on the
+# test results -- test_cpp_unit is. Reporting the coverage anyway also keeps this from turning
+# into a second place where the access queue integration tests have to be chased: they drive the
+# worker threads for real and lose an access in a few percent of the runs at -O0, where they are
+# slow enough for finalizeParallelization to race the drain of the queues.
+TESTS_FAILED=0
+LLVM_PROFILE_FILE="$PROFRAW" "$TEST_BINARY" || TESTS_FAILED=1
+if [ "$TESTS_FAILED" -ne 0 ]; then
+    echo
+    echo "WARNING: the test binary reported failures. The coverage below is measured from that run."
+fi
+
 "$PROFDATA" merge -sparse "$PROFRAW" -o "$PROFDATA_FILE"
 
 REPORT_ARGS=("$TEST_BINARY" "-instr-profile=$PROFDATA_FILE" "${REPO_ROOT}/profiler/rtlib")
@@ -154,8 +166,13 @@ if [ -n "$MARKDOWN_OUT" ]; then
         echo
         echo '</details>'
         echo
-        echo "_Excludes \`profiler/rtlib/injected_functions\`: the callbacks the LLVM pass injects are"
-        echo "not linked into the unit test binary and are covered by the end-to-end suites instead._"
+        echo "_Excludes most of \`profiler/rtlib/injected_functions\`: the callbacks the LLVM pass injects"
+        echo "are only linked into the unit test binary where the shutdown calls them, and are covered by"
+        echo "the end-to-end suites instead._"
+        if [ "$TESTS_FAILED" -ne 0 ]; then
+            echo
+            echo "**The test binary reported failures in this run**, see the job log."
+        fi
     } > "$MARKDOWN_OUT"
     echo "Markdown summary written to ${MARKDOWN_OUT}"
 fi
