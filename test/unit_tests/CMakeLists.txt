@@ -59,6 +59,7 @@ target_sources(
   utils/dputil/test_dputil.cpp
   output_paths/test_output_paths.cpp
   immortal/test_immortal_storage.cpp
+  types/dependencies/test_dependency_types.cpp
   static_callstate_transitions/call_state/test_call_state.cpp
   static_callstate_transitions/call_state_graph/test_call_state_graph.cpp
   static_callstate_transitions/utils/test_call_state_transitions_utils.cpp
