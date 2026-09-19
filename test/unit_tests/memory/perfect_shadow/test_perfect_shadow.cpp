@@ -26,6 +26,21 @@ TEST_F(PerfectShadowTest, testConstructor) {
   ASSERT_TRUE(writes->empty());
 }
 
+// The runtime picks between PerfectShadow and ShadowMemory at startup and hands both the same
+// three shadow memory parameters. A perfect shadow records every address, so it ignores them --
+// but it has to accept them, or the two are no longer interchangeable.
+TEST_F(PerfectShadowTest, testConstructorWithTheShadowMemoryParameters) {
+  auto shadow = __dp::PerfectShadow{56, 270000, 2};
+
+  ASSERT_NE(shadow.getSigRead(), nullptr);
+  ASSERT_TRUE(shadow.getSigRead()->empty());
+  ASSERT_NE(shadow.getSigWrite(), nullptr);
+  ASSERT_TRUE(shadow.getSigWrite()->empty());
+
+  shadow.updateInWrite(1000, 7);
+  EXPECT_EQ(shadow.testInWrite(1000), 7);
+}
+
 TEST_F(PerfectShadowTest, testGet) {
   auto shadow = __dp::PerfectShadow{};
 
