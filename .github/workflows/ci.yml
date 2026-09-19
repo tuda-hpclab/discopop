@@ -362,7 +362,9 @@ jobs:
 
   # ------------------------------------------------------------ coverage -----
   # Builds its own instrumented copy of the runtime library, so it cannot reuse
-  # the build artifact. Reports only; the number is not gated.
+  # the build artifact. The floor is there to catch code that arrives without
+  # tests, not to be met exactly: it sits a few points below what the suite
+  # reaches today, so ordinary movement does not fail the job.
   coverage_rtlib:
     runs-on: self-hosted
     container:
@@ -380,7 +382,9 @@ jobs:
 
       - name: Measure the coverage of the runtime library
         run: |
-          ./scripts/dev/run_rtlib_coverage.sh --markdown-out rtlib_coverage_summary.md
+          ./scripts/dev/run_rtlib_coverage.sh \
+            --markdown-out rtlib_coverage_summary.md \
+            --min-line-coverage 90
 
       - name: Add the report to the job summary
         if: ${{ always() }}
