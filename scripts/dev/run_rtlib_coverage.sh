@@ -112,8 +112,10 @@ rm -f "$PROFRAW" "$PROFDATA_FILE"
 # A failing test still produces a complete profile, and this is not the job that gates on the
 # test results -- test_cpp_unit is. Reporting the coverage anyway also keeps this from turning
 # into a second place where the access queue integration tests have to be chased: they drive the
-# worker threads for real and lose an access in a few percent of the runs at -O0, where they are
-# slow enough for finalizeParallelization to race the drain of the queues.
+# worker threads for real, and finalizeParallelization can return before the queues have been
+# drained, which loses an access. Measured over 60 runs of that suite, roughly 5% fail here at
+# -O0 and roughly 2% in the -O3 build the test job uses, so it is a race of the runtime rather
+# than of this build.
 TESTS_FAILED=0
 LLVM_PROFILE_FILE="$PROFRAW" "$TEST_BINARY" || TESTS_FAILED=1
 if [ "$TESTS_FAILED" -ne 0 ]; then
