@@ -85,9 +85,12 @@ if [ -z "$CLANG" ]; then
 fi
 echo "Using ${CLANGPP}, ${PROFDATA}, ${COV}"
 
-# -O0 keeps the line numbers in the report meaningful. GTEST_HAS_CXXABI_H_=0 keeps GoogleTest from
-# including the cxxabi.h that ships with LLVM, which conflicts with the one of the system libstdc++.
-CXX_COVERAGE_FLAGS="-O0 -g -DGTEST_HAS_CXXABI_H_=0 -fprofile-instr-generate -fcoverage-mapping"
+# -O0 keeps the line numbers in the report meaningful. NDEBUG is what a Release build would have
+# defined and is restored by hand because setting CMAKE_CXX_FLAGS_RELEASE replaces it: without it
+# the asserts stay in, and the recovery paths behind them are reported as unreachable although the
+# shipped runtime takes them. GTEST_HAS_CXXABI_H_=0 keeps GoogleTest from including the cxxabi.h
+# that ships with LLVM, which conflicts with the one of the system libstdc++.
+CXX_COVERAGE_FLAGS="-O0 -g -DNDEBUG -DGTEST_HAS_CXXABI_H_=0 -fprofile-instr-generate -fcoverage-mapping"
 
 CC="$CLANG" CXX="$CLANGPP" cmake \
     -S "$REPO_ROOT" \
