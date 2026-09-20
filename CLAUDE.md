@@ -107,6 +107,16 @@ To execute the CI pipeline locally, use the following command from the root fold
 - Google Benchmark micro-benchmarks for the runtime library data structures live in `benchmark/`
 - they are built through the root `CMakeLists.txt`: `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_BM -j "$(nproc)"`, then run `build_tests/benchmark/DiscoPoP_BM`
 
+### Injected callback benchmark
+- `benchmark/injected_functions` measures what each callback the LLVM pass injects costs, split into the call the pass adds and the body the runtime executes inside it
+- the split comes from building the runtime twice: `DiscoPoP_RT_EmptyCallbacks` is built with `DP_BENCHMARK_EMPTY_CALLBACKS`, where `callback_bodies_enabled()` is a compile-time `false` and every callback compiles down to its return (`profiler/rtlib/callback_scope.hpp`)
+- to run it: `venv/bin/python benchmark/injected_functions/run_callback_benchmark.py`; it configures, builds `DiscoPoP_BM_Callbacks` and `DiscoPoP_BM_Callbacks_Empty`, runs both and subtracts them per callback
+- `--no-build`, `--filter <regex>`, `--repetitions <n>` and `--min-time <s>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
+- it fails when a binary does not build or run, when the runtime does not come up, or when the two runs no longer agree on the set of benchmarks; the times are reported, never enforced
+- the binaries need `DOT_DISCOPOP` to point at a directory containing a `profiler/` subdirectory when run by hand -- the runtime opens its result files before `main`; the driver supplies one
+- see `benchmark/injected_functions/README.md` for what is and is not covered, and for how to add a callback
+- the CI job `benchmark_rtlib_callbacks` in `.github/workflows/ci.yml` runs it and publishes the comparison as the job summary
+
 ### Pass overhead benchmark
 - `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
 - it needs the profiler installed without `-e`: `venv/bin/pip install ./profiler`

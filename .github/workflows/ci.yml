@@ -442,6 +442,55 @@ jobs:
           fi
 
 
+  # ----------------------------------------------------------- benchmark -----
+  # Builds its own copy of the runtime library, and builds it twice: this is the only job that
+  # needs DiscoPoP_RT_EmptyCallbacks, the variant whose callbacks return before their body.
+  # Reports what each injected callback costs, split into the call and the body, and fails only
+  # when that cannot be measured -- a binary that does not build or run, a runtime that does not
+  # come up, or two runs that no longer agree on which benchmarks exist. The times themselves are
+  # reported, not enforced: they are far too sensitive to the runner to gate on.
+  benchmark_rtlib_callbacks:
+    runs-on: self-hosted
+    container:
+      image: ubuntu:24.04
+    name: "Benchmark: cost of the injected callbacks"
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update
+          apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19 llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # the driver itself needs nothing but the standard library; the venv is here for the two
+      # checks below, and because the top level CMakeLists expects one next to the sources.
+      - name: Setup venv
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install black mypy
+
+      - name: Check formatting and types of the benchmark driver
+        run: |
+          venv/bin/python3 -m black -l 120 --check benchmark/injected_functions
+          venv/bin/python3 -m mypy --config-file=mypy.ini benchmark/injected_functions/run_callback_benchmark.py
+
+      - name: Measure the injected callbacks with and without their bodies
+        run: |
+          venv/bin/python3 benchmark/injected_functions/run_callback_benchmark.py \
+            --json-out callback_benchmark_results.json \
+            --markdown-out callback_benchmark_summary.md
+
+      - name: Add the comparison to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f callback_benchmark_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat callback_benchmark_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+
   # ----------------------------------------------------------------- gate ----
   # The single status check to require in the branch protection rules, so that
   # the list of jobs above can change without touching the repository settings.
@@ -458,6 +507,7 @@ jobs:
       - test_profiler_gold_standard
       - test_end_to_end
       - benchmark_pass_overhead
+      - benchmark_rtlib_callbacks
     if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     steps:
       - name: Report
