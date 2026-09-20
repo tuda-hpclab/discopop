@@ -14,6 +14,8 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
+#include "../callback_scope.hpp"
+
 #include "../static_callstate_transitions/utils.hpp"
 
 namespace __dp {
@@ -22,9 +24,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_incr(const int loop_id, int32_t instruction_id) {
-  if (!profiling_active()) {
-    return;
-  }
+  DP_CALLBACK_GUARD();
 
   if (loop_manager->is_done()) {
     return;

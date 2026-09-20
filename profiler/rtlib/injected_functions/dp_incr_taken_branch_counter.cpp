@@ -14,15 +14,15 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
+#include "../callback_scope.hpp"
+
 namespace __dp {
 
 /******* Instrumentation function *******/
 extern "C" {
 
 void __dp_incr_taken_branch_counter(char *source_and_target, int cmp_res, int active_on) {
-  if (!profiling_active()) {
-    return;
-  }
+  DP_CALLBACK_GUARD();
 
   if (cmp_res == active_on) {
     if (cuec.count(source_and_target) == 0) {

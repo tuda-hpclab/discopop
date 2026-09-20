@@ -72,6 +72,20 @@ add_library(DiscoPoP_RT STATIC
 
 target_link_libraries(DiscoPoP_RT PRIVATE Boost::headers)
 
+# The runtime a second time, with every injected callback compiled down to its call and its
+# return (see DP_BENCHMARK_EMPTY_CALLBACKS in callback_scope.hpp). Built here rather than next to
+# the benchmark that uses it, because CMAKE_CXX_FLAGS above applies to this directory only and the
+# two libraries have to be compiled identically for their measurements to be comparable.
+#
+# Not installed and not linked by anything the profiler ships: the symbols are the same as those
+# of DiscoPoP_RT, so an instrumented program linked against this one would profile nothing.
+if(DP_BUILD_UNITTESTS STREQUAL "1")
+        add_library(DiscoPoP_RT_EmptyCallbacks STATIC
+                ${DiscoPoP_SOURCES})
+        target_link_libraries(DiscoPoP_RT_EmptyCallbacks PRIVATE Boost::headers)
+        target_compile_definitions(DiscoPoP_RT_EmptyCallbacks PUBLIC DP_BENCHMARK_EMPTY_CALLBACKS)
+endif()
+
 # forward compiler flags
 if(DEFINED DP_PTHREAD_COMPATIBILITY_MODE)
         if(NOT ${DP_PTHREAD_COMPATIBILITY_MODE} EQUAL 0)
@@ -131,5 +145,15 @@ endif()
 
 
 # end of compiler flags
+
+# The empty callback variant has to see exactly the configuration above, or its measurements would
+# describe a runtime nobody builds. Copied off the target rather than repeated, so that an option
+# added to the list above cannot be forgotten here.
+if(TARGET DiscoPoP_RT_EmptyCallbacks)
+        get_target_property(DiscoPoP_RT_FORWARDED_DEFINITIONS DiscoPoP_RT INTERFACE_COMPILE_DEFINITIONS)
+        if(DiscoPoP_RT_FORWARDED_DEFINITIONS)
+                target_compile_definitions(DiscoPoP_RT_EmptyCallbacks PUBLIC ${DiscoPoP_RT_FORWARDED_DEFINITIONS})
+        endif()
+endif()
 
 install(TARGETS DiscoPoP_RT ARCHIVE DESTINATION discopop-profiler.libs)

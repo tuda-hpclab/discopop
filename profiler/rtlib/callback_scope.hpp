@@ -23,6 +23,23 @@
 
 namespace __dp {
 
+// Whether the callbacks the LLVM pass injects carry out their own work at all.
+//
+// A benchmark build -- and nothing else -- defines DP_BENCHMARK_EMPTY_CALLBACKS. Every callback
+// then returns as soon as it has been entered, which separates the two costs of instrumentation
+// that are otherwise only ever observed together: what the added calls cost by themselves, and
+// what the runtime does inside them. See benchmark/injected_functions.
+//
+// Deliberately a constant rather than a flag: the body has to be gone from the generated code,
+// not skipped over at runtime, or the measurement would include the branch that skips it.
+constexpr bool callback_bodies_enabled() noexcept {
+#ifdef DP_BENCHMARK_EMPTY_CALLBACKS
+  return false;
+#else
+  return true;
+#endif
+}
+
 // A region of the runtime that is announced in the verbose build and measured in the timing
 // build, and that is neither a callback nor takes a lock. Used for the individual output steps
 // of __dp_finalize, which run with the lock already held.
@@ -67,7 +84,7 @@ private:
 template <std::size_t N> class CallbackScope {
 public:
   CallbackScope([[maybe_unused]] TimerRegion region, [[maybe_unused]] const char (&name)[N])
-      : active(profiling_active()) {
+      : active(callback_bodies_enabled() && profiling_active()) {
     if (!active) {
       // Deliberately before everything else: a callback that is about to return without doing
       // anything must not take the lock, announce itself or produce a timing sample.
@@ -137,6 +154,15 @@ private:
     return;                                                                                                            \
   }                                                                                                                    \
   static_cast<void>(dp_scope)
+
+// The preamble of an instrumented callback that neither takes the lock nor is traced or timed,
+// and therefore has no CallbackScope to ask. It answers the same two questions: is the runtime
+// running, and does this build execute callback bodies at all.
+#define DP_CALLBACK_GUARD()                                                                                            \
+  if (!::__dp::callback_bodies_enabled() || !::__dp::profiling_active()) {                                             \
+    return;                                                                                                            \
+  }                                                                                                                    \
+  static_cast<void>(0)
 
 // A traced and timed section that is not a callback: no state check, no lock. See TimedSection.
 #define DP_TIMED_SECTION(region, name)                                                                                 \
