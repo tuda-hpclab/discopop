@@ -24,7 +24,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_incr(const int loop_id, int32_t instruction_id) {
-  DP_CALLBACK_GUARD();
+  DP_CALLBACK_GUARD(LOOP_INCR);
 
   if (loop_manager->is_done()) {
     return;

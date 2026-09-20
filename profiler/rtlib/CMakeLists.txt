@@ -11,7 +11,33 @@
 #    )
 
 # Runtime library sources and build flags.
-set(DiscoPoP_SOURCES
+#
+# Split in two because the benchmark variants below recompile one half and reuse the other. The
+# callback half is every translation unit whose generated code depends on callback_body_enabled(),
+# i.e. everything that includes callback_scope.hpp; the shared half compiles to the same objects
+# in every variant. Keep a new source on the right side of that line: a callback file that ends up
+# in the shared list would silently be built once and shared by all variants.
+set(DiscoPoP_CALLBACK_SOURCES
+        injected_functions/dp_alloca.cpp
+        injected_functions/dp_call.cpp
+        injected_functions/dp_decl.cpp
+        injected_functions/dp_delete.cpp
+        injected_functions/dp_func_entry.cpp
+        injected_functions/dp_func_exit.cpp
+        injected_functions/dp_incr_taken_branch_counter.cpp
+        injected_functions/dp_loop_entry.cpp
+        injected_functions/dp_loop_exit.cpp
+        injected_functions/dp_loop_incr.cpp
+        injected_functions/dp_new.cpp
+        injected_functions/dp_read.cpp
+        injected_functions/dp_report_bb.cpp
+        injected_functions/dp_report_bb_pair.cpp
+        injected_functions/dp_write.cpp
+
+        lifecycle/runtime_shutdown.cpp
+        )
+
+set(DiscoPoP_SHARED_SOURCES
         output_paths.cpp
         runtimeFunctions.cpp
         runtimeFunctionsGlobals.cpp
@@ -27,34 +53,20 @@ set(DiscoPoP_SOURCES
         calltree/utils.cpp
 
         injected_functions/dp_add_bb_deps.cpp
-        injected_functions/dp_alloca.cpp
-        injected_functions/dp_call.cpp
-        injected_functions/dp_decl.cpp
-        injected_functions/dp_delete.cpp
         injected_functions/dp_finalize.cpp
-        injected_functions/dp_func_entry.cpp
-        injected_functions/dp_func_exit.cpp
-        injected_functions/dp_incr_taken_branch_counter.cpp
-        injected_functions/dp_loop_entry.cpp
-        injected_functions/dp_loop_exit.cpp
-        injected_functions/dp_loop_incr.cpp
         injected_functions/dp_loop_output.cpp
-        injected_functions/dp_new.cpp
-        injected_functions/dp_read.cpp
-        injected_functions/dp_report_bb.cpp
-        injected_functions/dp_report_bb_pair.cpp
         injected_functions/dp_taken_branch_counter_output.cpp
-        injected_functions/dp_write.cpp
 
         hybrid_analysis/bb_deps.cpp
 
         lifecycle/runtime_startup.cpp
-        lifecycle/runtime_shutdown.cpp
 
         static_callstate_transitions/CallState.cpp
         static_callstate_transitions/CallStateGraph.cpp
         static_callstate_transitions/utils.cpp
         )
+
+set(DiscoPoP_SOURCES ${DiscoPoP_SHARED_SOURCES} ${DiscoPoP_CALLBACK_SOURCES})
 
 set(CMAKE_CXX_FLAGS
         "-O2 -std=c++17 -pthread -fno-rtti -fPIE -fPIC")
@@ -72,18 +84,49 @@ add_library(DiscoPoP_RT STATIC
 
 target_link_libraries(DiscoPoP_RT PRIVATE Boost::headers)
 
-# The runtime a second time, with every injected callback compiled down to its call and its
-# return (see DP_BENCHMARK_EMPTY_CALLBACKS in callback_scope.hpp). Built here rather than next to
-# the benchmark that uses it, because CMAKE_CXX_FLAGS above applies to this directory only and the
-# two libraries have to be compiled identically for their measurements to be comparable.
+# The runtime again, once with none of the callback bodies and once per callback with only that
+# one (see callback_body_enabled() in callback_scope.hpp). Together they take the cost of
+# instrumentation apart: what the added calls cost by themselves, and what each callback's body
+# adds on top of them.
 #
-# Not installed and not linked by anything the profiler ships: the symbols are the same as those
-# of DiscoPoP_RT, so an instrumented program linked against this one would profile nothing.
+# Built here rather than next to the benchmarks that use them, because CMAKE_CXX_FLAGS above
+# applies to this directory only and libraries that are compared have to be compiled identically.
+# None of them is installed or linked by anything the profiler ships: they export the same symbols
+# as DiscoPoP_RT, so an instrumented program linked against one of them would profile partially or
+# not at all.
 if(DP_BUILD_UNITTESTS STREQUAL "1")
+        # the half that does not depend on which callbacks are switched on, compiled once and
+        # reused by every variant -- which is what keeps sixteen extra runtime libraries cheap
+        add_library(DiscoPoP_RT_BenchmarkShared OBJECT ${DiscoPoP_SHARED_SOURCES})
+        target_link_libraries(DiscoPoP_RT_BenchmarkShared PRIVATE Boost::headers)
+
+        # the CallbackId enumerators from callback_scope.hpp. The library name carries the
+        # enumerator so that a driver can go from one to the other without a table.
+        set(DiscoPoP_RT_BENCHMARK_CALLBACKS
+                ALLOCA CALL DECL DELETE FUNC_ENTRY FUNC_EXIT INCR_TAKEN_BRANCH_COUNTER
+                LOOP_ENTRY LOOP_EXIT LOOP_INCR NEW READ REPORT_BB REPORT_BB_PAIR WRITE)
+
         add_library(DiscoPoP_RT_EmptyCallbacks STATIC
-                ${DiscoPoP_SOURCES})
-        target_link_libraries(DiscoPoP_RT_EmptyCallbacks PRIVATE Boost::headers)
+                ${DiscoPoP_CALLBACK_SOURCES}
+                $<TARGET_OBJECTS:DiscoPoP_RT_BenchmarkShared>)
         target_compile_definitions(DiscoPoP_RT_EmptyCallbacks PUBLIC DP_BENCHMARK_EMPTY_CALLBACKS)
+        set(DiscoPoP_RT_BENCHMARK_TARGETS DiscoPoP_RT_BenchmarkShared DiscoPoP_RT_EmptyCallbacks)
+
+        foreach(dp_callback IN LISTS DiscoPoP_RT_BENCHMARK_CALLBACKS)
+                add_library(DiscoPoP_RT_Only_${dp_callback} STATIC
+                        ${DiscoPoP_CALLBACK_SOURCES}
+                        $<TARGET_OBJECTS:DiscoPoP_RT_BenchmarkShared>)
+                target_compile_definitions(DiscoPoP_RT_Only_${dp_callback} PUBLIC
+                        DP_BENCHMARK_ONLY_CALLBACK=${dp_callback})
+                list(APPEND DiscoPoP_RT_BENCHMARK_TARGETS DiscoPoP_RT_Only_${dp_callback})
+        endforeach()
+
+        foreach(dp_variant IN LISTS DiscoPoP_RT_BENCHMARK_TARGETS)
+                target_link_libraries(${dp_variant} PRIVATE Boost::headers)
+        endforeach()
+
+        # one target to ask for all of them, so a driver does not have to know the list
+        add_custom_target(DiscoPoP_RT_BenchmarkVariants DEPENDS ${DiscoPoP_RT_BENCHMARK_TARGETS})
 endif()
 
 # forward compiler flags
@@ -146,13 +189,15 @@ endif()
 
 # end of compiler flags
 
-# The empty callback variant has to see exactly the configuration above, or its measurements would
+# The benchmark variants have to see exactly the configuration above, or their measurements would
 # describe a runtime nobody builds. Copied off the target rather than repeated, so that an option
 # added to the list above cannot be forgotten here.
-if(TARGET DiscoPoP_RT_EmptyCallbacks)
+if(DiscoPoP_RT_BENCHMARK_TARGETS)
         get_target_property(DiscoPoP_RT_FORWARDED_DEFINITIONS DiscoPoP_RT INTERFACE_COMPILE_DEFINITIONS)
         if(DiscoPoP_RT_FORWARDED_DEFINITIONS)
-                target_compile_definitions(DiscoPoP_RT_EmptyCallbacks PUBLIC ${DiscoPoP_RT_FORWARDED_DEFINITIONS})
+                foreach(dp_variant IN LISTS DiscoPoP_RT_BENCHMARK_TARGETS)
+                        target_compile_definitions(${dp_variant} PUBLIC ${DiscoPoP_RT_FORWARDED_DEFINITIONS})
+                endforeach()
         endif()
 endif()
 
