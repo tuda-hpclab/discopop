@@ -18,6 +18,37 @@ Measures what the DiscoPoP LLVM pass (`profiler/DiscoPoP`) costs, by building ev
 | `baseline`     | plain `clang++ -g -O0 -fno-discard-value-names -fPIC`                                                 |
 | `instrumented` | the same command plus `-fpass-plugin=LLVMDiscoPoP.so` and the `DiscoPoP_RT` runtime library           |
 
+## Where the overhead comes from
+
+`--callback-breakdown` builds every program a further seventeen times, against the benchmark
+variants of the runtime library:
+
+| configuration     | links                     | measures                                        |
+| ----------------- | ------------------------- | ----------------------------------------------- |
+| `calls only`      | `DiscoPoP_RT_EmptyCallbacks` | the calls the pass adds, with no body behind them |
+| `only __dp_read`, ... | `DiscoPoP_RT_Only_READ`, ... | those calls plus exactly one callback's body  |
+
+The variants come from `profiler/rtlib/CMakeLists.txt` and are not built by default:
+
+```bash
+cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
+cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants
+venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --callback-breakdown
+```
+
+With `--callback-breakdown` every instrumented configuration, including `instrumented` itself, is
+linked from `--variants-dir` (`build_tests/profiler/rtlib` by default) rather than from the
+installed package, so that all of them come out of one build of the runtime.
+
+**The rows do not add up to the last one.** A body that runs while the others do not finds the
+runtime's queues and caches in a state it would never find them in during a real profiling run --
+in particular, the access queue only saturates, and the main thread only waits for the worker
+threads, once enough callbacks are recording at the same time. Read the breakdown as a ranking of
+where the cost sits, not as a decomposition of the total.
+
+For the same callbacks measured in isolation and in nanoseconds rather than as whole program
+factors, see [`benchmark/injected_functions`](../injected_functions).
+
 That is the same combination [`CXX_wrapper.sh`](../../profiler/scripts/CXX_wrapper.sh) uses, minus
 the AST dump — so the difference between the two columns is the pass and its runtime library, and
 nothing else.

@@ -20,11 +20,16 @@ the call the pass adds, and what the runtime does inside it.
 
 Both are built from [`benchmark_injected_functions.cpp`](benchmark_injected_functions.cpp) and run
 the same benchmarks under the same names. `DiscoPoP_RT_EmptyCallbacks` is the runtime library built
-with `DP_BENCHMARK_EMPTY_CALLBACKS`, where `callback_bodies_enabled()` is a compile time `false` and
+with `DP_BENCHMARK_EMPTY_CALLBACKS`, where `callback_body_enabled()` is a compile time `false` and
 every callback compiles down to its return (see
 [`profiler/rtlib/callback_scope.hpp`](../../profiler/rtlib/callback_scope.hpp)). The body of a
 callback therefore costs the difference between the two binaries -- and the loop that drives the
 measurement, being the same code on both sides, drops out of that difference.
+
+For the same question asked about whole programs rather than single calls -- how much of a
+profiled run's time goes into which callback -- see `--callback-breakdown` in
+[`benchmark/pass_overhead`](../pass_overhead). It uses the same switch, with
+`DP_BENCHMARK_ONLY_CALLBACK` to turn the bodies back on one at a time.
 
 ## Running it
 
