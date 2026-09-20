@@ -33,6 +33,15 @@ using namespace std;
 namespace __dp {
 
 void unwind_function_stack(LID lid) {
+  // The loop below is driven by what __dp_func_exit does to the function stack level. In the
+  // benchmark build that callback returns without touching it (see callback_bodies_enabled()),
+  // so the level never reaches -1 and this would spin forever. Nothing was pushed onto the stack
+  // in that build either, so there is nothing to unwind -- including the two invariants below,
+  // which describe a stack that was maintained.
+  if (!callback_bodies_enabled()) {
+    return;
+  }
+
   while (function_manager->get_current_stack_level() >= 0) {
     __dp_func_exit(lid, 1);
   }
