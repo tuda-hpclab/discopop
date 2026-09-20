@@ -237,15 +237,22 @@ def compare(call_only: Dict[str, Measurement], full: Dict[str, Measurement]) -> 
     return [Comparison(name, call_only[name], full[name]) for name in full]
 
 
+def row_label(comparison: Comparison) -> str:
+    return comparison.name + (" (2 calls)" if comparison.is_paired else "")
+
+
 def format_table(comparisons: Sequence[Comparison]) -> str:
     """The comparison as a plain text table."""
 
-    header = f"{'callback':<32}{'call only':>12}{'call+body':>12}{'body':>12}{'body share':>13}"
+    # measured rather than fixed: the bracketed entries carry a suffix and are long enough to push
+    # every number on their row out of its column
+    width = max([len("callback")] + [len(row_label(comparison)) for comparison in comparisons]) + 2
+
+    header = f"{'callback':<{width}}{'call only':>12}{'call+body':>12}{'body':>12}{'body share':>13}"
     lines = [header, "-" * len(header)]
     for comparison in comparisons:
-        name = comparison.name + (" (2 calls)" if comparison.is_paired else "")
         lines.append(
-            f"{name:<32}"
+            f"{row_label(comparison):<{width}}"
             f"{comparison.call_only.nanoseconds:>10.2f} ns"
             f"{comparison.full.nanoseconds:>10.2f} ns"
             f"{comparison.body_nanoseconds:>10.2f} ns"
