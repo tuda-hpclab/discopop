@@ -107,9 +107,14 @@ To execute the CI pipeline locally, use the following command from the root fold
 - Google Benchmark micro-benchmarks for the runtime library data structures live in `benchmark/`
 - they are built through the root `CMakeLists.txt`: `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_BM -j "$(nproc)"`, then run `build_tests/benchmark/DiscoPoP_BM`
 
+### Runtime library benchmark variants
+- `profiler/rtlib/CMakeLists.txt` builds the runtime 17 times when `DP_BUILD_UNITTESTS=1`: the shipped `DiscoPoP_RT`, plus `DiscoPoP_RT_EmptyCallbacks` (no callback body at all) and one `DiscoPoP_RT_Only_<CALLBACK>` per callback (only that body)
+- the switch is `callback_body_enabled(CallbackId)` in `profiler/rtlib/callback_scope.hpp`, driven by `DP_BENCHMARK_EMPTY_CALLBACKS` and `DP_BENCHMARK_ONLY_CALLBACK=<enumerator>`; it is a compile-time constant, so a body that is off is gone from the generated code rather than skipped over
+- build them all with `cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants`; they are not installed and must never be linked into a profiled program
+- the shared half of the runtime is compiled once into `DiscoPoP_RT_BenchmarkShared` and reused; `DiscoPoP_CALLBACK_SOURCES` in that CMakeLists lists the files whose code depends on the switch (everything including `callback_scope.hpp`) — a new callback file belongs there, not in `DiscoPoP_SHARED_SOURCES`
+
 ### Injected callback benchmark
 - `benchmark/injected_functions` measures what each callback the LLVM pass injects costs, split into the call the pass adds and the body the runtime executes inside it
-- the split comes from building the runtime twice: `DiscoPoP_RT_EmptyCallbacks` is built with `DP_BENCHMARK_EMPTY_CALLBACKS`, where `callback_bodies_enabled()` is a compile-time `false` and every callback compiles down to its return (`profiler/rtlib/callback_scope.hpp`)
 - to run it: `venv/bin/python benchmark/injected_functions/run_callback_benchmark.py`; it configures, builds `DiscoPoP_BM_Callbacks` and `DiscoPoP_BM_Callbacks_Empty`, runs both and subtracts them per callback
 - `--no-build`, `--filter <regex>`, `--repetitions <n>` and `--min-time <s>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
 - it fails when a binary does not build or run, when the runtime does not come up, or when the two runs no longer agree on the set of benchmarks; the times are reported, never enforced
@@ -125,3 +130,5 @@ To execute the CI pipeline locally, use the following command from the root fold
 - it fails when a program does not build or run, or when the instrumented binary stops reproducing the baseline output; timings only fail the run if `--max-compile-factor` / `--max-run-factor` are given
 - adding a program means dropping a `.cpp` file with a `// BENCHMARK: <description>` comment into `benchmark/pass_overhead/programs`; see `benchmark/pass_overhead/README.md`
 - the CI job `pass_overhead_benchmark` in `.github/workflows/ci.yml` runs it and publishes the comparison as the job summary
+- `--callback-breakdown` additionally builds every program against each runtime variant above, which attributes the whole-program overhead to the individual callbacks; it needs the variants built and links *every* instrumented configuration from `--variants-dir` so they all come from one build
+- the breakdown rows do not add up to the total: a body running on its own never saturates the access queue, so the main thread never waits for the workers the way it does in a real profiling run. Read it as a ranking, not as a decomposition

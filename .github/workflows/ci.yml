@@ -443,12 +443,15 @@ jobs:
 
 
   # ----------------------------------------------------------- benchmark -----
-  # Builds its own copy of the runtime library, and builds it twice: this is the only job that
-  # needs DiscoPoP_RT_EmptyCallbacks, the variant whose callbacks return before their body.
-  # Reports what each injected callback costs, split into the call and the body, and fails only
-  # when that cannot be measured -- a binary that does not build or run, a runtime that does not
-  # come up, or two runs that no longer agree on which benchmarks exist. The times themselves are
-  # reported, not enforced: they are far too sensitive to the runner to gate on.
+  # What the injected callbacks cost, from two directions: per call in nanoseconds, and per program
+  # against an uninstrumented build. Both split the cost into the calls the pass adds and the
+  # bodies behind them, which is what the benchmark variants of the runtime library are for -- this
+  # is the only job that builds them.
+  #
+  # Fails only when the measurement cannot be made: a binary that does not build or run, a runtime
+  # that does not come up, two runs that no longer agree on which benchmarks exist, an instrumented
+  # program that stops reproducing its own output. The times themselves are reported, not enforced:
+  # they are far too sensitive to the runner to gate on.
   benchmark_rtlib_callbacks:
     runs-on: self-hosted
     container:
@@ -464,18 +467,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      # the driver itself needs nothing but the standard library; the venv is here for the two
-      # checks below, and because the top level CMakeLists expects one next to the sources.
-      - name: Setup venv
+      # Both drivers need nothing but the standard library; black and mypy are for the check below.
+      # The profiler is installed -- without -e, or LLVMDiscoPoP.so does not end up in the venv --
+      # because the whole program breakdown drives clang with the pass plugin from there.
+      - name: Setup venv and install the DiscoPoP profiler
         run: |
           rm -rf venv
           python3 -m venv venv
+          venv/bin/pip install ./profiler
           venv/bin/pip install black mypy
 
-      - name: Check formatting and types of the benchmark driver
+      - name: Check formatting and types of the benchmark drivers
         run: |
-          venv/bin/python3 -m black -l 120 --check benchmark/injected_functions
-          venv/bin/python3 -m mypy --config-file=mypy.ini benchmark/injected_functions/run_callback_benchmark.py
+          venv/bin/python3 -m black -l 120 --check benchmark/injected_functions benchmark/pass_overhead
+          venv/bin/python3 -m mypy --config-file=mypy.ini \
+            benchmark/injected_functions/run_callback_benchmark.py \
+            benchmark/pass_overhead/run_pass_benchmark.py
 
       - name: Measure the injected callbacks with and without their bodies
         run: |
@@ -488,6 +495,30 @@ jobs:
         run: |
           if [ -f callback_benchmark_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             cat callback_benchmark_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The same split for whole programs rather than for single calls: every program is built
+      # against the runtime whose callbacks have no body, and once per callback with only that
+      # body switched on. One repetition per configuration -- seventeen extra builds and runs of
+      # every program is enough work as it is, and what this answers is which callbacks dominate,
+      # not by how many percent.
+      - name: Build the runtime library variants
+        run: |
+          cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants -j "$(nproc)"
+
+      - name: Attribute the whole program overhead to the callbacks
+        run: |
+          venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py \
+            --callback-breakdown \
+            --repetitions 1 \
+            --json-out callback_breakdown_results.json \
+            --markdown-out callback_breakdown_summary.md
+
+      - name: Add the breakdown to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f callback_breakdown_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat callback_breakdown_summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
 
