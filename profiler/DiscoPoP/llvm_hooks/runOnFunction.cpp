@@ -388,10 +388,11 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
 #endif
       }
 #if LLVM_VERSION_MAJOR >= 22
-      CallInst::Create(ReportBB, ConstantInt::get(Int32, bbDepCount), "", insertionPoint->getIterator());
+      CallInst *report = CallInst::Create(ReportBB, ConstantInt::get(Int32, bbDepCount), "", insertionPoint->getIterator());
 #else
-      CallInst::Create(ReportBB, ConstantInt::get(Int32, bbDepCount), "", insertionPoint);
+      CallInst *report = CallInst::Create(ReportBB, ConstantInt::get(Int32, bbDepCount), "", insertionPoint);
 #endif
+      insertedBBReports.push_back({report, nullptr});
 
       // ---- Insert deps into string ----
       if (bbDepCount)
@@ -432,11 +433,12 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
 
 #if LLVM_VERSION_MAJOR >= 22
         auto LI = new LoadInst(Int32, AI, Twine(""), false, insertionPoint->getIterator());
-        CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint->getIterator());
+        CallInst *report = CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint->getIterator());
 #else
         auto LI = new LoadInst(Int32, AI, Twine(""), false, insertionPoint);
-        CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint);
+        CallInst *report = CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint);
 #endif
+        insertedBBReports.push_back({report, LI});
 
         // ---- Insert deps into string ----
         if (bbDepCount)
