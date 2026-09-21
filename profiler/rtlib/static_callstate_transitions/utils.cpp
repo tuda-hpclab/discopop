@@ -41,10 +41,9 @@ void update_callstate_from_call(int32_t instructionID) {
     // transition found
 
     // check if a fall-through transition (i.e. instructionID '0') exists
-    CallState *fallthrough_transition_target = transition_target->get_transition_target(0);
+    CallState *fallthrough_transition_target = transition_target->get_fallthrough_transition_target();
     if (fallthrough_transition_target) {
       // overwrite transition target with the fallthrough
-      // TODO: this fallthrough could be implemented statically by redirecting the edges accordingly
       transition_target = fallthrough_transition_target;
     }
 
@@ -73,11 +72,11 @@ void update_callstate_from_func_exit(int32_t instructionID) {
     return;
   }
 
-  // check if a transition exists
-  CallState *transition_target = current_callpath_state->get_transition_target(instructionID);
-  if (!transition_target && instructionID == 1) {
-    transition_target = current_callpath_state->get_implicit_return_transition_target();
-  }
+  // check if a transition exists. The trigger a function exit reports is always the same, so the
+  // state answers it without a lookup -- including the fall back to the implicit return target.
+  CallState *transition_target = (instructionID == CallState::kReturnTrigger)
+                                     ? current_callpath_state->get_return_transition_target()
+                                     : current_callpath_state->get_transition_target(instructionID);
   if (transition_target) {
     // transition found
     // update current callstate
@@ -116,10 +115,9 @@ void update_callstate(int32_t instructionID) {
     // transition found
 
     // check if a fall-through transition (i.e. instructionID '0') exists
-    CallState *fallthrough_transition_target = transition_target->get_transition_target(0);
+    CallState *fallthrough_transition_target = transition_target->get_fallthrough_transition_target();
     if (fallthrough_transition_target) {
       // overwrite transition target with the fallthrough
-      // TODO: this fallthrough could be implemented statically by redirecting the edges accordingly
       transition_target = fallthrough_transition_target;
     }
 
