@@ -154,6 +154,13 @@ if(DEFINED DP_INTERNAL_TIMER)
         endif()
 endif()
 
+if(DEFINED DP_STACK_ACCESS_DETECTION)
+        if(NOT ${DP_STACK_ACCESS_DETECTION} EQUAL 0)
+                target_compile_definitions(DiscoPoP_RT PUBLIC DP_STACK_ACCESS_DETECTION=${DP_STACK_ACCESS_DETECTION})
+                message(STATUS "WARNING: DiscoPoP configuration: DP_STACK_ACCESS_DETECTION enabled. Reduces profiling speed.")
+        endif()
+endif()
+
 if(DEFINED DP_CALLTREE_PROFILING)
         if(NOT ${DP_CALLTREE_PROFILING} EQUAL 0)
                 target_compile_definitions(DiscoPoP_RT PUBLIC DP_CALLTREE_PROFILING=${DP_CALLTREE_PROFILING})

@@ -51,13 +51,6 @@ void __dp_read(LID lid, ADDR addr, const char *var) {
          << endl;
   }
 
-  // TEST
-  // check for stack access
-#if DP_STACK_ACCESS_DETECTION
-  bool is_stack_access = memory_manager->is_stack_access(addr);
-#endif
-  // !TEST
-
 #if defined DP_NUM_WORKERS && DP_NUM_WORKERS == 0
   AccessInfo current;
 #else
