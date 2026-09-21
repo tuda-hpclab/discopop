@@ -64,7 +64,7 @@ struct DiscoPoP_new_PM_adaptor : public PassInfoMixin<DiscoPoP_new_PM_adaptor> {
     errs() << "Running DiscoPoP pass on Module: \n";
     //const ModuleAnalysisManager &MAM = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F).getManager();
     DiscoPoP().runOnModule(M, MAM);
-    return PreservedAnalyses::all();
+    return PreservedAnalyses::none();
   }
 };
 
