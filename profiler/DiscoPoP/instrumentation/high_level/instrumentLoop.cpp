@@ -19,6 +19,16 @@
 void DiscoPoP::instrument_loop(Function &F, int file_id, llvm::Loop *loop, LoopInfo &LI,
                                map<string, string> *trueVarNamesFromMetadataMap) {
 
+  // Whatever becomes of this loop, its subloops are loops of their own. Both early returns
+  // below used to take them with it, so a loop that could not be described made every loop
+  // inside it disappear as well. Called where the recursion used to sit on the path that
+  // keeps the loop, so the order in which loop ids are handed out does not change.
+  const auto instrument_subloops = [&]() {
+    for (llvm::Loop *sub_loop : loop->getSubLoops()) {
+      instrument_loop(F, file_id, sub_loop, LI, trueVarNamesFromMetadataMap);
+    }
+  };
+
   auto loc = loop->getStartLoc();
   if (!dp_reduction_loc_exists(loc)) {
     // Nothing can be said about a loop that has no location: it is left out of
@@ -28,11 +38,17 @@ void DiscoPoP::instrument_loop(Function &F, int file_id, llvm::Loop *loop, LoopI
     // empties the file for a whole module, and that looks like nothing at all.
     errs() << "WARNING: DiscoPoP: loop without a source location, not instrumented."
            << " File: " << file_id << " Function: " << F.getName() << "\n";
+    instrument_subloops();
     return;
   }
 
   auto basic_blocks = loop->getBlocks();
-  if (basic_blocks.size() < 3) {
+  // basic_blocks[1] is the only one addressed by index, so two blocks are enough. Asking
+  // for three dropped every while and do-while loop whose body is a single block -- no
+  // entry in loop_meta.txt, no __dp_loop_incr, no iteration count -- while the same loop
+  // with an if in its body was profiled.
+  if (basic_blocks.size() < 2) {
+    instrument_subloops();
     return;
   }
   // add an entry to the 'loops_' vector
@@ -48,11 +64,7 @@ void DiscoPoP::instrument_loop(Function &F, int file_id, llvm::Loop *loop, LoopI
 
   loops_.push_back(loop_info);
 
-  // call 'instrument_loop' on all its subloops
-  auto const sub_loops = loop->getSubLoops();
-  for (auto loop_it = sub_loops.begin(); loop_it != sub_loops.end(); ++loop_it) {
-    instrument_loop(F, file_id, *loop_it, LI, trueVarNamesFromMetadataMap);
-  }
+  instrument_subloops();
   // The key corresponds to the variable that is loaded / stored.
   // The value points to the actual load / store instruction.
   std::map<llvm::Value *, llvm::Instruction *> load_instructions;
