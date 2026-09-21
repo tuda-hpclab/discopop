@@ -52,10 +52,11 @@ void DiscoPoP::instrumentStore(StoreInst *toInstrument, int32_t llvm_ir_instruct
 #endif
 
 #if LLVM_VERSION_MAJOR >= 22
-  CallInst::Create(DpWrite, args, "", toInstrument->getIterator());
+  CallInst *callback = CallInst::Create(DpWrite, args, "", toInstrument->getIterator());
 #else
-  CallInst::Create(DpWrite, args, "", toInstrument);
+  CallInst *callback = CallInst::Create(DpWrite, args, "", toInstrument);
 #endif
+  insertedAccessCallbacks[toInstrument] = callback;
 
 #ifdef SKIP_DUP_INSTR
   // Post instrumentation call

@@ -52,10 +52,11 @@ void DiscoPoP::instrumentLoad(LoadInst *toInstrument, int32_t llvm_ir_instructio
   args.push_back(currentCount);
 #endif
 #if LLVM_VERSION_MAJOR >= 22
-  CallInst::Create(DpRead, args, "", toInstrument->getIterator());
+  CallInst *callback = CallInst::Create(DpRead, args, "", toInstrument->getIterator());
 #else
-  CallInst::Create(DpRead, args, "", toInstrument);
+  CallInst *callback = CallInst::Create(DpRead, args, "", toInstrument);
 #endif
+  insertedAccessCallbacks[toInstrument] = callback;
 
 #ifdef SKIP_DUP_INSTR
   // Post instrumentation call

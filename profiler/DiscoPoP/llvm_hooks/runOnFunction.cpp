@@ -171,6 +171,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     instrumentFuncEntry(F);
 
     // Traverse all instructions, collect loads/stores/returns, check for calls.
+    insertedAccessCallbacks.clear();
     for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ++FI) {
       BasicBlock &BB = *FI;
       runOnBasicBlock(BB);
@@ -516,24 +517,17 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     }
 
     // Remove omittable instructions from profiling
-    Instruction *DP_Instrumentation;
+    //
+    // By the call that was inserted for the instruction, not by whatever instruction happens
+    // to sit next to it: the two are neighbours only as long as nothing between the
+    // instrumentation and here moves them apart, and an instruction whose call is not found
+    // keeps being profiled although its dependencies have been reported statically.
     for (Instruction *I : omittableInstructions) {
-      if (isa<AllocaInst>(I)) {
-        DP_Instrumentation = I->getNextNode()->getNextNode();
-      } else {
-        DP_Instrumentation = I->getPrevNode();
-      }
-
-      if (!DP_Instrumentation)
+      const auto callback = insertedAccessCallbacks.find(I);
+      if (callback == insertedAccessCallbacks.end())
         continue;
-      if (CallInst *call_inst = dyn_cast<CallInst>(DP_Instrumentation)) {
-        if (Function *Fun = call_inst->getCalledFunction()) {
-          string fn = Fun->getName().str();
-          if (fn == "__dp_write" || fn == "__dp_read" || fn == "__dp_alloca") {
-            DP_Instrumentation->eraseFromParent();
-          }
-        }
-      }
+      callback->second->eraseFromParent();
+      insertedAccessCallbacks.erase(callback);
     }
 
     // Report statically identified dependencies
