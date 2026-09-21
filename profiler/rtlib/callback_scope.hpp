@@ -25,10 +25,10 @@ namespace __dp {
 
 // The callbacks the LLVM pass injects, one enumerator each.
 //
-// Separate from TimerRegion although the names overlap: TimerRegion drives the DP_INTERNAL_TIMER
-// report and covers the runtime's own regions as well, while two of the callbacks below have no
-// entry in it at all. Tying the benchmark builds to it would mean changing that report to change
-// what can be measured.
+// Separate from TimerRegion although every enumerator below has one of that name as well:
+// TimerRegion drives the DP_INTERNAL_TIMER report and covers the runtime's own regions too.
+// Tying the benchmark builds to it would mean changing that report to change what can be
+// measured.
 enum class CallbackId {
   ALLOCA,
   CALL,

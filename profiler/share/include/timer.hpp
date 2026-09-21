@@ -34,9 +34,11 @@ enum class TimerRegion : unsigned int {
   FINALIZE,
   FUNC_ENTRY,
   FUNC_EXIT,
+  INCR_TAKEN_BRANCH_COUNTER,
   INIT,
   LOOP_ENTRY,
   LOOP_EXIT,
+  LOOP_INCR,
   NEW,
   READ,
   REPORT_BB,
@@ -169,6 +171,9 @@ public:
     stream << '\n';
     print(stream, " Loop entry                                      : ", TimerRegion::LOOP_ENTRY);
     print(stream, " Loop exit                                       : ", TimerRegion::LOOP_EXIT);
+    print(stream, " Loop iteration                                  : ", TimerRegion::LOOP_INCR);
+    print(stream, " Taken branch counter                            : ",
+          TimerRegion::INCR_TAKEN_BRANCH_COUNTER);
     stream << '\n';
     print(stream, " Add basic block dependencies                    : ", TimerRegion::ADD_BB_DEPS);
     print(stream, " Report a basic block                            : ", TimerRegion::REPORT_BB);
