@@ -39,6 +39,7 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <unordered_set>
 #include <utility>
 // hybrid analysis
 #include <regex>
@@ -445,6 +446,43 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
   }
 }
 
+namespace {
+
+// What a deferred access is identified by: the address, the instruction and call path state
+// its LID carries, whether it reads or writes, and whether it is one of the markers the
+// hybrid analysis inserts. Two accesses that agree on all of it derive the same dependency
+// from the state the earlier chunks left behind. Leaving the direction out of this made a
+// read swallow the write that followed it on the same address and line.
+struct DeferredAccess {
+  ADDR addr;
+  LID lid;
+  bool isRead;
+  bool skip;
+
+  bool operator==(const DeferredAccess &other) const noexcept {
+    return addr == other.addr && lid == other.lid && isRead == other.isRead && skip == other.skip;
+  }
+};
+
+struct DeferredAccessHash {
+  std::size_t operator()(const DeferredAccess &access) const noexcept {
+    const std::size_t flags = (access.isRead ? 1u : 0u) | (access.skip ? 2u : 0u);
+    return std::hash<ADDR>()(access.addr) ^ (std::hash<LID>()(access.lid) << 1) ^ (flags << 3);
+  }
+};
+
+// After this many deferred accesses in one chunk, the deduplication has to have paid for
+// itself -- see DEFERRED_DEDUP_MIN_HIT_RATE. Long enough to measure, short enough that a
+// chunk of 100000 accesses does not spend much of itself deciding.
+constexpr std::size_t DEFERRED_DEDUP_TRIAL = 4096;
+
+// The share of deferred accesses that has to be a repeat of one already queued for the table
+// to be worth a hash insert per access. Code that walks a new address every time -- a linked
+// list, a large array touched once -- finds nothing and drops far below this.
+constexpr double DEFERRED_DEDUP_MIN_HIT_RATE = 0.25;
+
+} // namespace
+
 void *processFirstAccessQueue(void *arg) {
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
@@ -471,17 +509,46 @@ void *processFirstAccessQueue(void *arg) {
       // process chunk
       AbstractShadow *SMem = new PerfectShadow2();
       std::vector<AccessInfo> *entry_condition_accesses = new std::vector<AccessInfo>();
+      std::unordered_set<DeferredAccess, DeferredAccessHash> already_deferred;
+      // Given up once the chunk turns out not to repeat its accesses.
+      bool deduplicate = true;
+      std::size_t deferred_seen = 0;
+      std::size_t deferred_repeats = 0;
 
       for (AccessInfo access : *(current->get_buffer())) {
         if (!(access.addr || access.lid)) {
           continue;
         }
 
-        // check if access is the first access to a memory location in the current chunk
-        bool is_entry_condition_access = (SMem->testInRead(access.addr) == 0) && (SMem->testInWrite(access.addr) == 0);
+        // An access can be analyzed against the chunk local shadow only once that shadow
+        // knows everything about its address, and it does from the first write to it on.
+        // Before that, "no earlier write in this chunk" is not "no earlier write", and where
+        // the chunk boundary happens to fall decides what is reported. So everything up to
+        // and including the first write to an address is analyzed by the second queue, which
+        // carries the state the earlier chunks left behind.
+        bool is_entry_condition_access = SMem->testInWrite(access.addr) == 0;
         if (is_entry_condition_access) {
-          // register the access in the list of entry conditions
-          entry_condition_accesses->push_back(access);
+          // Once per address and LID: the second queue would derive the same dependency from
+          // the second one, and a read heavy chunk repeats the same pair thousands of times.
+          // The shadow below is still updated for every one of them, so the state this chunk
+          // hands on is the state of its last access.
+          if (deduplicate) {
+            ++deferred_seen;
+            if (already_deferred.insert(DeferredAccess{access.addr, access.lid, access.isRead, access.skip})
+                    .second) {
+              entry_condition_accesses->push_back(access);
+            } else {
+              ++deferred_repeats;
+            }
+            if (deferred_seen == DEFERRED_DEDUP_TRIAL &&
+                static_cast<double>(deferred_repeats) / static_cast<double>(deferred_seen) <
+                    DEFERRED_DEDUP_MIN_HIT_RATE) {
+              already_deferred.clear();
+              deduplicate = false;
+            }
+          } else {
+            entry_condition_accesses->push_back(access);
+          }
           // register the read / write represented by the access to allow the identification of correct dependencies for
           // the rest of the chunk
           if (access.isRead) {
