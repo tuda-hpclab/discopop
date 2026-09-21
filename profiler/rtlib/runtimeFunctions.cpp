@@ -370,9 +370,12 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
     }
     // End HA
     sigElement lastWrite = SMem->testInWrite(access.addr);
+    // Every read, not only the ones that turn out to be RAWs: a read that found no earlier write
+    // is still the read a later write has to come after, and leaving it out of the shadow made
+    // that WAR depend on whether the read happened to open a chunk.
+    SMem->insertToRead(access.addr, access.lid);
     if (lastWrite != 0 && lastWrite != 1) {
       // RAW
-      SMem->insertToRead(access.addr, access.lid);
 #if DP_CALLTREE_PROFILING
       read_ctn = std::move(access.call_tree_node_ptr);
 #endif
@@ -392,6 +395,7 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
     if (access.skip) {
       return;
     }
+    sigElement lastRead = SMem->testInRead(access.addr);
     if (lastWrite == 0 || lastWrite == 1) {
       // INIT
 #if DP_CALLTREE_PROFILING
@@ -400,8 +404,21 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
 #else
       addDep(INIT, access.lid, 0, access.var, access.AAvar, access.addr);
 #endif
+      // A read that came before this write is a WAR no matter whether a write came before it as
+      // well. Asking only in the branch below used to lose those dependencies -- and the chunked
+      // analysis made that the common case rather than a corner case, because every chunk starts
+      // from an empty shadow, so "no earlier write" there only means "none in this chunk".
+      if (lastRead != 0 && lastRead != 1) {
+#if DP_CALLTREE_PROFILING
+        addDep(WAR, access.lid, lastRead, access.var, access.AAvar, access.addr, write_ctn, read_ctn,
+               access.calculate_dependency_metadata);
+#else
+        addDep(WAR, access.lid, lastRead, access.var, access.AAvar, access.addr);
+#endif
+        // Clear intermediate read ops
+        SMem->insertToRead(access.addr, 0);
+      }
     } else {
-      sigElement lastRead = SMem->testInRead(access.addr);
       if (lastRead != 0 && lastRead != 1) {
         // WAR
 #if DP_CALLTREE_PROFILING
