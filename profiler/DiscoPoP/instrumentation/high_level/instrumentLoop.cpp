@@ -21,6 +21,13 @@ void DiscoPoP::instrument_loop(Function &F, int file_id, llvm::Loop *loop, LoopI
 
   auto loc = loop->getStartLoc();
   if (!dp_reduction_loc_exists(loc)) {
+    // Nothing can be said about a loop that has no location: it is left out of
+    // loop_meta.txt and gets no __dp_loop_incr, so its iterations are never counted.
+    // Worth a word, because the location comes off the terminator of the loop's
+    // preheader -- a branch inserted in front of it without a debug location silently
+    // empties the file for a whole module, and that looks like nothing at all.
+    errs() << "WARNING: DiscoPoP: loop without a source location, not instrumented."
+           << " File: " << file_id << " Function: " << F.getName() << "\n";
     return;
   }
 
