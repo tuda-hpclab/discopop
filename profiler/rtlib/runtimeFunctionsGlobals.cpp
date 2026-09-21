@@ -37,6 +37,7 @@ ImmortalStorage<SecondAccessQueue> secondAccessQueue_storage;
 ImmortalStorage<FirstAccessQueueChunkBuffer> firstAccessQueueChunkBuffer_storage;
 
 bool immortal_globals_constructed = false;
+bool manager_globals_alive = false;
 } // namespace
 
 bool DP_DEBUG = false; // debug flag
@@ -45,9 +46,9 @@ Timers *timers = nullptr;
 
 std::mutex pthread_compatibility_mutex;
 
-FunctionManager *function_manager = nullptr;
-LoopManager *loop_manager = nullptr;
-MemoryManager *memory_manager = nullptr;
+ImmortalStorage<FunctionManager> function_manager;
+ImmortalStorage<LoopManager> loop_manager;
+ImmortalStorage<MemoryManager> memory_manager;
 
 #if DP_CALLTREE_PROFILING
 CallTree call_tree;
@@ -100,6 +101,32 @@ CallStateGraph *call_state_graph;
 
 // statistics
 std::chrono::high_resolution_clock::time_point statistics_profiling_start_time;
+
+// The managers, constructed where __dp_init used to new them. Kept apart from the immortal
+// globals below because they are created later in the startup sequence and a unit test brings
+// them up on its own.
+void construct_manager_globals() {
+  if (manager_globals_alive) {
+    return;
+  }
+  function_manager.construct();
+  loop_manager.construct();
+  memory_manager.construct();
+  manager_globals_alive = true;
+}
+
+// Destroyed in the reverse order, where __dp_finalize used to delete them.
+void destroy_manager_globals() {
+  if (!manager_globals_alive) {
+    return;
+  }
+  memory_manager.destroy();
+  loop_manager.destroy();
+  function_manager.destroy();
+  manager_globals_alive = false;
+}
+
+bool manager_globals_constructed() noexcept { return manager_globals_alive; }
 
 // Constructs the globals above. Called from __dp_init, before anything reads them, and
 // idempotent so that a second entry point can call it too.

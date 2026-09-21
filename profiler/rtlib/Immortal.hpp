@@ -52,6 +52,15 @@ template <typename T> union ImmortalStorage {
   }
 
   void destroy() { value.~T(); }
+
+  // Reached with -> and *, so a use site reads like the pointer some of these globals used to
+  // be while the object is addressed directly. A pointer variable -- and a reference at
+  // namespace scope, which is one -- would itself have to be loaded before the object behind it
+  // can be touched, on every callback that reaches it.
+  T *operator->() noexcept { return &value; }
+  const T *operator->() const noexcept { return &value; }
+  T &operator*() noexcept { return value; }
+  const T &operator*() const noexcept { return value; }
 };
 
 } // namespace __dp

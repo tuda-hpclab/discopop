@@ -33,9 +33,6 @@ protected:
     previous_all_deps = allDeps;
     previous_output_deps = outPutDeps;
     previous_bb_list = bbList;
-    previous_function_manager = function_manager;
-    previous_loop_manager = loop_manager;
-    previous_memory_manager = memory_manager;
     previous_call_state_graph = call_state_graph;
     previous_shadow = singleThreadedExecutionSMem;
     previous_map = myMap;
@@ -58,9 +55,10 @@ protected:
     NUM_WORKERS = 0;
     initSingleThreadedExecution();
 
-    function_manager = new FunctionManager();
-    loop_manager = new LoopManager();
-    memory_manager = new MemoryManager();
+    // objects in the runtime's own storage rather than pointers, so a fresh set means
+    // destroying whatever an earlier test left behind
+    destroy_manager_globals();
+    construct_manager_globals();
     call_state_graph = new CallStateGraph();
 
     allDeps = new depMap();
@@ -80,23 +78,18 @@ protected:
     delete allDeps;
     delete outPutDeps;
     delete bbList;
-    delete function_manager;
-    delete loop_manager;
-    delete memory_manager;
     delete call_state_graph;
     delete singleThreadedExecutionSMem;
     delete myMap;
 
     // release_runtime() destroys them, and the rest of the suite expects them to exist
     construct_immortal_globals();
+    construct_manager_globals();
 
     out = previous_out;
     allDeps = previous_all_deps;
     outPutDeps = previous_output_deps;
     bbList = previous_bb_list;
-    function_manager = previous_function_manager;
-    loop_manager = previous_loop_manager;
-    memory_manager = previous_memory_manager;
     call_state_graph = previous_call_state_graph;
     singleThreadedExecutionSMem = previous_shadow;
     myMap = previous_map;
@@ -147,9 +140,6 @@ private:
   depMap *previous_all_deps = nullptr;
   stringDepMap *previous_output_deps = nullptr;
   ReportedBBSet *previous_bb_list = nullptr;
-  FunctionManager *previous_function_manager = nullptr;
-  LoopManager *previous_loop_manager = nullptr;
-  MemoryManager *previous_memory_manager = nullptr;
   CallStateGraph *previous_call_state_graph = nullptr;
   AbstractShadow *previous_shadow = nullptr;
   depMap *previous_map = nullptr;
@@ -253,9 +243,7 @@ TEST_F(RuntimeShutdownTest, testTheCountedBranchesAreWritten) {
 TEST_F(RuntimeShutdownTest, testReleasingTheRuntimeDropsEverythingItCreated) {
   release_runtime();
 
-  EXPECT_EQ(function_manager, nullptr);
-  EXPECT_EQ(loop_manager, nullptr);
-  EXPECT_EQ(memory_manager, nullptr);
+  EXPECT_FALSE(manager_globals_constructed());
   EXPECT_EQ(call_state_graph, nullptr);
   EXPECT_EQ(allDeps, nullptr);
   EXPECT_EQ(outPutDeps, nullptr);
