@@ -56,8 +56,11 @@ void DiscoPoP::instrument_loop(Function &F, int file_id, llvm::Loop *loop, LoopI
   for (size_t i = 0; i < basic_blocks.size(); ++i) {
     llvm::BasicBlock *const bb = basic_blocks[i];
 
-    std::string bb_name = bb->getName().str();
-    if ((std::strncmp("for.inc", bb_name.c_str(), 7) == 0) || (std::strncmp("for.cond", bb_name.c_str(), 8) == 0)) {
+    // Skip the loop's own control blocks and look at its body only. These used to be
+    // recognised by the names clang gives them in a for loop, for.cond and for.inc, which
+    // ties the analysis to one source construct and to names that nothing guarantees --
+    // half of a block that something has split answers to neither of them.
+    if (bb == loop->getHeader() || loop->isLoopLatch(bb)) {
       continue;
     }
 
