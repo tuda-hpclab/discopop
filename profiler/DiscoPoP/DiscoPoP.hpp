@@ -214,6 +214,11 @@ private:
 
   // DPInstrumentationOmission
   string bbDepString;
+
+  // The calls to __dp_report_bb and __dp_report_bb_pair inserted into this module, each with
+  // the semaphore it is conditional on or null. They are only guarded once every analysis of
+  // this pass has run, see doFinalization.
+  std::vector<std::pair<CallInst *, Value *>> insertedBBReports;
   string fileName;
   int32_t fid;
   FunctionCallee ReportBB, ReportBBPair;
