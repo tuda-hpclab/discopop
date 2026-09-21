@@ -30,10 +30,14 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_call(LID instructionID, int8_t isLibraryFunction) {
+void __dp_call(LID lid, int32_t instructionID, int8_t isLibraryFunction) {
   DP_CALLBACK_SCOPE(CALL);
 
-  function_manager->log_call(instructionID);
+  // The location of the call site, which the function manager pairs with the entry of the
+  // function that is about to run and reports as "<call site> BGN func <entry>". It used to
+  // be handed the instruction id, which decodeLID then read as a location and printed as
+  // "0:<id>".
+  function_manager->log_call(lid);
 
   // exclude library functions from callstate updates due to the missing instrumented function exit
   // and the resulting inconsistent callstate after returning

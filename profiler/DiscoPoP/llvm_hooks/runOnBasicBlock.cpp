@@ -260,7 +260,12 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
         if(F){
           F_is_library_function = (int8_t) F->isDeclaration();
         }
-        IRBCall.CreateCall(DpCallOrInvoke, {ConstantInt::get(Int32, llvm_ir_instruction_id), ConstantInt::get(Int8, F_is_library_function)});
+        // Both, and not one of the two: the runtime records the call site as a location
+        // (decodeLID turns it into file:line for BGN func) and switches the call state on
+        // the instruction id.
+        IRBCall.CreateCall(DpCallOrInvoke, {ConstantInt::get(Int32, lid),
+                                            ConstantInt::get(Int32, llvm_ir_instruction_id),
+                                            ConstantInt::get(Int8, F_is_library_function)});
         if (DP_DEBUG) {
           if (isa<CallInst>(BI)) {
             if (!(fn.str() == ""))

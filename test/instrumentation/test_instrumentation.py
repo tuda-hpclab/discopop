@@ -145,8 +145,9 @@ class TestFunctionCall(InstrumentationTestCase):
     def test_the_call_site_is_instrumented_as_project_code(self) -> None:
         self.assertInstrumentsLine("__dp_call", "call")
         call = [c for c in self.program.calls("__dp_call") if self.program.source_line(c) is not None][0]
-        # the second argument flags calls into code the pass did not instrument
-        self.assertEqual(0, call.arg_int(1), "the call to helper is reported as a library call")
+        # the call site first, then the instruction id, then the flag for calls into code the
+        # pass did not instrument
+        self.assertEqual(0, call.arg_int(2), "the call to helper is reported as a library call")
 
 
 class TestNestedLoops(InstrumentationTestCase):

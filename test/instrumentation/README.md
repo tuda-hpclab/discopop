@@ -66,8 +66,10 @@ hides the difference:
 
 - `__dp_func_entry`, `__dp_loop_entry`, `__dp_alloca`, … report a **packed location**,
   `(fileID << 14) + line` (see `LIDSIZE` in `profiler/share/include/DPUtils.hpp`).
-- `__dp_read`, `__dp_write`, `__dp_call` report an **instruction id**, which the pass resolves
+- `__dp_read`, `__dp_write` report an **instruction id**, which the pass resolves
   through `.discopop/profiler/instructionID_to_lineID_mapping.txt`.
+- `__dp_call` reports both: the packed location of the call site first, the instruction id
+  of the call second.
 
 ## What is covered
 
