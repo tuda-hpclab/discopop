@@ -12,77 +12,9 @@
 
 #include "../DiscoPoP.hpp"
 
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
-namespace {
-
-// Makes one report of a basic block happen on the first pass through that block only, by moving the
-// call that was inserted for it into `if (<semaphore> && !reported) { ...; reported = 1; }`.
-//
-// The runtime collects the reported indices in a set and only ever asks whether an index is in it,
-// so every report after the first one leaves that set exactly as it was -- see __dp_report_bb and
-// process_registered_bb_deps. Repeating them is not free, though: these two callbacks sit at the end
-// of a basic block rather than at a memory access, which makes them by a wide margin the most
-// frequently called of all. Measured over the programs in benchmark/pass_overhead they were 531 of
-// 906 million calls, and between them they carried 375 distinct indices.
-//
-// One flag per call site rather than one per index: bbDepCount is incremented once per report
-// inserted, so no two call sites ever announce the same index.
-//
-// The flag is read and written without synchronization, as the set behind it already was. It is
-// only ever written to one, so two threads racing on it cannot lose that write; the worst a race can
-// do is let both of them report, which is what every pass through the block did before.
-//
-// Both branches take over the debug location of the terminator they end up in front of. Llvm reads
-// the location of a loop off the terminator of its preheader, so a branch without one there hides
-// the loop from anything that asks afterwards.
-void guardReport(Module &module, IntegerType *flagType, CallInst *report, Value *semaphore) {
-  GlobalVariable *reported =
-      new GlobalVariable(module, flagType, /*isConstant=*/false, GlobalValue::PrivateLinkage,
-                         ConstantInt::get(flagType, 0), ".dp_bb_reported");
-
-  // Taken before the split, which moves this terminator into the tail half and leaves the branch to
-  // it behind in the block the report sits in.
-  BasicBlock *block = report->getParent();
-  const DebugLoc blockEnd = block->getTerminator()->getDebugLoc();
-
-  IRBuilder<> builder(report);
-  builder.SetCurrentDebugLocation(blockEnd);
-  Value *guard = builder.CreateIsNull(builder.CreateLoad(flagType, reported));
-  if (semaphore != nullptr) {
-    guard = builder.CreateAnd(builder.CreateIsNotNull(semaphore), guard);
-  }
-
-#if LLVM_VERSION_MAJOR >= 22
-  Instruction *guarded = SplitBlockAndInsertIfThen(guard, report->getIterator(), false);
-  report->moveBefore(guarded->getIterator());
-  new StoreInst(ConstantInt::get(flagType, 1), reported, false, guarded->getIterator());
-#else
-  Instruction *guarded = SplitBlockAndInsertIfThen(guard, report, false);
-  report->moveBefore(guarded);
-  new StoreInst(ConstantInt::get(flagType, 1), reported, false, guarded);
-#endif
-  block->getTerminator()->setDebugLoc(blockEnd);
-  guarded->setDebugLoc(blockEnd);
-}
-
-} // namespace
-
 bool DiscoPoP::doFinalization(Module &M) {
-  // Report every basic block on the first pass through it rather than on every one, see guardReport.
-  //
-  // Deliberately here rather than where the reports are inserted: a guard splits the block it sits
-  // in, and everything this pass does after inserting them runs on the instrumented module. The
-  // removal of the instrumentation of the omitted instructions identifies the call it erases as the
-  // instruction next to the load or store it belongs to, and instrument_loop walks the blocks of a
-  // loop and skips the ones whose name begins with for.cond or for.inc -- a half of a split block
-  // answers to neither. Both of them quietly produced different profiling results.
-  for (const auto &report : insertedBBReports) {
-    guardReport(M, Int8, report.first, report.second);
-  }
-  insertedBBReports.clear();
-
   // unique InstructionID assignment
   // write the current count of unique instructions to a file to avoid duplication between modules.
   outInstructionIDCounter = new std::ofstream();
