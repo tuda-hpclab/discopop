@@ -81,9 +81,8 @@ void __dp_func_exit(LID lid, int32_t isExit) {
     cout << "Exiting fucntion LID " << std::dec << dputil::decodeLID(lid) << endl;
     cout << "Function stack level = " << std::dec << function_manager->get_current_stack_level() << endl;
   }
-  // released before the last statement, as the hand written unlock() here was
-  dp_scope.unlock();
-
+  // Under the lock, like the matching update in __dp_call: the two touch the same call
+  // state. The scope releases the lock when it is destroyed.
   update_callstate_from_func_exit(1); // 1 is the dummy instruction id for leaving a function
 }
 }
