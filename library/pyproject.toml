@@ -1,0 +1,90 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discopop-library"
+dynamic = ["version"]
+description = "DiscoPoP Library: shared utilities and tools for the DiscoPoP parallelization framework."
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {file = "LICENSE"}
+authors = [
+    {name = "TU Darmstadt and Iowa State University", email = "discopop@lists.parallel.informatik.tu-darmstadt.de"},
+]
+requires-python = ">=3.6"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development",
+]
+dependencies = [
+    # the Project Manager GUI's hotspot tab identifies code regions with the
+    # region-key helpers that live next to the instrumentation pass writing them
+    "discopop-hotspot-detection>=0.0.1a1",
+    "extrap",
+    "filelock",
+    "jsonpickle",
+    "jsons",
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "packaging",
+    "plotille",
+    "pydot",
+    "requests",
+    "scipy",
+    "setuptools",
+    "sympy",
+    "sympy_plot_backends",
+    "tabulate",
+    "termcolor",
+    "tqdm",
+    "ttkthemes",
+]
+
+[project.optional-dependencies]
+dev = ["mypy", "black", "data-science-types", "pre-commit"]
+ci = ["mypy", "black", "data-science-types"]
+
+[project.urls]
+Homepage = "https://www.discopop.tu-darmstadt.de/"
+
+[project.scripts]
+discopop_optimizer = "discopop_library.discopop_optimizer.__main__:main"
+discopop_patch_generator = "discopop_library.PatchGenerator.__main__:main"
+discopop_patch_applicator = "discopop_library.PatchApplicator.__main__:main"
+discopop_config_provider = "discopop_library.ConfigProvider.__main__:main"
+discopop_auto_tuner = "discopop_library.EmpiricalAutotuning.__main__:main"
+discopop_patch_repair = "discopop_library.PatchRepair.__main__:main"
+discopop_sanity_checker = "discopop_library.SanityChecker.__main__:main"
+discopop_preprocessor = "discopop_library.PreProcessor.__main__:main"
+discopop_project_manager = "discopop_library.ProjectManager.__main__:main"
+discopop = "discopop_library.ProjectManager.__main__:main"
+discopop_gui = "discopop_library.ProjectManager.__main__:gui_main"
+discopop_configuration_manager = "discopop_library.ConfigurationManager.__main__:main"
+discopop_dependency_comparator = "discopop_library.DependencyComparator.__main__:main"
+discopop_parallel_region_merger = "discopop_library.ParallelRegionMerger.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["discopop_library*"]
+
+[tool.setuptools.package-data]
+discopop_library = ["scripts/*"]
+
+[tool.setuptools]
+zip-safe = true

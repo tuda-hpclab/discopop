@@ -11,6 +11,7 @@ def run_cmd(cmd: str, cwd: str, env: Dict[str, str]) -> None:
         env=env,
         capture_output=True,
     )
+    # print(result.stdout.decode("utf-8"))
     if result.returncode != 0:
         raise ValueError(
             "Error during subprocess call. \nCALL: "

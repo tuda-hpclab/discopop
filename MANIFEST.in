@@ -11,5 +11,4 @@
 
 include VERSION
 include requirements.txt
-recursive-include discopop_wizard *
 recursive-include discopop_library *

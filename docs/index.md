@@ -31,7 +31,7 @@ This example installs DiscoPoP, instruments and builds the provided example, ana
 In case any issues arise during the process, please refer to the detailed [setup instructions](setup/setup.md), contact us via GitHub messages, or get in contact by mail to [discopop-support@lists.parallel.informatik.tu-darmstadt.de](mailto:discopop-support@lists.parallel.informatik.tu-darmstadt.de).
 ```
 # setup DiscoPoP
-git clone git@github.com:discopop-project/discopop.git
+git clone git@github.com:tuda-hpclab/discopop.git
 cd discopop
 mkdir build && cd build
 DP_BUILD=$(pwd)

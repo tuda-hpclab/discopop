@@ -16,7 +16,7 @@ if (POLICY CMP0077)
 endif()
 
 # Print DiscoPoP version to be installed
-file(READ ${CMAKE_CURRENT_LIST_DIR}/discopop_library/global_data/version/VERSION DiscoPoP_VERSION)
+file(READ ${CMAKE_CURRENT_LIST_DIR}/library/discopop_library/global_data/version/VERSION DiscoPoP_VERSION)
 string(REGEX REPLACE "\n$" "" DiscoPoP_VERSION "${DiscoPoP_VERSION}")
 message(STATUS "DiscoPoP version: ${DiscoPoP_VERSION}")
 
@@ -31,18 +31,21 @@ elseif(NOT ${USE_LLVM_VERSION} STREQUAL "")
     # search for specified llvm version
     find_package(LLVM ${USE_LLVM_VERSION} REQUIRED)
 else()
-    # search for llvm 19 installations
-    find_package(LLVM 19.0 CONFIG QUIET)
+    # search for any supported LLVM major version (19–22), any minor version
+    foreach(_major 19 20 21 22)
+        foreach(_minor RANGE 0 9)
+            if(NOT LLVM_FOUND)
+                find_package(LLVM "${_major}.${_minor}" CONFIG QUIET)
+            endif()
+        endforeach()
+    endforeach()
     if(NOT LLVM_FOUND)
-        find_package(LLVM 19.1 CONFIG QUIET)
-        if(NOT LLVM_FOUND)
-            message(FATAL_ERROR "\
+        message(FATAL_ERROR "\
 No supported LLVM Version found. \
-Version 19.0 or 19.1 required! \
+Versions 19–22 are supported. \
 If a supported LLVM Version is installed, consider specifying the -DLLVM_DIST_PATH flag. \
-For more information, please refer to https://discopop-project.github.io/discopop/setup/discopop. \
+For more information, please refer to https://tuda-hpclab.github.io/discopop/setup/discopop. \
 ")
-        endif()
     endif()
 endif()
 
@@ -62,13 +65,7 @@ include(AddLLVM)
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS})
 
-# update or initialize git submodules
-message(STATUS "Updating git submodules")
-execute_process(COMMAND git submodule update --init --recursive --remote)
-
-add_subdirectory(DiscoPoP)
-
-add_subdirectory(rtlib)
+add_subdirectory(profiler)
 
 add_subdirectory(scripts)
 
@@ -92,31 +89,31 @@ file(APPEND "${DiscoPoP_BINARY_DIR}/build_config.txt" "PYTHON_EXECUTABLE=${Pytho
 ##### END OF DEPRECATED #####
 
 # save build_config.py to discopop_library/ConfigProvider/assets for easy accessibility and global use
-file(REMOVE "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py")
-file(TOUCH "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_VERSION=\"${DiscoPoP_VERSION}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_BUILD=\"${DiscoPoP_BINARY_DIR}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_SOURCE=\"${DiscoPoP_SOURCE_DIR}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "LLVM_BIN_DIR=\"${LLVM_TOOLS_BINARY_DIR}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "PYTHON_EXECUTABLE=\"${Python3_EXECUTABLE}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_HYBRID_PROFILING=\"${DP_HYBRID_PROFILING}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_PTHREAD_COMPATIBILITY_MODE=\"${DP_PTHREAD_COMPATIBILITY_MODE}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_RTLIB_VERBOSE=\"${DP_RTLIB_VERBOSE}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_NUM_WORKERS=\"${DP_NUM_WORKERS}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_INTERNAL_TIMER=\"${DP_INTERNAL_TIMER}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_CALLTREE_PROFILING=\"${DP_CALLTREE_PROFILING}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_CALLTREE_PROFILING_METADATA_CUTOFF=\"${DP_CALLTREE_PROFILING_METADATA_CUTOFF}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_CALLTREE_PROFILING_METADATA_CUTOFF_IGNORE_PROBABILITY=\"${DP_CALLTREE_PROFILING_METADATA_CUTOFF_IGNORE_PROBABILITY}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_MEMORY_REGION_DEALIASING=\"${DP_MEMORY_REGION_DEALIASING}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_BRANCH_TRACKING=\"${DP_BRANCH_TRACKING}\"\n")
-file(APPEND "${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py" "DP_BUILD_UNITTESTS=\"${DP_BUILD_UNITTESTS}\"\n")
+file(REMOVE "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py")
+file(TOUCH "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_VERSION=\"${DiscoPoP_VERSION}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_BUILD=\"${DiscoPoP_BINARY_DIR}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_SOURCE=\"${DiscoPoP_SOURCE_DIR}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "LLVM_BIN_DIR=\"${LLVM_TOOLS_BINARY_DIR}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "PYTHON_EXECUTABLE=\"${Python3_EXECUTABLE}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_HYBRID_PROFILING=\"${DP_HYBRID_PROFILING}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_PTHREAD_COMPATIBILITY_MODE=\"${DP_PTHREAD_COMPATIBILITY_MODE}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_RTLIB_VERBOSE=\"${DP_RTLIB_VERBOSE}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_NUM_WORKERS=\"${DP_NUM_WORKERS}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_INTERNAL_TIMER=\"${DP_INTERNAL_TIMER}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_CALLTREE_PROFILING=\"${DP_CALLTREE_PROFILING}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_CALLTREE_PROFILING_METADATA_CUTOFF=\"${DP_CALLTREE_PROFILING_METADATA_CUTOFF}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_CALLTREE_PROFILING_METADATA_CUTOFF_IGNORE_PROBABILITY=\"${DP_CALLTREE_PROFILING_METADATA_CUTOFF_IGNORE_PROBABILITY}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_MEMORY_REGION_DEALIASING=\"${DP_MEMORY_REGION_DEALIASING}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_BRANCH_TRACKING=\"${DP_BRANCH_TRACKING}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_BUILD_UNITTESTS=\"${DP_BUILD_UNITTESTS}\"\n")
 
 
 if(NOT ${IS_DEB_INSTALL} STREQUAL "")
     message(STATUS "performing installation from .deb package")
 else()
     # print DiscoPoP configuration
-    file(READ ${DiscoPoP_SOURCE_DIR}/discopop_library/ConfigProvider/assets/build_config.py DiscoPoP_CONFIGURATION)
+    file(READ ${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py DiscoPoP_CONFIGURATION)
     string(REGEX REPLACE "\n$" "" DiscoPoP_CONFIGURATION "${DiscoPoP_CONFIGURATION}")
     string(REGEX REPLACE "\n" "\n    " DiscoPoP_CONFIGURATION "${DiscoPoP_CONFIGURATION}")
     message(STATUS "DiscoPoP configuration:\n    ${DiscoPoP_CONFIGURATION}")
@@ -162,24 +159,11 @@ add_custom_target(
     DEPENDS install_python_modules reset_symlinks setup_symlinks
 )
 
-add_custom_target(
-    update_submodules
-    COMMENT "Updating git submodules"
-    COMMAND git submodule update --init --recursive --remote
-)
-
-add_custom_target(
-    install_submodules
-    COMMENT "Installing git submodules"
-    COMMAND ${Python3_VENV_EXECUTABLE} -m pip install ${DiscoPoP_SOURCE_DIR}/tools/submodules/update_notifications
-    DEPENDS update_submodules
-)
 
 add_custom_target(
     install_python_modules
     COMMENT "Installing python modules and dependencies"
-    COMMAND ${Python3_VENV_EXECUTABLE} -m pip install ${DiscoPoP_SOURCE_DIR}
-    DEPENDS update_submodules install_submodules
+    COMMAND ${Python3_VENV_EXECUTABLE} -m pip install -e ${DiscoPoP_SOURCE_DIR}
 )
 
 add_custom_target(
@@ -202,26 +186,15 @@ add_custom_target(
     setup_symlinks
     DEPENDS reset_symlinks
     COMMENT "Creating symlinks for DiscoPoP python executables"
-    COMMAND echo "--> discopop_auto_tuner"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_auto_tuner ${DP_LOCAL_BIN_DIR}/discopop_auto_tuner
-    COMMAND echo "--> discopop_config_provider"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_config_provider ${DP_LOCAL_BIN_DIR}/discopop_config_provider
-    COMMAND echo "--> discopop_explorer"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_explorer ${DP_LOCAL_BIN_DIR}/discopop_explorer
-    COMMAND echo "--> discopop_optimizer"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_optimizer ${DP_LOCAL_BIN_DIR}/discopop_optimizer
-    COMMAND echo "--> discopop_patch_applicator"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_patch_applicator ${DP_LOCAL_BIN_DIR}/discopop_patch_applicator
-    COMMAND echo "--> discopop_patch_generator"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_patch_generator ${DP_LOCAL_BIN_DIR}/discopop_patch_generator
-    COMMAND echo "--> discopop_sanity_checker"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_sanity_checker ${DP_LOCAL_BIN_DIR}/discopop_sanity_checker
-    COMMAND echo "--> discopop_preprocessor"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_preprocessor ${DP_LOCAL_BIN_DIR}/discopop_preprocessor
-    COMMAND echo "--> discopop_project_manager"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_project_manager ${DP_LOCAL_BIN_DIR}/discopop_project_manager
-    COMMAND echo "--> discopop_configuration_manager"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_configuration_manager ${DP_LOCAL_BIN_DIR}/discopop_configuration_manager
-    COMMAND echo "--> discopop_dependency_comparator"
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_dependency_comparator ${DP_LOCAL_BIN_DIR}/discopop_dependency_comparator
 )

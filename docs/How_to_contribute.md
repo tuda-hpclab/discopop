@@ -67,6 +67,16 @@ A new version number shall be determined as follows:
     * ==> Increase first digit by `1`.
     * ==> Set remaining digits to `0`.
 
+### Publish to PyPi
+To publish a package update to PyPi, crate and upload a tag on the respective branch.
+To trigger an update of:
+- the profiler, use `profiler_v*`
+- the explorer, use `explorer_v*`
+- the library, use `library_v*`
+as tag names, where `*` can be a version number as described above, but also be formatted as follows to publish alpha or beta packages.
+To publish package 1.2.3 alpha version 4, use `1.2.3a4` as version string. For a beta release use `b` instead.
+Update the `VERSION` file of the respective package accordingly.
+
 # Developer hints
 ## Output folder structure
 All tools developed as part of the DiscoPop Project make use of the following folder structure:

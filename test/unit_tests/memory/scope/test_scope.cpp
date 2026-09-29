@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/memory/Scope.hpp"
+#include "../../../../profiler/rtlib/memory/Scope.hpp"
 
 // Tests for old version (i.e., capturing functionality)
 

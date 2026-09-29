@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-VERSION=$(cat discopop_library/global_data/version/VERSION)
+VERSION=$(cat library/discopop_library/global_data/version/VERSION)
 
 PACKAGE_NAME="discopop-${VERSION}-$(dpkg --print-architecture)-$(uname --kernel-name).deb"
 
@@ -37,7 +37,7 @@ mkdir opt/DiscoPoP/build/libi
 mkdir opt/DiscoPoP/build/rtlib
 mkdir opt/DiscoPoP/build/scripts
 cp -r ../DEBIAN/prebuilt DEBIAN
-cp ../discopop_library/global_data/version/VERSION opt/DiscoPoP
+cp ../library/discopop_library/global_data/version/VERSION opt/DiscoPoP
 
 # specify files to be included in the package
 #mv * opt/DiscoPoP
@@ -58,7 +58,7 @@ cp -r ../example opt/DiscoPoP
 
 # add the Version tag to DEBIAN/control.raw to create DEBIAN/control
 echo "$(cat DEBIAN/control.raw)" > DEBIAN/control
-echo "Version: $(cat ../discopop_library/global_data/version/VERSION)" >> DEBIAN/control
+echo "Version: $(cat ../library/discopop_library/global_data/version/VERSION)" >> DEBIAN/control
 echo "Architecture: $(dpkg --print-architecture)" >> DEBIAN/control
 echo "" >> DEBIAN/control
 

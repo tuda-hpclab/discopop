@@ -44,9 +44,9 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 git checkout -b "release/v${VERSION}" || error "Failed."
 echo "${VERSION}" > VERSION
-echo "__version__ = \"${VERSION}\"" > discopop_explorer/_version.py
+echo "__version__ = \"${VERSION}\"" > explorer/discopop_explorer/_version.py
 echo "__version__ = \"${VERSION}\"" > discopop_profiler/_version.py
-git add VERSION discopop_explorer/_version.py discopop_profiler/_version.py || \
+git add VERSION explorer/discopop_explorer/_version.py discopop_profiler/_version.py || \
     error "Failed."
 git commit -m "Release of Version ${VERSION}" || error "Failed."
 git tag -a -m "Version ${VERSION}" "v${VERSION}" || error "Failed."

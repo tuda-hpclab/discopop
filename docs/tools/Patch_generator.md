@@ -12,6 +12,7 @@ nav_order: 3
 ## Purpose
 Convert a set of parallel patterns obtained by the [DiscoPoP Explorer](../tools/Explorer.md) or [optimizer](../tools/Optimizer.md) into a structured set of applicable patch files.
 The created patches can be applied manually or via the [DiscoPoP patch applicator](../tools/Patch_applicator.md).
+A generated patch is not guaranteed to compile; [patch repair](../tools/Patch_repair.md) finds those that do not and attempts to fix them.
 
 ## Required input
 - `Parallel patterns` in the form of a `JSON` file

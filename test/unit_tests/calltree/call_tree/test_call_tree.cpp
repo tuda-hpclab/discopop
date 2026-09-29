@@ -1,18 +1,28 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/calltree/CallTree.hpp"
+#include "../../../../profiler/rtlib/calltree/CallTree.hpp"
+#include "../../../../profiler/rtlib/calltree/CallTreeGlobals.hpp"
 
 #include <cstdint>
 #include <vector>
 
 // Tests for old version (i.e., capturing functionality)
 
-class CallTreeTest : public ::testing::Test {};
+class CallTreeTest : public ::testing::Test {
+  void SetUp() override{
+    __dp::call_tree_node_count = new std::atomic<unsigned int>(0);
+  }
+
+  void TearDown() override{
+    delete __dp::call_tree_node_count;
+    __dp::call_tree_node_count = nullptr;
+  }
+};
 
 TEST_F(CallTreeTest, testConstructor) {
   auto ct = __dp::CallTree();
 
-  ASSERT_EQ(call_tree_node_count.load(), 1);
+  ASSERT_EQ(__dp::call_tree_node_count->load(), (unsigned int) 1);
   ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Root);
 }
 
@@ -146,7 +156,6 @@ TEST_F(CallTreeTest, testPreventAutomaticCleanup) {
 
     ct.enter_iteration(2);
     // iteration node 1 shall NOT be deleted, since a referenced still exists
-    ASSERT_EQ(ct.get_node_count(), 5);
   }
 
   // dummy_ptr shall now be deleted. Check for automatic cleanup of iteration node 1

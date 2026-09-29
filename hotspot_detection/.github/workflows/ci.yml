@@ -1,0 +1,57 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "Hotspot Detection CI"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  lint_and_type_check:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Setup venv and install dependencies
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install numpy requests packaging termcolor mypy black data-science-types
+
+      - name: Run MyPy type checking
+        run: |
+          venv/bin/python3 -m mypy --ignore-missing-imports discopop_hotspot_analyzer discopop_hotspot_cc discopop_hotspot_cxx
+
+      - name: Check formatting
+        run: |
+          venv/bin/python3 -m black -l 120 --check discopop_hotspot_analyzer discopop_hotspot_cc discopop_hotspot_cxx
+
+  checks_successful:
+    runs-on: ubuntu-latest
+    name: Checks successful
+    needs: [lint_and_type_check]
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    steps:
+      - name: Report
+        run: |
+          echo "All checks successful!"

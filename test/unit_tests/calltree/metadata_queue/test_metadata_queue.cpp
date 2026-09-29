@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/calltree/MetaDataQueue.hpp"
+#include "../../../../profiler/rtlib/calltree/MetaDataQueue.hpp"
 
 class MetaDataQueueTest : public ::testing::Test {};
 

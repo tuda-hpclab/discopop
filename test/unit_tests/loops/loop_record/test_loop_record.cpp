@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/loop/LoopRecord.hpp"
+#include "../../../../profiler/rtlib/loop/LoopRecord.hpp"
 
 // Tests for old version (i.e., capturing functionality)
 

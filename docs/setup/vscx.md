@@ -11,7 +11,7 @@ Using the DiscoPoP VS Code extension is the recommended way to get started using
 
 ## Prerequisites
 
-- [DiscoPoP](https://github.com/discopop-project/discopop) is installed: Check out [How to install DiscoPoP](./discopop.md) before following this guide.
+- [DiscoPoP](https://github.com/tuda-hpclab/discopop) is installed: Check out [How to install DiscoPoP](./discopop.md) before following this guide.
 - The [HotspotDetection](https://github.com/discopop-project/Hotspot-Detection) is installed. The setup procedure is the same as for DiscoPoP.
 - [VS Code](https://code.visualstudio.com/) is installed.
 - OS: Linux or Windows with [WSL](https://code.visualstudio.com/docs/remote/wsl-tutorial) are supported.

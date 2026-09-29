@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/loop/LoopManager.hpp"
+#include "../../../../profiler/rtlib/loop/LoopManager.hpp"
 
 // Tests for old version (i.e., capturing functionality)
 

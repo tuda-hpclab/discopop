@@ -7,155 +7,140 @@
 # directory for details.
 
 name: "DiscoPoP CI"
+
 on:
   push:
     branches:
       - master
+      - new_explorer  # This is a temporary addition and should be removed before merging into master!
   pull_request:
     branches:
-      - '**'
+      - "**"
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
   pages: write
   id-token: write
 
 jobs:
-  execute_license_check:
+# used for eventual multiple operating system testing
+  create_matrix:
     runs-on: self-hosted
-    name: License check
+    name: Create matrix
+    outputs:
+      matrix: ${{ steps.create_matrix.outputs.matrix }}
     steps:
+      - name: Create build matrix
+        id: create_matrix
+        shell: bash
+        run: |
+          matrix='{"include":[
+            {"id":"debian:stable",
+             "base_image":"debian:stable",
+             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+            },
+            {"id":"ubuntu-24-04",
+             "base_image":"ubuntu:24.04",
+             "install_deps_cmd":" export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+            }
+          ]}'
+
+          if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
+            matrix='{"include":[
+              {"id":"debian:stable",
+              "base_image":"debian:stable",
+              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+              },
+              {"id":"ubuntu-24-04",
+              "base_image":"ubuntu:24.04",
+              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+              }
+            ]}'
+          fi
+
+          {
+            echo "matrix<<END"
+            echo "$matrix"
+            echo "END"
+          } >> "$GITHUB_OUTPUT"
+
+
+  build_install_and_test:
+    runs-on: self-hosted
+    container:
+      image: ${{ matrix.base_image }}
+    name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
+    needs: [create_matrix]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+
+    steps:
+      - name: Install Prerequisites
+        run: |
+          ${{ matrix.install_deps_cmd}}
+
       - name: Checkout Repository
         uses: actions/checkout@v3
+#        with:
+#          submodules: recursive
 
-      - name: "Github SHA"
-        run: |
-          echo "Hello from: ${{ github.sha }}"
-
-      - name: "Check all files for DiscoPoP License tag"
+      - name: Check all files for DiscoPoP License tag
         run: |
           ./scripts/dev/check-license.sh $(find . -type f)
 
-  prepare_ci_base:
-    runs-on: self-hosted
-    name: Build base container
-    needs: execute_license_check
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Build docker image discopop_ci_base
+      - name: Setup venv and install DiscoPoP
         run: |
-          docker build -f .github/workflows/Dockerfile_ci_base -t discopop_ci_base .
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          venv/bin/pip install pytest
 
-  prepare_ci_container:
-    runs-on: self-hosted
-    name: Build CI container
-    needs: prepare_ci_base
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Build docker image discopop_ci_${{ github.sha }}
+      - name: Run MyPy Type Checking
         run: |
-          docker build -f .github/workflows/Dockerfile_ci -t discopop_ci_${{ github.sha }} --no-cache .
+            venv/bin/python3 -m mypy --config-file=mypy.ini
 
-  code_check_mypy_explorer:
-    runs-on: self-hosted
-    name: "Type check: Explorer"
-    needs: prepare_ci_container
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: "Run MyPy Type Checker - DiscoPoP Explorer"
+      - name: Check formatting of DiscoPoP Explorer
         run: |
-          docker run --rm discopop_ci_${{ github.sha }} python -m mypy --config-file=mypy.ini -p discopop_explorer
+            venv/bin/python3 -m black -l 120 --check explorer
 
-  code_check_mypy_library:
-    runs-on: self-hosted
-    name: "Type check: Library"
-    needs: prepare_ci_container
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: "Run MyPy Type Checker - DiscoPoP Library"
+      - name: Check formatting of DiscoPoP Library
         run: |
-          docker run --rm discopop_ci_${{ github.sha }} python -m mypy --config-file=mypy.ini -p discopop_library
+            venv/bin/python3 -m black -l 120 --check library
 
-  code_check_black_explorer:
-    runs-on: self-hosted
-    name: "Format check: Explorer"
-    needs: prepare_ci_container
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: "Check formatting of DiscoPoP Explorer"
+      - name: Check formatting of DiscoPoP Hotspot Detection
         run: |
-          docker run --rm discopop_ci_${{ github.sha }} python -m black -l 120 --check discopop_explorer
+            venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
 
-  code_check_black_library:
-    runs-on: self-hosted
-    name: "Format check: Library"
-    needs: prepare_ci_container
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: "Check formatting of DiscoPoP Library"
+      - name: Python unit tests (discopop_explorer)
         run: |
-          docker run --rm discopop_ci_${{ github.sha }} python -m black -l 120 --check discopop_library
+            . venv/bin/activate
+            python3 -m pytest explorer/discopop_explorer
 
-  execute_cxx_unit_tests:
-    runs-on: self-hosted
-    name: Execute C++ unit tests
-    needs: [code_check_mypy_explorer, code_check_mypy_library, code_check_black_explorer, code_check_black_library]
-    steps:
-      - name: C++ unit tests
+      - name: Build and execute C++ unit tests
         run: |
-          docker run --rm discopop_ci_${{ github.sha }} build/test/unit_tests/DiscoPoP_UT
+          cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
+          cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"
+          build_tests/test/unit_tests/DiscoPoP_UT
 
-  execute_profiler_tests:
-    runs-on: self-hosted
-    name: Execute profiler tests
-    needs: [code_check_mypy_explorer, code_check_mypy_library, code_check_black_explorer, code_check_black_library]
-    steps:
-      - name: Profiler gold standard tests (regular)
+      - name: Profiler gold standard tests
         run: |
-          docker run -e DP_TEST_PROFILER_CONFIG="build_regular" --rm discopop_ci_${{ github.sha }} python -m unittest -v -k *test.profiler.*
-      - name: Profiler gold standard tests (hybrid)
-        run: |
-          docker run -e DP_TEST_PROFILER_CONFIG="build_hybrid" --rm discopop_ci_${{ github.sha }} python -m unittest -v -k *test.profiler.*
+            . venv/bin/activate
+            python3 -m unittest -v -k "*test.profiler.*"
 
-  execute_end_to_end_tests:
-    runs-on: self-hosted
-    name: Execute end-to-end tests
-    needs: [execute_profiler_tests, execute_cxx_unit_tests]
-    steps:
       - name: Python end-to-end-tests
         run: |
-          docker run --rm discopop_ci_${{ github.sha }} python -m unittest -v -k *.end_to_end.*
+            . venv/bin/activate
+            python3 -m unittest -v -k "*.end_to_end.*"
+
+
 
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [execute_cxx_unit_tests, execute_end_to_end_tests]
+    needs: [build_install_and_test]
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     steps:
       - name: Report
         run: |
           echo "All checks successful!"
-
-  cleanup:
-    runs-on: self-hosted
-    name: Cleanup
-    if: always()
-    needs: [prepare_ci_base, prepare_ci_container, execute_cxx_unit_tests, execute_end_to_end_tests]
-    steps:
-      - name: Cleanup temporary docker image discopop_ci_${{ github.sha }}
-        run: |
-          if [ ! -z "$(docker images -q discopop_ci_${{ github.sha }} 2> /dev/null)" ]; then
-            docker image rm discopop_ci_${{ github.sha }}
-          fi

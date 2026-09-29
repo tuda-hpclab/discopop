@@ -7,7 +7,7 @@ nav_order: 1
 
 # DiscoPoP Setup - Package
 - Proposed method of installation for `users` of DiscoPoP
-- Download the `.deb` package of choice from [releases](https://github.com/discopop-project/discopop/releases).
+- Download the `.deb` package of choice from [releases](https://github.com/tuda-hpclab/discopop/releases).
     - Packages for different targets and configurations might become available in the future
 - Install via a package manager of choice (example: `sudo apt install ./<packagename>.deb`)
 - Uninstall via a package manager of choice (example: `sudo apt remove discopop`)
@@ -16,12 +16,12 @@ nav_order: 1
 # DiscoPoP Setup - Manual
 - Proposed method of installation for `developers` of DiscoPoP
 ## Prerequisites
-- LLVM/clang version 19
+- LLVM/clang version 19, 20, 21, or 22
 - Python version 3.6 or greater
 
 ## Setup
 ```
-git clone git@github.com:discopop-project/discopop.git
+git clone git@github.com:tuda-hpclab/discopop.git
 cd discopop
 mkdir build
 ```
@@ -61,4 +61,10 @@ To test the installation, it is possible to execute the provided set of unit tes
 ```
 cd <dp_source_dir>
 venv/bin/python -m unittest -v
+```
+
+The tests below `test/wip_end_to_end` are work in progress and are skipped by default.
+To include them, set `DP_RUN_WIP_TESTS=1`:
+```
+DP_RUN_WIP_TESTS=1 venv/bin/python -m unittest -v
 ```

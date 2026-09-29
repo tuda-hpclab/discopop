@@ -1,61 +1,100 @@
-# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
-#
-# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
-#
-# This software may be modified and distributed under the terms of
-# the 3-Clause BSD License.  See the LICENSE file in the package base
-# directory for details.
+#!/bin/sh
 
+set -eu
+
+RELEASE="@RELEASE@"
 DP_DIR=/opt/DiscoPoP
 DP_BUILD_DIR=/opt/DiscoPoP/build
 
+if [ "$RELEASE" = "true" ]; then
+    DDP_BUILD_UNITTESTS=0
+else
+    DDP_BUILD_UNITTESTS=1
+fi
+
 echo "Building DiscoPoP"
+echo "-- release mode: ${RELEASE}"
 echo "-- source dir: ${DP_DIR}"
 echo "-- build dir:  ${DP_BUILD_DIR}"
-echo "-- using cmake: $(which cmake)"
-echo "-- using make: $(which make)"
-echo "-- using python3: $(which python3)"
+echo "-- using make: $(command -v make)"
+echo "-- using cmake: $(command -v cmake)"
+echo "-- using python3: $(command -v python3)"
 
-echo "Cleaning up if required"
-rm -rvf ${DP_BUILD_DIR}
-mkdir ${DP_BUILD_DIR}
+echo "Cleaning before install"
+rm -rvf "${DP_BUILD_DIR}"
+mkdir "${DP_BUILD_DIR}"
 
 echo "Configuring..."
-cd ${DP_BUILD_DIR}
-cmake .. -DIS_DEB_INSTALL="TRUE" -DDP_PTHREAD_COMPATIBILITY_MODE=0 -DDP_NUM_WORKERS=8 -DDP_RTLIB_VERBOSE=0 -DDP_MEMORY_REGION_DEALIASING=0 -DDP_BRANCH_TRACKING=0 -DDP_CALLSTACK_PROFILING=0 -DDP_STACK_ACCESS_DETECTION=0 -DDP_CALLSTACK_PROFILING_ENABLE_CUTOFF=1 -DDP_INTERNAL_TIMER=0 -DDP_HYBRID_PROFILING=1 -DDP_HYBRID_PROFILING_CUTOFF=0 -DDP_HYBRID_PROFILING_CUTOFF_IGNORE_PROBABILITY=1 -DDP_PROFILING_SAMPLING_PROBABILITY=0 -DDP_CALLTREE_PROFILING=1 -DDP_CALLTREE_PROFILING_METADATA_CUTOFF=5 -DDP_CALLTREE_PROFILING_METADATA_CUTOFF_IGNORE_PROBABILITY=1
+cd "${DP_BUILD_DIR}"
+cmake .. \
+    -DIS_DEB_INSTALL="TRUE" \
+    -DDP_PTHREAD_COMPATIBILITY_MODE=0 \
+    -DDP_NUM_WORKERS=8 \
+    -DDP_RTLIB_VERBOSE=0 \
+    -DDP_MEMORY_REGION_DEALIASING=0 \
+    -DDP_BRANCH_TRACKING=0 \
+    -DDP_CALLSTACK_PROFILING=0 \
+    -DDP_STACK_ACCESS_DETECTION=0 \
+    -DDP_CALLSTACK_PROFILING_ENABLE_CUTOFF=1 \
+    -DDP_INTERNAL_TIMER=0 \
+    -DDP_HYBRID_PROFILING=1 \
+    -DDP_HYBRID_PROFILING_CUTOFF=0 \
+    -DDP_HYBRID_PROFILING_CUTOFF_IGNORE_PROBABILITY=1 \
+    -DDP_PROFILING_SAMPLING_PROBABILITY=0 \
+    -DDP_CALLTREE_PROFILING=1 \
+    -DDP_CALLTREE_PROFILING_METADATA_CUTOFF=5 \
+    -DDP_CALLTREE_PROFILING_METADATA_CUTOFF_IGNORE_PROBABILITY=1 \
+    -DDP_BUILD_UNITTESTS="${DDP_BUILD_UNITTESTS}"
 
 echo "Building..."
-make -j 4
+make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
 echo "Setting up DiscoPoP python venv"
-cd ${DP_DIR}
+cd "${DP_DIR}"
+rm -rf venv
 python3 -m venv venv
-VENV_BIN=${DP_DIR}/venv/bin
-VENV_PYTHON=${VENV_BIN}/python3
+
+VENV_BIN="${DP_DIR}/venv/bin"
+VENV_PYTHON="${VENV_BIN}/python3"
+VENV_PIP="${VENV_BIN}/pip"
+
+echo "Upgrading venv pip"
+"${VENV_PIP}" install --upgrade pip setuptools wheel
+
+echo "Installing venv Python requirements"
+if [ -f "./requirements.txt" ]; then
+    "${VENV_PIP}" install -r "./requirements.txt"
+fi
 
 echo "Installing DiscoPoP python modules"
-${VENV_PYTHON} -m pip install . -v
+"${VENV_PYTHON}" -m pip install "." -v
 
-echo "Installing DiscoPoP submodules"
-${VENV_PYTHON} -m pip install tools/submodules/update_notifications
+# echo "Installing DiscoPoP submodules"
+# submodule was deleted
+# "${VENV_PYTHON}" -m pip install "./tools/submodules/update_notifications"
 
 echo "Creating symlinks"
-ln -sf ${DP_BUILD_DIR}/scripts/CC_wrapper.sh ${VENV_BIN}/discopop_cc
-ln -sf ${DP_BUILD_DIR}/scripts/CXX_wrapper.sh ${VENV_BIN}/discopop_cxx
-ln -sf ${DP_BUILD_DIR}/scripts/CMAKE_wrapper.sh ${VENV_BIN}/discopop_cmake
+ln -sf "${DP_BUILD_DIR}/scripts/CC_wrapper.sh" "${VENV_BIN}/discopop_cc"
+ln -sf "${DP_BUILD_DIR}/scripts/CXX_wrapper.sh" "${VENV_BIN}/discopop_cxx"
+ln -sf "${DP_BUILD_DIR}/scripts/CMAKE_wrapper.sh" "${VENV_BIN}/discopop_cmake"
 
-ln -sf ${VENV_BIN}/discopop_cc /usr/bin/discopop_cc
-ln -sf ${VENV_BIN}/discopop_cxx /usr/bin/discopop_cxx
-ln -sf ${VENV_BIN}/discopop_cmake /usr/bin/discopop_cmake
-ln -sf ${VENV_BIN}/discopop_explorer /usr/bin/discopop_explorer
-ln -sf ${VENV_BIN}/discopop_project_manager /usr/bin/discopop_project_manager
-ln -sf ${VENV_BIN}/discopop_preprocessor /usr/bin/discopop_preprocessor
-ln -sf ${VENV_BIN}/discopop_optimizer /usr/bin/discopop_optimizer
-ln -sf ${VENV_BIN}/discopop_patch_generator /usr/bin/discopop_patch_generator
-ln -sf ${VENV_BIN}/discopop_patch_applicator /usr/bin/discopop_patch_applicator
-ln -sf ${VENV_BIN}/discopop_config_provider /usr/bin/discopop_config_provider
-ln -sf ${VENV_BIN}/discopop_auto_tuner /usr/bin/discopop_auto_tuner
-ln -sf ${VENV_BIN}/discopop_sanity_checker /usr/bin/discopop_sanity_checker
-ln -sf ${VENV_BIN}/discopop_configuration_manager /usr/bin/discopop_configuration_manager
-ln -sf ${VENV_BIN}/discopop_dependency_comparator /usr/bin/discopop_dependency_comparator
-ln -sf ${VENV_BIN}/discopop_parallel_region_merger /usr/bin/discopop_parallel_region_merger
+ln -sf "${VENV_BIN}/discopop_cc" /usr/bin/discopop_cc
+ln -sf "${VENV_BIN}/discopop_cxx" /usr/bin/discopop_cxx
+ln -sf "${VENV_BIN}/discopop_cmake" /usr/bin/discopop_cmake
+ln -sf "${VENV_BIN}/discopop_explorer" /usr/bin/discopop_explorer
+ln -sf "${VENV_BIN}/discopop_project_manager" /usr/bin/discopop_project_manager
+ln -sf "${VENV_BIN}/discopop_preprocessor" /usr/bin/discopop_preprocessor
+ln -sf "${VENV_BIN}/discopop_optimizer" /usr/bin/discopop_optimizer
+ln -sf "${VENV_BIN}/discopop_patch_generator" /usr/bin/discopop_patch_generator
+ln -sf "${VENV_BIN}/discopop_patch_applicator" /usr/bin/discopop_patch_applicator
+ln -sf "${VENV_BIN}/discopop_config_provider" /usr/bin/discopop_config_provider
+ln -sf "${VENV_BIN}/discopop_auto_tuner" /usr/bin/discopop_auto_tuner
+ln -sf "${VENV_BIN}/discopop_sanity_checker" /usr/bin/discopop_sanity_checker
+ln -sf "${VENV_BIN}/discopop_configuration_manager" /usr/bin/discopop_configuration_manager
+ln -sf "${VENV_BIN}/discopop_dependency_comparator" /usr/bin/discopop_dependency_comparator
+ln -sf "${VENV_BIN}/discopop_parallel_region_merger" /usr/bin/discopop_parallel_region_merger
+
+if [ "$RELEASE" = "false" ]; then
+    cd "./test/profiler"
+    make all
+fi

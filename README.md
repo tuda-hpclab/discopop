@@ -25,34 +25,83 @@ DiscoPoP is built on top of LLVM. Therefore, DiscoPoP can perform the above-ment
 A more comprehensive overview of DiscoPoP can be found on our [project website](https://www.discopop.tu-darmstadt.de/).
 
 ## Getting started
-Follow the steps in [setup](https://discopop-project.github.io/discopop/setup/discopop/) to install DiscoPoP.
-To setup the [Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop) (recommended for general use of the framework), please follow [these steps](https://discopop-project.github.io/discopop/setup/vscx/).
+Follow the steps below to install DiscoPoP.
+To setup the [Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop) (recommended for general use of the framework), please follow [these steps](https://tuda-hpclab.github.io/discopop/setup/vscx/).
 
-For a brief introduction to the [VSCode Extension](https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop), please follow the [walk-through example](https://discopop-project.github.io/discopop/examples/walk_through_gui/).
-For a brief introduction to the command line tools, please refer to the [tools overview](https://discopop-project.github.io/discopop/Tools) and follow the [command-line walk-through example](https://discopop-project.github.io/discopop/examples/walk_through/).
+For a brief introduction to the [VSCode Extension](https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop), please follow the [walk-through example](https://tuda-hpclab.github.io/discopop/examples/walk_through_gui/).
+For a brief introduction to the command line tools, please refer to the [tools overview](https://tuda-hpclab.github.io/discopop/Tools) and follow the [command-line walk-through example](https://tuda-hpclab.github.io/discopop/examples/walk_through/).
 
-For detailed information on the gathered and stored data as well as the tools themselves, please refer to [data](https://discopop-project.github.io/discopop/Data) and the pages of the individual tools in the [tools overview](https://discopop-project.github.io/discopop/Tools).
+For detailed information on the gathered and stored data as well as the tools themselves, please refer to [data](https://tuda-hpclab.github.io/discopop/Data) and the pages of the individual tools in the [tools overview](https://tuda-hpclab.github.io/discopop/Tools).
 
 ## Installation
-To simplify the setup we provide a Debian package via the [Release Assets](https://github.com/discopop-project/discopop/releases/latest).
+### Prerequisites
+#### Via `APT` package manager
+```
+sudo apt install python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+# Replace 19 with 20, 21, or 22 if you prefer a newer LLVM release.
+```
 
-## TL;DR - Example
-If you are interested in installing DiscoPoP as a `developer`, please refer to the [DiscoPoP setup wiki page](https://discopop-project.github.io/discopop/setup/discopop/).
+#### Via `pacman` package manager (Arch-based distributions)
+```
+sudo pacman -S python python-pip tk base-devel cmake git llvm clang openmp boost
+# Arch ships the latest LLVM release. For a specific version (e.g., 19), install llvm19, clang19, and openmp from the AUR instead.
+```
 
-The following example installs DiscoPoP for `users`, instruments and builds the provided example, analyzes the results, and prints the identified parallelization suggestions to the console.
-In case any issues arise during the process, please refer to the detailed [setup instructions](https://discopop-project.github.io/discopop/Setup), contact us via GitHub messages, or get in contact by mail to [discopop-support@lists.parallel.informatik.tu-darmstadt.de](mailto:discopop-support@lists.parallel.informatik.tu-darmstadt.de).
+#### Via `Homebrew` package manager (macOS)
+```
+brew install python python-tk llvm@21 libomp boost ninja
+# For a specific LLVM version (e.g., 19), use llvm@19 instead of llvm.
+# Homebrew installs LLVM keg-only to avoid conflicting with Apple's clang. Add it to your PATH:
+export PATH="$(brew --prefix llvm@21)/bin:$PATH"
+export LDFLAGS="-L$(brew --prefix llvm@21)/lib"
+export CPPFLAGS="-I$(brew --prefix llvm@21)/include"
+```
+
+### Latest release from PyPi
+```
+pip install discopop==5.0.3a1
+```
+
+### Local installation
+```
+git clone https://github.com/tuda-hpclab/discopop.git
+cd discopop
+# installs profiler and python packages
+make
+```
+
+### Developer
+If you are interested in installing DiscoPoP as a `developer`, please refer to the [DiscoPoP setup wiki page](https://tuda-hpclab.github.io/discopop/setup/discopop/).
+
+## Example
+The following example instruments and builds the provided example code, analyzes the results, and prints the identified parallelization suggestions to the console.
+In case any issues arise during the process please do not hesitate to contact us via GitHub messages, or get in contact by mail to [discopop-support@lists.parallel.informatik.tu-darmstadt.de](mailto:discopop-support@lists.parallel.informatik.tu-darmstadt.de).
 
 ### Prerequisites
-- Download and install `.deb` package from [latest Release](https://github.com/discopop-project/discopop/releases/latest).
-- Install the [Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop)
-### Example
+- Installed required system packages
+- Installed profiler and python packages
+- Installed the [Visual Studio Code Extension](https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop) for visualization of the results.
+
+### Example (GUI)
+To launch the GUI, navigate to the project's folder and execute the `discopop_gui` command.
+```
+# create a copy of the example code and enter the folder
+cd discopop_example
+# start the GUI. A wizard will start to help you configure your project.
+discopop_gui
+```
+(Up to DiscoPoP 5.0, the GUI was opened by the bare `discopop` command. That name is
+now the command line tool, i.e. a stand-in for `discopop_project_manager`.)
+The below explanation on the Visual Studio Code Extension is also valid when using the GUI.
+
+### Example (manual)
 Instrument and execute the code.
 ```
-# create a copy of the example code
-cp -r /opt/DiscoPoP/example discopop_example
+# create a copy of the example code and enter the folder
 cd discopop_example
 
 # instrument and build the example code
+# use discopop_cxx for .cpp, and discopop_cc for .c files
 discopop_cxx example.cpp -o example
 
 # execute instrumented code

@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/memory/MemoryManager.hpp"
+#include "../../../../profiler/rtlib/memory/MemoryManager.hpp"
 
 #include <cstdint>
 #include <vector>

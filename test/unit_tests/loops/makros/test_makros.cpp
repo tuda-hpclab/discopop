@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/loop/Makros.hpp"
+#include "../../../../profiler/rtlib/loop/Makros.hpp"
 
 // Tests for old version (i.e., capturing functionality)
 

@@ -5,30 +5,32 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-ARG BASE_IMAGE_TAG=""
 
-FROM discopop_ci_base${BASE_IMAGE_TAG}
+ARG BASE_IMAGE="ubuntu:24.04"
+
+FROM ${BASE_IMAGE}
+
+# ARG PACKAGE_FILE
+ARG REPOSITORY_LOCATION
+
+ENV DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /usr/local/ci
 
-# import repository to /usr/local/ci/discopop
-# Dockerfile located in discopop/.github/workflows, hence the ../..
-ADD ../.. /usr/local/ci/discopop
+#RUN apt-get update && apt-get install -y \
+#    ca-certificates \
+#    apt-utils
 
-# build discopop
-RUN cmake -S discopop -B discopop/build -DCMAKE_BUILD_TYPE=Debug -DUSE_VENV=/usr/local/ci/venv -DDP_CALLTREE_PROFILING=1 -DDP_BUILD_UNITTESTS=1
-RUN make --directory=discopop/build -j4
-RUN make --directory=discopop/build install_python_modules
+#COPY packages/${PACKAGE_FILE} /tmp/${PACKAGE_FILE}
+COPY ${REPOSITORY_LOCATION} /tmp/${REPOSITORY_LOCATION}
 
-WORKDIR /usr/local/ci/discopop
+# RUN apt-get install -y /tmp/${PACKAGE_FILE}
 
-RUN /usr/local/ci/venv/bin/pip install -r requirements.txt
 
-RUN ln -s /usr/local/ci/discopop/build/scripts/CC_wrapper.sh /usr/local/bin/discopop_cc
-RUN ln -s /usr/local/ci/discopop/build/scripts/CXX_wrapper.sh /usr/local/bin/discopop_cxx
+# ENV PATH="/opt/DiscoPoP/venv/bin:${PATH}"
 
-# build test profilers
-WORKDIR /usr/local/ci/discopop/test/profiler
-RUN make all
+# WORKDIR /opt/DiscoPoP
 
-# set entry directory for the container
-WORKDIR /usr/local/ci/discopop
+# install DiscoPoP
+WORKDIR /tmp/${REPOSITORY_LOCATION}
+RUN make install

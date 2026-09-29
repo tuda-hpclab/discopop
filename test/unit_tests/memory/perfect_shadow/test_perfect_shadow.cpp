@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "../../../../rtlib/memory/PerfectShadow.hpp"
+#include "../../../../profiler/rtlib/memory/PerfectShadow.hpp"
 
 // Tests for old version (i.e., capturing functionality)
 

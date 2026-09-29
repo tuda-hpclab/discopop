@@ -1,0 +1,57 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+[build-system]
+requires = ["scikit-build-core>=0.9"]
+build-backend = "hatch_build"
+backend-path = ["."]
+
+[project]
+name = "discopop-hotspot-detection"
+dynamic = ["version"]
+description = "DiscoPoP Hotspot Detection: LLVM instrumentation pass for identifying performance hotspots"
+requires-python = ">=3.6"
+license = {file = "LICENSE"}
+
+authors = [
+    {name = "TU Darmstadt and Iowa State University", email = "discopop@lists.parallel.informatik.tu-darmstadt.de"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: C++",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "numpy",
+    "requests",
+    "packaging",
+    "termcolor",
+]
+
+[project.urls]
+Homepage = "https://www.discopop.tu-darmstadt.de/"
+
+[project.scripts]
+discopop_hotspot_analyzer = "discopop_hotspot_analyzer.__main__:main"
+discopop_hotspot_cc = "discopop_hotspot_cc.__main__:main"
+discopop_hotspot_cxx = "discopop_hotspot_cxx.__main__:main"
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["discopop_hotspot_analyzer", "discopop_hotspot_cc", "discopop_hotspot_cxx"]
+build-dir = "build/{wheel_tag}"
+cmake.version = "<4.4.3"
+# Pass optional build flags through via cmake.args, e.g.:
+#   pip install . --config-settings="cmake.args=-DLLVM_DIST_PATH=/path/to/llvm"
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "VERSION"
+regex = "(?P<value>.*)"

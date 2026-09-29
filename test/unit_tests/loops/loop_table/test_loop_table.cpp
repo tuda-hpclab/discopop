@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/loop/LoopTable.hpp"
+#include "../../../../profiler/rtlib/loop/LoopTable.hpp"
 
 // Tests for old version (i.e., capturing functionality)
 

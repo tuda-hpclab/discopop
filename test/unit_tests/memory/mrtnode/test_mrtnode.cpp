@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../../../../rtlib/memory/MemoryRegionTree.hpp"
+#include "../../../../profiler/rtlib/memory/MemoryRegionTree.hpp"
 
 #include <cstdint>
 #include <vector>

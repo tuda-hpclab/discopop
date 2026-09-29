@@ -63,7 +63,7 @@ class TestMethods(unittest.TestCase):
         # load detection results
         with open(test_output_file, "r") as f:
             tmp_str = f.read()
-        test_output: DetectionResult = jsonpickle.decode(tmp_str)
+        test_output: DetectionResult = jsonpickle.decode(tmp_str, keys=True)
 
         for pattern_type in test_output.patterns.__dict__:
             amount_of_identified_patterns = len(test_output.patterns.__dict__[pattern_type])

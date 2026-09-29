@@ -1,0 +1,51 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: Publish discopop-hotspot-detection to PyPI
+
+on:
+  push:
+    tags:
+      - "hotspot_detection_v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish discopop-hotspot-detection
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # IMPORTANT: this permission is mandatory for Trusted Publishing
+      id-token: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+
+      - name: Install prerequisites
+        run: |
+          sudo apt update
+          sudo apt install clang-20
+
+      - name: Build discopop-hotspot-detection
+        run: pip install build && python -m build --sdist hotspot_detection/ -v
+
+      - name: Publish discopop-hotspot-detection to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: hotspot_detection/dist/

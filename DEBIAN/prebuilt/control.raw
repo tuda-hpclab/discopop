@@ -1,10 +1,10 @@
 Package: discopop
 Maintainer: Lukas Rothenberger <lukas.rothenberger@tu-darmstadt.de>
 Depends: libc6,python3,python3-pip,python3-tk,llvm-19-dev,clang-19
-Homepage: https://github.com/discopop-project/discopop
+Homepage: https://github.com/tuda-hpclab/discopop
 Description: DiscoPoP is an open-source tool that helps software developers parallelize their programs with threads. It is a joint project of the Laboratory for Parallel Programming @ TU Darmstadt and the Software Analytics and Pervasive Parallelism Lab at Iowa State University.
  .
- GitHub: https://github.com/discopop-project/discopop
+ GitHub: https://github.com/tuda-hpclab/discopop
  .
  Parallel Programming @ TU Darmstadt: https://www.parallel.informatik.tu-darmstadt.de/
   .

@@ -2,7 +2,7 @@
 layout: default
 title: Config provider
 parent: Tools
-nav_order: 6
+nav_order: 7
 ---
 
 # DiscoPoP config provider

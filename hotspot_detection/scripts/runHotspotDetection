@@ -1,0 +1,358 @@
+#!/bin/bash
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+# This script is based on a script from the discopop project
+# https://github.com/tuda-hpclab/discopop
+
+HELPTEXT="*** HotspotDetection Execution Wizard ***
+
+Use this tool to analyze a project that is built using Makefiles
+
+REQUIRED ARGUMENTS: Please use absolut paths!
+ --gllvm <dir>         path to a directory with gllvm executables
+                        (gclang, gclang++, get-bc, gsanity-check)
+ --project <dir>       path to the directory that contains your makefile
+ --executable-name <string> the name of the executable that is built and analyzed
+
+OPTIONAL ARGUMENTS:
+ --llvm-clang <file>    path to clang executable
+ --llvm-clang++ <file>  path to clang++ executable
+ --llvm-ar <file>       path to llvm-ar executable
+ --llvm-link <file>     path to llvm-link executable
+ --llvm-dis <file>      path to llvm-dis executable
+ --llvm-opt <file>      path to opt executable
+ --llvm-llc <file>      path to llc executable
+ --executable-arguments <string>
+                          run your application with these arguments
+ --linker-flags <string>   if your build requires to link other libraries
+                          please provide the necessary linker flags. e.g. -lm
+ --make-target <string>   specify a specific Make target to be built,
+                          if not specified the default make target is used.
+ --make-flags <string>     specify flags which will be passed through to make.
+ --exit-after-compilation construct and compile the instrumented code, but do not execute and analyze it.
+ --python-path <dir>     path to python binary folder
+ --help or -h,            show this text and exit.
+ --verbose or -v,         show verbose output.
+"
+
+#####
+# function to log with different levels and colorful output e.g.
+# log -i "some info"
+#####
+log () {
+  if [ "$COLORS" = true ]; then
+    DEF='\033[0m'     # no color / default
+    CYA='\033[0;36m'  # cyan
+    GRE='\033[0;32m'  # green
+    YEL='\033[1;33m'  # yellow
+    RED='\033[0;31m'  # red
+  fi
+  case "$1" in
+    -e|--err|--error)
+      shift
+      echo -e "${CYA}HOTSPOT_ERROR:${RED} $*${DEF}"
+      ;;
+    -w|--warn)
+      shift
+      echo -e "${CYA}HOTSPOT_WARN:${YEL} $*${DEF}"
+      ;;
+    -i|--info|-l|--log)
+      shift
+      echo -e "${CYA}HOTSPOT_INFO:${GRE} $*${DEF}"
+      ;;
+    -d|--dbug|--debug|--bug)
+      shift
+      echo -e "${CYA}HOTSPOT_DBUG:${DEF} $*"
+      ;;
+    -v|--verbose|--verb)
+      shift
+      if [ "$VERBOSE" = true ]; then
+        echo -e "${CYA}HOTSPOT_VERBOSE:${DEF} $*"
+      fi
+      ;;
+  esac
+}
+
+log_or_fail () {
+  RETVAL=$?
+  log $1 "$2"
+  if [ $RETVAL -ne 0 ]; then
+    log -e "Exiting script with code: ${RETVAL}"
+    exit $RETVAL
+  fi
+}
+
+#####
+# Read build configuration
+#####
+DP_BUILD="$(dirname "$(dirname "$(readlink -fm "$0")")")"
+DP_BUILD_LLVM_BIN_DIR="$(cat ${DP_BUILD}/build_config.txt | grep -oP "(?<=LLVM_BIN_DIR=).*")"
+
+#####
+# Parse Arguments
+# based on https://stackoverflow.com/questions/192249/how-do-i-parse-command-line-arguments-in-bash
+#####
+
+# Default Values for optional Arguments
+HELP=false
+VERBOSE=false
+COLORS=false
+MAKFILE_TARGET=""
+PYTHONPATH_FLAG="."
+LLVM_CLANG=$DP_BUILD_LLVM_BIN_DIR/clang
+LLVM_CLANGPP=$DP_BUILD_LLVM_BIN_DIR/clang++
+LLVM_AR=$DP_BUILD_LLVM_BIN_DIR/llvm-ar
+LLVM_LINK=$DP_BUILD_LLVM_BIN_DIR/llvm-link
+LLVM_DIS=$DP_BUILD_LLVM_BIN_DIR/llvm-dis
+LLVM_OPT=$DP_BUILD_LLVM_BIN_DIR/opt
+LLVM_LLC=$DP_BUILD_LLVM_BIN_DIR/llc
+
+POSITIONAL_ARGS=()
+requiredArgCount=0
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+      HELP=true
+      shift # past argument
+      ;;
+    -v|--verbose)
+      VERBOSE=true
+      shift # past argument
+      ;;
+    -c|--color)
+      COLORS=true
+      shift # past argument
+      ;;
+    --llvm-clang)
+      LLVM_CLANG=$2
+      shift; shift # past argument and value
+      ;;
+    --llvm-clang++)
+      LLVM_CLANGPP=$2
+      shift; shift # past argument and value
+      ;;
+    --llvm-ar)
+      LLVM_AR=$2
+      shift; shift # past argument and value
+      ;;
+    --llvm-link)
+      LLVM_LINK=$2
+      shift; shift # past argument and value
+      ;;
+    --llvm-dis)
+      LLVM_DIS=$2
+      shift; shift # past argument and value
+      ;;
+    --llvm-opt)
+      LLVM_OPT=$2
+      shift; shift # past argument and value
+      ;;
+    --llvm-llc)
+      LLVM_LLC=$2
+      shift; shift # past argument and value
+      ;;
+    --gllvm)
+      GLLVM="$2"
+      ((requiredArgCount++))
+      shift; shift # past argument and value
+      ;;
+    --project)
+      PROJECT="$2"
+      ((requiredArgCount++))
+      shift; shift # past argument and value
+      ;;
+    --linker-flags)
+      LINKER_FLAGS="$2"
+      shift; shift # past argument and value
+      ;;
+    --executable-name)
+      EXECUTABLE_NAME="$2"
+      ((requiredArgCount++))
+      shift; shift # past argument and value
+      ;;
+    --executable-arguments)
+      shift # past argument
+      # parse all values:
+      EXEC_ARGS=()
+      while [[ $# -gt 0 && "$1" != -* && "$1" != --* ]]; do
+          EXEC_ARGS+=("$1")
+          shift
+      done
+      EXECUTABLE_ARGUMENTS="${EXEC_ARGS[0]}"
+      ;;
+    --make-flags)
+      MAKE_FLAGS="$2"
+      shift; shift # past argument and value
+      ;;
+    --make-target)
+      MAKEFILE_TARGET="$2"
+      shift; shift # past argument and value
+      ;;
+    --exit-after-compilation)
+      EXIT_AFTER_COMPILATION=true
+      shift # past argument
+      ;;
+    --python-path)
+      PYTHONPATH_FLAG="$2"
+      shift; shift # past argument and value
+      ;;
+    -*|--*)
+      log -e "Unknown option $1"
+      exit 1
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1") # save positional arg
+      shift # past argument
+      ;;
+  esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+# show helptext
+if [ "$HELP" = true ]; then
+    echo "$HELPTEXT"
+    exit 0
+fi
+
+# this tool should not receive any positional arguments
+if [[ -n $1 ]]; then
+  log -e "There should not be any positional arguments:"
+  log -e "positional argument: $1"
+  exit 1
+fi
+
+# check for required arguments
+if [ $requiredArgCount -ne 3 ]; then
+  log -e "Please provide all required arguments exactly once. Use --help or -h to view them."
+  exit 1
+fi
+
+#####
+# other variables
+#####
+
+# create a fresh working copy of the targeted source code
+cd $PROJECT
+rm -rf .hotspot-detection
+mkdir .hotspot-detection
+cp -r * .hotspot-detection
+# overwrite PROJECT to use working copy
+cd .hotspot-detection
+PROJECT=$PROJECT/.hotspot-detection
+
+GLLVM_LOG=$PROJECT/gllvm_log.txt
+
+#####
+# show configuration
+#####
+
+log -i \
+  "CONFIGURATION:
+  llvm-clang  $LLVM_CLANG
+      $($LLVM_CLANG --version | grep version)
+  llvm-clang++ $LLVM_CLANGPP
+      $($LLVM_CLANGPP --version | grep version)
+  llvm-ar     $LLVM_AR
+      $($LLVM_AR --version | grep version)
+  llvm-link   $LLVM_LINK
+      $($LLVM_LINK --version | grep version)
+  llvm-dis    $LLVM_DIS
+      $($LLVM_DIS --version | grep version)
+  llvm-opt    $LLVM_OPT
+      $($LLVM_OPT --version | grep version)
+  llvm-llc    $LLVM_LLC
+      $($LLVM_LLC --version | grep version)
+  gllvm:      $GLLVM
+  project:    $PROJECT
+  ldFlags:    $LINKER_FLAGS
+  execName:   $EXECUTABLE_NAME
+  execArgs:   $EXECUTABLE_ARGUMENTS
+  makeFlags:  $MAKE_FLAGS
+  makeTarget: $MAKEFILE_TARGET
+  dp_build:   $DP_BUILD
+  gllvmLog:   $GLLVM_LOG
+  pythonPath: $PYTHONPATH_FLAG"
+
+#####
+# configure gllvm
+#####
+
+#export LLVM_COMPILER_PATH="<path/to/llvm/build>"
+export LLVM_CC_NAME=$LLVM_CLANG
+export LLVM_CXX_NAME=$LLVM_CLANGPP
+export LLVM_AR_NAME=$LLVM_AR
+export LLVM_LINK_NAME=$LLVM_LINK
+export WLLVM_OUTPUT_LEVEL="AUDIT"  # can be used to more easily determine flags needed during the link step
+export WLLVM_OUTPUT_FILE=$GLLVM_LOG
+export LLVM_BITCODE_GENERATION_FLAGS="-g -O0 -fno-discard-value-names"
+#export LLVM_LINK_FLAGS=""
+
+log -v "GLLVM SANITY CHECK:
+$($GLLVM/gsanity-check)"
+
+#####
+# Perform preliminary checks
+#####
+if ! command -v discopop_explorer &> /dev/null
+then
+  log -e "discopop_explorer could not be found."
+  log -i "Install the python package or set the --python-path flag if it is already installed."
+    exit 1
+fi
+
+#####
+# create FileMapping.txt,
+# build with gllvm,
+# create single .bc and .ll from the executable
+#####
+
+cd $PROJECT
+
+# build using gllvm as compiler
+log -i "Building your application..."
+log_or_fail -d "\n$(make CC=$GLLVM/gclang CXX=$GLLVM/gclang++ LD=$GLLVM/gclang++ $MAKE_FLAGS $MAKEFILE_TARGET)"
+
+# create single .bc and .ll from the executable
+log_or_fail -v "$($GLLVM/get-bc -b -m -v $EXECUTABLE_NAME 2>&1)"
+$LLVM_DIS ${EXECUTABLE_NAME}.bc -o ${EXECUTABLE_NAME}.ll
+
+#####
+# apply instrumentation and run
+#####
+
+# Run HotspotDetection Pass
+log -i "Running HotspotDetection Pass to analyze and instrument your application..."
+$LLVM_OPT -S -load ${DP_BUILD}/libi/LLVMHotspotDetection.so -HotspotDetection ${EXECUTABLE_NAME}.ll -o ${EXECUTABLE_NAME}_hotspot.ll
+
+log -i "Creating Executable..."
+$LLVM_LLC -filetype=obj  ${EXECUTABLE_NAME}_hotspot.ll -o  ${EXECUTABLE_NAME}_hotspot.o
+$LLVM_CLANGPP ${EXECUTABLE_NAME}_hotspot.o -Wl,--export-dynamic -O0 -g -o ${EXECUTABLE_NAME}_hotspot -L$DP_BUILD/rtlib -lHotspotDetection_RT -lpthread $LINKER_FLAGS
+
+if [ "$EXIT_AFTER_COMPILATION" = true ]; then
+  log -i "Exiting after compilation."
+  exit 0
+fi
+
+
+# Run the instrumented application
+arraylength=${#EXEC_ARGS[@]}
+for (( i=0; i<${arraylength}; i++ ));
+do
+  log -i "Running instrumented application to detect hotspots... ($(($i+1)) / $arraylength)"
+  log -d "executable arguements: ${EXEC_ARGS[$i]}"
+  log_or_fail -d "$(./${EXECUTABLE_NAME}_hotspot ${EXEC_ARGS[$i]})"
+  log -v "HotspotDetection result:"
+  log -v "$(cat result.txt)"
+  mv result.txt hotspot_result_${i}.txt
+done
+
+# Run the python module that creates the hotspot report
+python3 $DP_BUILD/scripts/detection.py > detection_report.txt

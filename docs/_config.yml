@@ -35,7 +35,7 @@ mermaid:
 
 aux_links:
   "DiscoPoP on GitHub":
-    - "//github.com/discopop-project/discopop"
+    - "//github.com/tuda-hpclab/discopop"
   "VS Code Extension":
     - "https://marketplace.visualstudio.com/items?itemName=TUDarmstadt-LaboratoryforParallelProgramming.discopop"
 

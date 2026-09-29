@@ -30,14 +30,21 @@ repos:
   - id: check-merge-conflict  # check for merge conflict strings
 
 
-# mypy -- more info: https://github.com/pre-commit/mirrors-mypy
-- repo: https://github.com/pre-commit/mirrors-mypy
-  rev: 'v1.5.1'  # Use the sha / tag you want to point at
+# mypy -- run through the project's own venv (same as CI and the documented manual command) instead of
+# pre-commit's `mirrors-mypy`, which installs mypy into its own isolated virtualenv without the project's
+# dependencies, pins its own mypy version, and only checks the staged files -- all of which made its
+# results diverge from `venv/bin/python -m mypy --config-file=mypy.ini`.
+- repo: local
   hooks:
-    - id: mypy
-      args: [--config-file=mypy.ini, --ignore-missing-imports]
-      #additional_dependencies: [dep==version.version.version, ...]
-      # NOTE: pre-commit runs mypy in a virtualenv, so dependencies are not installed unless explicitly listed here
+  - id: mypy
+    name: mypy
+    entry: venv/bin/python3 -m mypy --config-file=mypy.ini
+    language: system
+    types: [python]
+    exclude: '^test/'
+    pass_filenames: false
+    # pass_filenames: false makes mypy check the full project tree declared by `files=` in mypy.ini,
+    # matching CI and the manual invocation, instead of only the files staged for this commit
 
 
 # black -- more info: https://github.com/psf/black/blob/main/docs/integrations/source_version_control.md

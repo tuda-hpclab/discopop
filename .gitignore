@@ -26,9 +26,13 @@ __pycache__/
 # Visual Studio Code
 .vscode/
 
+# AI assistants
+.claude/
+
 # Distribution / packaging
 .Python
 build/
+build_tests/
 develop-eggs/
 dist/
 downloads/
@@ -36,6 +40,7 @@ eggs/
 .eggs/
 lib/
 !/share/lib/
+!/profiler/share/lib/
 lib64/
 parts/
 sdist/
@@ -149,7 +154,6 @@ CMakeCache.txt
 CMakeFiles
 CMakeScripts
 Testing
-Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json

@@ -6,41 +6,86 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-name: "Publish Package"
+name: Publish DiscoPoP Package
 
 on:
   push:
     tags:
-      - v*
+      - "v*[0-9]*.[0-9]*.[0-9]*"
+      - "!v*[0-9]*.[0-9]*.[0-9]*a[0-9]*"
+      - "!v*[0-9]*.[0-9]*.[0-9]*b[0-9]*"
+      - "!v*[0-9]*.[0-9]*.[0-9]*dev[0-9]*"
+
+permissions:
+  contents: write
 
 jobs:
   publish:
-    name: "Publish Package"
+    name: Publish DiscoPoP Package
     runs-on: ubuntu-22.04
+
     steps:
-      - name: "Checkout Repository"
-        uses: actions/checkout@v2
-      - name: "Setup Python"
-        uses: actions/setup-python@v2
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+#        with:
+#          submodules: recursive
+#          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.8
-      - name: "Get Version String"
-        id: get_version
-        env:
-          GITHUB_REF: ${{ github.ref }}
-        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\/v/}
+          python-version: "3.8"
+
+      - name: Fetch master branch (shallow)
+        run: git fetch origin master --depth=1
         shell: bash
-      - name: "Generate Python Package"
+
+      - name: Ensure tagged commit is on master
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "Tag ${GITHUB_REF_NAME} is not on master. Skipping release."
+            exit 1
+          fi
+        shell: bash
+
+      - name: Extract Version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build Debian Package
+        run: bash create_package.sh -r
+
+      - name: Build Python Package
         run: python setup.py sdist
-      - name: "Create Draft Release on GitHub"
+
+      - name: Get .deb filename
+        id: deb_file
+        run: |
+          FILE=$(ls packages/*.deb)
+          echo "file=$FILE" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          tag_name: ${{ github.ref_name }}
           release_name: Version ${{ steps.get_version.outputs.VERSION }}
           draft: true
-      - name: "Publish Distribution to PyPI"
+          prerelease: false
+
+      - name: Upload .deb asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.deb_file.outputs.file }}
+          asset_name: discopop.deb
+          asset_content_type: application/vnd.debian.binary-package
+
+      - name: Publish Distribution to PyPI
         uses: pypa/gh-action-pypi-publish@master
         with:
           password: ${{ secrets.pypi_password }}

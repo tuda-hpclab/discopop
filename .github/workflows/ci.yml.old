@@ -1,0 +1,282 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "DiscoPoP CI"
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  license_check:
+    runs-on: self-hosted
+    name: License check
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Github SHA
+        run: |
+          echo "Hello from: ${{ github.sha }}"
+
+      - name: Check all files for DiscoPoP License tag
+        run: |
+          ./scripts/dev/check-license.sh $(find . -type f)
+
+# used for eventual multiple operating system testing
+  create_matrix:
+    runs-on: self-hosted
+    name: Create matrix
+    needs: [license_check]
+    outputs:
+      matrix: ${{ steps.create_matrix.outputs.matrix }}
+    steps:
+      - name: Create build matrix
+        id: create_matrix
+        shell: bash
+        run: |
+          matrix='{"include":[
+            {"id":"ubuntu-24-04", "base_image":"ubuntu:24.04"}
+          ]}'
+
+          if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
+            matrix='{"include":[
+              {"id":"ubuntu-24-04", "base_image":"ubuntu:24.04"}
+            ]}'
+          fi
+
+          {
+            echo "matrix<<END"
+            echo "$matrix"
+            echo "END"
+          } >> "$GITHUB_OUTPUT"
+
+  build_debian_package:
+    if: ${{ !github.event.act }}
+    runs-on: self-hosted
+    name: Build Debian package
+    needs: [license_check]
+    outputs:
+      package_name: ${{ steps.package_information.outputs.package_name }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Build package
+        run: |
+          ./scripts/dev/create_package.sh
+
+      - name: Get package information
+        id: package_information
+        shell: bash
+        run: |
+          VERSION=$(cat library/discopop_library/global_data/version/VERSION)
+          PACKAGE_NAME="discopop-${VERSION}-all-Linux.deb"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          test -f "packages/${PACKAGE_NAME}"
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: discopop_debian_package
+          path: packages/${{ steps.package_information.outputs.package_name }}
+          if-no-files-found: error
+
+  build_install_and_test:
+    if: ${{ !github.event.act }}
+    runs-on: self-hosted
+    name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
+    needs: [create_matrix, build_debian_package]
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Get package
+        uses: actions/download-artifact@v4
+        with:
+          name: discopop_debian_package
+          path: packages
+
+      - name: Show package
+        run: |
+          ls -lah packages
+          test -f "packages/${{ needs.build_debian_package.outputs.package_name }}"
+
+      - name: Build docker image discopop_ci_${{ github.sha }}-${{ matrix.id }}
+        run: |
+          docker build \
+            -f .github/workflows/Dockerfile_ci \
+            -t discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            --build-arg BASE_IMAGE=${{ matrix.base_image }} \
+            --build-arg PACKAGE_FILE=${{ needs.build_debian_package.outputs.package_name }} \
+            --no-cache \
+            .
+
+      - name: Run MyPy Type Checker - DiscoPoP Explorer
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m mypy --config-file=mypy.ini -p discopop_explorer
+
+      - name: Run MyPy Type Checker - DiscoPoP Library
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m mypy --config-file=mypy.ini -p discopop_library
+
+      - name: Check formatting of DiscoPoP Explorer
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m black -l 120 --check explorer/discopop_explorer
+
+      - name: Check formatting of DiscoPoP Library
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m black -l 120 --check library/discopop_library
+
+      - name: Execute C++ unit tests
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            build/test/unit_tests/DiscoPoP_UT
+
+      - name: Profiler gold standard tests (regular)
+        run: |
+          docker run --rm -e DP_TEST_PROFILER_CONFIG="build_regular" discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m unittest -v -k "*test.profiler.*"
+
+      - name: Profiler gold standard tests (hybrid)
+        run: |
+          docker run --rm -e DP_TEST_PROFILER_CONFIG="build_hybrid" discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m unittest -v -k "*test.profiler.*"
+
+      - name: Python end-to-end-tests
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m unittest -v -k "*.end_to_end.*"
+
+  build_install_and_test_act:
+    if: ${{ github.event.act }}
+    runs-on: self-hosted
+    name: "Build package, build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }}) using act"
+    needs: [create_matrix]
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Build package
+        shell: bash
+        run: |
+          ./scripts/dev/create_package.sh
+
+      - name: Show package
+        id: package_information
+        shell: bash
+        run: |
+          VERSION=$(cat library/discopop_library/global_data/version/VERSION)
+          PACKAGE_NAME="discopop-${VERSION}-all-Linux.deb"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          ls -lah "packages"
+          test -f "packages/${PACKAGE_NAME}"
+
+      - name: Build docker image discopop_ci_${{ github.sha }}-${{ matrix.id }}
+        run: |
+          docker build \
+            -f .github/workflows/Dockerfile_ci \
+            -t discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            --build-arg BASE_IMAGE=${{ matrix.base_image }} \
+            --build-arg PACKAGE_FILE=${{ steps.package_information.outputs.package_name }} \
+            --no-cache \
+            .
+
+      - name: Run MyPy Type Checker - DiscoPoP Explorer
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m mypy --config-file=mypy.ini -p discopop_explorer
+
+      - name: Run MyPy Type Checker - DiscoPoP Library
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m mypy --config-file=mypy.ini -p discopop_library
+
+      - name: Check formatting of DiscoPoP Explorer
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m black -l 120 --check explorer/discopop_explorer
+
+      - name: Check formatting of DiscoPoP Library
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m black -l 120 --check library/discopop_library
+
+      - name: Execute C++ unit tests
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            build/test/unit_tests/DiscoPoP_UT
+
+      - name: Profiler gold standard tests (regular)
+        run: |
+          docker run --rm -e DP_TEST_PROFILER_CONFIG="build_regular" discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m unittest -v -k "*test.profiler.*"
+
+      - name: Profiler gold standard tests (hybrid)
+        run: |
+          docker run --rm -e DP_TEST_PROFILER_CONFIG="build_hybrid" discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m unittest -v -k "*test.profiler.*"
+
+      - name: Python end-to-end-tests
+        run: |
+          docker run --rm discopop_ci_${{ github.sha }}-${{ matrix.id }} \
+            python -m unittest -v -k "*.end_to_end.*"
+
+  checks_successful:
+    runs-on: self-hosted
+    name: Checks successful
+    needs: [build_install_and_test, build_install_and_test_act]
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    steps:
+      - name: Report
+        run: |
+          echo "All checks successful!"
+
+  cleanup:
+    runs-on: self-hosted
+    name: "Cleanup (${{ matrix.id }})"
+    if: always()
+    needs: [checks_successful, create_matrix, build_install_and_test, build_install_and_test_act]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Cleanup images
+        run: |
+          if [ -n "$(docker images -q discopop_ci_${{ github.sha }}-${{ matrix.id }} 2>/dev/null)" ]; then
+            docker image rm discopop_ci_${{ github.sha }}-${{ matrix.id }}
+          fi

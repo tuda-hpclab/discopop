@@ -1,0 +1,53 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discopop"
+dynamic = ["version"]
+description = "DiscoPoP is a tool that helps software developers parallelize their programs with threads. It discovers potential parallelism in a sequential program and makes recommendations on how to exploit it."
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {file = "LICENSE"}
+authors = [
+    {name = "TU Darmstadt and Iowa State University", email = "discopop@lists.parallel.informatik.tu-darmstadt.de"},
+]
+requires-python = ">=3.6"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+"Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "discopop-profiler>=0.0.1a2",
+    "discopop-library>=0.0.1a4",
+    "discopop-gui>=0.0.1a2",
+    "discopop-explorer>=0.0.1a2",
+    "discopop-mcp-server>=0.0.1a1",
+    "discopop-hotspot-detection>=0.0.1a1",
+    "mypy", "black", "data-science-types"
+]
+
+[project.urls]
+Homepage = "https://www.discopop.tu-darmstadt.de/"
+
+[tool.black]
+line-length = 120
+target-version = ["py313"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools]
+packages = []
+zip-safe = true

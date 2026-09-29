@@ -118,6 +118,9 @@
 | 35 | R in body | W in called function | X |
 | 36 | R in loop body | W in loop body (intra-iteration) | X |
 | 37 | R in loop body | W in loop body (inter-iteration forward) | X |
+| 38 | R in loop body | W in loop body (inter-iteration forward arbitrary distance) | X |
+| 39 | R in loop body | W in loop body (inter-iteration backwards) | X |
+| 40 | R in loop body | W in loop body (inter-iteration backwards arbitrary distance) | X |
 | 41 | R in called function | W in body | X |
 | 42 | R in called function | W in called function | X |
 | 42_2 | R in called function | W in different called function | X |
@@ -130,7 +133,7 @@
 | 47 | R is loop index read | W is loop index increment | X |
 | 48 | R is loop index read | W is loop index increment in next iteration | X |
 | 49 | R is loop index read as variable length array index | W is loop index increment | X |
-| 50 | R is loop index read as static length array index | W is loop index increment | |
+| 50 | R is loop index read as static length array index | W is loop index increment | X |
 | 51 | heap array access | pointer | X |
 | 52 | pointer | heap array access | X |
 | 53 | heap array pointer arithmetics | pointer | X |
@@ -185,7 +188,9 @@
 | 35 | W in body | W in called function | X |
 | 36 | W in loop body | W in loop body (intra-iteration) | X |
 | 37 | W in loop body | W in loop body (inter-iteration forward) | X |
+| 38 | W in loop body | W in loop body (inter-iteration forward arbitrary distance) | X |
 | 39 | W in loop body | W in loop body (inter-iteration backwards) | X |
+| 40 | W in loop body | W in loop body (inter-iteration backwards arbitrary distance) | X |
 | 41 | W in called function | W in body | X |
 | 42 | W in called function | W in called function | X |
 | 42_2 | W in called function | W in different called function | X |
@@ -193,9 +198,23 @@
 | 44 | W in nested called function | W in body | X |
 | 45 | W in nested called function | W in called function | X |
 | 46 | W in nested called function | W in nested called function | X |
-| 47 | W is loop index increment | W is loop index increment | |
+| 47 | W is loop index increment | W is loop index increment | X |
 | 49 | heap array access | pointer | X |
 | 50 | pointer | heap array access | X |
 | 51 | heap array pointer arithmetics | pointer | X |
 | 52 | heap array access | heap pointer arithmetics | X |
 | 53 | heap pointer arithmetics | alias | X |
+
+
+## NONE
+Negative/false-positive tests: each asserts that specific dependencies are *absent* from the dynamic
+dependency trace, complementing the RAW/WAR/WAW suites above (which only assert required dependencies
+are present). Static analysis is intentionally a conservative may-analysis and is not checked for
+absence, only the exact dynamic execution trace.
+
+| test id | scenario | guards against | implemented |
+| --- | -------- | --- | --- |
+| 00 | embarrassingly-parallel loop, disjoint indices per iteration | spurious loop-carried dependency on a trivially parallel loop | X |
+| 01 | two disjoint arrays accessed in separate loops | cross-array/base-pointer aliasing | X |
+| 02 | disjoint interleaved indices in one array (even/odd split) | non-address-exact hazard tracking | X |
+| 03 | two independent scalar locals, each in its own loop | unrelated-variable aliasing | X |
