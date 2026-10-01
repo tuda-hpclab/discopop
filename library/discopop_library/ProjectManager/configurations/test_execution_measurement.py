@@ -178,7 +178,7 @@ def test_a_sub_millisecond_reported_time_is_not_rounded_to_zero(tmp_path: Path) 
 def test_the_wall_clock_time_has_sub_millisecond_resolution(tmp_path: Path, monkeypatch: Any) -> None:
     # a clock that advances 0.4ms per reading: to the millisecond, a 0.0s run
     ticks = itertools.count()
-    monkeypatch.setattr(execution.time, "perf_counter", lambda: next(ticks) * 0.0004)
+    monkeypatch.setattr(f"{execution.__name__}.time.perf_counter", lambda: next(ticks) * 0.0004)
     reported, entry = _run(tmp_path, "true\n", None)
     assert reported == 0.0004
     assert entry["wall_clock_time"] == 0.0004
