@@ -12,6 +12,7 @@ These run an actual script through the real function, because the point of the
 feature is what a program's output does to the recorded measurement.
 """
 
+import itertools
 import json
 import os
 import stat
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, cast
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations import execution
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
 from discopop_library.ProjectManager.configurations.execution_time import (
     DEFAULT_EXECUTION_TIME_REGEX,
@@ -163,3 +165,20 @@ def test_the_measurement_out_parameter_exposes_the_wall_clock_time(tmp_path: Pat
 def test_the_measurement_out_parameter_is_optional(tmp_path: Path) -> None:
     reported, entry = _run(tmp_path, "echo 'Total time: 1.0'\n", TOTAL_TIME_REGEX)
     assert reported == 1.0
+
+
+def test_a_sub_millisecond_reported_time_is_not_rounded_to_zero(tmp_path: Path) -> None:
+    # rodinia kmeans on its 100-point input: rounded to milliseconds this was 0.0,
+    # which every consumer reads as "no runtime recorded"
+    reported, entry = _run(tmp_path, "echo 'Time for process: 0.000412'\n", r"Time for process:\s*([0-9.eE+-]+)")
+    assert reported == 0.000412
+    assert entry["time"] == 0.000412
+
+
+def test_the_wall_clock_time_has_sub_millisecond_resolution(tmp_path: Path, monkeypatch: Any) -> None:
+    # a clock that advances 0.4ms per reading: to the millisecond, a 0.0s run
+    ticks = itertools.count()
+    monkeypatch.setattr(execution.time, "perf_counter", lambda: next(ticks) * 0.0004)
+    reported, entry = _run(tmp_path, "true\n", None)
+    assert reported == 0.0004
+    assert entry["wall_clock_time"] == 0.0004
