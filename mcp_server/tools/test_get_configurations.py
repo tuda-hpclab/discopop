@@ -35,6 +35,15 @@ class TestGetConfigurations(unittest.TestCase):
         with open(os.path.join(self.configs_dir, *parts), "w") as f:
             f.write(content)
 
+    def test_an_incomplete_setup_names_the_missing_step(self) -> None:
+        # setUp leaves the project without a compile.sh
+        self.assertIn("set_compile_script", self._handle()["next_step"])
+
+    def test_a_complete_setup_is_not_steered_into_the_pipeline(self) -> None:
+        self.__write("compile.sh")
+        self.__write("default", "execute.sh")
+        self.assertNotIn("next_step", self._handle())
+
     def test_absent_optional_scripts_are_reported_as_null(self) -> None:
         self.__write("compile.sh")
         self.__write("default", "execute.sh")

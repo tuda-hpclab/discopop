@@ -33,20 +33,16 @@ class TestCreateExecutionConfiguration(unittest.TestCase):
         result = create_execution_configuration.handle(arguments, self.ctx)
         return json.loads(result[0].text)
 
-    def test_omitted_compile_script_body_creates_only_execute_sh(self) -> None:
+    def test_creates_only_execute_sh(self) -> None:
         data = self._handle()
         self.assertEqual(data["status"], "success")
-        self.assertNotIn("compile_script_path", data)
         self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "default", "execute.sh")))
-        self.assertFalse(os.path.exists(os.path.join(self.configs_dir, "default", "compile.sh")))
+        self.assertEqual(os.listdir(os.path.join(self.configs_dir, "default")), ["execute.sh"])
 
-    def test_compile_script_body_creates_per_config_override(self) -> None:
-        data = self._handle(compile_script_body="$CXX $CXXFLAGS main.cpp -o a.out\n")
-        self.assertEqual(data["status"], "success")
-        compile_path = os.path.join(self.configs_dir, "default", "compile.sh")
-        self.assertEqual(data["compile_script_path"], compile_path)
-        self.assertTrue(os.path.exists(compile_path))
-        self.assertTrue(os.access(compile_path, os.X_OK))
+    def test_compile_scripts_are_only_set_via_set_compile_script(self) -> None:
+        properties = create_execution_configuration.TOOL.inputSchema["properties"]
+        self.assertNotIn("compile_script_body", properties)
+        self.assertNotIn("validation_compile_script_body", properties)
 
     def test_validate_script_body_creates_validate_sh(self) -> None:
         data = self._handle(validate_script_body="./a.out | diff - reference.txt\n")
@@ -54,34 +50,15 @@ class TestCreateExecutionConfiguration(unittest.TestCase):
         validate_path = os.path.join(self.configs_dir, "default", "validate.sh")
         self.assertEqual(data["validate_script_path"], validate_path)
         self.assertTrue(os.access(validate_path, os.X_OK))
-        self.assertNotIn("validation_compile_script_path", data)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.configs_dir, "default"))), ["execute.sh", "validate.sh"])
 
-    def test_validation_compile_script_body_creates_override_alongside_validate_sh(self) -> None:
-        data = self._handle(
-            validate_script_body="./a.out | diff - reference.txt\n",
-            validation_compile_script_body="$CXX $CXXFLAGS -DVALIDATE main.cpp -o a.out\n",
-        )
+    def test_a_repeated_call_keeps_a_validate_sh_it_is_not_given(self) -> None:
+        self._handle(validate_script_body="./a.out | diff - reference.txt\n")
+        data = self._handle(script_body="./a.out --small\n")
         self.assertEqual(data["status"], "success")
-        validation_compile_path = os.path.join(self.configs_dir, "default", "compile_validate.sh")
-        self.assertEqual(data["validation_compile_script_path"], validation_compile_path)
-        self.assertTrue(os.access(validation_compile_path, os.X_OK))
-
-    def test_validation_compile_script_body_without_validate_sh_errors(self) -> None:
-        data = self._handle(validation_compile_script_body="$CXX $CXXFLAGS main.cpp -o a.out\n")
-        self.assertEqual(data["status"], "error")
-        # nothing at all is written, not even execute.sh's directory content
-        self.assertFalse(os.path.exists(os.path.join(self.configs_dir, "default", "compile_validate.sh")))
-        self.assertFalse(os.path.exists(os.path.join(self.configs_dir, "default", "execute.sh")))
-
-    def test_validation_compile_script_body_accepts_preexisting_validate_sh(self) -> None:
-        os.makedirs(os.path.join(self.configs_dir, "default"))
-        with open(os.path.join(self.configs_dir, "default", "validate.sh"), "w") as f:
-            f.write("#!/bin/bash\nexit 0\n")
-
-        data = self._handle(validation_compile_script_body="$CXX $CXXFLAGS -DVALIDATE main.cpp -o a.out\n")
-
-        self.assertEqual(data["status"], "success")
-        self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "default", "compile_validate.sh")))
+        self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "default", "validate.sh")))
+        with open(os.path.join(self.configs_dir, "default", "execute.sh")) as f:
+            self.assertIn("--small", f.read())
 
 
 if __name__ == "__main__":

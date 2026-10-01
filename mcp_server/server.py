@@ -26,11 +26,24 @@ import asyncio
 import json
 import logging
 import sys
+import threading
 import time
 from typing import Any, Callable, Optional
 
+import anyio
+import anyio.from_thread
+import anyio.lowlevel
+import anyio.to_thread
 from mcp.server import Server
-from mcp.types import TextContent, Tool
+from mcp.types import (
+    CallToolResult,
+    CancelledNotification,
+    CancelledNotificationParams,
+    ClientNotification,
+    RequestId,
+    TextContent,
+    Tool,
+)
 from termcolor import colored
 
 from mcp_server.argument_coercion import coerce_arguments, validation_error
@@ -38,17 +51,21 @@ from mcp_server.setup_mcp import MCPSetup
 
 from mcp_server.tools import (
     create_execution_configuration,
+    delete_execution_configuration,
+    explain_parallelization,
     gather_data,
     get_configurations,
+    get_hotspots,
     get_data_dependencies,
     get_execution_results,
     get_parallelization_patches,
+    get_project_status,
     initialize_discopop_directory,
     manage_patches,
     run_auto_tuning,
     set_compile_script,
 )
-from mcp_server.tools.helpers import ToolContext
+from mcp_server.tools.helpers import ProgressReporter, ToolContext
 
 _LOG_FORMAT = "%(asctime)s  %(levelname)-8s  %(message)s"
 _LOG_DATEFMT = "%H:%M:%S"
@@ -125,61 +142,68 @@ def _setup_logging(debug: bool = False) -> None:
 _setup_logging()
 logger = logging.getLogger("discopop-mcp")
 
+# Claude Code cuts server instructions off after 2048 characters (it shows the first
+# 2047 and "[truncated]"; other clients may cut sooner or later), so this text has a
+# hard budget, enforced by a test.
+# It is ordered by what an agent needs first: whether this server fits the task at
+# all, then what it costs, then how to use it -- a rule that only fits after the cut
+# is a rule the agent never sees.
 _SERVER_INSTRUCTIONS = (
-    "This server exposes DiscoPoP functionality for two primary use cases: "
-    "(1) parallelism detection — instrument a project, run profiling, detect parallel patterns, "
-    "retrieve OpenMP patches, and apply or roll back patches via manage_patches; "
-    "(2) data dependency analysis — query the combined static and dynamic data dependencies "
-    "for arbitrary code regions to support code understanding, refactoring, and correctness checks. "
-    "All DiscoPoP data must be accessed exclusively through the tool calls provided by this server. "
-    "Do not read, list, or inspect .discopop directories or their contents directly via file reads, "
-    "directory listings, or shell commands. "
-    "Those directories contain large binary files, intermediate artefacts, and serialised objects "
-    "that are expensive to parse and consume a large number of tokens. "
-    "The MCP tools return pre-processed, structured summaries at a fraction of the token cost. "
-    "If information appears to be missing, use the tool that produces it "
-    "(e.g. run gather_data before calling get_parallelization_patches or get_data_dependencies) "
-    "rather than reading the underlying files directly. "
-    "The route from an initialized project to parallelized code is: gather_data to profile "
-    "and detect patterns, then run_auto_tuning to measure which combination of the resulting "
-    "suggestions is actually fastest, then manage_patches to apply that combination — or "
-    "run_auto_tuning(apply=true), which does the last two in one call. "
-    "Never decide which patches to apply by reading them: that choice is what run_auto_tuning "
-    "measures, and picking from the diffs by hand throws away the one thing DiscoPoP can "
-    "establish and a reader cannot. Call it BEFORE applying anything — it needs an un-patched "
-    "project, and clears and restores an existing selection to get one. "
-    "IMPORTANT: Always use manage_patches to apply suggested patches — never read patch content "
-    "and apply changes manually. manage_patches delegates all patching work to the "
-    "discopop_patch_applicator binary, which is orders of magnitude faster and consumes far "
-    "fewer tokens than reading patch files and editing source files by hand. "
-    "Use initialize_discopop_directory with reset=true to clear stale analysis artefacts "
-    "when the pipeline is in a broken or inconsistent state."
+    "DiscoPoP finds parallelism in C/C++ programs by profiling them: it records the data "
+    "dependencies that actually occur at runtime and turns code that is safe to parallelize "
+    "into OpenMP patches. "
+    "Use it when the user wants to speed up or parallelize C/C++ code, asks whether code can "
+    "safely run in parallel, or needs to know which data a code region reads and writes, e.g. "
+    "to check that a refactoring preserves the data flow (get_data_dependencies). Its answers "
+    "come from executions, so they capture aliasing that reading the code misses, and "
+    "run_auto_tuning measures which suggestions actually pay off instead of guessing.\n"
+    "Not suitable when the project cannot be built and run locally, for languages other than "
+    "C/C++, for GPU or distributed-memory parallelism, or for questions that reading the code "
+    "answers quickly: the pipeline takes minutes to hours.\n"
+    "Prerequisites: a build script using $CC/$CXX and $CFLAGS/$CXXFLAGS, and a small but "
+    "representative input, since instrumented runs can be up to 100x slower.\n"
+    "Workflow: initialize_discopop_directory, set_compile_script and "
+    "create_execution_configuration once per project; gather_data to profile and detect "
+    "patterns, with hotspot_config_names (ideally two configurations with different input "
+    "sizes) so that tuning can use the hotspot-guided search; run_auto_tuning(apply=true) to measure the fastest combination of suggestions "
+    "and apply it (without apply=true, apply its selection via manage_patches).\n"
+    "Rules: access DiscoPoP data only through these tools and never read .discopop directories "
+    "directly; they hold large binary artefacts, while the tools return compact summaries. If "
+    "data is missing, run the tool that produces it, usually gather_data. Never choose patches "
+    "by reading them: run_auto_tuning measures that choice, and needs an un-patched project. "
+    "Never apply patches by editing source files; use manage_patches. If the pipeline is in an "
+    "inconsistent state, initialize_discopop_directory(reset=true) clears the analysis artefacts."
 )
 
 _ALL_TOOLS = [
+    get_project_status,
     get_configurations,
     get_execution_results,
     get_data_dependencies,
     initialize_discopop_directory,
     set_compile_script,
     create_execution_configuration,
+    delete_execution_configuration,
     gather_data,
+    get_hotspots,
     get_parallelization_patches,
+    explain_parallelization,
     run_auto_tuning,
     manage_patches,
 ]
 
-# The three tools that *define* a project rather than analyse one. Together they are
-# roughly a third of the tool definitions this server sends a client, and a caller
+# The tools that *define* a project rather than analyse one. Together they are a
+# sizeable part of the tool definitions this server sends a client, and a caller
 # working on a project that is already set up -- an unattended run against a prepared
 # project, most of all -- never wants them: at best they are unused context, at worst
-# initialize_discopop_directory(reset=true) removes the very configurations the caller
-# was pointed at. --tools analysis leaves them out, of the listing and of dispatch
+# initialize_discopop_directory(reset=true) removes the analysis results and recorded
+# runs of the project the caller was pointed at. --tools analysis leaves them out, of the listing and of dispatch
 # alike, so "not offered" and "not available" mean the same thing.
 _SETUP_TOOLS = [
     initialize_discopop_directory,
     set_compile_script,
     create_execution_configuration,
+    delete_execution_configuration,
 ]
 
 TOOL_SETS = {
@@ -205,6 +229,102 @@ def unavailable_tool_message(name: str, tool_set: str) -> str:
     return f"Unknown tool: {name}"
 
 
+Handler = Callable[[dict[str, Any], ToolContext], list[TextContent]]
+
+
+def _progress_token(server: "Server[Any, Any]") -> Optional[Any]:
+    """The progress token of the request being handled, if its client sent one."""
+    try:
+        request = server.request_context
+    except LookupError:
+        return None
+    return request.meta.progressToken if request.meta is not None else None
+
+
+def _progress_reporter(server: "Server[Any, Any]") -> Optional[ProgressReporter]:
+    """A reporter that turns ToolContext.report_progress into MCP progress notifications.
+
+    It is called from the worker thread the handler runs in (and from heartbeat
+    threads it starts), so the notification is sent on the event loop and the calling
+    thread waits for it.
+    """
+    token = _progress_token(server)
+    if token is None:
+        return None
+    request = server.request_context
+    loop = anyio.lowlevel.current_token()
+
+    def report(progress: float, total: Optional[float], message: Optional[str]) -> None:
+        anyio.from_thread.run(
+            request.session.send_progress_notification,
+            token,
+            progress,
+            total,
+            message,
+            str(request.request_id),
+            token=loop,
+        )
+
+    return report
+
+
+async def _forward_cancel(session: Any, request_id: RequestId) -> None:
+    """Tell the daemon that the client cancelled the request `request_id` sent to it.
+
+    The SDK's ClientSession abandons a cancelled request without saying so.
+    """
+    notification = CancelledNotification(
+        params=CancelledNotificationParams(requestId=request_id, reason="Cancelled by the client.")
+    )
+    try:
+        with anyio.fail_after(5):
+            await session.send_notification(ClientNotification(notification))
+    except Exception as e:
+        logger.warning(f"Could not pass the cancel on to the daemon: {e}")
+
+
+async def _run_handler(
+    server: "Server[Any, Any]",
+    handler: Handler,
+    arguments: dict[str, Any],
+    ctx: ToolContext,
+    limiter: anyio.CapacityLimiter,
+) -> list[TextContent]:
+    """Run a synchronous tool handler without blocking the event loop.
+
+    Handlers block for as long as their tool runs -- gather_data and run_auto_tuning
+    for minutes to hours. Run on the event loop, they left the server unable to send
+    progress or answer anything until they returned. In a worker thread they cannot
+    run concurrently, though: handlers change the working directory and share the
+    ToolContext, so the limiter admits one at a time, as the event loop used to.
+
+    A cancelled call does not end at once: a thread cannot be stopped from outside, so
+    the handler is told (ctx.cancel stops the processes it started), and the limiter is
+    held until it has cleaned up and returned -- the next call must not start in a
+    project the cancelled one is still restoring.
+    """
+    reporter = _progress_reporter(server)
+    finished = threading.Event()
+
+    def call() -> list[TextContent]:
+        try:
+            with ctx.reporting_progress(reporter), ctx.cancellable():
+                return handler(arguments, ctx)
+        finally:
+            finished.set()
+
+    async with limiter:
+        try:
+            # abandon_on_cancel: return to the event loop on cancellation instead of
+            # waiting for the thread, so that the handler can be told to stop
+            return await anyio.to_thread.run_sync(call, abandon_on_cancel=True)
+        except anyio.get_cancelled_exc_class():
+            ctx.cancel()
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(finished.wait)
+            raise
+
+
 def _is_daemon_running(port: int) -> bool:
     import socket
 
@@ -223,12 +343,17 @@ class DiscoPopMCPServer:
         self._tools = TOOL_SETS[tool_set]
         _setup_logging(debug=debug)
         self._ctx = ToolContext(debug=debug)
+        self._limiter: Optional[anyio.CapacityLimiter] = None
         self._register_tools()
 
+    def _handler_limiter(self) -> anyio.CapacityLimiter:
+        # Created on first use: a limiter belongs to the event loop it is created in.
+        if self._limiter is None:
+            self._limiter = anyio.CapacityLimiter(1)
+        return self._limiter
+
     def _register_tools(self) -> None:
-        _dispatch: dict[str, Callable[[dict[str, Any], ToolContext], list[TextContent]]] = {
-            mod.TOOL.name: mod.handle for mod in self._tools
-        }
+        _dispatch: dict[str, Handler] = {mod.TOOL.name: mod.handle for mod in self._tools}
 
         _schemas: dict[str, dict[str, Any]] = {mod.TOOL.name: mod.TOOL.inputSchema for mod in self._tools}
 
@@ -267,7 +392,7 @@ class DiscoPopMCPServer:
             logger.info(f"▶ Executing: {name}({params_summary})")
             start_time = time.time()
             try:
-                result = handler(arguments, self._ctx)
+                result = await _run_handler(self.server, handler, arguments, self._ctx, self._handler_limiter())
                 elapsed = time.time() - start_time
                 # Raise on tool errors so the MCP client receives isError=true.
                 # The exception message is the JSON payload, preserving all error detail.
@@ -329,15 +454,33 @@ class DiscoPopMCPProxy:
         self._session: Optional[Any] = None  # mcp.client.session.ClientSession when connected
         # Inline fallback components (used when daemon is unavailable)
         self._ctx = ToolContext(debug=debug)
-        self._dispatch: dict[str, Callable[[dict[str, Any], ToolContext], list[TextContent]]] = {
-            mod.TOOL.name: mod.handle for mod in self._tools
-        }
+        self._limiter: Optional[anyio.CapacityLimiter] = None
+        self._dispatch: dict[str, Handler] = {mod.TOOL.name: mod.handle for mod in self._tools}
         self.server = Server("discopop_mcp_server", instructions=_SERVER_INSTRUCTIONS)
         # Lazy daemon connection state
         self._tg: Optional[Any] = None  # anyio task group set by run()
         self._daemon_init_started: bool = False
         self._daemon_session_ready: Optional[asyncio.Event] = None
         self._register_tools()
+
+    def _handler_limiter(self) -> anyio.CapacityLimiter:
+        if self._limiter is None:
+            self._limiter = anyio.CapacityLimiter(1)
+        return self._limiter
+
+    def _relay_progress(self) -> Optional[Callable[[float, Optional[float], Optional[str]], Any]]:
+        """Forward the daemon's progress notifications to this proxy's client."""
+        token = _progress_token(self.server)
+        if token is None:
+            return None
+        request = self.server.request_context
+
+        async def relay(progress: float, total: Optional[float], message: Optional[str]) -> None:
+            await request.session.send_progress_notification(
+                token, progress, total, message, related_request_id=str(request.request_id)
+            )
+
+        return relay
 
     def _register_tools(self) -> None:
         @self.server.list_tools()  # type: ignore[misc, untyped-decorator]
@@ -373,12 +516,26 @@ class DiscoPopMCPProxy:
                 raise Exception(invalid)
             await self._ensure_daemon()
             if self._session is not None:
+                session = self._session
+                # the id call_tool's request gets: send_request takes it without awaiting first
+                request_id = session._request_id
+                daemon_result: Optional[CallToolResult] = None
                 try:
-                    result = await self._session.call_tool(name, arguments)
-                    return result.content  # type: ignore[no-any-return]
+                    daemon_result = await session.call_tool(name, arguments, progress_callback=self._relay_progress())
+                except anyio.get_cancelled_exc_class():
+                    # The client cancelled the call. Abandoning the request would leave the
+                    # daemon running the tool, its processes and all; pass the cancel on.
+                    with anyio.CancelScope(shield=True):
+                        await _forward_cancel(session, request_id)
+                    raise
                 except Exception:
                     logger.warning(f"Daemon disconnected during {name}, switching to inline execution")
                     self._session = None
+                if daemon_result is not None:
+                    if daemon_result.isError:
+                        # raised, as on the inline path, so that the client sees isError as well
+                        raise Exception("".join(c.text for c in daemon_result.content if isinstance(c, TextContent)))
+                    return daemon_result.content  # type: ignore[return-value]
             # Inline fallback — identical error-handling to DiscoPopMCPServer
             self._ctx.log_call(name, arguments)
             handler = self._dispatch.get(name)
@@ -386,7 +543,7 @@ class DiscoPopMCPProxy:
                 error_msg = unavailable_tool_message(name, self.tool_set)
                 logger.error(error_msg)
                 raise Exception(error_msg)
-            inline_result = handler(arguments, self._ctx)
+            inline_result = await _run_handler(self.server, handler, arguments, self._ctx, self._handler_limiter())
             if inline_result:
                 try:
                     data = json.loads(inline_result[0].text)
@@ -538,7 +695,7 @@ Available agents: {', '.join(agent_choices)}
         help=(
             "Which tools to expose. 'all' (default) offers every tool; 'analysis' leaves out "
             "the project setup tools (initialize_discopop_directory, set_compile_script, "
-            "create_execution_configuration) — use it against a project that is already "
+            "create_execution_configuration, delete_execution_configuration) — use it against a project that is already "
             "configured, so those tools can neither be listed nor called"
         ),
     )

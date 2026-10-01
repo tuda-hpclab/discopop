@@ -10,10 +10,10 @@ import json
 import logging
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Optional
@@ -29,9 +29,11 @@ from mcp_server.tools.helpers import (
     APPLICATOR_OK_RETURNCODES,
     ToolContext,
     applicator_failure_details,
+    invalid_configuration_name,
     read_application_result,
     read_applied_suggestions,
     run_patch_applicator,
+    terminate_process_tree,
 )
 
 logger = logging.getLogger("discopop-mcp")
@@ -39,8 +41,19 @@ logger = logging.getLogger("discopop-mcp")
 # Preferred algorithm: deterministic and measurement-frugal, but only meaningful with
 # hotspot detection results. Without those, the greedy forward search is the fallback:
 # it needs no hotspot information and still terminates in O(N) evaluations.
-HOTSPOT_GUIDED_ALGORITHM = 6
-FALLBACK_ALGORITHM = 4
+HOTSPOT_GUIDED_ALGORITHM = "hotspot_guided"
+FALLBACK_ALGORITHM = "greedy"
+# The search algorithms by name, and the -A value of discopop_auto_tuner each one stands for.
+# Callers name them; the numbers are an implementation detail of the tuner's command line
+# (2 is not assigned there), but are still accepted, as earlier versions of this tool took them.
+ALGORITHMS = {
+    "independent": 0,
+    "linear": 1,
+    "evolutionary": 3,
+    "greedy": 4,
+    "coordinate_descent": 5,
+    "hotspot_guided": 6,
+}
 DEFAULT_TIMEOUT_SECONDS = 3600
 # How long the tuner and its children get to shut down after SIGTERM before SIGKILL.
 _KILL_GRACE_SECONDS = 10.0
@@ -57,8 +70,7 @@ TOOL = Tool(
         "This is the answer to 'which of these patches should I apply?'. The autotuner "
         "compiles, executes and validates candidate combinations in throwaway copies of the "
         "project and keeps the fastest one that still produces a valid result, so the "
-        "selection is measured rather than guessed. Call it after gather_data and BEFORE "
-        "applying any patch.\n\n"
+        "selection is measured rather than guessed. Call it after gather_data.\n\n"
         "By default the tool leaves the sources as it found them and only reports the "
         "selection, which manage_patches(action='apply', suggestion_ids=[...]) then "
         "persists. Pass apply=true to have the selected combination applied right away, "
@@ -83,7 +95,15 @@ TOOL = Tool(
         "parallelization that corrupts the output is indistinguishable from a correct one. "
         "Define validate.sh via create_execution_configuration(validate_script_body=...) "
         "before tuning whenever the program's output can be checked. The result carries a "
-        "'warnings' list whenever the selection rests on weaker evidence than it appears to."
+        "'warnings' list whenever the selection rests on weaker evidence than it appears to.\n\n"
+        "To measure one given selection instead of searching, pass suggestion_ids (the ids "
+        "returned by get_parallelization_patches). The tool then measures exactly that "
+        "selection against the un-patched project — no other combination is tried — and "
+        "reports its runtime, its speedup and in 'outcome' whether it built, ran and "
+        "produced a valid result. apply=true applies it whenever that outcome is 'valid', even "
+        "if it is slower than the un-patched project. The "
+        "stored result of the last search is kept. "
+        "Use it to check a specific combination; to find the fastest one, run the search."
     ),
     inputSchema={
         "type": "object",
@@ -102,28 +122,47 @@ TOOL = Tool(
                 ),
             },
             "algorithm": {
-                "type": "integer",
+                # the integers are the names' -A values, accepted for earlier callers
+                "anyOf": [
+                    {"type": "string", "enum": list(ALGORITHMS)},
+                    {"type": "integer", "enum": list(ALGORITHMS.values())},
+                ],
                 "description": (
-                    "Search algorithm. Omit this to let the tool choose: 6 when hotspot "
-                    "detection results are available, otherwise 4. The chosen value and the "
+                    "Search algorithm. Omit this to let the tool choose: hotspot_guided when hotspot "
+                    "detection results are available, otherwise greedy. The chosen algorithm and the "
                     "reason are reported back in 'algorithm' and 'algorithm_selection'. "
-                    "Pass a value only to override that choice; an explicit 6 without hotspot "
-                    "results is refused rather than silently replaced.\n"
-                    "  0 — no combination; measures every suggestion on its own.\n"
-                    "  1 — linear combination; accumulates suggestions that keep the result valid.\n"
-                    "  3 — evolutionary combination; uses randomness, so it is not reproducible.\n"
-                    "  4 — greedy forward search; one pass over all suggestions, O(N) evaluations. "
+                    "Pass a value only to override that choice; an explicit hotspot_guided without "
+                    "hotspot results is refused rather than silently replaced.\n"
+                    "  independent — no combination; measures every suggestion on its own.\n"
+                    "  linear — accumulates suggestions that keep the result valid.\n"
+                    "  evolutionary — uses randomness, so it is not reproducible.\n"
+                    "  greedy — forward search; one pass over all suggestions, O(N) evaluations. "
                     "Needs no hotspot information, which is why it is the fallback.\n"
-                    "  5 — coordinate descent; repeated bit-flip passes until no pass improves.\n"
-                    "  6 — hotspot-guided region descent; deterministic and measurement-frugal, "
+                    "  coordinate_descent — repeated bit-flip passes until no pass improves.\n"
+                    "  hotspot_guided — region descent; deterministic and measurement-frugal, "
                     "but requires hotspot detection results."
+                ),
+            },
+            "suggestion_ids": {
+                "type": "array",
+                "items": {"type": ["string", "integer"]},
+                "description": (
+                    "Measure exactly this selection of suggestions instead of running a search. "
+                    "IDs are the pattern_id values returned by get_parallelization_patches; "
+                    "unknown IDs are rejected before anything is measured. Cannot be combined with "
+                    "'algorithm'. The result reports the selection's 'runtime', its 'speedup' over "
+                    "the un-patched project and an 'outcome': valid, invalid (the result failed "
+                    "the validation), failed (build or execution failed) or not_applied (a patch "
+                    "could not be applied)."
                 ),
             },
             "apply": {
                 "type": "boolean",
                 "description": (
                     "Apply the selected combination to the source files once the search is "
-                    "done, instead of only reporting it. Default: false. With apply=true the "
+                    "done, instead of only reporting it. Default: false. With suggestion_ids, the "
+                    "given selection is applied whenever its outcome is 'valid', whether or not it is "
+                    "faster; an invalid or failed one never is. With apply=true the "
                     "result carries 'applied' with the ids that reached the code; the "
                     "selection can be undone afterwards with "
                     "manage_patches(action='rollback', suggestion_ids=[...])."
@@ -134,7 +173,8 @@ TOOL = Tool(
                 "description": (
                     "Maximum wall clock time for the whole search. Default: 3600. When it "
                     "expires the tuner is stopped and the best combination measured so far "
-                    "is returned with status 'timeout'."
+                    "is returned with status 'timeout'. With suggestion_ids, a timeout before "
+                    "the selection was measured is an error."
                 ),
             },
         },
@@ -143,8 +183,9 @@ TOOL = Tool(
     },
     # Not read-only (it compiles and executes the project, and applies patches when asked)
     # but it destroys nothing: with apply=false the sources end up as they were, and an
-    # applied selection is reversible with manage_patches.
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False),
+    # applied selection is reversible with manage_patches. Not idempotent: a repeated
+    # search re-measures, and runtime noise can make it select a different combination.
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
 )
 
 
@@ -227,16 +268,166 @@ def hotspot_loops_available(dot_dp: str) -> bool:
 
 
 def _hotspot_requirement_error(dot_dp: str) -> str:
-    """Why algorithm 6 cannot run here, for a caller that asked for it explicitly."""
+    """Why hotspot_guided cannot run here, for a caller that asked for it explicitly."""
     remedy = (
         "Re-run gather_data with hotspot_config_names set (ideally two configurations with "
-        "different input sizes), choose a different algorithm (4 or 5) which does not need "
-        "hotspot information, or omit 'algorithm' to let the tool fall back automatically."
+        "different input sizes), choose a different algorithm (greedy or coordinate_descent) which "
+        "does not need hotspot information, or omit 'algorithm' to let the tool fall back automatically."
     )
     hotspots_file = hotspots_json_path(dot_dp)
     if not os.path.exists(hotspots_file):
-        return f"algorithm 6 requires hotspot detection results, but {hotspots_file} does not exist. " + remedy
-    return "algorithm 6 requires hot loops, but the hotspot detection results contain none. " + remedy
+        return (
+            f"algorithm hotspot_guided requires hotspot detection results, but {hotspots_file} does not exist. "
+            + remedy
+        )
+    return "algorithm hotspot_guided requires hot loops, but the hotspot detection results contain none. " + remedy
+
+
+def _algorithm_name(requested: Any) -> Optional[str]:
+    """The name of a requested algorithm, given by name or by its -A value; None if unknown."""
+    if isinstance(requested, str) and requested in ALGORITHMS:
+        return requested
+    if isinstance(requested, int) and not isinstance(requested, bool):
+        return next((name for name, number in ALGORITHMS.items() if number == requested), None)
+    return None
+
+
+def normalize_suggestion_ids(raw: Any) -> tuple[list[str], Optional[str]]:
+    """The requested selection as the string ids used throughout this server, or an error.
+
+    Integers are accepted as well, since a suggestion id is a number in every other
+    respect; duplicates are dropped, keeping the order of their first occurrence.
+    """
+    if not isinstance(raw, list):
+        return [], f"'suggestion_ids' must be a list of suggestion IDs, got {raw!r}."
+    ids: list[str] = []
+    invalid: list[str] = []
+    for entry in raw:
+        text = str(entry).strip() if isinstance(entry, (str, int)) and not isinstance(entry, bool) else ""
+        if not text.isdigit():
+            invalid.append(repr(entry))
+            continue
+        text = str(int(text))
+        if text not in ids:
+            ids.append(text)
+    if invalid:
+        return [], (
+            "'suggestion_ids' must contain suggestion IDs as returned by get_parallelization_patches; "
+            "not an ID: " + ", ".join(invalid) + "."
+        )
+    if not ids:
+        return [], (
+            "'suggestion_ids' is empty. Name at least one suggestion to measure, or omit "
+            "'suggestion_ids' to run a search."
+        )
+    return ids, None
+
+
+def unknown_suggestion_ids(dot_dp: str, suggestion_ids: list[str]) -> list[str]:
+    """The requested ids that name no generated suggestion.
+
+    Checked against the patch directories, the same source get_parallelization_patches
+    lists its ids from, so an id that tool returned is never rejected here.
+    """
+    patch_generator = Path(dot_dp) / "patch_generator"
+    try:
+        known = {entry.name for entry in patch_generator.iterdir() if entry.is_dir() and entry.name.isdigit()}
+    except OSError:
+        known = set()
+    return [suggestion_id for suggestion_id in suggestion_ids if suggestion_id not in known]
+
+
+def _selection_outcome(measurement: dict[str, Any]) -> str:
+    """How the measurement of a given selection ended, from the most to the least basic failure."""
+    if measurement.get("application_failed"):
+        return "not_applied"
+    if measurement.get("return_code") != 0:
+        return "failed"
+    if not measurement.get("valid") or not measurement.get("tsan", True):
+        return "invalid"
+    return "valid"
+
+
+def selection_result_from_events(events: list[dict[str, Any]], selection: list[str]) -> Optional[dict[str, Any]]:
+    """The measurement of the given selection as the tool's result; None if it was not measured.
+
+    The tuner's own ``result`` event is not used: it names the best *valid*
+    configuration, which is the un-patched reference whenever the selection fails,
+    and would then report a speedup of 1 for a selection that never ran correctly.
+    """
+    wanted = sorted(int(s) for s in selection)
+    measurement = next(
+        (
+            event
+            for event in events
+            if event.get("event") == "measurement" and sorted(int(s) for s in event.get("suggestions", [])) == wanted
+        ),
+        None,
+    )
+    if measurement is None:
+        return None
+    baseline = next((e for e in events if e.get("event") == "baseline"), None)
+    baseline_runtime = baseline.get("runtime") if baseline else None
+    thread_count = baseline.get("thread_count") if baseline else None
+
+    outcome = _selection_outcome(measurement)
+    runtime = None if outcome == "not_applied" else measurement.get("runtime")
+    speedup: Optional[float] = None
+    # Only a valid run has a speedup: a crashing or wrong program is fast for the wrong reason.
+    if outcome == "valid" and isinstance(runtime, (int, float)) and runtime > 0:
+        measured_speedup = measurement.get("speedup")
+        if isinstance(measured_speedup, (int, float)):
+            speedup = float(measured_speedup)
+        elif isinstance(baseline_runtime, (int, float)) and baseline_runtime > 0:
+            speedup = round(float(baseline_runtime) / float(runtime), 4)
+
+    result: dict[str, Any] = {
+        "status": "success" if outcome == "valid" else "rejected",
+        "mode": "selection",
+        "suggestion_ids": list(selection),
+        "outcome": outcome,
+        # None where the output was never checked: nothing ran, or the run itself failed
+        "result_valid": outcome == "valid" if outcome in ("valid", "invalid") else None,
+        "return_code": measurement.get("return_code"),
+        "runtime": runtime,
+        "baseline_runtime": baseline_runtime,
+        "speedup": speedup,
+        "thread_count": thread_count,
+    }
+    if speedup is not None and isinstance(thread_count, int) and thread_count > 0:
+        result["efficiency"] = round(speedup / thread_count, 4)
+    failed = [str(s) for s in measurement.get("failed_suggestions", [])]
+    if failed:
+        result["not_applied"] = failed
+
+    if outcome == "valid":
+        result["message"] = (
+            f"The selection built, ran and produced a valid result in {runtime}s, against "
+            f"{baseline_runtime}s for the un-patched project (speedup {speedup})."
+        )
+        if speedup is not None and speedup <= 1:
+            result["message"] += (
+                " It is not faster than the un-patched project; run_auto_tuning without "
+                "suggestion_ids searches for a combination that is."
+            )
+    elif outcome == "invalid":
+        result["message"] = (
+            "The selection built and ran, but its result failed the validation: the program "
+            "does not compute the same result with these suggestions applied. Do not apply it."
+        )
+    elif outcome == "failed":
+        result["message"] = (
+            f"The selection failed to build or to execute (return code {measurement.get('return_code')}). "
+            "An execution that takes longer than twice the un-patched project's is stopped and "
+            "counts as failed as well."
+        )
+    else:
+        result["message"] = (
+            "The patches of the suggestions "
+            + ", ".join(failed or selection)
+            + " could not be applied, so the selection was not measured."
+        )
+    return result
 
 
 def _pump_output(stream: Any, tail: Deque[str], project_path: str, ctx: ToolContext) -> None:
@@ -259,41 +450,30 @@ def _terminate(proc: "subprocess.Popen[str]") -> None:
     the compile and execute scripts as well; killing only the tuner would leave a
     long-running benchmark behind.
     """
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        proc.terminate()
-    try:
-        proc.wait(timeout=_KILL_GRACE_SECONDS)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        proc.kill()
-    try:
-        proc.wait(timeout=_KILL_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        pass
+    terminate_process_tree(proc, _KILL_GRACE_SECONDS)
 
 
 def _cleanup_project_copies(project_path: str, config_name: str, ctx: ToolContext) -> list[str]:
     """Remove the candidate project copies a killed tuner left behind.
 
     ``copy_configuration`` places every candidate next to the project root, named
-    ``<config>_<settings>_<project>_<id>``. A completed run deletes them itself; an
-    interrupted one cannot, and they are full copies of the project.
+    ``<config>_<settings>_<project>_<id>``: par_settings.json for the measured candidates,
+    hd_settings.json for the hotspot-instrumented ones the refinement of a -s selection builds. A completed run
+    deletes them itself; an interrupted one cannot, and they are full copies of the project.
     """
     project_dir = Path(project_path).resolve()
-    prefix = f"{config_name}_par_settings.json_{project_dir.name}_"
+    prefixes = tuple(
+        f"{config_name}_{settings}_{project_dir.name}_" for settings in ("par_settings.json", "hd_settings.json")
+    )
     removed: list[str] = []
     try:
         candidates = sorted(project_dir.parent.iterdir())
     except OSError:
         return removed
     for entry in candidates:
-        if not entry.is_dir() or not entry.name.startswith(prefix):
+        # the id after the prefix keeps a sibling project named "<project>_..." out of it
+        prefix = next((p for p in prefixes if entry.name.startswith(p)), None)
+        if prefix is None or not entry.name[len(prefix) :].isdigit() or not entry.is_dir():
             continue
         try:
             shutil.rmtree(str(entry))
@@ -433,7 +613,7 @@ def _progress_file(dot_dp: str) -> Path:
     return Path(dot_dp) / "auto_tuner" / "progress.jsonl"
 
 
-def _progress_mtime(dot_dp: str) -> Optional[float]:
+def progress_mtime(dot_dp: str) -> Optional[float]:
     """The progress file's mtime, or None when it does not exist.
 
     Sampled before and after the run so a progress file left over from an earlier
@@ -445,7 +625,7 @@ def _progress_mtime(dot_dp: str) -> Optional[float]:
         return None
 
 
-def _read_progress_events(dot_dp: str) -> list[dict[str, Any]]:
+def read_progress_events(dot_dp: str) -> list[dict[str, Any]]:
     progress_file = _progress_file(dot_dp)
     if not progress_file.exists():
         return []
@@ -455,7 +635,22 @@ def _read_progress_events(dot_dp: str) -> list[dict[str, Any]]:
         return []
 
 
-def _result_from_events(events: list[dict[str, Any]], timed_out: bool) -> dict[str, Any]:
+def _tuning_progress(
+    dot_dp: str, progress_mtime_before: Optional[float], started: float
+) -> tuple[float, Optional[float], str]:
+    """How far a running search is, read from the progress file it writes.
+
+    The number of candidates a search evaluates is not known up front, so there is no
+    total; the count of measured candidates is what increases.
+    """
+    elapsed = f"{time.monotonic() - started:.0f}s elapsed"
+    if progress_mtime(dot_dp) == progress_mtime_before:
+        return 0, None, f"Measuring the baseline ({elapsed})"
+    measured = sum(1 for event in read_progress_events(dot_dp) if event.get("event") == "measurement")
+    return measured, None, f"{measured} candidate configuration(s) measured ({elapsed})"
+
+
+def result_from_events(events: list[dict[str, Any]], timed_out: bool) -> dict[str, Any]:
     """Turn the tuner's progress stream into the tool's result payload."""
     baseline = next((e for e in events if e.get("event") == "baseline"), None)
     baseline_runtime = baseline.get("runtime") if baseline else None
@@ -498,14 +693,119 @@ def _result_from_events(events: list[dict[str, Any]], timed_out: bool) -> dict[s
     }
 
 
+# What the tuner writes to .discopop/ as the result of its run. auto_tuner/results.json is
+# what the GUI and `discopop_project_manager --apply-suggestions auto` apply, and the
+# others describe the last search to get_project_status, the GUI and the user.
+_TUNER_RESULT_FILES = (
+    "auto_tuner/results.json",
+    "auto_tuner/progress.jsonl",
+    "auto_tuner/measurements.json",
+    "auto_tuner/compile_results.json",
+    "dp_autotuner_statistics.dot",
+    "dp_autotuner_statistics.svg",
+)
+_TunerResults = dict[Path, Optional[tuple[bytes, float]]]
+
+
+def _snapshot_tuner_results(dot_dp: str) -> _TunerResults:
+    """The tuner's result files as they are, with their mtimes; None for a missing one."""
+    snapshot: _TunerResults = {}
+    for name in _TUNER_RESULT_FILES:
+        path = Path(dot_dp) / name
+        try:
+            snapshot[path] = (path.read_bytes(), path.stat().st_mtime)
+        except OSError:
+            snapshot[path] = None
+    return snapshot
+
+
+def _restore_tuner_results(snapshot: _TunerResults) -> None:
+    """Put the result files back, so that measuring a selection does not replace the last search."""
+    for path, saved in snapshot.items():
+        try:
+            if saved is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(saved[0])
+                os.utime(path, (saved[1], saved[1]))
+        except OSError as e:
+            logger.warning(f"Could not restore {path}: {e}")
+
+
+def _run_tuner(
+    cmd: list[str],
+    dot_dp: str,
+    project_path: str,
+    timeout_seconds: int,
+    run_description: str,
+    progress_mtime_before: Optional[float],
+    ctx: ToolContext,
+) -> tuple[list[dict[str, Any]], int, bool, Deque[str]]:
+    """Run the tuner until it ends, times out or is cancelled; its events, exit code and output tail."""
+    tail: Deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
+    started = time.monotonic()
+    # start_new_session puts the tuner into its own process group so a timeout can
+    # take down the compile and execute scripts it spawned along with it.
+    proc = subprocess.Popen(
+        cmd,
+        cwd=dot_dp,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+    )
+    # stops the tuner right away if the cancel came after the caller's last look at it
+    ctx.track_process(proc)
+    pump = threading.Thread(target=_pump_output, args=(proc.stdout, tail, project_path, ctx), daemon=True)
+    pump.start()
+
+    timed_out = False
+    try:
+        ctx.report_progress(0, None, f"Auto-tuning started ({run_description}), measuring the baseline")
+        with ctx.heartbeat(lambda: _tuning_progress(dot_dp, progress_mtime_before, started)):
+            returncode = proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        ctx.log_action(
+            project_path,
+            "run_auto_tuning",
+            f"Timeout after {timeout_seconds}s — stopping the autotuner",
+        )
+        _terminate(proc)
+        returncode = proc.returncode if proc.returncode is not None else -1
+    except BaseException:
+        # a tuner left running would keep writing the files the caller is about to restore
+        _terminate(proc)
+        raise
+    pump.join(timeout=5.0)
+
+    # A progress file that this run did not write belongs to an earlier one. Reporting
+    # it would present an old run's selection as the result of this one.
+    events = read_progress_events(dot_dp) if progress_mtime(dot_dp) != progress_mtime_before else []
+    return events, returncode, timed_out, tail
+
+
+def _cancelled(project_path: str, cleared: list[str], ctx: ToolContext) -> list[TextContent]:
+    """The answer to a cancelled call, once the suggestions cleared for it are restored."""
+    message = "Cancelled by the client."
+    if cleared:
+        restore_error = _restore_cleared(project_path, cleared, ctx)
+        message += f" {restore_error}" if restore_error is not None else " The applied suggestions were restored."
+    return ctx.error(message, project_path, "run_auto_tuning")
+
+
 def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
     try:
         project_path: str = arguments.get("project_path", "")
         config_name: str = arguments.get("config_name", "")
-        requested_algorithm: Optional[int] = arguments.get("algorithm")
+        requested_algorithm: Any = arguments.get("algorithm")
         apply_selection: bool = bool(arguments.get("apply", False))
         timeout_seconds: int = arguments.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
 
+        name_error = invalid_configuration_name(config_name)
+        if name_error is not None:
+            return ctx.error(name_error, project_path, "run_auto_tuning")
         dot_dp = str(Path(project_path) / ".discopop")
         if not os.path.exists(dot_dp):
             return ctx.error(
@@ -518,11 +818,38 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         if precondition_error is not None:
             return ctx.error(precondition_error, project_path, "run_auto_tuning")
 
+        # A given selection replaces the search, so it is checked completely before
+        # anything is cleared, compiled or run.
+        selection: Optional[list[str]] = None
+        if arguments.get("suggestion_ids") is not None:
+            if requested_algorithm is not None:
+                return ctx.error(
+                    "'suggestion_ids' and 'algorithm' cannot be combined: with suggestion_ids the given "
+                    "selection is measured and no search runs. Pass only one of them.",
+                    project_path,
+                    "run_auto_tuning",
+                )
+            selection, selection_error = normalize_suggestion_ids(arguments["suggestion_ids"])
+            if selection_error is not None:
+                return ctx.error(selection_error, project_path, "run_auto_tuning")
+            unknown = unknown_suggestion_ids(dot_dp, selection)
+            if unknown:
+                return ctx.error(
+                    "Unknown suggestion IDs: "
+                    + ", ".join(unknown)
+                    + ". get_parallelization_patches lists the IDs of the current suggestions; IDs "
+                    "from an earlier analysis are no longer valid after gather_data ran again.",
+                    project_path,
+                    "run_auto_tuning",
+                )
+
         # Hotspot-guided descent unless there is nothing for it to be guided by. An
         # explicitly requested algorithm is never silently replaced: the caller asked for
-        # a specific search, so a missing prerequisite is reported instead.
+        # a specific search, so a missing prerequisite is reported instead. A given
+        # selection runs no search, so it needs no algorithm.
         algorithm_selection: Optional[str] = None
-        if requested_algorithm is None:
+        algorithm: Optional[str] = None
+        if selection is None and requested_algorithm is None:
             if hotspot_loops_available(dot_dp):
                 algorithm = HOTSPOT_GUIDED_ALGORITHM
                 algorithm_selection = "hotspot-guided region descent, chosen because hotspot results are available"
@@ -534,8 +861,15 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                     "which usually needs fewer measurements."
                 )
             ctx.log_action(project_path, "run_auto_tuning", f"Selected algorithm {algorithm}: {algorithm_selection}")
-        else:
-            algorithm = requested_algorithm
+        elif selection is None:
+            requested_name = _algorithm_name(requested_algorithm)
+            if requested_name is None:
+                return ctx.error(
+                    f"Unknown algorithm {requested_algorithm!r}. Choose one of: {', '.join(ALGORITHMS)}.",
+                    project_path,
+                    "run_auto_tuning",
+                )
+            algorithm = requested_name
             if algorithm == HOTSPOT_GUIDED_ALGORITHM and not hotspot_loops_available(dot_dp):
                 return ctx.error(_hotspot_requirement_error(dot_dp), project_path, "run_auto_tuning")
 
@@ -560,54 +894,61 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             dot_dp,
             "-c",
             config_name,
-            "-A",
-            str(algorithm),
             "--log",
             "WARNING",
         ]
+        if selection is not None:
+            # --skip-removal-pass keeps the tuner from refining the selection afterwards,
+            # which would profile it and measure a reduced selection the caller never named.
+            cmd += ["-s", ",".join(selection), "--skip-removal-pass"]
+            run_description = "measuring the selection " + ", ".join(selection)
+        else:
+            assert algorithm is not None
+            cmd += ["-A", str(ALGORITHMS[algorithm])]
+            run_description = f"algorithm {algorithm}"
         ctx.log_action(
             project_path,
             "run_auto_tuning",
-            f"config={config_name}, algorithm={algorithm}, timeout={timeout_seconds}s, cmd={cmd}",
+            f"config={config_name}, {run_description}, timeout={timeout_seconds}s, cmd={cmd}",
         )
 
-        tail: Deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
-        progress_mtime_before = _progress_mtime(dot_dp)
-        # start_new_session puts the tuner into its own process group so a timeout can
-        # take down the compile and execute scripts it spawned along with it.
-        proc = subprocess.Popen(
-            cmd,
-            cwd=dot_dp,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            start_new_session=True,
-        )
-        pump = threading.Thread(target=_pump_output, args=(proc.stdout, tail, project_path, ctx), daemon=True)
-        pump.start()
+        # A cancel during the clearing above would not stop a tuner started after it.
+        if ctx.cancelled:
+            return _cancelled(project_path, cleared, ctx)
 
-        timed_out = False
+        progress_mtime_before = progress_mtime(dot_dp)
+        saved_results = _snapshot_tuner_results(dot_dp) if selection is not None else None
         try:
-            returncode = proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            ctx.log_action(
-                project_path,
-                "run_auto_tuning",
-                f"Timeout after {timeout_seconds}s — stopping the autotuner",
+            events, returncode, timed_out, tail = _run_tuner(
+                cmd, dot_dp, project_path, timeout_seconds, run_description, progress_mtime_before, ctx
             )
-            _terminate(proc)
-            returncode = proc.returncode if proc.returncode is not None else -1
-        pump.join(timeout=5.0)
+        finally:
+            # also when running the tuner raised: the files are back whatever happened
+            if saved_results is not None:
+                _restore_tuner_results(saved_results)
+
+        if ctx.cancelled:
+            # ctx.cancel stopped the tuner; what it leaves behind is cleaned up as after a timeout
+            _cleanup_project_copies(project_path, config_name, ctx)
+            return _cancelled(project_path, cleared, ctx)
 
         removed_copies = _cleanup_project_copies(project_path, config_name, ctx) if timed_out else []
 
-        # A progress file that this run did not write belongs to an earlier one. Reporting
-        # it would present an old run's selection as the result of this one.
-        events = _read_progress_events(dot_dp) if _progress_mtime(dot_dp) != progress_mtime_before else []
-        if not events:
-            if timed_out:
+        selection_result = selection_result_from_events(events, selection) if selection is not None else None
+        if not events or (selection is not None and selection_result is None):
+            if selection is not None:
+                # The baseline alone answers nothing about the selection.
+                stopped = (
+                    f"the timeout of {timeout_seconds}s expired"
+                    if timed_out
+                    else f"the autotuner exited (rc={returncode})"
+                )
+                message = (
+                    f"The selection was not measured: {stopped} before its measurement was complete. "
+                    "A measurement covers one compilation plus one execution of the un-patched project "
+                    "and of the selection" + (" — re-run with a larger timeout_seconds." if timed_out else ".")
+                )
+            elif timed_out:
                 message = (
                     f"The timeout of {timeout_seconds}s expired before the autotuner completed its "
                     "first measurement, so no configuration could be evaluated. A single measurement "
@@ -629,45 +970,67 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 )
             return ctx.error(message, project_path, "run_auto_tuning")
 
-        result = _result_from_events(events, timed_out)
-        result["project_path"] = project_path
-        result["config_name"] = config_name
-        result["algorithm"] = algorithm
-        if algorithm_selection is not None:
-            result["algorithm_selection"] = algorithm_selection
-
-        if timed_out:
-            result["message"] = (
-                f"The search was stopped after {timeout_seconds}s. The reported combination is the "
-                "best one measured so far; the search was not completed and the final pass that "
-                "checks whether an accepted suggestion can be removed again did not run. "
-                "Re-run with a larger timeout_seconds for a complete search."
-            )
+        if selection_result is not None:
+            result = selection_result
+            result["project_path"] = project_path
+            result["config_name"] = config_name
+            # The selection's measurement is complete; what the tuner did after it (re-running
+            # its best configuration) is not part of the answer, so being stopped there is
+            # only mentioned.
+            if timed_out or returncode != 0:
+                stopped = f"timeout of {timeout_seconds}s" if timed_out else f"exit code {returncode}"
+                result["message"] += (
+                    f" The autotuner ended with a {stopped} after the selection had been measured; "
+                    "the measurement above is complete."
+                )
             if removed_copies:
                 result["removed_project_copies"] = removed_copies
-        elif returncode != 0:
-            # measurements exist, so the outcome is still usable — but say what happened
-            result["status"] = "partial"
-            result["returncode"] = returncode
-            result["message"] = (
-                f"The autotuner exited with code {returncode}. The reported combination is derived "
-                "from the measurements it had written. Last output:\n" + "\n".join(tail)
-            )
-        elif not result["suggestion_ids"]:
-            result["message"] = (
-                "No combination of suggestions was faster than the unmodified project, so no "
-                "suggestion is recommended for application."
-            )
+            # Only a selection that ran correctly may reach the sources.
+            to_apply: list[str] = list(result["suggestion_ids"]) if result["outcome"] == "valid" else []
+        else:
+            result = result_from_events(events, timed_out)
+            result["project_path"] = project_path
+            result["config_name"] = config_name
+            result["algorithm"] = algorithm
+            if algorithm_selection is not None:
+                result["algorithm_selection"] = algorithm_selection
+            to_apply = result["suggestion_ids"]
+            if timed_out:
+                result["message"] = (
+                    f"The search was stopped after {timeout_seconds}s. The reported combination is the "
+                    "best one measured so far; the search was not completed and the final pass that "
+                    "checks whether an accepted suggestion can be removed again did not run. "
+                    "Re-run with a larger timeout_seconds for a complete search."
+                )
+                if removed_copies:
+                    result["removed_project_copies"] = removed_copies
+            elif returncode != 0:
+                # measurements exist, so the outcome is still usable — but say what happened
+                result["status"] = "partial"
+                result["returncode"] = returncode
+                result["message"] = (
+                    f"The autotuner exited with code {returncode}. The reported combination is derived "
+                    "from the measurements it had written. Last output:\n" + "\n".join(tail)
+                )
+            elif not result["suggestion_ids"]:
+                result["message"] = (
+                    "No combination of suggestions was faster than the unmodified project, so no "
+                    "suggestion is recommended for application."
+                )
 
         warnings: list[str] = []
         if cleared:
             result["cleared_before_tuning"] = cleared
+        if apply_selection and selection_result is not None and not to_apply:
+            warnings.append(
+                f"The selection was not applied, because its outcome is '{result['outcome']}' rather than 'valid'."
+            )
 
         # Either the selection replaces what was in the code, or the code goes back to the
         # state the call found it in. Both are stated in the result: which one happened
         # decides what the caller has to do next.
-        if apply_selection and result["suggestion_ids"]:
-            result.update(_apply_selection(project_path, result["suggestion_ids"], ctx))
+        if apply_selection and to_apply:
+            result.update(_apply_selection(project_path, to_apply, ctx))
             apply_error = result.pop("apply_error", None)
             if apply_error is not None:
                 warnings.append(apply_error)
@@ -685,7 +1048,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 if restore_error is not None:
                     warnings.append(restore_error)
                     restored = False
-            if result["suggestion_ids"]:
+            if to_apply:
                 result["message"] = (
                     (result.get("message", "") + " " if result.get("message") else "")
                     + "Pass suggestion_ids to manage_patches(action='apply', suggestion_ids=[...]) to "
@@ -698,10 +1061,32 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
 
         # How much the "the result stays valid" claim is worth depends on the configuration,
         # so the caller is told rather than left to assume the strongest reading.
-        if result["suggestion_ids"]:
+        if to_apply:
             warnings += _validation_notes(dot_dp, config_name, result)
         if warnings:
             result["warnings"] = warnings
+
+        # The counts say that candidates were rejected, not why; the reason is in the
+        # recorded runs, and a caller that wonders whether a rejected suggestion was
+        # broken or only slow has to be told where it is.
+        rejected = {
+            key: result.get(key)
+            for key in ("invalid_count", "failed_count", "not_applied_count")
+            if isinstance(result.get(key), int) and result[key] > 0
+        }
+        if rejected:
+            result["diagnosis_hint"] = (
+                "Some candidates were rejected ("
+                + ", ".join(f"{key}={value}" for key, value in rejected.items())
+                + "). get_execution_results(config_name=..., failed_only=true, include_output=true) "
+                "shows those runs with their applied_suggestions, return code and output, which tells "
+                "a broken build or a failed validation apart from a slow run."
+            )
+        elif selection_result is not None and result["outcome"] in ("invalid", "failed"):
+            result["diagnosis_hint"] = (
+                "get_execution_results(config_name=..., failed_only=true, include_output=true) shows "
+                "the selection's run with its return code and output, which tells why it was rejected."
+            )
 
         ctx.log_response("run_auto_tuning", result)
         return [TextContent(type="text", text=json.dumps(result))]
