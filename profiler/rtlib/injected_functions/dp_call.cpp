@@ -53,6 +53,8 @@ void __dp_call(LID instructionID, int8_t isLibraryFunction) {
   if (!isLibraryFunction) {
     update_callstate_from_call(instructionID);
   }
+  // the callee's __dp_func_exit leaves the callpath state only if this call updated it
+  register_call_for_callstate(!isLibraryFunction);
 }
 }
 

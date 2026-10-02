@@ -320,7 +320,9 @@ void DiscoPoP::save_initial_path(StaticCallPathTree* call_path_tree_ptr){
   for(auto candidate: candidates){
 
     auto label = candidate->base_node->get_label();
-    if (label.find("main") != std::string::npos)
+    // the label of a function node is the function's name. Only main itself is the entry point,
+    // not every function whose (mangled) name contains "main", e.g. a parameter of type "Domain"
+    if (label == "main")
     {
       cout << "CANDIDATE: " << label << "\n";
       // save path id to file
@@ -365,7 +367,7 @@ void DiscoPoP::save_enumerated_paths(StaticCallPathTree* call_path_tree_ptr){
     if(path->prefix != nullptr) {
         parent_id = path->prefix->path_id;
     }
-    
+
     std::string node_label = "ROOT";
     if(path->base_node != nullptr) {
         node_label = path->base_node->get_label();

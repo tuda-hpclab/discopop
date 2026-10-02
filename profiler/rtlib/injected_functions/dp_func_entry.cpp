@@ -46,6 +46,9 @@ void __dp_func_entry(LID lid, int32_t isStart) {
     return;
   }
 
+  // remember whether this function was entered through a call which updated the callpath state
+  enter_function_for_callstate();
+
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
   std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
 #endif

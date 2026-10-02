@@ -240,7 +240,10 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
         IRBuilder<> IRBCall(&*BI);
         int8_t F_is_library_function = 0;
         if(F){
-          F_is_library_function = (int8_t) F->isDeclaration();
+          // a callee without instrumentation (declared only, or defined outside of the project, e.g.
+          // a template of a system header) never reports its exit, so its call must not update the
+          // callpath state, see isInstrumentedFunction
+          F_is_library_function = (int8_t) !isInstrumentedFunction(*F);
         }
         IRBCall.CreateCall(DpCallOrInvoke, {ConstantInt::get(Int32, llvm_ir_instruction_id), ConstantInt::get(Int8, F_is_library_function)});
         if (DP_DEBUG) {
