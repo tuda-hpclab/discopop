@@ -868,6 +868,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         region.add(node)
         return region
 
+    @staticmethod
+    def __pet_node_order(node: TGNode) -> Tuple[int, ...]:
+        """A deterministic order of TGNodes by their PET node id "<file>:<cu>", numerically."""
+        return tuple(int(part) if part.isdigit() else -1 for part in str(node.pet_node_id).split(":"))
+
     def __break_cycles(self) -> None:
         # search for cycles in each function and replace them with two distinct iteraions
         for function_node in progress(self.TGFunctionNode_pet_node_id_to_tg_node.values(), desc="Breaking cycles"):
@@ -949,29 +954,37 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     self.add_edge(entry_node, lem)
                     self.add_edge(lem, exit_node)
 
-                    # add iteration entry markings between entry_node and iteration_entry_points
-                    ism_list: List[TGStartIterationNode] = []
-
+                    # add one iteration entry marking between entry_node and its successors in the
+                    # cycle, and one iteration exit marking after all nodes ending an iteration. A
+                    # compound condition (`while (a && b)`) gives the entry node several successors
+                    # in the cycle, and in a loop tested at its bottom the latch is also the exit
+                    # source. One marker per such node would split the loop into several iterations,
+                    # which the duplication then copies once per end marker, and which
+                    # __fix_loop_structures pairs up wrongly (deleting the loop body).
+                    iteration_entry_points = sorted(iteration_entry_points, key=self.__pet_node_order)
+                    iteration_exit_points = sorted(dict.fromkeys(iteration_exit_points), key=self.__pet_node_order)
+                    ism = TGStartIterationNode(
+                        iteration_entry_points[0].pet_node_id,
+                        iteration_entry_points[0].level,
+                        iteration_entry_points[0].position,
+                        entry_node.pet_node_id,
+                    )
+                    # loop iterations will be duplicated later, which sets the loopstate ids
+                    self.add_node(ism)
+                    self.add_edge(entry_node, ism)
                     for itenp in iteration_entry_points:
                         self.graph.remove_edge(entry_node, itenp)
-                        ism = TGStartIterationNode(
-                            itenp.pet_node_id, itenp.level, itenp.position, entry_node.pet_node_id
-                        )
-                        # ism.loopstate_iteration_ids = [
-                        #   0
-                        # ]  # loop iterations will be duplicated later. loopstate_ids will be overwritten / set then.
-
-                        ism_list.append(ism)
-                        self.add_node(ism)
-                        self.add_edge(entry_node, ism)
                         self.add_edge(ism, itenp)
 
-                    # add iteration exit markings after iteration_exit_points
-                    iem_list: List[TGEndIterationNode] = []
+                    iem = TGEndIterationNode(
+                        iteration_exit_points[0].pet_node_id,
+                        iteration_exit_points[0].level,
+                        iteration_exit_points[0].position,
+                        entry_node.pet_node_id,
+                    )
+                    iem_list: List[TGEndIterationNode] = [iem]
+                    self.add_node(iem)
                     for itexp in iteration_exit_points:
-                        iem = TGEndIterationNode(itexp.pet_node_id, itexp.level, itexp.position, entry_node.pet_node_id)
-                        iem_list.append(iem)
-                        self.add_node(iem)
                         self.add_edge(itexp, iem)
 
                     # redirect edge from entry -> end_loop to iteration_exit markers -> end_loop
@@ -1218,46 +1231,63 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     if not already_duplicated:
                         filtered_end_iteration_nodes.append(ein)
 
-                # find corresponding end iteration node for each start
-                for sin in filtered_start_iteration_nodes:
-                    #                    print("SIN: ", sin.get_label())
-                    for ein in filtered_end_iteration_nodes:
-                        #                        print("EIN: ", ein.get_label())
+                # pair each start with the end of its loop. Inner loops are duplicated first: the nodes
+                # of a duplicated iteration are not considered again, and copies are never copied, so
+                # an inner loop inside an outer iteration that is copied first would never be
+                # duplicated (neither in the original nor in the copy). The order is made
+                # deterministic, as get_descendants follows set iteration order.
+                pairs: List[Tuple[TGStartIterationNode, TGEndIterationNode, Set[TGNode]]] = []
+                for sin in sorted(filtered_start_iteration_nodes, key=self.__pet_node_order):
+                    for ein in sorted(filtered_end_iteration_nodes, key=self.__pet_node_order):
                         # only consider pairs with equal corresponding pet_node_id's
                         if sin.parent_loop_pet_node_id != ein.parent_loop_pet_node_id:
                             continue
-
-                        # get iteration nodes
                         iteration_nodes = self.__get_iteration_nodes(sin, ein)
                         if len(iteration_nodes) == 0:
                             continue
+                        pairs.append((sin, ein, iteration_nodes))
+                        # one end per iteration (see __break_cycles)
+                        break
+                pending_starts = {sin for sin, _, _ in pairs}
+                innermost = [
+                    (sin, ein)
+                    for sin, ein, iteration_nodes in pairs
+                    if not any(other in iteration_nodes for other in pending_starts if other is not sin)
+                ]
+                if len(innermost) == 0:
+                    # no innermost loop (malformed nesting): duplicate in the plain order
+                    innermost = [(sin, ein) for sin, ein, _ in pairs]
+                for sin, ein in innermost:
+                    # duplicating a sibling loop may have changed the graph since the pairing
+                    iteration_nodes = self.__get_iteration_nodes(sin, ein)
+                    if len(iteration_nodes) == 0:
+                        continue
+                    # copy the iteration nodes and connect them to the original iteration
+                    ein_successors = self.get_successors(ein)
+                    for succ in ein_successors:
+                        self.graph.remove_edge(ein, succ)
+                    copied_nodes: Dict[TGNode, TGNode] = dict()
 
-                        # copy the iteration nodes and connect them to the original iteration
-                        ein_successors = self.get_successors(ein)
-                        for succ in ein_successors:
-                            self.graph.remove_edge(ein, succ)
-                        copied_nodes: Dict[TGNode, TGNode] = dict()
+                    copied_nodes, copied_path, copied_iteration_entry, copied_iteration_exit = (
+                        self.__copy_iteration_subgraph(copied_nodes, iteration_nodes, sin, ein)
+                    )
 
-                        copied_nodes, copied_path, copied_iteration_entry, copied_iteration_exit = (
-                            self.__copy_iteration_subgraph(copied_nodes, iteration_nodes, sin, ein)
-                        )
+                    # set loopstate_iterations_ids sucht that both iteration nodes react to different loopsate information during dependency creation
+                    # print("sin.loopstate_iteration_ids: ", sin.loopstate_iteration_ids)
+                    if sin.loopstate_iteration_ids is None:
+                        sin.set_loopstate_iteration_ids([1])
+                    if cast(TGStartIterationNode, copied_iteration_entry).loopstate_iteration_ids is None:
+                        cast(TGStartIterationNode, copied_iteration_entry).set_loopstate_iteration_ids([0, 2])
 
-                        # set loopstate_iterations_ids sucht that both iteration nodes react to different loopsate information during dependency creation
-                        # print("sin.loopstate_iteration_ids: ", sin.loopstate_iteration_ids)
-                        if sin.loopstate_iteration_ids is None:
-                            sin.set_loopstate_iteration_ids([1])
-                        if cast(TGStartIterationNode, copied_iteration_entry).loopstate_iteration_ids is None:
-                            cast(TGStartIterationNode, copied_iteration_entry).set_loopstate_iteration_ids([0, 2])
+                    self.add_edge(ein, copied_iteration_entry)
+                    for succ in ein_successors:
+                        self.add_edge(copied_iteration_exit, succ)
+                    for copied_node in copied_nodes.values():
+                        added_copies.add(copied_node)
 
-                        self.add_edge(ein, copied_iteration_entry)
-                        for succ in ein_successors:
-                            self.add_edge(copied_iteration_exit, succ)
-                        for copied_node in copied_nodes.values():
-                            added_copies.add(copied_node)
-
-                        for iteration_node in iteration_nodes:
-                            already_considered.add(iteration_node)
-                        modification_found = True
+                    for iteration_node in iteration_nodes:
+                        already_considered.add(iteration_node)
+                    modification_found = True
 
     def __assign_contexts(self) -> None:  # TODO: make the used graph parametric
         logger.info("Assigning contexts...")

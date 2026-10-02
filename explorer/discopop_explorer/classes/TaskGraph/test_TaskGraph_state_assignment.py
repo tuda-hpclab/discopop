@@ -250,14 +250,6 @@ def _unbalanced_markers(tg: TaskGraph, max_depth: int = 80) -> List[Tuple[str, s
 
 # --- profile tests ----------------------------------------------------------------------------
 
-_LOOP_SHAPE = (
-    "a loop whose exit test is not at its entry node gets several start/end iteration markers, "
-    "which duplicates the iteration into branches (and may delete the body)"
-)
-_NESTED_COPIES = (
-    "copies are excluded from duplication (added_copies), so an inner loop copied along with an outer "
-    "iteration is never duplicated; whether that happens depends on set iteration order"
-)
 _EARLY_EXIT = "break/exit/return paths leave an iteration without its end marker, corrupting context nesting"
 _CROSSING_BRANCHES = "short-circuit conditions create crossing branch regions with unbalanced markers"
 
@@ -265,9 +257,9 @@ _CROSSING_BRANCHES = "short-circuit conditions create crossing branch regions wi
 _PROFILES_ALL_ASSIGNED = {
     "ground_truth": [],
     "loopcall": [],
-    "nested": [_NESTED_COPIES],
+    "nested": [],
     "recursion": [],
-    "whileand": [_LOOP_SHAPE],
+    "whileand": [],
     "dowhile": [],
     "breakexit": [_EARLY_EXIT],
     "shortcircuit": [],
@@ -278,14 +270,14 @@ _PROFILES_UNIQUE = {
     "loopcall": [],
     "nested": [],
     "recursion": [],
-    "whileand": [_LOOP_SHAPE],
+    "whileand": [],
     "dowhile": [],
     "breakexit": [_EARLY_EXIT],
     "shortcircuit": [],
 }
 
 # reasons which only make a test fail in some processes
-_NONDETERMINISTIC = {_NESTED_COPIES}
+_NONDETERMINISTIC: Set[str] = set()
 
 # program -> reasons it currently fails "markers are balanced"
 _PROFILES_BALANCED = {
@@ -293,8 +285,8 @@ _PROFILES_BALANCED = {
     "loopcall": [],
     "nested": [],
     "recursion": [],
-    "whileand": [_LOOP_SHAPE],
-    "dowhile": [_LOOP_SHAPE],
+    "whileand": [],
+    "dowhile": [],
     "breakexit": [_EARLY_EXIT],
     "shortcircuit": [_CROSSING_BRANCHES],
 }
@@ -475,25 +467,17 @@ def _iteration_ids_of_inner_loops(tg: TaskGraph) -> List[List[List[int]]]:
 @pytest.mark.parametrize(
     "outer_first",
     [
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="copies are excluded from duplication (added_copies), so an inner loop copied "
-                "along with an outer iteration is never duplicated and falls back to the ids [0]",
-            ),
-        ),
+        True,
         False,
     ],
 )
 def test_nested_loop_iterations_are_duplicated_regardless_of_processing_order(
     build_pet_graph: Any, make_node: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outer_first: bool
 ) -> None:
-    """__duplicate_loop_iterations processes the start-iteration nodes in the order of
-    get_descendants, which follows set iteration order and so varies between processes. Every
-    iteration of the outer loop has to contain both iterations ([1] and [0, 2]) of the inner loop,
-    whichever loop is duplicated first. The order is forced here to make the test deterministic."""
+    """Every iteration of the outer loop has to contain both iterations ([1] and [0, 2]) of the inner
+    loop. Copies are never copied again, so __duplicate_loop_iterations has to duplicate inner loops
+    first; it used to follow the order of get_descendants (set iteration order, varying between
+    processes), which is forced both ways here."""
     original = TaskGraph.get_descendants
 
     def ordered_descendants(self: TaskGraph, node: Any) -> List[Any]:
@@ -530,13 +514,12 @@ DO_WHILE: Sequence[FunctionSpec] = (
 DO_WHILE_CALLS: Sequence[CallSpec] = (("1:3", "1:10", 7),)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_LOOP_SHAPE)
 def test_a_loop_tested_at_its_bottom_has_one_start_and_one_end_per_iteration(
     build_pet_graph: Any, make_node: Any, tmp_path: Path
 ) -> None:
-    """In a do-while loop the latch is also the exit source. __break_cycles adds it to the
+    """In a do-while loop the latch is also the exit source. __break_cycles used to add it to the
     iteration exit points twice (as latch and as exit source), and __duplicate_loop_iterations
-    copies the iteration once per end marker: three iteration copies ([1], [1], [0, 2]) hanging
+    copied the iteration once per end marker: three iteration copies ([1], [1], [0, 2]) hanging
     off different arms of the latch instead of two in sequence."""
     pet = _build_program(build_pet_graph, make_node, DO_WHILE, DO_WHILE_CALLS)
 
@@ -576,13 +559,12 @@ COMPOUND_CONDITION: Sequence[FunctionSpec] = (
 COMPOUND_CONDITION_CALLS: Sequence[CallSpec] = (("1:5", "1:10", 7),)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_LOOP_SHAPE)
 def test_a_loop_with_a_compound_condition_keeps_its_body(build_pet_graph: Any, make_node: Any, tmp_path: Path) -> None:
-    """The entry node 1:2 has two successors in the cycle, so __break_cycles creates two start
-    iteration markers (for 1:3 and 1:4), and an end marker after the exit source 1:4. The start
-    marker of 1:4 and that end marker share a pet node id, which is what __fix_loop_structures
-    pairs on: the "iteration" between them is 1:4 alone, the edge 1:4 -> 1:5 looks like a break,
-    and the whole body is deleted as unreachable."""
+    """The entry node 1:2 has two successors in the cycle. __break_cycles used to create a start
+    iteration marker for each (1:3 and 1:4), and an end marker after the exit source 1:4. The start
+    marker of 1:4 and that end marker shared a pet node id, which is what __fix_loop_structures
+    pairs on: the "iteration" between them was 1:4 alone, the edge 1:4 -> 1:5 looked like a break,
+    and the whole body was deleted as unreachable."""
     pet = _build_program(build_pet_graph, make_node, COMPOUND_CONDITION, COMPOUND_CONDITION_CALLS)
 
     tg = _construct(tmp_path, pet)
