@@ -168,6 +168,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     current_position: Dict[LevelIndex, PositionIndex] = {0: 0}
     plotting_graph_buffer = None
     plotting_postions_buffer = None
+    # __inline_function_calls stops at this depth ("depth >= limit"), so calls are inlined at most
+    # CALL_PATH_LIMIT - 1 levels deep
+    CALL_PATH_LIMIT: int = 6
+    # counters of the last __assign_state_ids run, see there
+    state_assignment_statistics: Dict[str, int] = dict()
 
     def __init__(
         self,
@@ -2063,7 +2068,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         # inline functions calls starting from the root node
         # repeat the process until no modification is found anymore, i.e. no further functions calls need to be inlined
         # Tracking of the call path depth for "early termination", i.e. supporting recursion and cyclic calls
-        call_path_limit = 6
+        call_path_limit = self.CALL_PATH_LIMIT
         call_path_depth = 0
         modification_found = True
         with progress(total=call_path_limit, desc="Callpath depth") as progress_bar:
@@ -3008,214 +3013,184 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             state_mappings_dict[state_id] = callpath
         return state_mappings_dict
 
+    # one frame of a callpath signature: (function name, call instruction id the function was entered
+    # through (None for a root function), ((loop position, iteration ids), ...) of the active loops)
+    _SignatureFrame = Tuple[str, Optional[int], Tuple[Tuple[int, Tuple[int, ...]], ...]]
+
+    def __context_signature(
+        self, ctx: Context, cache: Dict[Context, Optional[Tuple[_SignatureFrame, ...]]]
+    ) -> Optional[Tuple[_SignatureFrame, ...]]:
+        """The callpath a context lies on, read from its parent_context chain: the functions (entered
+        through which call instruction) and, per function, the loop positions it lies inside of, with
+        the iteration ids of the IterationContext the chain passes. A loop the chain enters without
+        passing one of its iterations (the loop header) runs in every iteration bucket, so it gets
+        the ids (0, 1, 2). None if the chain does not start at a FunctionContext (detached context)."""
+        chain: List[Context] = []
+        current: Optional[Context] = ctx
+        while current is not None and current not in cache:
+            chain.append(current)
+            current = current.parent_context
+            if len(chain) > 100000:
+                # cyclic parent relation, see __break_containment_cycles
+                return None
+        signature: Optional[Tuple[TaskGraph._SignatureFrame, ...]] = () if current is None else cache[current]
+        # remembers the call instruction of an InlinedFunctionContext until its FunctionContext
+        pending_call: Optional[int] = None
+        if current is not None and isinstance(current, InlinedFunctionContext):
+            pending_call = current.call_instruction_id
+        for element in reversed(chain):
+            if signature is not None:
+                if isinstance(element, FunctionContext):
+                    if element.parent_function is None:
+                        raise ValueError("parent_function is None!")
+                    signature = signature + ((self.pet.node_at(element.parent_function).name, pending_call, ()),)
+                    pending_call = None
+                elif isinstance(element, InlinedFunctionContext):
+                    pending_call = element.call_instruction_id
+                elif type(element) is Context and element.parent_context is None:
+                    # the root context, above the contexts of the functions
+                    pass
+                elif len(signature) == 0:
+                    # the chain has to start at a function
+                    signature = None
+                elif isinstance(element, LoopParentContext) and element.loopstate_position is not None:
+                    signature = self.__with_loop(signature, element.loopstate_position, (0, 1, 2))
+                elif (
+                    isinstance(element, IterationContext)
+                    and isinstance(element.parent_context, LoopParentContext)
+                    and element.parent_context.loopstate_position is not None
+                ):
+                    signature = self.__with_loop(
+                        signature,
+                        element.parent_context.loopstate_position,
+                        tuple(sorted(element.loopstate_iteration_ids)),
+                    )
+            cache[element] = signature
+        return signature
+
+    @staticmethod
+    def __with_loop(
+        signature: Tuple[_SignatureFrame, ...], loopstate_position: int, ids: Tuple[int, ...]
+    ) -> Tuple[_SignatureFrame, ...]:
+        """signature, with the loop at loopstate_position of its innermost frame set to ids."""
+        name, call, loops = signature[-1]
+        updated = dict(loops)
+        updated[loopstate_position] = ids
+        return signature[:-1] + ((name, call, tuple(sorted(updated.items()))),)
+
+    @staticmethod
+    def _callpath_frames(callpath: List[str]) -> Optional[List[Tuple[str, Optional[int], Dict[int, int]]]]:
+        """The frames of a profiler callpath: (function name, call instruction id it was entered
+        through, {loop position: iteration bucket} of its active loops). Successive loopstate entries
+        of a frame are transitions, the last one is the current state. None if the callpath is
+        malformed (a loopstate of another function than the current frame's)."""
+        frames: List[Tuple[str, Optional[int], Dict[int, int]]] = []
+        pending_call: Optional[int] = None
+        for entry in callpath:
+            if entry.startswith("call_") and entry[5:].isdigit():
+                pending_call = int(entry[5:])
+                continue
+            if "_loopstate" in entry:
+                function_name, _, digits = entry.rpartition("_loopstate")
+                if digits.isdigit():
+                    if len(frames) == 0 or frames[-1][0] != function_name:
+                        return None
+                    frames[-1] = (
+                        frames[-1][0],
+                        frames[-1][1],
+                        {position: int(digit) for position, digit in enumerate(digits) if digit in "012"},
+                    )
+                    continue
+            frames.append((entry, pending_call, {}))
+            pending_call = None
+        return frames
+
     def __assign_state_ids(self, dynamic_dependency_file: Optional[str]) -> None:
-        """attaches state ids to Context nodes."""
-        # read stateID to callpath mapping. States are filtered for observed states in dynamic dependency file to compress map slightly
+        """attaches the callpath states of the profiler to the contexts they describe.
+
+        A state is attached to the FunctionContext (no loop of the innermost function active) or the
+        IterationContext (of the innermost active loop) whose signature (see __context_signature)
+        is the state's callpath: the same functions entered through the same call instructions, the
+        same active loops, and iterations whose ids contain the state's iteration bucket of every
+        active loop. The contexts are indexed by their signature once, so the result is independent
+        of the order of the contexts and consistent with the consumers, which read the states along
+        the parent_context chain (Context.get_state_ids)."""
         if dynamic_dependency_file is None:
             raise ValueError("Invalid Path!")
         state_mappings_dict = self.__get_state_mappings_from_file(dynamic_dependency_file)
-        #        print("state_mappings_dict: ")
-        #        for state_id in state_mappings_dict:
-        #            print("->", state_id, " -> ", state_mappings_dict[state_id])
 
-        def recursive_assignment(
-            state_id: int,
-            callstate: Tuple[str, ...],
-            ctx: Context,
-            memo: Dict[Tuple[int, Tuple[str, ...]], bool],
-        ) -> bool:
-            """assigns state_id to the matching states.
-            Returns True, if state_id was assigned to at least one Context.
-            Returns False otherwise.
-
-            Results are memoized per state_id search on (context identity, incoming callstate).
-            The function is deterministic in that pair, and its only side effect (appending
-            state_id to matching contexts) is fully determined by it, so revisiting a cached pair
-            would merely re-append the identical state_id to the identical contexts. Memoization
-            therefore preserves the exact set of (context -> state_id) assignments while collapsing
-            the otherwise exponential re-traversal of shared subtrees (contexts are reachable both
-            directly via a parent's contained_contexts and via successor chains)."""
-            # memoize on the INCOMING callstate (before any in-function rewriting below), keyed by
-            # context identity. Different callstates reaching the same context are distinct keys.
-            memo_key = (id(ctx), callstate)
-            if memo_key in memo:
-                return memo[memo_key]
-            result = compute_assignment(state_id, callstate, ctx, memo)
-            memo[memo_key] = result
-            return result
-
-        def compute_assignment(
-            state_id: int,
-            callstate: Tuple[str, ...],
-            ctx: Context,
-            memo: Dict[Tuple[int, Tuple[str, ...]], bool],
-        ) -> bool:
-            if len(callstate) == 0:
-                return False
-
-            if isinstance(ctx, FunctionContext):
-                if "_loopstate" in callstate[0]:
-                    # remove leading loopstate entries
-                    callstate = tuple(
-                        v for v in callstate if not ("_loopstate" in v and v.split("_loopstate")[1].isdigit())
-                    )
-
-                if ctx.parent_function is None:
-                    raise ValueError("parent_function is None!")
-
-                if len(callstate) > 0 and self.pet.node_at(ctx.parent_function).name == callstate[0]:
-                    # HIT
-                    callstate = callstate[1:]
-                else:
-                    # MISS
-                    return False
-            elif isinstance(ctx, IterationContext):
-                if "_loopstate" in callstate[0]:
-                    # check for matching loopstate id
-                    # get current loopstate_info
-                    loopstate_info = callstate[0].split("_loopstate")[1]
-                    # check if parent is LoopParentContext. if not, MISS
-                    if not isinstance(ctx.parent_context, LoopParentContext):
-                        return False
-                    # get loopstate_position
-                    parent_loop_ctx = ctx.parent_context
-                    loopstate_position = parent_loop_ctx.loopstate_position
-                    if loopstate_position is None:
-                        raise ValueError("loopstate position is None")
-                    #                    logger.debug("loopstate_info: " + loopstate_info)
-                    #                    logger.debug("loopstate_position: " + str(loopstate_position))
-
-                    if (
-                        loopstate_position + 1 <= len(loopstate_info)
-                        and int(loopstate_info[loopstate_position]) in ctx.loopstate_iteration_ids
-                    ):
-                        # HIT LOOPSTATE
-                        # replace iteration id with processed marker "4"
-                        new_head = (
-                            callstate[0][: callstate[0].index("_loopstate") + len("_loopstate") + loopstate_position]
-                            + "4"
-                            + callstate[0][
-                                callstate[0].index("_loopstate") + 1 + loopstate_position + len("_loopstate") :
-                            ]
-                        )
-                        callstate = (new_head,) + callstate[1:]
-                        # check if search along this path is finished
-                        if (
-                            len(callstate) == 1
-                            and "0" not in callstate[0].split("_loopstate")[1]
-                            and "1" not in callstate[0].split("_loopstate")[1]
-                            and "2" not in callstate[0].split("_loopstate")[1]
-                        ):
-                            # trigger setting of state id
-                            callstate = callstate[1:]
-                    else:
-                        # missed loop state. continue search with successors
-                        pass
-                else:
-                    # MISS (invalid)
-                    return False
-            elif isinstance(ctx, InlinedFunctionContext):
-                if callstate[0].startswith("call_") and callstate[0][5:].isdigit():
-                    # check for matching CallInstruction ID
-                    call_instruction_id = int(callstate[0][5:])
-                    #                    print(
-                    #                        "FOUND InlinedFunctionContext "
-                    #                        + str(ctx)
-                    #                        + " at current callstate: "
-                    #                        + str(callstate)
-                    #                        + " with callInstID: "
-                    #                        + str(ctx.call_instruction_id)
-                    #                    )
-                    if call_instruction_id == ctx.call_instruction_id:
-                        # HIT CALL
-                        callstate = callstate[1:]
-                    else:
-                        # MISS (invalid)
-                        return False
-                else:
-                    # MISS (invalid)
-                    return False
-
-            # set state_id if necessary
-            if len(callstate) == 0:
-                ctx.state_ids.append(state_id)
-                logger.debug("ADD state_id:" + str(state_id) + " to ctx: " + str(ctx))
-                return True
-
-            # continue assignment with children
-            ret_val = False
-            for child in ctx.get_contained_contexts():
-                ret_val = ret_val or recursive_assignment(state_id, callstate, child, memo)
-            # continue assignment with successors
-
-            if ctx.successor is not None:
-
-                ret_val = ret_val or recursive_assignment(state_id, callstate, ctx.successor, memo)
-            return ret_val
-
-        # assign state id to task_graph nodes
         logger.info("Assigning state ids to nodes...")
-        # entry points are independent of the processed state; compute them once.
-        entry_points: List[Context] = [c for c in self.contexts if isinstance(c, FunctionContext)]
-        for state_id in progress(state_mappings_dict):
-            #            print()
-            #            print("Parsing state_id: ", state_id)
-            #            print("CallState: ", state_mappings_dict[state_id])
-            smd_entry = state_mappings_dict[state_id]
-            # skip callstate ending with call element
-            if (
-                len(state_mappings_dict[state_id]) > 0
-                and smd_entry[-1].startswith("call_")
-                and smd_entry[-1].split("call_")[1].isdigit()
-            ):
-                #                print("skipping due to call at the end.")
+        # {((function name, call id, active loop positions) per frame): [(context, its signature)]}
+        index: Dict[
+            Tuple[Tuple[str, Optional[int], Tuple[int, ...]], ...],
+            List[Tuple[Context, Tuple[TaskGraph._SignatureFrame, ...]]],
+        ] = {}
+        signature_cache: Dict[Context, Optional[Tuple[TaskGraph._SignatureFrame, ...]]] = {}
+        for ctx in self.__collect_all_contexts():
+            if not isinstance(ctx, (FunctionContext, IterationContext)):
                 continue
-            # cleanup callstate (shallow copy suffices: entries are immutable strings)
-            callstate = list(smd_entry)
-            #            # cleanup callstate (remove call_<int> markers)
-            #            to_be_removed: List[int] = []
-            #            for idx in range(0, len(callstate)):
-            #                if callstate[idx].startswith("call_") and callstate[idx].split("call_")[1].isdigit():
-            #                    to_be_removed.append(idx)
-            #            for idx in sorted(to_be_removed, reverse=True):
-            #                del callstate[idx]
-            # cleanup callstate (compress multiple successive loopstates)
-            if len(callstate) > 0:
-                loopstate_indices: List[int] = []
-                for idx in range(0, len(callstate)):
-                    if "_loopstate" in callstate[idx]:
-                        loopstate_indices.append(idx)
-                to_be_removed: List[int] = []
-                for idx, val in enumerate(loopstate_indices):
-                    if idx >= len(loopstate_indices) - 1:
-                        continue
-                    # check next registered loopstate info is a direct successor of the current one.
-                    # if so, the current enty can be omitted
-                    if val + 1 == loopstate_indices[idx + 1]:
-                        to_be_removed.append(val)
-                for tbr in sorted(to_be_removed, reverse=True):
-                    del callstate[tbr]
+            signature = self.__context_signature(ctx, signature_cache)
+            if signature is None or len(signature) == 0:
+                continue
+            if isinstance(ctx, IterationContext) and len(signature[-1][2]) == 0:
+                # an iteration outside of every loop of its function: no loop state can describe it
+                continue
+            if isinstance(ctx, FunctionContext) and len(signature[-1][2]) != 0:
+                continue
+            key = tuple((name, call, tuple(position for position, _ in loops)) for name, call, loops in signature)
+            index.setdefault(key, []).append((ctx, signature))
 
-            #            print("Clean CallState: ", callstate)
-            callstate_tuple: Tuple[str, ...] = tuple(callstate)
-            # memoize (context, incoming callstate) -> result within this state's search only.
-            # See recursive_assignment for why this preserves the assignment side effects.
-            memo: Dict[Tuple[int, Tuple[str, ...]], bool] = {}
-            could_be_assigned: bool = False
-            for entry_point in entry_points:
-                could_be_assigned = could_be_assigned or recursive_assignment(
-                    int(state_id), callstate_tuple, entry_point, memo
+        observed = 0
+        assigned = 0
+        too_deep = 0
+        ambiguous = 0
+        for state_id in sorted(state_mappings_dict, key=int):
+            callpath = state_mappings_dict[state_id]
+            # a callpath ending with a call element describes the call instruction itself
+            if len(callpath) == 0 or (callpath[-1].startswith("call_") and callpath[-1][5:].isdigit()):
+                continue
+            frames = self._callpath_frames(callpath)
+            if frames is None:
+                continue
+            observed += 1
+            key = tuple((name, call, tuple(sorted(buckets))) for name, call, buckets in frames)
+            matches = [
+                ctx
+                for ctx, signature in index.get(key, [])
+                if all(
+                    bucket in dict(loops)[position]
+                    for (_, _, buckets), (_, _, loops) in zip(frames, signature)
+                    for position, bucket in buckets.items()
                 )
-
-    #            if not could_be_assigned:
-    #                print("-> Not assigned!")
-
-    #        ax = self.create_plot("Context Graph")
-    #        self.plot_context_graph(ax)
-    #        self.run_visualizer()
-
-    #        import sys
-    #        sys.exit(0)
+            ]
+            if len(matches) == 0:
+                if len(frames) - 1 >= self.CALL_PATH_LIMIT:  # more calls than inlined
+                    too_deep += 1
+                continue
+            assigned += 1
+            if len(matches) > 1:
+                # two copies of one context: a structural error of the TaskGraph. Attaching the state
+                # to all of them over-approximates the dependencies, which is the safe direction.
+                ambiguous += 1
+            for ctx in matches:
+                ctx.state_ids.append(int(state_id))
+        logger.info(
+            "Assigned "
+            + str(assigned)
+            + " of "
+            + str(observed)
+            + " callpath states to contexts ("
+            + str(too_deep)
+            + " unassigned states are deeper than the call inlining limit, "
+            + str(ambiguous)
+            + " states match several contexts)"
+        )
+        self.state_assignment_statistics = {
+            "observed": observed,
+            "assigned": assigned,
+            "too_deep": too_deep,
+            "ambiguous": ambiguous,
+        }
 
     #     def __old_assign_state_ids(self, dynamic_dependency_file: Optional[str]) -> None:
     #         """attaches state ids to Context nodes."""
