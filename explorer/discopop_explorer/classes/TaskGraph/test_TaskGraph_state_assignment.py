@@ -337,14 +337,53 @@ def test_assigned_contexts_spell_out_the_callpath_of_their_state(program: str, t
     tg = _task_graph_from_profile(program, tmp_path)
     callpaths = _callpaths(tg)
 
+    approximate = tg.approximately_assigned_state_ids
     wrong = [
         (state, " / ".join(callpaths[state]), context.get_label())
         for state, contexts in _assignments(tg).items()
+        if state not in approximate
         for context in contexts
         if not _context_matches_callpath(tg, context, callpaths[state])
     ]
 
     assert wrong == []
+
+
+def _matches_a_callee_suffix(tg: TaskGraph, context: Context, callpath: Sequence[str]) -> bool:
+    """The context spells out the part of the callpath from some called function on."""
+    return any(
+        _context_matches_callpath(tg, context, callpath[start:])
+        for start in range(1, len(callpath))
+        if not _CALL.match(callpath[start]) and not _LOOPSTATE.match(callpath[start])
+    )
+
+
+@pytest.mark.parametrize("program", list(_PROFILES_ALL_ASSIGNED))
+def test_unmatched_states_go_to_the_standalone_copy_of_a_function_on_their_callpath(
+    program: str, tmp_path: Path
+) -> None:
+    """A state without a context of its full callpath (e.g. deeper than the inlining) is attached
+    to the standalone copy of a function on its callpath, keeping the longest matching suffix,
+    and is listed as approximate. Together with the exact matches, every observed state whose
+    callpath does not end in a call has a context."""
+    tg = _task_graph_from_profile(program, tmp_path)
+    callpaths = _callpaths(tg)
+    assignments = _assignments(tg)
+
+    wrong = [
+        (state, " / ".join(callpaths[state]), context.get_label())
+        for state in tg.approximately_assigned_state_ids
+        for context in assignments.get(state, [])
+        if not _matches_a_callee_suffix(tg, context, callpaths[state])
+    ]
+    unassigned = [
+        state
+        for state in _observed_states(tg)
+        if len(callpaths.get(state, [])) > 0 and not _CALL.match(callpaths[state][-1]) and state not in assignments
+    ]
+
+    assert wrong == []
+    assert unassigned == []
 
 
 @pytest.mark.parametrize("program", _profile_params(_PROFILES_UNIQUE))

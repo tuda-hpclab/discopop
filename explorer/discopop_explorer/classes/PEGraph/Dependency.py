@@ -34,6 +34,9 @@ class Dependency:
     metadata_source_ancestors: Optional[List[LineID]]
     origin: Optional[DepOrigin] = None
     is_gep_result_dependency: bool = False
+    # an end of the dependency could not be attributed to the calling context of its callpath state
+    # and was mapped to a wider scope (see TaskGraph._ContextFallback)
+    approximate_context: bool = False
 
     def __init__(self, type: EdgeType):
         self.etype = type

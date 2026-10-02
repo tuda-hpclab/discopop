@@ -149,6 +149,51 @@ class MappedDependencyRecord(NamedTuple):
     other_contexts: List[Context]
 
 
+class _ContextFallback:
+    """Maps a dependency end whose state no work context at its location carries (a loop header
+    line, a structure the state assignment could not resolve), instead of dropping it: dropping a
+    dependency is unsound for parallelism detection, since a missing loop-carried dependency
+    allows a false do-all or reduction suggestion.
+
+    The end is mapped to the work contexts at the location below the closest common scope: the
+    contexts carrying the state itself (or their closest ancestor) whose subtree contains contexts
+    at the location; if there is none, to all contexts at the location. Both over-approximate.
+    The (location, state) pairs mapped this way are collected in `approximate`."""
+
+    def __init__(self, contexts: List[Context]) -> None:
+        self.contexts_by_state: Dict[int, List[Context]] = {}
+        for ctx in contexts:
+            for state_id in ctx.state_ids:
+                self.contexts_by_state.setdefault(int(state_id), []).append(ctx)
+        self.ancestors: Dict[Context, Set[Context]] = {}
+        self.approximate: Set[Tuple[str, int]] = set()
+        self.location_only = 0
+        self.scoped = 0
+
+    def _ancestors(self, ctx: Context) -> Set[Context]:
+        cached = self.ancestors.get(ctx)
+        if cached is None:
+            cached = set(ctx.get_ancestor_contexts())
+            cached.add(ctx)
+            self.ancestors[ctx] = cached
+        return cached
+
+    def resolve(self, location: str, state_id: int, contexts: Set[Context]) -> Set[Context]:
+        self.approximate.add((location, state_id))
+        for anchor in self.contexts_by_state.get(state_id, []):
+            scope: Optional[Context] = anchor
+            depth = 0
+            while scope is not None and depth < 10000:
+                below = {ctx for ctx in contexts if scope in self._ancestors(ctx)}
+                if len(below) > 0:
+                    self.scoped += 1
+                    return below
+                scope = scope.parent_context
+                depth += 1
+        self.location_only += 1
+        return set(contexts)
+
+
 class TaskGraph(Plottable, object):  # type: ignore[misc]
     pet: PEGraphX
     graph: nx.MultiDiGraph
@@ -178,6 +223,10 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     cus_deleted_by_exception_unwinding: Set[PETNodeID] = set()
     # counters of __split_branch_region_side_entries over all functions
     branch_region_side_entry_statistics: Dict[str, int] = dict()
+    # states __assign_state_ids attached by the suffix fallback, see there
+    approximately_assigned_state_ids: Set[int] = set()
+    # counters of the approximately mapped dependency ends, see _ContextFallback
+    approximate_dependency_end_statistics: Dict[str, int] = dict()
     # counters of the last __assign_state_ids run, see there
     state_assignment_statistics: Dict[str, int] = dict()
 
@@ -3377,6 +3426,27 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             pending_call = None
         return frames
 
+    @staticmethod
+    def __contexts_matching_frames(
+        index: Dict[
+            Tuple[Tuple[str, Optional[int], Tuple[int, ...]], ...],
+            List[Tuple[Context, Tuple[_SignatureFrame, ...]]],
+        ],
+        frames: List[Tuple[str, Optional[int], Dict[int, int]]],
+    ) -> List[Context]:
+        """The indexed contexts whose signature is frames: the same functions, call instructions
+        and active loops, and iterations containing the bucket of every active loop."""
+        key = tuple((name, call, tuple(sorted(buckets))) for name, call, buckets in frames)
+        return [
+            ctx
+            for ctx, signature in index.get(key, [])
+            if all(
+                bucket in dict(loops)[position]
+                for (_, _, buckets), (_, _, loops) in zip(frames, signature)
+                for position, bucket in buckets.items()
+            )
+        ]
+
     def __assign_state_ids(self, dynamic_dependency_file: Optional[str]) -> None:
         """attaches the callpath states of the profiler to the contexts they describe.
 
@@ -3414,8 +3484,10 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
         observed = 0
         assigned = 0
+        approximate = 0
         too_deep = 0
         ambiguous = 0
+        self.approximately_assigned_state_ids = set()
         for state_id in sorted(state_mappings_dict, key=int):
             callpath = state_mappings_dict[state_id]
             # a callpath ending with a call element describes the call instruction itself
@@ -3425,24 +3497,30 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             if frames is None:
                 continue
             observed += 1
-            key = tuple((name, call, tuple(sorted(buckets))) for name, call, buckets in frames)
-            matches = [
-                ctx
-                for ctx, signature in index.get(key, [])
-                if all(
-                    bucket in dict(loops)[position]
-                    for (_, _, buckets), (_, _, loops) in zip(frames, signature)
-                    for position, bucket in buckets.items()
-                )
-            ]
+            matches = self.__contexts_matching_frames(index, frames)
             if len(matches) == 0:
                 if len(frames) - 1 >= self.CALL_PATH_LIMIT:  # more calls than inlined
                     too_deep += 1
-                continue
-            assigned += 1
+                # fallback: the longest suffix of the callpath which starts at the standalone copy
+                # of a function (the contexts of a function not inlined anywhere, i.e. "called from
+                # somewhere"). Covers callpaths deeper than the inlining and calls whose inlined
+                # copy is missing. The dependencies of the state then lose the distinction of the
+                # outer calling contexts, which over-approximates them.
+                for start in range(1, len(frames)):
+                    name, _, buckets = frames[start]
+                    matches = self.__contexts_matching_frames(index, [(name, None, buckets)] + frames[start + 1 :])
+                    if len(matches) > 0:
+                        break
+                if len(matches) == 0:
+                    continue
+                approximate += 1
+                self.approximately_assigned_state_ids.add(int(state_id))
+            else:
+                assigned += 1
             if len(matches) > 1:
-                # two copies of one context: a structural error of the TaskGraph. Attaching the state
-                # to all of them over-approximates the dependencies, which is the safe direction.
+                # two copies of one context: a structural error of the TaskGraph, or the copies of a
+                # block reached through different paths of a short-circuit condition. Attaching the
+                # state to all of them over-approximates the dependencies, which is the safe direction.
                 ambiguous += 1
             for ctx in matches:
                 ctx.state_ids.append(int(state_id))
@@ -3451,7 +3529,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             + str(assigned)
             + " of "
             + str(observed)
-            + " callpath states to contexts ("
+            + " callpath states to contexts, "
+            + str(approximate)
+            + " more to the standalone copy of a function on their callpath ("
             + str(too_deep)
             + " unassigned states are deeper than the call inlining limit, "
             + str(ambiguous)
@@ -3460,6 +3540,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         self.state_assignment_statistics = {
             "observed": observed,
             "assigned": assigned,
+            "approximate": approximate,
             "too_deep": too_deep,
             "ambiguous": ambiguous,
         }
@@ -3681,18 +3762,22 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         location_to_work_contexts: Dict[LineID, Set[WorkContext]],
         lookup_cache: Dict[Tuple[str, str], Set[Context]],
         state_ids_cache: Dict[Context, FrozenSet[int]],
+        fallback: Optional["_ContextFallback"] = None,
     ) -> Set[Context]:
         """instructionID_mappings_dict is a mapping from instructionIDs to lineIDs. This should be removed in the long run, when instructionIDs become the default over lineIDs.
         state_mappings_dict is a mapping from stateIDs to callpaths.
         location_to_work_contexts is a reverse index {lineID: WorkContexts whose code scope contains it},
         built once per dependency-insertion pass (see __insert_data_dependencies_from_files).
-        state_ids_cache memoizes get_state_ids per context for the duration of that pass."""
+        state_ids_cache memoizes get_state_ids per context for the duration of that pass.
+        With a fallback, an end whose state no context at the location carries is not dropped but
+        mapped approximately (see _ContextFallback.resolve)."""
 
         #        cache_key = (location, state_id)
         #        if cache_key in lookup_cache:
         #            return lookup_cache[cache_key]
 
         contexts: Set[Context] = set()
+        requested_location = location
         # check if location is an instructionID. If so, convert it to a lineID using the mappings_dict.
         if ":" not in location:
             # location is an instruction id or something unspecified (e.g. '*').
@@ -3727,6 +3812,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     state_ids_cache[ctx] = cached_state_ids
                 if target_state_id in cached_state_ids:
                     filtered_contexts.add(ctx)
+            if len(filtered_contexts) == 0 and len(contexts) > 0 and fallback is not None:
+                return fallback.resolve(requested_location, target_state_id, contexts)
 
             #            lookup_cache[cache_key] = filtered_contexts
             return filtered_contexts
@@ -3805,6 +3892,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         _context_lookup_cache: Dict[Tuple[str, str], Set[Context]] = {}
         # see __get_work_contexts_by_location_and_state_id
         _state_ids_cache: Dict[Context, FrozenSet[int]] = {}
+        # ends whose state no context at their location carries are mapped approximately
+        context_fallback = _ContextFallback(self.__collect_all_contexts())
 
         # insert data dependencies into graph
         # ignores WAW dependencies, as they do not represent data flow and thus are not relevant for the TaskGraph.
@@ -3819,6 +3908,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         # duration of this pass: inserting dependencies does not change the containment relation.
         closest_function_ancestor_cache: Dict[Context, Optional[Context]] = {}
         iteration_ancestors_cache: Dict[Context, List[Context]] = {}
+
+        def _is_approximate(location: str, state_id: str) -> bool:
+            return state_id.isdigit() and (location, int(state_id)) in context_fallback.approximate
 
         def closest_function_ancestor(ctx: Context) -> Optional[Context]:
             if ctx not in closest_function_ancestor_cache:
@@ -3867,7 +3959,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         location_to_work_contexts,
                         _context_lookup_cache,
                         _state_ids_cache,
+                        context_fallback,
                     )
+                    source_is_approximate = _is_approximate(source_location, source_state_id)
                     for sink_location, sink_location_deps in source_state_deps.items():
                         dependency_source_line = self.__line_of_location(sink_location, mappings_dict)
                         for sink_state_id, var_infos in sink_location_deps.items():
@@ -3882,7 +3976,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 location_to_work_contexts,
                                 _context_lookup_cache,
                                 _state_ids_cache,
+                                context_fallback,
                             )
+                            approximate_context = source_is_approximate or _is_approximate(sink_location, sink_state_id)
                             # the variable name and the memory region depend on the entry alone,
                             # but used to be parsed again for every pair of contexts
                             parsed_var_infos: List[Tuple[str, Optional[MemoryRegion]]] = [
@@ -3926,6 +4022,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             dependency.origin = dep_origin
                                             dependency.source_line = dependency_source_line
                                             dependency.sink_line = dependency_sink_line
+                                            dependency.approximate_context = approximate_context
 
                                             source_ctx.register_outgoing_dependency(target_ctx, dependency)
                             else:
@@ -3954,6 +4051,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             dependency.origin = dep_origin
                                             dependency.source_line = dependency_source_line
                                             dependency.sink_line = dependency_sink_line
+                                            dependency.approximate_context = approximate_context
 
                                             if dependency.var_name == "error":
                                                 print(
@@ -3978,6 +4076,20 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                                 print()
                                             source_ctx.register_outgoing_dependency(target_ctx, dependency)
 
+        logger.info(
+            "Mapped "
+            + str(len(context_fallback.approximate))
+            + " dependency ends without a context carrying their state approximately ("
+            + str(context_fallback.scoped)
+            + " within the scope of their state, "
+            + str(context_fallback.location_only)
+            + " by location only)"
+        )
+        self.approximate_dependency_end_statistics = {
+            "ends": len(context_fallback.approximate),
+            "scoped": context_fallback.scoped,
+            "location_only": context_fallback.location_only,
+        }
         logger.info(
             "Inserting data dependencies from files: "
             + str(dynamic_dependency_file)
