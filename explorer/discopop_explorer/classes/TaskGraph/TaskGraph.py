@@ -174,6 +174,10 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     # CUs reachable only through an early exit out of a loop (exit(), abort()), deleted by
     # __fix_loop_structures together with their dependencies
     cus_deleted_by_early_exits: Set[PETNodeID] = set()
+    # CUs reachable only through exception landing pads, see __cut_exception_unwind_paths
+    cus_deleted_by_exception_unwinding: Set[PETNodeID] = set()
+    # counters of __split_branch_region_side_entries over all functions
+    branch_region_side_entry_statistics: Dict[str, int] = dict()
     # counters of the last __assign_state_ids run, see there
     state_assignment_statistics: Dict[str, int] = dict()
 
@@ -231,6 +235,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         # prepare function graphs without calling
         with stage("Visiting PET nodes", 1, total=14):
             self.__visit_pet(pet)
+            self.__cut_exception_unwind_paths()
         with stage("Breaking cycles", 2, total=14):
             self.__break_cycles()
         with stage("Fixing loop structures", 3, total=14):
@@ -675,6 +680,58 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
     def node_registered(self, pet_node_id: PETNodeID) -> bool:
         return pet_node_id in self.TGNode_pet_node_id_to_tg_node
+
+    # basic block names clang gives the code run only while an exception unwinds the stack
+    _EXCEPTION_UNWIND_BLOCK_PREFIXES = ("lpad", "ehcleanup", "eh.resume", "terminate.lpad", "terminate.handler")
+
+    def __cut_exception_unwind_paths(self) -> None:
+        """Removes the edges into exception landing pads, and the code reachable only through
+        them (destructor cleanups, eh.resume, catch handlers).
+
+        Every call that may throw has an edge to a landing pad, and the cleanup chains of a
+        function are shared by all of its calls, so they cross every branch region of the function
+        (see __split_branch_region_side_entries), while they run only when an exception unwinds
+        the stack. They are cut like the early exits out of loops (see __fix_loop_structures),
+        and recorded in cus_deleted_by_exception_unwinding: dependencies observed at their lines
+        are lost (a profiled run that threw an exception)."""
+        self.cus_deleted_by_exception_unwinding = set()
+
+        def is_unwind_block(node: TGNode) -> bool:
+            if type(node) is not TGNode or node.pet_node_id is None:
+                return False
+            pet_node = self.pet.node_at(node.pet_node_id)
+            block = getattr(pet_node, "basic_block_id", "") or ""
+            return block.startswith(self._EXCEPTION_UNWIND_BLOCK_PREFIXES)
+
+        cut_targets: List[TGNode] = []
+        for node in list(self.graph.nodes):
+            if not is_unwind_block(node):
+                continue
+            for pred in self.get_predecessors(node):
+                if is_unwind_block(pred):
+                    continue
+                if len([succ for succ in self.get_successors(pred) if not is_unwind_block(succ)]) == 0:
+                    # the only way on (e.g. a call which always throws); keep it
+                    continue
+                while self.graph.has_edge(pred, node):
+                    self.graph.remove_edge(pred, node)
+                cut_targets.append(node)
+        # delete the nodes no longer reachable, as __fix_loop_structures does
+        queue: Deque[TGNode] = deque(cut_targets)
+        while len(queue) > 0:
+            current = queue.popleft()
+            if not self.graph.has_node(current) or len(self.get_predecessors(current)) > 0:
+                continue
+            queue.extend(self.get_successors(current))
+            if type(current) is TGNode and current.pet_node_id is not None:
+                self.cus_deleted_by_exception_unwinding.add(current.pet_node_id)
+            self.graph.remove_node(current)
+        if len(self.cus_deleted_by_exception_unwinding) > 0:
+            logger.info(
+                "Cut the exception unwind paths: deleted "
+                + str(len(self.cus_deleted_by_exception_unwinding))
+                + " CUs reachable only through landing pads"
+            )
 
     def __visit_pet(self, pet: PEGraphX) -> None:
         # construct Taskgraph by visiting the PET Graph
@@ -2160,6 +2217,182 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
                 self.print_graph_statistics(self.graph, "post inlining")
 
+    def __branching_dominator_trees(
+        self, function_node: TGNode
+    ) -> Tuple[Set[TGNode], Dict[TGNode, TGNode], Dict[Any, Any], object]:
+        """(scope, idom, ipdom, virtual exit) of the control flow below function_node. The
+        post-dominator tree is computed on the reversed graph with all sinks merged into one
+        virtual exit, so post-dominance reduces to ordinary dominance from that exit."""
+        scope: Set[TGNode] = set(self.get_descendants(function_node))
+        scope.add(function_node)
+        dom_graph = nx.MultiDiGraph()
+        dom_graph.add_nodes_from(scope)
+        for node in scope:
+            for succ in self.get_successors(node):
+                if succ in scope:
+                    dom_graph.add_edge(node, succ)
+        idom = nx.immediate_dominators(dom_graph, function_node)
+        sinks = [node for node in scope if dom_graph.out_degree(node) == 0]
+        pdom_graph = dom_graph.reverse(copy=True)
+        virtual_exit = object()
+        pdom_graph.add_node(virtual_exit)
+        for sink in sinks:
+            pdom_graph.add_edge(virtual_exit, sink)
+        ipdom = nx.immediate_dominators(pdom_graph, virtual_exit)
+        return scope, idom, ipdom, virtual_exit
+
+    # nodes a short-circuit condition or a duplicated tail must not contain: loops stay single
+    # copies (inlined calls, including their function markers, are fine)
+    _NON_CONDITION_NODE_TYPES = (TGStartLoopNode, TGEndLoopNode, TGStartIterationNode, TGEndIterationNode)
+    # at most this many nodes of a condition are treated as always evaluated
+    _MAX_CHAINED_CONDITION_NODES = 200
+    # at most this many nodes are copied for one side entry of a branch region
+    _MAX_TAIL_DUPLICATION_NODES = 80
+
+    def __split_branch_region_side_entries(self, function_node: TGNode) -> Tuple[int, int, int]:
+        """Makes the branch regions (n, ipdom(n)) single-entry, so that the branching markers can
+        nest. Returns (removed short-circuit edges, copied nodes, side entries left unresolved).
+
+        Conditions with short-circuit operators and shared return blocks produce regions which are
+        entered from the side: in `if (a && (b || c)) return 1; else return 0;` the block
+        `return 1` is reached from b and from c, and `return 0` from a and from c, so neither the
+        region of b nor the one of c is single-entry, and no placement of markers is properly
+        nested. A side entry y of the region of n (a node of the region with a predecessor p
+        outside of it) is resolved in one of two ways:
+
+        - short-circuit edge: if p also reaches y through a few CUs without calls or loops (the
+          remaining parts of the condition), the edge p -> y is removed, so that `a && b` becomes
+          the chain a -> b. The paths through the graph keep their nodes, except that these
+          condition parts now count as always evaluated - an over-approximation of the executed
+          code, which loses no dependency.
+        - tail duplication: otherwise, if the nodes from y to the region's exit are few and
+          contain no loop or call, y is split: a copy takes over the edges from outside and keeps
+          the outgoing edges, and its successors become side entries in turn. Splitting does not
+          change the paths through the graph. The copies are made before contexts exist, so a
+          copied block becomes a second copy of its context, as copies of loop iterations do.
+
+        Side entries matching neither are left as they are (the branching markers of their region
+        may then not nest)."""
+        removed_edges = 0
+        copied = 0
+        unresolved = 0
+        # removing edges changes the dominator trees, so they are recomputed in rounds
+        for _ in range(10):
+            scope, idom, ipdom, virtual_exit = self.__branching_dominator_trees(function_node)
+            modified = False
+            unresolved = 0
+
+            def dom_depth(node: TGNode) -> int:
+                depth = 0
+                current = node
+                while current in idom and idom[current] != current:
+                    current = idom[current]
+                    depth += 1
+                return depth
+
+            branch_points = [node for node in scope if len([s for s in self.get_successors(node) if s in scope]) > 1]
+            # innermost first, in a deterministic order
+            branch_points.sort(key=lambda node: (-dom_depth(node), self.__pet_node_order(node)))
+            for n in branch_points:
+                m = ipdom.get(n)
+                if m is None or m is virtual_exit or len(self.get_successors(n)) < 2:
+                    continue
+                region = self.__nodes_before(n, m)
+                inside = region | {n}
+                if all(all(pred in inside for pred in self.get_predecessors(node)) for node in region):
+                    continue
+                for node in self.__topological_order(region):
+                    outside_preds = [pred for pred in self.get_predecessors(node) if pred not in inside]
+                    for pred in outside_preds:
+                        if self.__is_short_circuit_edge(pred, node):
+                            while self.graph.has_edge(pred, node):
+                                self.graph.remove_edge(pred, node)
+                            removed_edges += 1
+                            modified = True
+                    outside_preds = [pred for pred in self.get_predecessors(node) if pred not in inside]
+                    if len(outside_preds) == 0:
+                        continue
+                    tail = self.__nodes_before(node, m) | {node}
+                    if len(tail) > self._MAX_TAIL_DUPLICATION_NODES or any(
+                        isinstance(t, self._NON_CONDITION_NODE_TYPES) for t in tail
+                    ):
+                        unresolved += 1
+                        logger.debug(
+                            "Unresolved side entry of the branch region at "
+                            + str(n.pet_node_id)
+                            + ": "
+                            + str(node.pet_node_id)
+                            + " (tail of "
+                            + str(len(tail))
+                            + " nodes)"
+                        )
+                        continue
+                    node_copy = copy.deepcopy(node)
+                    self.add_node(node_copy)
+                    copied += 1
+                    modified = True
+                    for pred in outside_preds:
+                        while self.graph.has_edge(pred, node):
+                            self.graph.remove_edge(pred, node)
+                            self.add_edge(pred, node_copy)
+                    for succ in self.get_successors(node):
+                        for _ in range(self.graph.number_of_edges(node, succ)):
+                            self.add_edge(node_copy, succ)
+            if not modified:
+                break
+        return removed_edges, copied, unresolved
+
+    def __nodes_before(self, source: TGNode, stop: TGNode) -> Set[TGNode]:
+        """Every node reachable from source (exclusive) without passing stop."""
+        found: Set[TGNode] = set()
+        queue: Deque[TGNode] = deque([source])
+        while len(queue) > 0:
+            current = queue.popleft()
+            for succ in self.get_successors(current):
+                if succ is not stop and succ not in found:
+                    found.add(succ)
+                    queue.append(succ)
+        return found
+
+    def __topological_order(self, nodes: Set[TGNode]) -> List[TGNode]:
+        """nodes in a deterministic topological order of the edges among them."""
+        in_degree = {node: len([p for p in self.get_predecessors(node) if p in nodes]) for node in nodes}
+        ready = sorted([node for node, degree in in_degree.items() if degree == 0], key=self.__pet_node_order)
+        order: List[TGNode] = []
+        while len(ready) > 0:
+            current = ready.pop(0)
+            order.append(current)
+            for succ in self.get_successors(current):
+                if succ in in_degree:
+                    in_degree[succ] -= 1
+                    if in_degree[succ] == 0:
+                        ready.append(succ)
+        return order
+
+    def __is_short_circuit_edge(self, source: TGNode, target: TGNode) -> bool:
+        """True if source has another successor from which target is reached through at most
+        _MAX_CHAINED_CONDITION_NODES nodes without loops (the remaining
+        parts of a condition, possibly with inlined calls), so that source -> target is the short
+        circuit of a condition."""
+        queue: Deque[TGNode] = deque()
+        seen: Set[TGNode] = set()
+        for other in self.get_successors(source):
+            if other is not target and not isinstance(other, self._NON_CONDITION_NODE_TYPES) and other not in seen:
+                queue.append(other)
+                seen.add(other)
+        while len(queue) > 0:
+            current = queue.popleft()
+            for succ in self.get_successors(current):
+                if succ is target:
+                    return True
+                if succ in seen or isinstance(succ, self._NON_CONDITION_NODE_TYPES):
+                    continue
+                if len(seen) >= self._MAX_CHAINED_CONDITION_NODES:
+                    return False
+                seen.add(succ)
+                queue.append(succ)
+        return False
+
     def __add_branching_nodes_for_function(self, function_node: TGNode) -> None:
         """Wraps every branch point (a node with more than one successor) together with its
         immediate post-dominator (the unique point where all of its arms are guaranteed to
@@ -2174,29 +2407,27 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         with an internal break) into the same marker, which silently corrupts context
         assignment depending on graph traversal order.
         """
-        scope: Set[TGNode] = set(self.get_descendants(function_node))
-        scope.add(function_node)
+        removed, copies, unresolved = self.__split_branch_region_side_entries(function_node)
+        if removed + copies + unresolved > 0:
+            logger.info(
+                "Branch regions of "
+                + function_node.get_label()
+                + ": removed "
+                + str(removed)
+                + " short-circuit edges, copied "
+                + str(copies)
+                + " nodes, left "
+                + str(unresolved)
+                + " side entries"
+            )
+        # per instance (the class attribute is only the default for an empty statistic)
+        statistics: Dict[str, int] = self.__dict__.setdefault("branch_region_side_entry_statistics", {})
+        for key, value in (("removed_edges", removed), ("copied_nodes", copies), ("unresolved", unresolved)):
+            statistics[key] = statistics.get(key, 0) + value
+        scope, idom, ipdom, virtual_exit = self.__branching_dominator_trees(function_node)
 
         def scoped_successors(node: TGNode) -> List[TGNode]:
             return [s for s in self.get_successors(node) if s in scope]
-
-        # forward dominator tree
-        dom_graph = nx.MultiDiGraph()
-        dom_graph.add_nodes_from(scope)
-        for node in scope:
-            for succ in scoped_successors(node):
-                dom_graph.add_edge(node, succ)
-        idom = nx.immediate_dominators(dom_graph, function_node)
-
-        # immediate post-dominator tree: reverse the graph and merge all sinks into one
-        # virtual exit, so post-dominance reduces to ordinary dominance from that exit
-        sinks = [node for node in scope if len(scoped_successors(node)) == 0]
-        pdom_graph = dom_graph.reverse(copy=True)
-        virtual_exit = object()
-        pdom_graph.add_node(virtual_exit)
-        for sink in sinks:
-            pdom_graph.add_edge(virtual_exit, sink)
-        ipdom = nx.immediate_dominators(pdom_graph, virtual_exit)
 
         region_owner: Dict[TGNode, TGNode] = {}
 
@@ -2369,6 +2600,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 self.add_edge(end_branch_node, ebpn)
 
     def __add_branching_nodes(self) -> None:
+        self.branch_region_side_entry_statistics = {"removed_edges": 0, "copied_nodes": 0, "unresolved": 0}
         for function_node in progress(
             list(self.TGFunctionNode_pet_node_id_to_tg_node.values()), desc="Adding branching nodes per function"
         ):
