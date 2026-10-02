@@ -46,6 +46,10 @@ NOT_EXECUTED_RETURN_CODE = -1
 logger = logging.getLogger("ConfigurationManager")
 
 
+# Resolution of a recorded wall clock time, in decimal places of a second.
+WALL_CLOCK_DECIMALS = 6
+
+
 def _resolve_compiler(cmd: str, search_path: str) -> str:
     """Resolve an unversioned clang/clang++ to an installed versioned binary.
 
@@ -117,7 +121,7 @@ def _run_once(
     timeout_expired = False
     stdout = b""
     stderr = b""
-    start = time.time()
+    start = time.perf_counter()
     try:
         if timeout is None:
             cmd = f"/bin/bash {str(script_path)}"
@@ -143,7 +147,10 @@ def _run_once(
         os.killpg(os.getpgid(p.pid), signal.SIGTERM)
         print("KILLED PROCESS: ", p.pid)
 
-    elapsed = round((time.time() - start), 3)
+    # Microseconds, not milliseconds: a run shorter than half a millisecond used to
+    # be recorded as 0.0s, which every consumer reads as "no measurement" (and a
+    # speedup over it is a division by zero).
+    elapsed = round((time.perf_counter() - start), WALL_CLOCK_DECIMALS)
 
     # A program reporting its own execution time excludes what is of no interest
     # (setup, teardown, reading and writing files); prefer that value, but never
@@ -163,7 +170,9 @@ def _run_once(
                 + ": its output did not report an execution time."
             )
         else:
-            elapsed = round(reported_time, 3)
+            # Taken as printed: the program chose its own resolution, and rounding it
+            # here turned sub-millisecond runs into 0.0s.
+            elapsed = reported_time
             time_source = TIME_SOURCE_CONSOLE
             logger.debug("-> execution time reported by the program: " + str(elapsed) + "s")
 

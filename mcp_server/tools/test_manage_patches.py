@@ -86,6 +86,23 @@ class TestManagePatches(unittest.TestCase):
         data = self.__handle((proc, None))
         self.assertEqual(data["status"], "success")
 
+    def test_a_clear_says_how_to_restore_and_that_it_is_not_safe_to_repeat(self) -> None:
+        proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        next_step = self.__handle((proc, None))["next_step"]
+        self.assertIn("action='load'", next_step)
+        self.assertIn("overwrite", next_step)
+
+    def test_an_apply_says_how_to_undo_it(self) -> None:
+        proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch.object(manage_patches, "read_application_result", return_value={"applied": ["1"]}):
+            data = self.__handle((proc, None), action="apply", suggestion_ids=["1"])
+        self.assertIn("action='rollback'", data["next_step"])
+
+    def test_an_apply_that_changed_nothing_suggests_no_undo(self) -> None:
+        proc = subprocess.CompletedProcess(args=[], returncode=3, stdout="", stderr="")
+        data = self.__handle((proc, None), action="apply", suggestion_ids=["1"])
+        self.assertNotIn("next_step", data)
+
     def test_an_applicator_that_cannot_be_run_is_an_error(self) -> None:
         data = self.__handle((None, "discopop_patch_applicator not found on PATH."))
         self.assertEqual(data["status"], "error")

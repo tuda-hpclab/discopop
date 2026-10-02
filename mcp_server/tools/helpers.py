@@ -11,10 +11,14 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from mcp.types import TextContent
 
@@ -144,6 +148,268 @@ def read_applied_suggestions(project_path: str) -> tuple[Optional[list[str]], Op
     return [], None
 
 
+def recorded_applied_suggestions(project_path: str) -> tuple[list[str], Optional[str]]:
+    """The applied suggestion ids; without a record of any, none are applied.
+
+    The applicator creates its state file on first use, so it is only asked once
+    that file exists: a tool that only looks must not write to the project.
+    """
+    dot_dp = Path(project_path) / ".discopop"
+    if not (dot_dp / "patch_applicator" / "applied_suggestions.json").is_file():
+        return [], None
+    if not (dot_dp / "patch_generator").is_dir() or not (dot_dp / "FileMapping.txt").is_file():
+        return [], None
+    applied, error = read_applied_suggestions(project_path)
+    return (applied or []), error
+
+
+# How much of a script's stdout or stderr a tool returns. The end of the output is
+# where a compiler error, a failed assertion or a crash shows up; a full log is what
+# made a single call cost tens of thousands of tokens.
+OUTPUT_TAIL_CHARS = 2000
+
+
+def tail_of_output(text: Any) -> tuple[str, Optional[int]]:
+    """The end of `text`, and its full length if it was cut."""
+    text = text if isinstance(text, str) else ("" if text is None else str(text))
+    if len(text) <= OUTPUT_TAIL_CHARS:
+        return text, None
+    return text[-OUTPUT_TAIL_CHARS:], len(text)
+
+
+# Printed by the placeholder compile.sh that initialize_discopop_directory writes; its
+# presence is what marks a compile.sh as not configured yet. Testing for "exit 1"
+# instead would misread every real script that bails out with `|| exit 1`.
+COMPILE_SCRIPT_PLACEHOLDER_MARKER = "compile.sh has not been configured yet"
+
+
+def compile_script_configured(configs_dir: Path) -> bool:
+    """Whether the shared compile.sh exists and is not the initial placeholder."""
+    compile_sh = configs_dir / "compile.sh"
+    try:
+        return compile_sh.is_file() and COMPILE_SCRIPT_PLACEHOLDER_MARKER not in compile_sh.read_text()
+    except OSError:
+        return False
+
+
+def configuration_names(configs_dir: Path) -> list[str]:
+    """The execution configurations that can be run, i.e. that have an execute.sh."""
+    if not configs_dir.is_dir():
+        return []
+    return sorted(d.name for d in configs_dir.iterdir() if d.is_dir() and (d / "execute.sh").is_file())
+
+
+def invalid_configuration_name(config_name: str) -> Optional[str]:
+    """Why `config_name` cannot name a configuration, or None if it can.
+
+    A configuration is a directory directly under configs/, and its name is joined onto
+    that path to read, run, overwrite and delete scripts. Anything but a plain name --
+    "..", "a/../b", an absolute path -- would reach other directories.
+    """
+    if (
+        not config_name
+        or config_name.startswith(".")
+        or "/" in config_name
+        or os.sep in config_name
+        or Path(config_name).name != config_name
+    ):
+        return f"Invalid config_name '{config_name}'. Must be a plain name without path separators or leading dots."
+    return None
+
+
+def unknown_configuration_message(configs_dir: Path, config_name: str) -> str:
+    """Why `config_name` cannot be used, with the names that can.
+
+    Listing the defined names in the error itself saves the round trip a caller would
+    otherwise need to find out what it should have passed.
+    """
+    names = configuration_names(configs_dir)
+    defined = (
+        f"Defined configurations: {', '.join(names)}."
+        if names
+        else "No execution configuration is defined yet; create one with create_execution_configuration."
+    )
+    return (
+        f"Configuration '{config_name}' not found. {defined} " "get_configurations shows each configuration's scripts."
+    )
+
+
+def setup_next_step(configs_dir: Path) -> str:
+    """The next step towards a project gather_data can run on, given what is set up.
+
+    Derived from the project's state rather than from the tool that was just called:
+    the setup tools can be called in any order and repeated, so the step that is
+    still missing is the one worth naming.
+    """
+    if not configs_dir.is_dir():
+        return "Call initialize_discopop_directory to set up the project."
+    if not compile_script_configured(configs_dir):
+        return "Call set_compile_script to describe how the project is built."
+    names = configuration_names(configs_dir)
+    if not names:
+        return "Call create_execution_configuration to describe how the compiled program is run."
+    hotspot_hint = (
+        f", passing hotspot_config_names (e.g. {names[:2]}) so that run_auto_tuning can use the hotspot-guided search"
+        if len(names) >= 2
+        else (
+            "; adding a second configuration with a different input size enables hotspot detection "
+            "via hotspot_config_names, which improves run_auto_tuning"
+        )
+    )
+    return (
+        f"The project is set up. Call gather_data with config_name set to one of {names} "
+        f"to profile it and detect parallelization opportunities{hotspot_hint}."
+    )
+
+
+# Receives (progress, total, message) for the tool call currently running.
+ProgressReporter = Callable[[float, Optional[float], Optional[str]], None]
+
+# How often a long-running step reports that it is still alive. Each notification
+# also lets a client that resets its request timeout on progress keep waiting.
+HEARTBEAT_INTERVAL_SECONDS = 15.0
+# How long a process gets to shut down after SIGTERM before SIGKILL.
+KILL_GRACE_SECONDS = 10.0
+
+
+def _stat(pid: int) -> Optional[list[str]]:
+    """The fields of /proc/<pid>/stat after the command name: state, ppid, pgrp, session, ..."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            # the command name in parentheses may contain spaces
+            return f.read().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+
+
+# index of the start time (field 22 of /proc/<pid>/stat) in what _stat returns
+_START_TIME = 19
+
+
+def _process_table() -> dict[int, list[str]]:
+    """_stat of every process, by pid."""
+    table: dict[int, list[str]] = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return table
+    for entry in entries:
+        if entry.isdigit():
+            fields = _stat(int(entry))
+            if fields is not None and len(fields) > _START_TIME:
+                table[int(entry)] = fields
+    return table
+
+
+def _descendants(pid: int, table: Optional[dict[int, list[str]]] = None) -> list[int]:
+    """The processes `pid` started, directly or not, from /proc; empty where there is none."""
+    children: dict[int, list[int]] = {}
+    for child, fields in (table if table is not None else _process_table()).items():
+        children.setdefault(int(fields[1]), []).append(child)
+    found: list[int] = []
+    pending = [pid]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            found.append(child)
+            pending.append(child)
+    return found
+
+
+def _tree(proc: "subprocess.Popen[Any]") -> dict[int, str]:
+    """The processes `proc` started, by pid, each with its start time.
+
+    Found as `proc`'s descendants and, for a `proc` started in a session of its own, as
+    the members of that session: a process whose parent exited is no longer a descendant,
+    but stays in the session even where it moved to a group of its own. The start time
+    tells a process from a later one that reused its pid.
+    """
+    table = _process_table()
+    pids = set(_descendants(proc.pid, table)) if proc.poll() is None else set()
+    # once `proc` is reaped, a process with its pid is a stranger, and so is its session
+    if proc.poll() is None or proc.pid not in table:
+        pids.update(pid for pid, fields in table.items() if int(fields[3]) == proc.pid and pid != proc.pid)
+    return {pid: table[pid][_START_TIME] for pid in pids if pid in table}
+
+
+def _alive(pid: int, start_time: Optional[str] = None) -> bool:
+    """Whether `pid` still runs, and is the process started at `start_time` if given.
+
+    A zombie only waits to be reaped and counts as gone.
+    """
+    fields = _stat(pid)
+    if fields is None or fields[0] == "Z":
+        return False
+    return start_time is None or (len(fields) > _START_TIME and fields[_START_TIME] == start_time)
+
+
+def _own_group(proc: "subprocess.Popen[Any]") -> Optional[int]:
+    """`proc`'s process group if it leads one, i.e. was started in its own session.
+
+    Never the server's group: a child started without a session of its own shares it,
+    and signalling that group would take down the server.
+    """
+    if proc.poll() is not None:
+        return None
+    try:
+        return proc.pid if os.getpgid(proc.pid) == proc.pid else None
+    except OSError:
+        return None
+
+
+def _signal_tree(
+    proc: "subprocess.Popen[Any]", group: Optional[int], known: dict[int, str], sig: int
+) -> dict[int, str]:
+    """Send `sig` to `proc` and everything it started; returns the processes signalled.
+
+    Both by group and process by process: a descendant may have moved to a group of its
+    own (GNU timeout, which runs the compile and execute scripts, does), and one whose
+    parent exited is no longer found as a descendant.
+    """
+    pids = {**known, **_tree(proc)}
+    if group is not None and proc.poll() is None:
+        try:
+            os.killpg(group, sig)
+        except OSError:
+            pass
+    # a pid only counts while the process found under it runs, so that no reused pid is signalled
+    for pid in [p for p, start_time in pids.items() if _alive(p, start_time)]:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+    if proc.poll() is None:
+        try:
+            proc.send_signal(sig)
+        except OSError:
+            pass
+    return pids
+
+
+def _wait_for_tree(proc: "subprocess.Popen[Any]", pids: dict[int, str], timeout: float) -> bool:
+    """Wait until `proc` and `pids` have ended; False if some still run after `timeout`."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if proc.poll() is not None and not any(_alive(pid, start_time) for pid, start_time in pids.items()):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def terminate_process_tree(proc: "subprocess.Popen[Any]", grace_seconds: float = KILL_GRACE_SECONDS) -> None:
+    """Stop `proc` and every process it started: SIGTERM, then SIGKILL after the grace period.
+
+    Stopping only `proc` would leave the compile or execute scripts it runs behind, and
+    those are what takes the time.
+    """
+    group = _own_group(proc)
+    pids = _signal_tree(proc, group, {}, signal.SIGTERM)
+    if _wait_for_tree(proc, pids, grace_seconds):
+        return
+    pids = _signal_tree(proc, group, pids, signal.SIGKILL)
+    _wait_for_tree(proc, pids, grace_seconds)
+
+
 class ToolContext:
     def __init__(self, debug: bool = False) -> None:
         self.debug = debug
@@ -151,11 +417,187 @@ class ToolContext:
         self._detection_cache: dict[str, tuple[Any, float]] = {}
         # project_path → (file_id_to_path, FileMapping.txt mtime)
         self._file_mapping_cache: dict[str, tuple[dict[int, Path], float]] = {}
+        # Set by the server for the duration of one tool call whose client asked for
+        # progress. Tool calls run one at a time, so a single slot is enough.
+        self._progress_reporter: Optional[ProgressReporter] = None
+        self._last_progress: Optional[float] = None
+        # What was reported last, for heartbeats to repeat: (total, message, when)
+        self._last_report: Optional[tuple[Optional[float], Optional[str], float]] = None
+        self._progress_lock = threading.Lock()
+        # Cancellation of the current call, see cancellable() and cancel(). The processes
+        # the call started are registered, so that a cancel can stop them.
+        self._cancel_event: Optional[threading.Event] = None
+        self._processes: list["subprocess.Popen[Any]"] = []
+        self._cancel_lock = threading.Lock()
+
+    @contextmanager
+    def cancellable(self) -> Iterator[None]:
+        """Make the block a call that cancel() can stop."""
+        with self._cancel_lock:
+            self._cancel_event = threading.Event()
+            self._processes = []
+        try:
+            yield
+        finally:
+            with self._cancel_lock:
+                self._cancel_event = None
+                self._processes = []
+
+    @property
+    def cancelled(self) -> bool:
+        """Whether the client cancelled the current call. Handlers check it between steps."""
+        with self._cancel_lock:
+            return self._cancel_event is not None and self._cancel_event.is_set()
+
+    def cancel(self) -> None:
+        """Stop the current call: mark it cancelled and stop the processes it registered.
+
+        Called from the event loop while the handler keeps running in its thread; the
+        handler sees its processes fail, checks `cancelled` and cleans up.
+        """
+        with self._cancel_lock:
+            if self._cancel_event is None or self._cancel_event.is_set():
+                return
+            self._cancel_event.set()
+            processes = [p for p in self._processes if p.poll() is None]
+        for proc in processes:
+            threading.Thread(target=terminate_process_tree, args=(proc,), daemon=True).start()
+
+    def track_process(self, proc: "subprocess.Popen[Any]") -> None:
+        """Register a process of the current call, so that a cancel stops it.
+
+        A process started after the cancel is stopped right away: the handler started it
+        between its last look at `cancelled` and the cancel. Processes that clean up after a
+        cancel (e.g. rebuilding the project without instrumentation) have to be able to
+        finish, so they are not registered at all.
+        """
+        with self._cancel_lock:
+            if self._cancel_event is None:
+                return
+            stop = self._cancel_event.is_set()
+            if not stop:
+                self._processes = [p for p in self._processes if p.poll() is None] + [proc]
+        if stop:
+            terminate_process_tree(proc)
+
+    def run_process(
+        self, cmd: list[str], timeout: Optional[float] = None, cleanup: bool = False, **kwargs: Any
+    ) -> "subprocess.CompletedProcess[str]":
+        """subprocess.run(cmd, capture_output=True, text=True, timeout=...) that cancel() can stop.
+
+        With `cleanup`, the process cleans up after a cancel and runs to its end regardless.
+        """
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True, **kwargs
+        )
+        if not cleanup:
+            self.track_process(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            terminate_process_tree(proc)
+            try:
+                # bounded: a process that survived the kill may still hold the pipes
+                proc.communicate(timeout=KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+    @contextmanager
+    def reporting_progress(self, reporter: Optional[ProgressReporter]) -> Iterator[None]:
+        """Route report_progress to `reporter` while the block runs."""
+        with self._progress_lock:
+            self._progress_reporter = reporter
+            self._last_progress = None
+            self._last_report = None
+        try:
+            yield
+        finally:
+            with self._progress_lock:
+                self._progress_reporter = None
+                self._last_progress = None
+                self._last_report = None
+
+    def report_progress(
+        self, progress: float, total: Optional[float] = None, message: Optional[str] = None, _heartbeat: bool = False
+    ) -> None:
+        """Tell the client how far the current call is. A no-op if it did not ask.
+
+        MCP requires every notification's progress to exceed the previous one, so a
+        repeated value -- a heartbeat within the same step -- is nudged upwards.
+        Never raises: a lost notification must not fail the tool call.
+        """
+        with self._progress_lock:
+            reporter = self._progress_reporter
+            if reporter is None:
+                return
+            if self._last_progress is not None and progress <= self._last_progress:
+                progress = self._last_progress + 0.001
+            self._last_progress = progress
+            # No total given: the one reported before still applies.
+            if total is None and self._last_report is not None:
+                total = self._last_report[0]
+            if not _heartbeat:
+                self._last_report = (total, message, time.monotonic())
+        try:
+            reporter(progress, total, message)
+        except Exception as error:  # pragma: no cover - depends on the transport
+            logger.debug(f"Progress notification failed: {error}")
+
+    def _repeat_last_report(self) -> Optional[tuple[float, Optional[float], str]]:
+        """The last reported state, marked as still running since it was reported."""
+        with self._progress_lock:
+            last, progress = self._last_report, self._last_progress
+        if last is None or progress is None:
+            return None
+        total, message, since = last
+        return progress, total, f"{message or 'Running'} (still running, {time.monotonic() - since:.0f}s)"
+
+    @contextmanager
+    def heartbeat(
+        self,
+        describe: Optional[Callable[[], Optional[tuple[float, Optional[float], str]]]] = None,
+        interval: float = HEARTBEAT_INTERVAL_SECONDS,
+    ) -> Iterator[None]:
+        """Report `describe()` every `interval` seconds while the block runs.
+
+        For steps that block for minutes or hours without a natural point to report
+        from, such as waiting for a subprocess. Without `describe`, the last state
+        reported via report_progress is repeated with the time it has been running.
+        """
+        describe = describe or self._repeat_last_report
+        if self._progress_reporter is None:
+            yield
+            return
+        stop = threading.Event()
+
+        def beat() -> None:
+            while not stop.wait(interval):
+                try:
+                    state = describe()
+                    if state is not None:
+                        self.report_progress(*state, _heartbeat=True)
+                except Exception as error:  # pragma: no cover - describe() is caller code
+                    logger.debug(f"Progress heartbeat failed: {error}")
+
+        thread = threading.Thread(target=beat, name="mcp-progress-heartbeat", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=interval)
 
     def log_to_file(self, project_path: str, marker: str, tool_name: str, message: str) -> None:
         """Append a timestamped entry to <project_path>/.discopop/mcp_server/log.txt.
-        Never raises — logging failures must not affect tool execution."""
+        Never raises — logging failures must not affect tool execution.
+
+        Only into a .discopop that exists: creating it would create a mistyped project_path,
+        and mark a directory as a DiscoPoP project that was never initialized as one."""
         try:
+            if not (Path(project_path) / ".discopop").is_dir():
+                return
             log_dir = Path(project_path) / ".discopop" / "mcp_server"
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -171,7 +613,11 @@ class ToolContext:
             logger.debug(f"  Arguments: {json.dumps(arguments, indent=2)}")
         project_path = arguments.get("project_path", "")
         if project_path:
-            args_summary = ", ".join(f"{k}={v!r}" for k, v in arguments.items() if k != "script_body")
+            # a script is a file of its own, written to the configuration; its size is enough here
+            args_summary = ", ".join(
+                f"{k}=<{len(v)} chars>" if k.endswith("script_body") and isinstance(v, str) else f"{k}={v!r}"
+                for k, v in arguments.items()
+            )
             self.log_to_file(project_path, "→ CALL", tool_name, args_summary)
 
     def log_response(self, tool_name: str, result: Any) -> None:
@@ -293,16 +739,19 @@ class ToolContext:
     def newest_source_mtime(project_path: str) -> Optional[float]:
         """Return the mtime of the most recently modified source file under project_path,
         excluding the .discopop subtree. Returns None if no source files are found."""
+        return max(ToolContext.source_mtimes(project_path).values(), default=None)
+
+    @staticmethod
+    def source_mtimes(project_path: str) -> dict[Path, float]:
+        """The mtime of every source file under project_path, excluding the .discopop subtree."""
         source_exts = {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh"}
-        newest: Optional[float] = None
+        mtimes: dict[Path, float] = {}
         for f in Path(project_path).rglob("*"):
             if ".discopop" in f.parts:
                 continue
             if f.suffix.lower() in source_exts and f.is_file():
-                mtime = f.stat().st_mtime
-                if newest is None or mtime > newest:
-                    newest = mtime
-        return newest
+                mtimes[f] = f.stat().st_mtime
+        return mtimes
 
     @staticmethod
     def fmt_ts(mtime: float) -> str:

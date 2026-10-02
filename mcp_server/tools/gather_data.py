@@ -15,16 +15,25 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from mcp.types import TextContent, Tool
+from mcp.types import TextContent, Tool, ToolAnnotations
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
-from mcp_server.tools.helpers import ToolContext
+from mcp_server.tools.helpers import (
+    ToolContext,
+    invalid_configuration_name,
+    recorded_applied_suggestions,
+    tail_of_output,
+    unknown_configuration_message,
+)
 
 logger = logging.getLogger("discopop-mcp")
 
 TOOL = Tool(
     name="gather_data",
+    # Overwrites the previous analysis results and rebuilds the project in place. A
+    # repeated call skips every step whose outputs are current, hence idempotent.
+    annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True, openWorldHint=False),
     description=(
         "Run the complete DiscoPoP data collection pipeline and detect parallelization patterns. "
         "Call this after set_compile_script and create_execution_configuration. "
@@ -54,7 +63,8 @@ TOOL = Tool(
         "the program and may abort, so building and running the program by hand afterwards "
         "is safe. "
         "\n\n"
-        "On success, call get_parallelization_patches to retrieve the generated patches."
+        "On success, call run_auto_tuning to measure which combination of the generated "
+        "suggestions is fastest (apply=true also applies it); get_parallelization_patches lists them."
     ),
     inputSchema={
         "type": "object",
@@ -103,9 +113,44 @@ def _log_stdout(project_path: str, step: str, stdout: str, ctx: ToolContext) -> 
             ctx.log_action(project_path, "gather_data", f"[{step}] stdout: {line}")
 
 
+def _stderr_fields(stderr: Any) -> dict[str, Any]:
+    """A step's stderr for its result: the tail, plus `stderr_length` when it was cut.
+
+    A real project's build or profiling run easily writes hundreds of KB to stderr;
+    the errors that explain a failure are at its end.
+    """
+    tail, full_length = tail_of_output(stderr)
+    fields: dict[str, Any] = {"stderr": tail}
+    if full_length is not None:
+        fields["stderr_length"] = full_length
+    return fields
+
+
+# Which configurations the hotspot results in .discopop/hotspot_detection/private/ were
+# profiled with. The result files themselves do not say, and the classification compares
+# them across inputs: results from other configurations than the requested ones, or from
+# only some of them, would classify silently on the wrong data.
+PROFILED_CONFIGURATIONS_FILE = "profiled_configurations.json"
+
+
+def _profiled_configurations(hotspot_dir: Path) -> list[str]:
+    try:
+        names = json.loads((hotspot_dir / PROFILED_CONFIGURATIONS_FILE).read_text())
+    except (OSError, ValueError):
+        return []
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
+def _record_profiled_configuration(hotspot_dir: Path, config_name: str) -> None:
+    names = _profiled_configurations(hotspot_dir)
+    if config_name not in names:
+        (hotspot_dir / PROFILED_CONFIGURATIONS_FILE).write_text(json.dumps(names + [config_name]))
+
+
 def _hotspot_instrument(
     project_path: str,
     config_name: str,
+    hotspot_config_names: list[str],
     timeout_seconds: int,
     force: bool,
     ctx: ToolContext,
@@ -119,7 +164,7 @@ def _hotspot_instrument(
     config_dir = configs_dir / config_name
 
     if not config_dir.exists():
-        return {"status": "error", "message": f"Configuration '{config_name}' not found."}
+        return {"status": "error", "message": unknown_configuration_message(configs_dir, config_name)}
     # honours a per-configuration compile.sh override, falling back to the shared script
     compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
     if not compile_sh.exists():
@@ -127,7 +172,11 @@ def _hotspot_instrument(
     if not hd_settings.exists():
         return {"status": "error", "message": "hd_settings.json not found. Run initialize_discopop_directory first."}
 
-    if not force and private_dir.exists():
+    # Skipped only when the results cover exactly the requested configurations: the plain
+    # rebuild at the end of every call leaves no instrumented binary behind, so profiling a
+    # configuration that is missing needs this step, and re-instrumenting clears the results
+    # of every other configuration as well.
+    if not force and private_dir.exists() and set(_profiled_configurations(hotspot_dir)) == set(hotspot_config_names):
         result_files = list(private_dir.glob("hotspot_result_*.txt"))
         if result_files:
             last_run_mtime = max(f.stat().st_mtime for f in result_files)
@@ -160,6 +209,7 @@ def _hotspot_instrument(
             script_path=str(compile_sh),
             thread_count=1,
             timeout=float(timeout_seconds),
+            process_started_callback=ctx.track_process,
         )
     finally:
         os.chdir(original_cwd)
@@ -184,7 +234,7 @@ def _hotspot_instrument(
             "message": f"Hotspot instrumentation failed (rc={returncode}).",
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
             "compiled_in_place": True,
         }
     ctx.log_action(project_path, "gather_data", f"Hotspot instrumentation succeeded in {elapsed}s")
@@ -203,14 +253,15 @@ def _hotspot_profiling_single(
     configs_dir = p / ".discopop" / "project" / "configs"
     hd_settings = configs_dir / "hd_settings.json"
     execute_sh = configs_dir / config_name / "execute.sh"
-    private_dir = p / ".discopop" / "hotspot_detection" / "private"
+    hotspot_dir = p / ".discopop" / "hotspot_detection"
+    private_dir = hotspot_dir / "private"
 
     if not execute_sh.exists():
         return {"status": "error", "message": f"execute.sh not found for configuration '{config_name}'."}
     if not hd_settings.exists():
         return {"status": "error", "message": "hd_settings.json not found."}
 
-    if not force and private_dir.exists():
+    if not force and private_dir.exists() and config_name in _profiled_configurations(hotspot_dir):
         existing = list(private_dir.glob("hotspot_result_*.txt"))
         if existing:
             last_run_mtime = max(f.stat().st_mtime for f in existing)
@@ -221,6 +272,7 @@ def _hotspot_profiling_single(
                     "num_runs_accumulated": len(existing),
                 }
 
+    results_before = set(private_dir.glob("hotspot_result_*.txt")) if private_dir.exists() else set()
     pm_args = ctx.make_pm_args(project_path, timeout_seconds)
     ctx.log_action(
         project_path,
@@ -237,6 +289,7 @@ def _hotspot_profiling_single(
             script_path=str(execute_sh),
             thread_count=1,
             timeout=float(timeout_seconds),
+            process_started_callback=ctx.track_process,
         )
     finally:
         os.chdir(original_cwd)
@@ -249,12 +302,14 @@ def _hotspot_profiling_single(
     result_files = sorted(private_dir.glob("hotspot_result_*.txt")) if private_dir.exists() else []
 
     if returncode != 0:
+        for added in set(result_files) - results_before:
+            _discard_partial_output(added, project_path, ctx)
         return {
             "status": "error",
             "message": f"Hotspot profiling failed for '{config_name}' (rc={returncode}).",
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
         }
     if not result_files:
         return {
@@ -265,8 +320,9 @@ def _hotspot_profiling_single(
             ),
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
         }
+    _record_profiled_configuration(hotspot_dir, config_name)
     ctx.log_action(
         project_path,
         "gather_data",
@@ -313,25 +369,20 @@ def _hotspot_analysis(
         f"Hotspot analysis: invoking discopop_hotspot_analyzer ({len(result_files)} run(s))",
     )
     try:
-        proc = subprocess.run(
-            [analyzer],
-            cwd=str(discopop_dir),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout_seconds,
-        )
+        proc = ctx.run_process([analyzer], timeout=timeout_seconds, cwd=str(discopop_dir), env=env)
     except subprocess.TimeoutExpired:
+        _discard_partial_output(hotspots_json, project_path, ctx)
         return {"status": "error", "message": f"discopop_hotspot_analyzer timed out after {timeout_seconds}s."}
 
     _log_stdout(project_path, "hotspot_analysis", proc.stdout, ctx)
 
     if proc.returncode != 0:
+        _discard_partial_output(hotspots_json, project_path, ctx)
         return {
             "status": "error",
             "message": f"discopop_hotspot_analyzer failed (rc={proc.returncode}).",
             "returncode": proc.returncode,
-            "stderr": proc.stderr,
+            **_stderr_fields(proc.stderr),
         }
 
     hotness_summary: dict[str, int] = {"YES": 0, "MAYBE": 0, "NO": 0}
@@ -372,7 +423,7 @@ def _instrument_project(
     config_dir = configs_dir / config_name
 
     if not config_dir.exists():
-        return {"status": "error", "message": f"Configuration '{config_name}' not found."}
+        return {"status": "error", "message": unknown_configuration_message(configs_dir, config_name)}
     # honours a per-configuration compile.sh override, falling back to the shared script
     compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
     if not compile_sh.exists():
@@ -414,6 +465,7 @@ def _instrument_project(
             script_path=str(compile_sh),
             thread_count=1,
             timeout=float(timeout_seconds),
+            process_started_callback=ctx.track_process,
         )
     finally:
         os.chdir(original_cwd)
@@ -436,7 +488,7 @@ def _instrument_project(
             "message": f"Instrumentation failed (rc={returncode}).",
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
             "compiled_in_place": True,
         }
     if not data_xml.exists():
@@ -445,11 +497,24 @@ def _instrument_project(
             "message": "Compilation succeeded but Data.xml was not created. Ensure discopop_cxx is on PATH.",
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
             "compiled_in_place": True,
         }
     ctx.log_action(project_path, "gather_data", f"Instrumentation succeeded in {elapsed}s")
     return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True}
+
+
+def _discard_partial_output(path: Path, project_path: str, ctx: ToolContext) -> None:
+    """Delete the output of a step that did not complete.
+
+    A step stopped by a failure, a timeout or a cancel may have written its output
+    already, and the next call would take it for a current result and skip the step.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return
+    ctx.log_action(project_path, "gather_data", f"Discarded the output of an incomplete step: {path}")
 
 
 def _run_profiling(
@@ -499,6 +564,7 @@ def _run_profiling(
             script_path=str(execute_sh),
             thread_count=1,
             timeout=float(timeout_seconds),
+            process_started_callback=ctx.track_process,
         )
     finally:
         os.chdir(original_cwd)
@@ -510,12 +576,13 @@ def _run_profiling(
     _log_stdout(project_path, "run_profiling", stdout, ctx)
 
     if returncode != 0:
+        _discard_partial_output(dyn_deps, project_path, ctx)
         return {
             "status": "error",
             "message": f"Profiling failed (rc={returncode}).",
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
         }
     if not dyn_deps.exists():
         return {
@@ -525,7 +592,7 @@ def _run_profiling(
             ),
             "returncode": returncode,
             "elapsed_time": elapsed,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
         }
     ctx.log_action(project_path, "gather_data", f"Profiling complete in {elapsed}s")
     return {"status": "success", "elapsed_time": elapsed}
@@ -568,25 +635,21 @@ def _run_pattern_detection(
 
     ctx.log_action(project_path, "gather_data", "Pattern detection: invoking discopop_explorer")
     try:
-        proc = subprocess.run(
-            [explorer],
-            cwd=str(discopop_dir),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout_seconds,
-        )
+        proc = ctx.run_process([explorer], timeout=timeout_seconds, cwd=str(discopop_dir), env=env)
     except subprocess.TimeoutExpired:
+        _discard_partial_output(patterns_json, project_path, ctx)
         return {"status": "error", "message": f"discopop_explorer timed out after {timeout_seconds}s."}
 
     _log_stdout(project_path, "pattern_detection", proc.stdout, ctx)
 
     if proc.returncode != 0:
+        # it writes patterns.json before it generates the patches
+        _discard_partial_output(patterns_json, project_path, ctx)
         return {
             "status": "error",
             "message": f"discopop_explorer failed (rc={proc.returncode}).",
             "returncode": proc.returncode,
-            "stderr": proc.stderr,
+            **_stderr_fields(proc.stderr),
         }
 
     ctx.log_action(project_path, "gather_data", "Pattern detection complete")
@@ -668,6 +731,8 @@ def _restore_plain_build(
             script_path=str(compile_sh),
             thread_count=1,
             timeout=float(timeout_seconds),
+            # not registered: the rebuild undoes the instrumented builds after a cancel, too
+            process_started_callback=None,
         )
     except Exception as error:  # a cleanup step may not take the pipeline down
         ctx.log_action(project_path, "gather_data", f"Plain rebuild raised: {error}")
@@ -695,13 +760,15 @@ def _restore_plain_build(
             "returncode": returncode,
             "elapsed_time": elapsed,
             "settings": settings.name,
-            "stderr": stderr,
+            **_stderr_fields(stderr),
         }
     ctx.log_action(project_path, "gather_data", f"Plain build restored in {elapsed}s")
     return {"status": "success", "elapsed_time": elapsed, "settings": settings.name}
 
 
-def _progress(step: int, total: int, label: str) -> None:
+def _progress(step: int, total: int, label: str, ctx: ToolContext) -> None:
+    # Steps completed so far, so the client sees the fraction that is done.
+    ctx.report_progress(step - 1, total, f"[{step}/{total}] {label}")
     from termcolor import colored
 
     prefix = colored(f"[gather_data {step}/{total}]", "cyan", attrs=["bold"])
@@ -709,7 +776,7 @@ def _progress(step: int, total: int, label: str) -> None:
     sys.stderr.flush()
 
 
-def _count_suggestions(project_path: str) -> Optional[int]:
+def count_suggestions(project_path: str) -> Optional[int]:
     """How many parallelization suggestions the explorer produced, or None if unknown."""
     patch_gen_dir = Path(project_path) / ".discopop" / "patch_generator"
     if not patch_gen_dir.is_dir():
@@ -720,11 +787,12 @@ def _count_suggestions(project_path: str) -> Optional[int]:
         return None
 
 
-def _next_step_hint(suggestion_count: Optional[int]) -> str:
+def next_step_hint(suggestion_count: Optional[int]) -> str:
     """What to do with the patches that were just generated."""
     if suggestion_count == 0:
         return (
-            "No parallelization suggestion was found. get_data_dependencies explains why a " "given loop was rejected."
+            "No parallelization suggestion was found. explain_parallelization tells for a given "
+            "code region why it was not parallelized, e.g. which data dependency prevents it."
         )
     found = f"{suggestion_count} parallelization suggestions were generated. " if suggestion_count else ""
     return (
@@ -734,6 +802,19 @@ def _next_step_hint(suggestion_count: Optional[int]) -> str:
         "get_parallelization_patches lists the suggestions, and get_data_dependencies "
         "explains the dependencies behind an individual one."
     )
+
+
+def _cancelled_result(project_path: str, hotspot_detection_enabled: bool, steps: dict[str, Any]) -> dict[str, Any]:
+    """The result of a call the client cancelled; the steps that ran are kept, since the
+    plain rebuild after the pipeline depends on knowing what was compiled in place."""
+    return {
+        "status": "error",
+        "project_path": project_path,
+        "message": "Cancelled by the client.",
+        "cancelled": True,
+        "hotspot_detection_enabled": hotspot_detection_enabled,
+        "steps": steps,
+    }
 
 
 def _pipeline(
@@ -766,22 +847,26 @@ def _pipeline(
     # === Optional: hotspot detection pipeline ===
     if hotspot_detection_enabled:
         step += 1
-        _progress(step, total_steps, "Hotspot instrumentation")
-        hd_instr = _hotspot_instrument(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
+        _progress(step, total_steps, "Hotspot instrumentation", ctx)
+        hd_instr = _hotspot_instrument(
+            project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, source_mtime
+        )
         steps["hotspot_instrumentation"] = hd_instr
 
-        if hd_instr["status"] in ("success", "skipped"):
+        if hd_instr["status"] in ("success", "skipped") and not ctx.cancelled:
             step += 1
-            _progress(step, total_steps, f"Hotspot profiling ({len(hotspot_config_names)} config(s))")
+            _progress(step, total_steps, f"Hotspot profiling ({len(hotspot_config_names)} config(s))", ctx)
             profiling_runs: list[dict[str, Any]] = []
             for hd_config in hotspot_config_names:
+                if ctx.cancelled:
+                    break
                 run_res = _hotspot_profiling_single(project_path, hd_config, timeout_seconds, force, ctx, source_mtime)
                 profiling_runs.append({"config": hd_config, **run_res})
             steps["hotspot_profiling"] = profiling_runs
 
-            if all(r["status"] in ("success", "skipped") for r in profiling_runs):
+            if not ctx.cancelled and all(r["status"] in ("success", "skipped") for r in profiling_runs):
                 step += 1
-                _progress(step, total_steps, "Hotspot analysis")
+                _progress(step, total_steps, "Hotspot analysis", ctx)
                 hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx, source_mtime)
                 steps["hotspot_analysis"] = hd_analysis
                 if hd_analysis["status"] not in ("success", "skipped"):
@@ -797,10 +882,15 @@ def _pipeline(
             steps["hotspot_analysis"] = {"status": "not_run", "reason": "hotspot_instrumentation_failed"}
 
     # === Required: instrument project ===
+    if ctx.cancelled:
+        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     step += 1
-    _progress(step, total_steps, "DiscoPoP instrumentation (compile)")
+    _progress(step, total_steps, "DiscoPoP instrumentation (compile)", ctx)
     instr = _instrument_project(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
     steps["instrumentation"] = instr
+    # a cancel stops the running step, which then fails; that failure is not the answer
+    if ctx.cancelled:
+        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     if instr["status"] not in ("success", "skipped"):
         result: dict[str, Any] = {
             "status": "error",
@@ -809,13 +899,26 @@ def _pipeline(
             "hotspot_detection_enabled": hotspot_detection_enabled,
             "steps": steps,
         }
+        # Only a step that ran and failed has output to look at. One refused by its
+        # pre-flight checks, or that exited 0 without producing its output, names the
+        # problem in its own message.
+        if instr.get("returncode") not in (None, 0):
+            result["next_step"] = (
+                "steps.instrumentation.stderr holds the build errors; get_execution_results("
+                "script='compile.sh', failed_only=true, include_output=true) also shows stdout. Fix the build with set_compile_script (it must use $CC/$CXX and "
+                "$CFLAGS/$CXXFLAGS), then call gather_data again."
+            )
         return result
 
     # === Required: run instrumented binary ===
+    if ctx.cancelled:
+        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     step += 1
-    _progress(step, total_steps, "Profiling (run instrumented binary)")
+    _progress(step, total_steps, "Profiling (run instrumented binary)", ctx)
     prof = _run_profiling(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
     steps["profiling"] = prof
+    if ctx.cancelled:
+        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     if prof["status"] not in ("success", "skipped"):
         result = {
             "status": "error",
@@ -824,13 +927,23 @@ def _pipeline(
             "hotspot_detection_enabled": hotspot_detection_enabled,
             "steps": steps,
         }
+        if prof.get("returncode") not in (None, 0):
+            result["next_step"] = (
+                "steps.profiling.stderr holds the program's errors; get_execution_results("
+                "script='execute.sh', failed_only=true, include_output=true) also shows stdout. Fix execute.sh with create_execution_configuration (a smaller input helps if "
+                "the run timed out), then call gather_data again."
+            )
         return result
 
     # === Required: pattern detection ===
+    if ctx.cancelled:
+        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     step += 1
-    _progress(step, total_steps, "Pattern detection (discopop_explorer)")
+    _progress(step, total_steps, "Pattern detection (discopop_explorer)", ctx)
     detection = _run_pattern_detection(project_path, timeout_seconds, force, ctx, source_mtime)
     steps["pattern_detection"] = detection
+    if ctx.cancelled:
+        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     if detection["status"] not in ("success", "skipped"):
         result = {
             "status": "error",
@@ -838,6 +951,10 @@ def _pipeline(
             "message": "Pattern detection failed. See steps.pattern_detection for details.",
             "hotspot_detection_enabled": hotspot_detection_enabled,
             "steps": steps,
+            "next_step": (
+                "If the profiling data is stale or inconsistent, call initialize_discopop_directory "
+                "with reset=true to clear the analysis artefacts, then gather_data again."
+            ),
         }
         return result
 
@@ -858,10 +975,10 @@ def _pipeline(
     # result is read far more reliably than a tool description. Saying how many there
     # are and which tool decides between them is what keeps the next step from being a
     # guess made out of the source code.
-    suggestion_count = _count_suggestions(project_path)
+    suggestion_count = count_suggestions(project_path)
     if suggestion_count is not None:
         result["suggestions_found"] = suggestion_count
-    result["next_step"] = _next_step_hint(suggestion_count)
+    result["next_step"] = next_step_hint(suggestion_count)
     return result
 
 
@@ -872,23 +989,44 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         hotspot_config_names: list[str] = arguments.get("hotspot_config_names") or []
         timeout_seconds: int = arguments.get("timeout_seconds", 3600)
         force: bool = arguments.get("force", False)
+        for name in [config_name, *hotspot_config_names]:
+            name_error = invalid_configuration_name(name)
+            if name_error is not None:
+                return ctx.error(name_error, project_path, "gather_data")
+        # Profiling patched sources analyses the parallel code, and the pattern detection
+        # deletes the applicator's record of what it applied, which a rollback needs.
+        applied, _ = recorded_applied_suggestions(project_path)
+        if applied:
+            return ctx.error(
+                f"The suggestions {applied} are applied to the sources. Analysing them would profile the "
+                "parallelized code, and re-running the pattern detection deletes the record needed to roll "
+                "them back. Roll them back first with manage_patches(action='clear'), then call gather_data "
+                "again.",
+                project_path,
+                "gather_data",
+            )
 
-        result = _pipeline(project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx)
+        # A single step (an instrumented run, above all) can take an hour; the heartbeat
+        # keeps reporting the step in progress so the client knows the call is alive.
+        with ctx.heartbeat():
+            result = _pipeline(project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx)
 
-        # Leave the project buildable by hand again. Only when something was
-        # actually compiled in place: a call that skipped every instrumentation
-        # step because its results were current found -- and leaves -- the build
-        # the previous call already restored, and a rebuild would be waste.
-        steps = result.get("steps") or {}
-        if _compiled_in_place(steps):
-            restore = _restore_plain_build(project_path, config_name, timeout_seconds, ctx)
-            steps["build_restore"] = restore
-            result["steps"] = steps
-            if restore.get("status") == "error":
-                # Reported, never fatal: the data this tool exists to produce is
-                # already on disk.
-                warning = str(restore.get("message") or "The plain rebuild failed.")
-                result["warning"] = f"{result['warning']} {warning}" if result.get("warning") else warning
+            # Leave the project buildable by hand again. Only when something was
+            # actually compiled in place: a call that skipped every instrumentation
+            # step because its results were current found -- and leaves -- the build
+            # the previous call already restored, and a rebuild would be waste.
+            steps = result.get("steps") or {}
+            if _compiled_in_place(steps):
+                # After the last step: report_progress keeps the value increasing.
+                ctx.report_progress(0, None, "Rebuilding the project without instrumentation")
+                restore = _restore_plain_build(project_path, config_name, timeout_seconds, ctx)
+                steps["build_restore"] = restore
+                result["steps"] = steps
+                if restore.get("status") == "error":
+                    # Reported, never fatal: the data this tool exists to produce is
+                    # already on disk.
+                    warning = str(restore.get("message") or "The plain rebuild failed.")
+                    result["warning"] = f"{result['warning']} {warning}" if result.get("warning") else warning
 
         ctx.log_response("gather_data", result)
         return [TextContent(type="text", text=json.dumps(result))]

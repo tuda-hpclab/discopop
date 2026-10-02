@@ -20,6 +20,8 @@ As part of the analysis, the [program execution graph](../data/Program_execution
 ## Output
 Identified [parallel patterns](../data/Parallel_patterns.md) are stored in a file named `.discopop/explorer/patterns.json` by default. This information can be imported by various other tools in the framework.
 
+Which code regions the pattern detection considered, which patterns it found for them and why it rejected the others (e.g. the data dependency that prevents a parallelization) is stored in `.discopop/explorer/pattern_decisions.json`. `--pattern-decisions <path>` writes it elsewhere; `--pattern-decisions` without a value disables the recording.
+
 ## Note
 For a more detailed description of the available run-time arguments, please refer to the help string of the respective tool.
 ```

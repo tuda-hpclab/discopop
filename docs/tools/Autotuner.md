@@ -38,6 +38,9 @@ This algorithm spends its measurements on the code regions that dominate the mea
 
 For meaningful scaling information the hotspot detection should be run for at least two input sizes. With a single run the scaling ratio is constant, the hotspot classification degenerates to a single threshold on the average runtime, and the ranking reduces to plain descending runtime order. The tuner warns when it detects this.
 
+## Measuring a given selection
+`-s/--suggestions <ids>` skips the search and measures the comma separated suggestions as one configuration, compared to the reference. By default, the tuner then refines the selection: it measures it again with hotspot instrumentation and drops the suggestions that slow their code region down. Add `--skip-removal-pass` to measure exactly the given selection and nothing else.
+
 ## Compile-only runs
 `--compile-only` builds every candidate and executes none of them, so a run answers "does this configuration compile?" instead of "how fast is it?". Nothing is measured, so no candidate is ranked, no speedup is reported and `results.json` is not written -- a configuration that was only ever compiled must never be named as the tuner's selection. The outcome is written to `compile_results.json` instead, which states separately whether the *reference* configuration built: when it did not, no candidate's failure says anything about its own patches.
 

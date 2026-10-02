@@ -71,6 +71,10 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         help="Dump DetectionResult object to JSON file. If a path is given, the DetectionResult object is written to the given file, otherwise to detection_result_dump.json. Contents are equivalent to the json output. NOTE: This dump contains a dump of the PET Graph!",
     )
     parser.add_argument(
+        "--pattern-decisions", type=str, nargs="?", default="explorer/pattern_decisions.json",
+        help="Write which code regions were considered as pattern candidates and why they were rejected to this JSON file; without a value, nothing is recorded. Default: explorer/pattern_decisions.json",
+    )
+    parser.add_argument(
         "--enable-patterns", type=str, nargs="?", default="reduction,doall",
         help="Specify comma-separated list of pattern types to be identified. Options: reduction,doall,task,pipeline,geodec,simplegpu. Default: reduction,doall",
     )
@@ -160,6 +164,7 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
     arguments.profiling = get_path_or_none(arguments.path, arguments.profiling)
     arguments.dump_pet = get_path_or_none(arguments.path, arguments.dump_pet)
     arguments.dump_detection_result = get_path_or_none(arguments.path, arguments.dump_detection_result)
+    arguments.pattern_decisions = get_path_or_none(arguments.path, arguments.pattern_decisions)
     arguments.microbench_file = get_path_or_none(arguments.path, arguments.microbench_file)
     arguments.plot_pet = get_path_or_none(arguments.path, arguments.plot_pet)
 
@@ -196,6 +201,7 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         enable_context_graph_plot=arguments.plot_context_graph,
         enable_visualizer=arguments.visualize,
         visualize_on=None,
+        enable_pattern_decisions_file=arguments.pattern_decisions,
     )
 
 

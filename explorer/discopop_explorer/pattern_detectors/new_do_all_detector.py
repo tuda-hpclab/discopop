@@ -26,6 +26,18 @@ from discopop_explorer.classes.TaskGraph.Contexts.WorkContext import WorkContext
 from discopop_explorer.classes.TaskGraph.Loops.TGStartLoopNode import TGStartLoopNode
 from discopop_explorer.classes.TaskGraph.TGNode import TGNode
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
+from discopop_explorer.classes.patterns.PatternDecisions import (
+    LOOP_CARRIED_DEPENDENCY,
+    NO_PATTERN_NODE,
+    TOO_FEW_ITERATIONS,
+    UNPRIVATIZABLE_STATIC_DEPENDENCY,
+    CodeRegion,
+    DecisionReason,
+    DependencyRecord,
+    PatternDecisionLog,
+    duplicate_pattern_reason,
+    region_of_pet_node,
+)
 from discopop_explorer.classes.patterns.PatternInfo import PatternInfo
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
@@ -49,17 +61,26 @@ from discopop_library.StatusReporting.console import progress, stage
 
 logger = logging.getLogger("Explorer").getChild("DoAll")
 
+# how this detector names itself and its pattern types in a PatternDecisionLog
+DECISION_DETECTOR = "doall_reduction"
+DECISION_PATTERN_TYPES = ("doall", "reduction")
+
 
 def run_detection(
-    pet: PEGraphX, task_graph: TaskGraph, ast_helper: ASTPatternDetectionHelper
+    pet: PEGraphX,
+    task_graph: TaskGraph,
+    ast_helper: ASTPatternDetectionHelper,
+    decisions: Optional[PatternDecisionLog] = None,
 ) -> List[DoAllInfo | ReductionInfo]:
+    """decisions, if given, receives every loop considered and why it was rejected. It is not
+    finalized here, since the caller decides which of the returned patterns are reported."""
     logger.info("Starting new do_all and reduction detection...")
     result: List[DoAllInfo | ReductionInfo] = []
     # built once, since the PET graph is not modified during pattern detection
     data_edges = DataEdgeIndex(pet)
 
     with stage("Identifying doall and reduction loops", 1, total=2):
-        result += identify_simple_doall_and_reduction(task_graph, ast_helper, data_edges)
+        result += identify_simple_doall_and_reduction(task_graph, ast_helper, data_edges, decisions)
     # collapsible nests are derived from the identified patterns, so this must run afterwards
     with stage("Identifying collapsible loop nests", 2, total=2):
         result += identify_collapsible_loop_nests(task_graph, ast_helper, result)
@@ -162,7 +183,10 @@ def get_pattern_key(
 
 
 def identify_simple_doall_and_reduction(
-    tg: TaskGraph, ast_helper: ASTPatternDetectionHelper, data_edges: DataEdgeIndex
+    tg: TaskGraph,
+    ast_helper: ASTPatternDetectionHelper,
+    data_edges: DataEdgeIndex,
+    decisions: Optional[PatternDecisionLog] = None,
 ) -> List[DoAllInfo | ReductionInfo]:
     """Analyzes the results of the graph simplification and create simple doall patterns.
     Implementation is fundamentally similar to the original doall detector, but implemented in a more maintainable fashion.
@@ -174,12 +198,26 @@ def identify_simple_doall_and_reduction(
     known_pattern_keys: Set[Tuple[Any, ...]] = set()
     # shared by every candidate, see detect_doall_sharing_clauses
     clause_cache: Dict[ClauseCacheKey, SharingClauses] = dict()
-    known_pattern_tags: Set[str] = set()
+    # the pattern registered for each tag, which a colliding candidate is the duplicate of
+    known_pattern_tags: Dict[str, DoAllInfo | ReductionInfo] = dict()
     logger.info("Identifying trivial doall suggestions.")
 
     show_plot(tg)
 
     prevented_loops: Set[NodeID] = set()
+    # the region of each loop, for recording decisions. The task graph holds several copies of a
+    # loop, so this is looked up once per loop rather than once per copy.
+    decision_regions: Dict[NodeID, CodeRegion] = dict()
+
+    def record_rejection(pet_node_id: NodeID, reason: DecisionReason) -> None:
+        if decisions is None:
+            return
+        region = decision_regions.get(pet_node_id)
+        if region is None:
+            region = region_of_pet_node(tg.pet, pet_node_id)
+            decision_regions[pet_node_id] = region
+        decisions.reject(DECISION_DETECTOR, DECISION_PATTERN_TYPES, region, reason)
+
     # candidate accounting, reported once at the end. The variable classification is by far the
     # most expensive part of a candidate, so the ratio of classified to skipped candidates is
     # what tells whether this pass is doing avoidable work.
@@ -204,6 +242,10 @@ def identify_simple_doall_and_reduction(
         if not isinstance(node.created_context, LoopParentContext):
             continue
         counts["candidates"] += 1
+        if decisions is not None and node.pet_node_id not in decision_regions:
+            region = region_of_pet_node(tg.pet, node.pet_node_id)
+            decision_regions[node.pet_node_id] = region
+            decisions.consider(DECISION_DETECTOR, DECISION_PATTERN_TYPES, region)
         # check if loop is not already preventedvariables
         if node.pet_node_id in prevented_loops:
             counts["skipped_prevented"] += 1
@@ -219,6 +261,14 @@ def identify_simple_doall_and_reduction(
         )
         if len(iteration_contexts) < 2:
             counts["skipped_too_few_iterations"] += 1
+            record_rejection(
+                node.pet_node_id,
+                DecisionReason(
+                    kind=TOO_FEW_ITERATIONS,
+                    message="Fewer than two iterations of this loop were observed during profiling, so "
+                    "there is no evidence that its iterations are independent.",
+                ),
+            )
             continue
         # get subtrees of iteration contexts
         subtrees: Dict[IterationContext, Set[Context]] = dict()
@@ -344,6 +394,18 @@ def identify_simple_doall_and_reduction(
                             if dep.origin == DepOrigin.DYNAMIC_ANALYSIS:
                                 # dependency is trustworthy and definitely breaks doall
                                 dependency_found = True
+                                if decisions is not None:
+                                    record = DependencyRecord.from_dependency(dep)
+                                    record_rejection(
+                                        node.pet_node_id,
+                                        DecisionReason(
+                                            kind=LOOP_CARRIED_DEPENDENCY,
+                                            message="A "
+                                            + record.describe()
+                                            + " between different iterations was observed during profiling.",
+                                            dependency=record,
+                                        ),
+                                    )
                                 break
                             else:
                                 # dependency is static and may be too pessimistic.
@@ -365,6 +427,15 @@ def identify_simple_doall_and_reduction(
         reduction_vars = collect_reduction_variables(reduction_info)
         reduction: Set[str] = set([str(v.name) for v in reduction_vars])
         pattern_key = get_pattern_key(node.pet_node_id, node.created_context, reduction_vars)
+        if pattern_key is None:
+            record_rejection(
+                node.pet_node_id,
+                DecisionReason(
+                    kind=NO_PATTERN_NODE,
+                    message="A reduction was recognized, but no enclosing loop was found to attach it to.",
+                    details={"reduction_variables": sorted(str(v.name) for v in reduction_vars)},
+                ),
+            )
         if pattern_key is None or pattern_key in known_pattern_keys:
             # Nothing to register. The classification is still needed when static dependencies
             # are pending, because the second chance check below consumes its firstwritten /
@@ -394,6 +465,19 @@ def identify_simple_doall_and_reduction(
             if dep.var_name not in firstwritten.union(init).union(reduction):
                 # node is not a valid doall loop
                 prevented_loops.add(node.pet_node_id)
+                if decisions is not None:
+                    record = DependencyRecord.from_dependency(dep)
+                    record_rejection(
+                        node.pet_node_id,
+                        DecisionReason(
+                            kind=UNPRIVATIZABLE_STATIC_DEPENDENCY,
+                            message="The static analysis reports a "
+                            + record.describe()
+                            + " between iterations, and the variable cannot be privatized: it is neither "
+                            "written before it is read in each iteration nor a reduction variable.",
+                            dependency=record,
+                        ),
+                    )
                 # print("LOOP: ", node.created_context.get_code_scope(tg.pet))
                 # print("SECOND CHANCEs missed!: ", dep.dtype, dep.var_name)
                 continue
@@ -450,9 +534,13 @@ def identify_simple_doall_and_reduction(
 
         # two different nodes can still collide on a tag, so the exact check remains - it is just
         # no longer the one which every duplicate has to be built for.
+        # The pattern registered first can still be removed afterwards (prevented_loops below, or
+        # the caller's choice of reported pattern types), so the reason refers to it and is
+        # resolved against the final result when the decision log is finalized.
         if pattern.pattern_tag in known_pattern_tags:
+            record_rejection(node.pet_node_id, duplicate_pattern_reason(known_pattern_tags[pattern.pattern_tag]))
             continue
-        known_pattern_tags.add(pattern.pattern_tag)
+        known_pattern_tags[pattern.pattern_tag] = pattern
         patterns.append(pattern)
 
     logger.info("Doall/reduction candidates: " + ", ".join(k + "=" + str(v) for k, v in counts.items()))

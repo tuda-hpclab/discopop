@@ -26,7 +26,7 @@ The DiscoPoP MCP Server bridges the gap between Claude and DiscoPoP's profiling 
 - **Standalone CLI executable** - Run independently via command line
 - **Local deployment** - Uses stdio for direct Claude integration
 - **Persistent daemon mode** - Optional long-running server that keeps analysis data in memory between calls
-- **Automatic daemon launch** - Spawns a daemon terminal on the first tool call when none is running
+- **Opt-in daemon** - Start `discopop_mcp_server --daemon` yourself; the server connects to it on the first tool call
 - **Transparent fallback** - Falls back to inline execution when no daemon is available
 - **Comprehensive logging** - View all incoming calls and outgoing responses
 - **Type-safe** - Full type hints throughout
@@ -97,7 +97,7 @@ See [SETUP_GUIDE.md](SETUP_GUIDE.md) for more options or [CLAUDE_INTEGRATION.md]
 
 This section documents the tools around build and execution configuration. The server exposes further tools for running the pipeline and querying its results; call `tools/list`, or see `mcp_server/tools/`, for the complete set.
 
-### 1. `set_compile_script`
+### `set_compile_script`
 
 Writes a build script for a project. Must use `$CC` / `$CXX` and `$CFLAGS` / `$CXXFLAGS` instead of hard-coded compiler names, since the same script is reused for sequential, instrumented, hotspot-detection and parallel builds — only the settings file differs.
 
@@ -118,7 +118,7 @@ A `compile_validate.sh` is only relevant when the configuration also has a `vali
 }
 ```
 
-### 2. `create_execution_configuration`
+### `create_execution_configuration`
 
 Creates a named execution configuration — a subdirectory under `.discopop/project/configs/` describing how to run the compiled binary.
 
@@ -126,9 +126,9 @@ Creates a named execution configuration — a subdirectory under `.discopop/proj
 - `project_path` (string, required): Path to the target project
 - `config_name` (string, required): Name of the configuration; also the subdirectory name
 - `script_body` (string, required): Body of `execute.sh`, the timed run
-- `compile_script_body` (string, optional): Body of a per-configuration `compile.sh` override
 - `validate_script_body` (string, optional): Body of `validate.sh`, an untimed output check run after a successful `execute.sh`; the run counts as correct only if both exit `0`
-- `validation_compile_script_body` (string, optional): Body of a per-configuration `compile_validate.sh`; requires a `validate.sh`, and is rejected without one
+
+A configuration that needs its own build, or a separate build for `validate.sh`, gets it from `set_compile_script` with `config_name` (and `purpose: "validate"`) once the configuration exists. Calling the tool again with the same `config_name` overwrites `execute.sh`, and `validate.sh` if given; `delete_execution_configuration` removes a configuration, keeping its recorded execution results and any analysis results gathered with it.
 
 **Example:**
 ```json
@@ -140,7 +140,7 @@ Creates a named execution configuration — a subdirectory under `.discopop/proj
 }
 ```
 
-### 3. `get_configurations`
+### `get_configurations`
 
 Retrieves the build scripts and execution configurations defined for a target project, reading `<project_path>/.discopop/project/configs/`.
 
@@ -156,23 +156,29 @@ Retrieves the build scripts and execution configurations defined for a target pr
 }
 ```
 
-### 4. `get_execution_results`
+### `get_execution_results`
 
-Retrieves execution results from prior program executions.
+Shows the recorded runs of a project's scripts, to find out why something failed: a build or profiling step of `gather_data`, a candidate that `run_auto_tuning` rejected, or a run started from the GUI or the command line.
 
 **Parameters:**
 - `project_path` (string, required): Path to the target project
+- `config_name` (string, optional): Only the runs of this configuration
+- `script` (string, optional): Only the runs of this script, e.g. `execute.sh` or `compile.sh`
+- `failed_only` (boolean, optional): Only runs with a non-zero return code, a timeout, or suggestions that could not be applied
+- `include_output` (boolean, optional): Add the last 2000 characters of each run's stdout and stderr
 
-Reads `<project_path>/.discopop/project/execution_results.json`.
+Reads `<project_path>/.discopop/project/execution_results.json` and returns it grouped by configuration, script and settings file, with one compact entry per run (`code`, `time`, `time_source`, `thread_count`, `applied_suggestions`; further fields only when they carry information). Program output is left out unless `include_output` is set: a full log can be hundreds of kilobytes.
 
 **Example:**
 ```json
 {
-  "project_path": "./my_project"
+  "project_path": "./my_project",
+  "failed_only": true,
+  "include_output": true
 }
 ```
 
-### 5. `get_data_dependencies`
+### `get_data_dependencies`
 
 Returns data dependencies (RAW, WAR, WAW) that cross or lie within a specified code region. Results contain both statically and dynamically identified dependencies — dynamic profiling correctly captures aliasing and other cases that pure static analysis cannot resolve.
 
@@ -186,13 +192,58 @@ Dependencies are grouped by direction:
 - `file_path` (string, required): Absolute path to the source file
 - `start_line` (integer, required): First line of the code region (inclusive)
 - `end_line` (integer, required): Last line of the code region (inclusive)
-- `include_raw` / `include_war` / `include_waw` (boolean, optional): Filter by dependency type (default: all true)
-- `include_incoming` / `include_outgoing` / `include_intra_region` (boolean, optional): Filter by direction (default: all true)
-- `var_name` (string, optional): Restrict results to a specific variable; automatically excludes incoming dependencies (aliasing safety)
+- `dep_types` (array of `"RAW"`, `"WAR"`, `"WAW"`, optional): Dependency types to return (default: all)
+- `directions` (array of `"incoming"`, `"outgoing"`, `"intra_region"`, optional): Directions to return (default: all)
+- `var_name` (string, optional): Restrict results to a specific variable; automatically excludes incoming dependencies (aliasing safety, reported as `incoming_excluded_due_to_var_name_filter`)
+
+Each entry carries `dep_type`, `var_name`, `source` and `sink`. An end in the queried `file_path` is given as its bare line number, an end in another file as `{"file", "line"}`.
+
+At most 200 dependencies are returned, ordered by direction (incoming, outgoing, intra_region), then sink and source line, so a cut result is reproducible. `num_dependencies` is always the full count; a cut result adds `truncated: true`, `num_dependencies_by_direction` and a `next_step` naming the ways to narrow the query (smaller line range, `var_name`, `dep_types`, `directions`).
 
 This tool is cheap to call repeatedly — `DetectionResult` and `FileMapping` are cached in memory after the first load. Requires `gather_data` to have been run first.
 
-### 6. `run_auto_tuning`
+### `explain_parallelization`
+
+Explains why DiscoPoP did or did not suggest a parallelization for the code at given lines. Returns every code region pattern detection considered that overlaps them, innermost first, with its outcome:
+- `accepted` — with the ids of the resulting suggestions (as strings, for `get_parallelization_patches`)
+- `rejected` — with the reasons, e.g. the data dependency between iterations that prevents it (type, variable, source and sink lines, and whether profiling or the static analysis found it), or too few observed iterations
+- `not_reported` — passed the checks, but its pattern type was not part of the result
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `file_path` (string, required): Absolute path to the source file
+- `start_line` (integer, required): Line to explain, or the first line of a range
+- `end_line` (integer, optional): Last line of the range (default: `start_line`)
+
+It reads `.discopop/explorer/pattern_decisions.json`, which `discopop_explorer` writes next to `patterns.json` (`--pattern-decisions`). The file is format-versioned and not tied to a detector, so further pattern detectors can record their decisions in it; see `discopop_explorer/classes/patterns/PatternDecisions.py`.
+
+### `get_hotspots`
+
+Lists the code regions (loops and functions) where the program spends its time, from the hotspot detection that `gather_data(hotspot_config_names=[...])` runs. Each region has a hotness: `YES` — above-average runtime that also grows with the input more than average; `MAYBE` — only one of the two; `NO` — neither. Regions come hottest class first, then by their longest measured runtime, with one inclusive runtime per hotspot profiling run and demangled function names. A `warning` says when only one input size was profiled, since growth with the input cannot be judged then.
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `hotness` (array of `YES`/`MAYBE`/`NO`, optional): Default `["YES", "MAYBE"]`
+- `region_type` (`loop` or `function`, optional): Default both
+- `file_path` (string, optional): Only regions in this source file
+- `limit` (integer, optional): Default 20; `truncated: true` when more matched
+
+### `get_project_status`
+
+Answers in one cheap, read-only call where a project stands in the DiscoPoP workflow and which call comes next, so an agent starting or resuming work does not have to probe several tools.
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+
+**Returns** (fields that do not apply are left out):
+- `initialized`, `compile_script_configured`, `configurations` (names of the runnable configurations)
+- `pipeline`: one entry per step — `hotspot_detection`, `instrumentation`, `profiling`, `pattern_detection`, `patch_generation` — with the time it last ran (`at`) and `stale` when a source file is newer, the same test `gather_data` uses to decide what to re-run; `{"done": false}` for a step that has not run
+- `suggestions` (number of suggestions the pattern detection produced; one suggestion can patch several files), `hotspot_results`, `applied_suggestions`
+- `auto_tuning`: the last tuning run's `config`, whether it was `complete`, its selected `suggestion_ids`, `speedup` and `thread_count`, and `stale` when it predates the current pattern detection
+- `note` when the sources were last changed by applying or rolling back suggestions: that marks the steps stale, but the analysis still describes the un-patched sources
+- `next_step`: the setup step still missing, `gather_data` when there is no or only stale analysis, `run_auto_tuning` when suggestions exist but have not been tuned, `manage_patches` to apply a tuning selection, and so on
+
+### `run_auto_tuning`
 
 Runs the [empirical autotuner](../docs/tools/Autotuner.md) and returns the combination of suggestions it selected, so the choice of patches is measured rather than guessed. The tuner compiles, executes and validates candidate combinations in throwaway copies of the project and keeps the fastest one that still produces a valid result.
 
@@ -203,8 +254,9 @@ Patches that are already applied are cleared before the search (the tuner has to
 **Parameters:**
 - `project_path` (string, required): Absolute path to the project root
 - `config_name` (string, required): Execution configuration to tune (a directory under `.discopop/project/configs/`)
-- `apply` (boolean, optional): Apply the selected combination once the search is done, default `false`. The result then carries `applied` with the ids that reached the code; undo them with `manage_patches(action="rollback", ...)`.
-- `algorithm` (integer, optional): Search algorithm. Omit it and the tool picks `6` (hotspot-guided region descent) when hotspot detection results are available, and `4` (greedy forward search) otherwise; the choice and its reason come back as `algorithm` / `algorithm_selection`. Pass a value only to override that; an explicit `6` without hotspot results is refused rather than silently replaced. See `docs/tools/Autotuner.md` for the full list.
+- `apply` (boolean, optional): Apply the selected combination once the search is done, default `false`. The result then carries `applied` with the ids that reached the code; undo them with `manage_patches(action="rollback", ...)`. With `suggestion_ids`, the given selection is applied whenever its `outcome` is `valid`, even if it is slower than the un-patched project; an `invalid`, `failed` or `not_applied` one never is.
+- `suggestion_ids` (array of strings or integers, optional): Measure exactly this selection instead of running a search (see below). The ids are the `pattern_id` values of `get_parallelization_patches`. Cannot be combined with `algorithm`.
+- `algorithm` (string, optional): Search algorithm: `independent`, `linear`, `evolutionary`, `greedy`, `coordinate_descent` or `hotspot_guided`. Omit it and the tool picks `hotspot_guided` (hotspot-guided region descent) when hotspot detection results are available, and `greedy` (greedy forward search) otherwise; the choice and its reason come back as `algorithm` / `algorithm_selection`. Pass a value only to override that; an explicit `hotspot_guided` without hotspot results is refused rather than silently replaced. The names stand for the tuner's `-A` values 0, 1, 3, 4, 5 and 6, which are still accepted. See `docs/tools/Autotuner.md` for details.
 - `timeout_seconds` (integer, optional): Wall clock bound for the whole search, default `3600`
 
 **Preconditions:** `gather_data` must have been run. Running `gather_data` with `hotspot_config_names` set is what makes the hotspot-guided search available.
@@ -222,7 +274,7 @@ Patches that are already applied are cleared before the search (the tuner has to
 ```json
 {
   "status": "success",
-  "algorithm": 6,
+  "algorithm": "hotspot_guided",
   "algorithm_selection": "hotspot-guided region descent, chosen because hotspot results are available",
   "suggestion_ids": ["7", "12"],
   "speedup": 2.31,
@@ -236,6 +288,36 @@ Patches that are already applied are cleared before the search (the tuner has to
 ```
 
 This is a measurement run: one compilation plus one execution of the project per candidate. When `timeout_seconds` expires the search is stopped and the best combination measured so far is still returned, with `"status": "timeout"` and `"partial": true`.
+
+#### Measuring a given selection
+
+With `suggestion_ids`, no search runs: the tool measures the un-patched project and exactly the given selection (the tuner's `-s <ids> --skip-removal-pass`, which also skips the tuner's refinement of the selection), and reports that one measurement. Unknown ids, malformed ids and a combination with `algorithm` are rejected before anything is cleared, compiled or run. Applied patches are cleared and restored, project copies cleaned up and cancellation handled as for a search. The tuner's result files in `.discopop/auto_tuner/` and its statistics graph (`.discopop/dp_autotuner_statistics.dot/.svg`) are restored afterwards, so the result of the last search, which the GUI and `discopop_project_manager --apply-suggestions auto` apply and `get_project_status` reports, is not replaced by the measurement.
+
+The result carries `"mode": "selection"` and, instead of the search's statistics:
+- `outcome`: `valid` (built, ran and passed the validation), `invalid` (ran, but the result failed the validation, i.e. `validate.sh` or the exit code), `failed` (the build or execution failed, including an execution stopped after twice the un-patched project's wall clock time) or `not_applied` (a patch could not be applied, listed in `not_applied`; nothing was measured)
+- `status`: `success` for a `valid` outcome, `rejected` otherwise
+- `result_valid`: whether the output passed the validation; `null` when it was never checked
+- `runtime` and `baseline_runtime` (seconds), `speedup` over the un-patched project and `efficiency` — `speedup` only for a `valid` outcome, since a program that crashes or computes the wrong result is fast for the wrong reason
+- `return_code` of the selection's run, and a `diagnosis_hint` pointing to `get_execution_results` when it was rejected
+
+```json
+{
+  "status": "success",
+  "mode": "selection",
+  "suggestion_ids": ["3", "5"],
+  "outcome": "valid",
+  "result_valid": true,
+  "return_code": 0,
+  "runtime": 4.0,
+  "baseline_runtime": 10.0,
+  "speedup": 2.5,
+  "efficiency": 0.625,
+  "thread_count": 4,
+  "applied": false
+}
+```
+
+A timeout before the selection's measurement is complete is an error; a timeout afterwards (while the tuner re-runs its best configuration) keeps the measurement.
 
 ## Logging Output
 
@@ -252,16 +334,10 @@ Enable `--debug` for full argument/response logging.
 
 ## Testing
 
-Run the test suite:
+The unit tests are colocated with the source as `test_*.py` files. From the repository root:
 
 ```bash
-python -m unittest discover -s mcp_server -p "test_*.py" -v
-```
-
-Or with pytest:
-
-```bash
-pytest mcp_server/test_server.py -v
+venv/bin/python -m pytest mcp_server
 ```
 
 ## Guidelines for LLM Agents
@@ -290,11 +366,11 @@ So `gather_data` rebuilds the project plainly (`par_settings.json`, falling back
 
 ### Limiting the exposed tools
 
-`--tools analysis` leaves out the three project setup tools (`initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration`), which are neither listed nor callable in that mode. Use it when pointing an agent at a project that is already configured: it removes roughly a third of the tool definitions from the agent's context, and rules out an `initialize_discopop_directory(reset=true)` that would delete the configurations the agent was pointed at.
+`--tools analysis` leaves out the project setup tools (`initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration`, `delete_execution_configuration`), which are neither listed nor callable in that mode. Use it when pointing an agent at a project that is already configured: it removes their tool definitions from the agent's context, and rules out an `initialize_discopop_directory(reset=true)` that would delete the analysis results and the recorded runs of the project the agent was pointed at (its configurations are kept).
 
 ## Daemon Mode
 
-By default, Claude Code spawns a fresh `discopop_mcp_server` process for each session. This is stateless — every tool call starts from scratch and any data loaded during the session (such as the `DetectionResult` produced by `run_pattern_detection`) is discarded when the session ends.
+By default, Claude Code starts a fresh `discopop_mcp_server` process for each session. Data loaded during the session (such as the `DetectionResult` produced by `gather_data`) is cached only for that session and discarded when it ends.
 
 **Daemon mode** (`--daemon`) solves this by running a single long-lived server process that keeps its internal state alive across multiple tool calls and across multiple Claude sessions.
 
@@ -305,13 +381,14 @@ When Claude Code runs `discopop_mcp_server` (the default, no flags), the process
 On the **first tool call**:
 
 1. The proxy checks whether a daemon is already listening on `localhost:7777`.
-2. If no daemon is found, it attempts to **automatically spawn one** in a new terminal window using the first available terminal emulator (`gnome-terminal`, `xterm`, `konsole`, `alacritty`, `kitty`, and others).
-3. Once a daemon is reachable, the proxy opens a **single persistent connection** to it and forwards all subsequent tool calls through that connection for the lifetime of the Claude session.
-4. If the daemon cannot be reached (no graphical display, spawn timeout, or connection error), every tool call **falls back to inline execution** — the old stateless behaviour — so the server remains fully functional without a daemon.
+2. If one is found, the proxy opens a **single persistent connection** to it and forwards all subsequent tool calls through that connection for the lifetime of the Claude session.
+3. If none is found, or the connection fails, every tool call **runs inline** in the proxy process — the stateless behaviour — so the server is fully functional without a daemon.
 
-### Running the daemon manually
+The proxy never starts a daemon on its own.
 
-You can start the daemon yourself instead of relying on auto-spawn:
+### Running the daemon
+
+Start the daemon in a terminal of your choice before starting the MCP client:
 
 ```bash
 discopop_mcp_server --daemon
@@ -333,7 +410,7 @@ discopop_mcp_server --daemon-port 8888
 
 |                          | `discopop_mcp_server` (default) | `discopop_mcp_server --daemon` |
 |--------------------------|--------------------------------|-------------------------------|
-| Who runs it              | Claude Code (automatic)        | You, manually (or auto-spawned on first tool call) |
+| Who runs it              | Claude Code (automatic)        | You, manually                 |
 | Lifetime                 | One Claude session             | Until `Ctrl+C`                |
 | Daemon check timing      | First tool call                | N/A                           |
 | State between tool calls | None                           | Kept alive in `ToolContext`   |
@@ -344,7 +421,7 @@ discopop_mcp_server --daemon-port 8888
 
 The daemon's `ToolContext` maintains two caches:
 
-- **`DetectionResult`** — loaded from `.discopop/explorer/detection_result_dump.json` using `jsonpickle` on the first call that needs it (e.g. `get_data_dependencies`, `get_parallelization_patches`). Subsequent calls skip the deserialization step entirely.
+- **`DetectionResult`** — loaded from `.discopop/explorer/detection_result_dump.json` using `jsonpickle` on the first call that needs it (`get_data_dependencies`). Subsequent calls skip the deserialization step entirely.
 - **`FileMapping`** — loaded from `.discopop/FileMapping.txt` on the first call to `get_data_dependencies`. Maps numeric file IDs to absolute source file paths.
 
 Both caches are keyed by `project_path` and automatically invalidated when the underlying file's modification time changes (i.e., after `gather_data` runs again).
@@ -361,8 +438,11 @@ The default (`discopop_mcp_server`) uses **stdio** for communication with Claude
 2. Proxy checks whether a daemon session is open
    - If yes: forwards the call to the daemon over SSE
    - If no: executes the tool inline
-3. Server logs the incoming call and outgoing response
-4. Response returned to Claude
+3. The tool handler runs in a worker thread, so the server stays responsive while a long tool (`gather_data`, `run_auto_tuning`) runs. Tool calls still run one at a time: handlers change the working directory and share their caches
+4. If the client sent a `progressToken`, the server sends MCP progress notifications: one per pipeline step of `gather_data`, the number of measured candidates for `run_auto_tuning`, and a heartbeat every 15 seconds during long steps. Through the daemon, the proxy relays them
+5. If the client cancels a call (`notifications/cancelled`), the processes the tool started — compile and execute scripts, `discopop_explorer`, the autotuner — are stopped with their children, and the tool cleans up as after a timeout: `gather_data` still rebuilds the project without instrumentation, `run_auto_tuning` removes its project copies and restores the patches it cleared. The next call starts once that cleanup is done
+6. Server logs the incoming call and outgoing response
+7. Response returned to Claude
 
 ## Shipping to Users
 

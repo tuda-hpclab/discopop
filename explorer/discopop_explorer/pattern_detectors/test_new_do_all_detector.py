@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Tuple
 
+from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
@@ -16,6 +17,18 @@ from discopop_explorer.classes.TaskGraph.Contexts.IterationContext import Iterat
 from discopop_explorer.classes.TaskGraph.Contexts.LoopParentContext import LoopParentContext
 from discopop_explorer.classes.TaskGraph.Contexts.WorkContext import WorkContext
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
+from discopop_explorer.classes.patterns.PatternDecisions import (
+    ACCEPTED,
+    DUPLICATE_OF_REJECTED_PATTERN,
+    DUPLICATE_PATTERN,
+    LOOP_CARRIED_DEPENDENCY,
+    NO_PATTERN_NODE,
+    NOT_REPORTED,
+    REJECTED,
+    TOO_FEW_ITERATIONS,
+    UNPRIVATIZABLE_STATIC_DEPENDENCY,
+    PatternDecisionLog,
+)
 from discopop_explorer.enums.DepOrigin import DepOrigin
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
@@ -24,6 +37,7 @@ from discopop_explorer.functions.PEGraph.queries.data_edge_index import DataEdge
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
 from discopop_explorer.pattern_detectors.reduction_detector import ReductionInfo
 from discopop_explorer.pattern_detectors.new_do_all_detector import (
+    DECISION_DETECTOR,
     detect_doall_sharing_clauses,
     identify_simple_doall_and_reduction,
 )
@@ -529,3 +543,269 @@ def test_pointer_only_read_in_the_loop_stays_shared(
 
     assert shared == {"rA"}
     assert private == set()
+
+
+def _decided(tg: TaskGraph, loop: Node) -> Any:
+    """runs the detection with a decision log and returns the loop's finalized decision"""
+    decisions = PatternDecisionLog()
+    patterns = identify_simple_doall_and_reduction(tg, ASTPatternDetectionHelper(), DataEdgeIndex(tg.pet), decisions)
+    decisions.finalize(DECISION_DETECTOR, patterns)
+    decision = decisions.get(DECISION_DETECTOR, loop.id)
+    assert decision is not None
+    return decision
+
+
+def test_an_accepted_loop_is_recorded_with_its_pattern(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    tg, loop, _loop_ctx, _work1, _work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    decision = _decided(tg, loop)
+    assert decision.outcome == ACCEPTED
+    assert [p["type"] for p in decision.patterns] == ["doall"]
+    assert decision.reasons == []
+    assert (decision.region.kind, decision.region.start_line, decision.region.end_line) == ("loop", 5, 10)
+
+
+def test_the_dependency_that_prevents_a_loop_is_recorded(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    tg, loop, _loop_ctx, work1, work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    dep = Dependency(EdgeType.DATA)
+    dep.dtype = DepType.RAW
+    dep.var_name = "x"
+    dep.source_line = LineID("1:7")
+    dep.sink_line = LineID("1:6")
+    dep.origin = DepOrigin.DYNAMIC_ANALYSIS
+    work1.register_outgoing_dependency(work2, dep)
+
+    decision = _decided(tg, loop)
+    assert decision.outcome == REJECTED
+    assert [r.kind for r in decision.reasons] == [LOOP_CARRIED_DEPENDENCY]
+    recorded = decision.reasons[0].dependency
+    assert (recorded.type, recorded.variable, recorded.source_line, recorded.sink_line, recorded.origin) == (
+        "RAW",
+        "x",
+        "1:7",
+        "1:6",
+        "dynamic",
+    )
+
+
+def test_an_unprivatizable_static_dependency_is_recorded(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    # unlike in test_identify_simple_doall_allows_static_dependency_first_written_inside_loop,
+    # "x" is not first written inside the loop, so the second chance fails
+    tg, loop, _loop_ctx, work1, work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    dep = Dependency(EdgeType.DATA)
+    dep.dtype = DepType.RAW
+    dep.var_name = "x"
+    dep.origin = DepOrigin.STATIC_ANALYSIS
+    work1.register_outgoing_dependency(work2, dep)
+
+    decision = _decided(tg, loop)
+    assert decision.outcome == REJECTED
+    assert [r.kind for r in decision.reasons] == [UNPRIVATIZABLE_STATIC_DEPENDENCY]
+    assert decision.reasons[0].dependency.origin == "static"
+
+
+def test_too_few_observed_iterations_are_recorded(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    main = make_node("1:1", NodeType.FUNC, name="main")
+    loop = make_node("1:2", NodeType.LOOP, name="loop")
+    pet = build_pet_graph([main, loop], [(main.id, loop.id, EdgeType.CHILD)])
+    loop_ctx = LoopParentContext(parent_loop=loop.id)
+    tg_loop = make_tg_node(loop.id)
+    tg_loop.register_created_context(loop_ctx)
+    tg = build_task_graph(pet, [tg_loop])
+
+    decision = _decided(tg, loop)
+    assert decision.outcome == REJECTED
+    assert [r.kind for r in decision.reasons] == [TOO_FEW_ITERATIONS]
+
+
+def test_a_loop_without_a_node_for_its_pattern_is_recorded_as_rejected(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+    monkeypatch: Any,
+) -> None:
+    # e.g. a reduction whose loop parent context names no loop: it passes every check, but no
+    # pattern can be registered, which must not read as "passed, but not reported"
+    from discopop_explorer.pattern_detectors import new_do_all_detector
+
+    tg, loop, _loop_ctx, _work1, _work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    monkeypatch.setattr(new_do_all_detector, "get_pattern_key", lambda *_args: None)
+
+    decision = _decided(tg, loop)
+    assert decision.outcome == REJECTED
+    assert [r.kind for r in decision.reasons] == [NO_PATTERN_NODE]
+
+
+def _loop_copy(make_tg_node: Any, loop_id: Any, body_id: Any, position: int, carried: bool = False) -> Any:
+    """a task graph copy of a loop with two iterations of `body_id`, with a dependency between
+    them if `carried`"""
+    loop_ctx = LoopParentContext(parent_loop=loop_id)
+    works = []
+    for index in range(2):
+        iteration = IterationContext(parent_context=loop_ctx, loopstate_iteration_ids=[index])
+        loop_ctx.add_contained_context(iteration)
+        iteration.register_parent_context(loop_ctx)
+        work = WorkContext()
+        work.add_node(make_tg_node(body_id, level=1, position=2 * position + index))
+        iteration.add_contained_context(work)
+        work.register_parent_context(iteration)
+        works.append(work)
+    if carried:
+        dep = Dependency(EdgeType.DATA)
+        dep.dtype = DepType.RAW
+        dep.var_name = "x"
+        dep.origin = DepOrigin.DYNAMIC_ANALYSIS
+        works[0].register_outgoing_dependency(works[1], dep)
+    tg_loop = make_tg_node(loop_id, level=0, position=position)
+    tg_loop.register_created_context(loop_ctx)
+    return tg_loop
+
+
+def _colliding_loops(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    first_is_prevented_later: bool,
+) -> Tuple[TaskGraph, Node, Node]:
+    """two loops at the same lines, so that their doall patterns collide on the pattern tag. The
+    first one is registered, the second one is dropped as its duplicate. With
+    `first_is_prevented_later`, a later copy of the first loop carries a dependency, which removes
+    its pattern again."""
+    main = make_node("1:1", NodeType.FUNC, name="main")
+    first = make_node("1:2", NodeType.LOOP, name="first", start_line=5, end_line=10)
+    first_body = make_node("1:3", NodeType.CU, name="first_body", start_line=6, end_line=6)
+    second = make_node("1:4", NodeType.LOOP, name="second", start_line=5, end_line=10)
+    second_body = make_node("1:5", NodeType.CU, name="second_body", start_line=7, end_line=7)
+    pet = build_pet_graph(
+        [main, first, first_body, second, second_body],
+        [
+            (main.id, first.id, EdgeType.CHILD),
+            (first.id, first_body.id, EdgeType.CHILD),
+            (main.id, second.id, EdgeType.CHILD),
+            (second.id, second_body.id, EdgeType.CHILD),
+        ],
+    )
+    copies = [
+        _loop_copy(make_tg_node, first.id, first_body.id, 0),
+        _loop_copy(make_tg_node, second.id, second_body.id, 1),
+    ]
+    if first_is_prevented_later:
+        copies.append(_loop_copy(make_tg_node, first.id, first_body.id, 2, carried=True))
+    return build_task_graph(pet, copies), first, second
+
+
+def _detect_with_decisions(tg: TaskGraph, reported_types: Tuple[type, ...] = (DoAllInfo, ReductionInfo)) -> Any:
+    """runs the detection and finalizes its decisions against the patterns of `reported_types`,
+    as PatternDetectorX.detect_patterns does for the enabled pattern types"""
+    decisions = PatternDecisionLog()
+    patterns = identify_simple_doall_and_reduction(tg, ASTPatternDetectionHelper(), DataEdgeIndex(tg.pet), decisions)
+    reported = [p for p in patterns if isinstance(p, reported_types)]
+    decisions.finalize(DECISION_DETECTOR, reported)
+    return decisions, reported
+
+
+def test_a_duplicate_refers_to_the_reported_pattern_it_duplicates(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    tg, first, second = _colliding_loops(make_node, build_pet_graph, build_task_graph, make_tg_node, False)
+    decisions, reported = _detect_with_decisions(tg)
+
+    assert [p.node_id for p in reported] == [first.id]
+    duplicate = decisions.get(DECISION_DETECTOR, second.id)
+    assert duplicate.outcome == REJECTED
+    assert [r.kind for r in duplicate.reasons] == [DUPLICATE_PATTERN]
+    assert duplicate.reasons[0].details == {
+        "pattern_id": reported[0].pattern_id,
+        "pattern_type": "doall",
+        "node_id": first.id,
+    }
+
+
+def test_a_duplicate_of_a_pattern_which_is_removed_later_is_not_rejected_as_a_duplicate(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    # the pattern the second loop collides with is removed, since a later copy of the first loop
+    # is prevented: "duplicate of" would point at a suggestion which does not exist
+    tg, first, second = _colliding_loops(make_node, build_pet_graph, build_task_graph, make_tg_node, True)
+    decisions, reported = _detect_with_decisions(tg)
+
+    assert reported == []
+    assert decisions.get(DECISION_DETECTOR, first.id).outcome == REJECTED
+    duplicate = decisions.get(DECISION_DETECTOR, second.id)
+    assert duplicate.outcome == NOT_REPORTED
+    assert [r.kind for r in duplicate.reasons] == [DUPLICATE_OF_REJECTED_PATTERN]
+    details = duplicate.reasons[0].details
+    assert (details["node_id"], details["start_line"], details["end_line"]) == (first.id, 5, 10)
+    assert details["reasons"] == [LOOP_CARRIED_DEPENDENCY]
+    assert "pattern_id" not in details
+
+
+def test_a_duplicate_of_a_pattern_whose_type_is_not_reported_is_not_reported_either(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    tg, first, second = _colliding_loops(make_node, build_pet_graph, build_task_graph, make_tg_node, False)
+    decisions, reported = _detect_with_decisions(tg, reported_types=(ReductionInfo,))
+
+    assert reported == []
+    for loop in (first, second):
+        decision = decisions.get(DECISION_DETECTOR, loop.id)
+        assert (decision.outcome, decision.reasons) == (NOT_REPORTED, [])
+
+
+def test_without_a_decision_log_nothing_is_recorded_and_the_result_is_unchanged(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    tg, _loop, _loop_ctx, _work1, _work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    assert len(identify_simple_doall_and_reduction(tg, ASTPatternDetectionHelper(), DataEdgeIndex(tg.pet))) == 1

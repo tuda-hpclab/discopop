@@ -77,6 +77,14 @@ def check_single_combination(
 
     show_debug_stats(debug_stats, logger)
 
+    # The refinement below measures more than the selection that was asked for: it
+    # profiles the selection with hotspot instrumentation and drops the suggestions
+    # that slowed their region down. A caller that wants exactly the named selection
+    # measured -- and nothing else compiled or run -- skips it.
+    if arguments.skip_removal_pass:
+        logger.info("Skipping the refinement of the checked suggestions (--skip-removal-pass).")
+        return
+
     # step 2: refinement
 
     # get hotspot measurement of created configuration
