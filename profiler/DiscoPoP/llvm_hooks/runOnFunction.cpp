@@ -140,6 +140,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
 
     fillCUVariables(TopRegion, globalVariablesSet, CUVector, BBIDToCUIDsMap);
 
+    loopToPETNodeID.clear();
     fillStartEndLineNumbers(root, LI);
 
     secureStream();

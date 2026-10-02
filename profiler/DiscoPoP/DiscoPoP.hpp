@@ -114,6 +114,9 @@ private:
   ofstream *outCallpathStateIDCounter;
   // Mohammad 23.12.2020
   map<string, string> loopStartLines;
+  // id of the loop node in Data.xml, per llvm::Loop of the function processed last
+  // (filled by fillStartEndLineNumbers, read by CFA for loopstate_positions.txt)
+  map<llvm::Loop *, string> loopToPETNodeID;
 
   // structures to get list of global variables
   set<string> programGlobalVariablesSet;
@@ -132,6 +135,9 @@ private:
   bool isaCallOrInvoke(Instruction *BI);
 
   bool sanityCheck(BasicBlock *BB);
+
+  // LID to report for leaving a loop through the exit block BB (see CFA)
+  LID getLoopExitLID(BasicBlock *BB);
 
   void collectDebugInfo();
 
@@ -373,6 +379,13 @@ struct container_hash {
   std::vector<instr_info_t> instructions_;
   std::map<std::string, int> path_to_id_;
   std::map<llvm::Loop*, int> loop_to_id;
+  // per loop id of the current module: id of its loop node in Data.xml and its start
+  // location (file_id:line), as written to loopstate_positions.txt
+  struct LoopIdentity {
+    std::string pet_node_id;
+    std::string start_location;
+  };
+  std::map<int32_t, LoopIdentity> loop_id_to_identity;
 
   // DPReduction end
 

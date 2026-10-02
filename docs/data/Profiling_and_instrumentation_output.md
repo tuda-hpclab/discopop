@@ -71,3 +71,16 @@ The format is quite simple and will be explained using the following example:
 `Loop Line Number` refers to the source code line of the loop which contains the identified operation.
 `Reduction Line Number` refers to the source code line where the operation is located.
 The name of the affected reduction variable is presented by `Variable Name` and `Operation Name` shows which operation is used for the reduction.
+
+## Loopstate Positions
+The callpath states written to `stateID_to_callpath_mapping.txt` describe the loops active within a function by labels of the form `<function>_loopstate<digits>`, carrying one digit per loop of the function: `0`, `1` or `2` name the iteration bucket of an active loop, `3` marks an inactive loop.
+Which loop each digit position stands for is stored in a file named `loopstate_positions.txt`.
+Each line of the file describes one digit position of one function.
+The used format is as follows: `<function_name> <position> <loop_id> <loop_node_id> <file_id>:<start_line>`.
+
+`function_name` is the (mangled) name used in the `_loopstate` labels, `position` the index of the digit within `<digits>`, counted from 0.
+`loop_id` is the loop's id within its module, as used in `loop_meta.txt`.
+`loop_node_id` is the id of the loop's node in `Data.xml`, and `<file_id>:<start_line>` the loop's start location, equal to that node's `startsAtLine`. Both are `-` if they are unknown.
+The positions follow a pre-order traversal of the function's loop nesting forest.
+Loops which are not instrumented for loop entry and exit, and thus are not part of the callpath states, are not listed.
+Since every compiled module appends to the file, a function compiled in multiple modules (e.g. an inline function defined in a header) is listed once per module.
