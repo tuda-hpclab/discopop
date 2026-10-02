@@ -206,8 +206,17 @@ std::vector<LoopTreeNode*> build_loop_forest(Function &F){
           else{
             if (fn.find("__dp_loop_exit") != string::npos)
             {
-              if(!open_loops.empty()){
-                open_loops.pop_back();
+              // close the exited loop (and any loop opened inside of it). A loop can have
+              // several exit calls, so an exit of a loop which is not open is ignored instead of
+              // closing the innermost open loop.
+              if (llvm::ConstantInt* CI = dyn_cast<llvm::ConstantInt>(ci->getArgOperand(1))) {
+                LOOP_ID loop_id = CI->getBitWidth() <= 32 ? (LOOP_ID)CI->getSExtValue() : 0;
+                for(std::size_t idx = open_loops.size(); idx > 0; --idx){
+                  if(open_loops[idx - 1]->loop_id == loop_id){
+                    open_loops.resize(idx - 1);
+                    break;
+                  }
+                }
               }
             }
           }
@@ -455,6 +464,12 @@ std::unordered_map<int32_t, std::vector<int32_t>> get_inverted_loop_callInstruct
 // builds a call tree for the given Module on the basis of the statically available information
 StaticCalltree DiscoPoP::buildStaticCalltree(Module &M) {
   StaticCalltree calltree;
+  // explicit mapping from the digit positions of the "<function>_loopstate<digits>" labels
+  // (see StaticCalltree.cpp) to the loops they describe, read by the explorer
+  std::ofstream loopstate_positions_file;
+  std::string loopstate_positions_path(getenv("DOT_DISCOPOP_PROFILER"));
+  loopstate_positions_path += "/loopstate_positions.txt";
+  loopstate_positions_file.open(loopstate_positions_path.data(), std::ios_base::app);
   for (Function &F : M) {
     cout << "BUILDING FUNCTION: " << F.getName().str() << "\n";
     // reconstruct the real loop nesting tree (preserves parent/child relationships, which is
@@ -464,6 +479,18 @@ StaticCalltree DiscoPoP::buildStaticCalltree(Module &M) {
     std::unordered_map<LoopTreeNode*, int32_t> node_to_offset;
     for(auto root : loop_forest){
       flatten_loop_forest(root, sequentialized_contained_loops, node_to_offset);
+    }
+    // <function> <position> <loop_id> <Data.xml loop node id> <file_id>:<start_line>
+    for(std::size_t position = 0; position < sequentialized_contained_loops.size(); ++position){
+      auto loop_id = sequentialized_contained_loops[position];
+      std::string pet_node_id = "-";
+      std::string start_location = "-";
+      auto identity = loop_id_to_identity.find(loop_id);
+      if(identity != loop_id_to_identity.end()){
+        pet_node_id = identity->second.pet_node_id;
+        start_location = identity->second.start_location;
+      }
+      loopstate_positions_file << F.getName().str() << " " << position << " " << loop_id << " " << pet_node_id << " " << start_location << "\n";
     }
     //cerr << "seq_contained_loops: " << std::endl;
     //for (auto s : sequentialized_contained_loops){
@@ -653,5 +680,6 @@ StaticCalltree DiscoPoP::buildStaticCalltree(Module &M) {
       }
     }
   }
+  loopstate_positions_file.close();
   return calltree;
 }

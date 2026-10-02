@@ -12,13 +12,13 @@
 
 #include "../DiscoPoP.hpp"
 
-bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
-  if (DP_DEBUG) {
-    errs() << "pass DiscoPoP: run pass on function " << F.getName().str() << "\n";
+// Returns true if runOnFunction instruments F, i.e. F reports its entry and exit to the runtime.
+// Calls to functions without instrumentation must not update the callpath state (see
+// runOnBasicBlock): the runtime would wait for the callee's __dp_func_exit forever.
+bool DiscoPoP::isInstrumentedFunction(Function &F) {
+  if (F.isDeclaration()) {
+    return false;
   }
-
-  // avoid instrumenting functions which are defined outside the scope of the
-  // project
 
   std::string dp_project_dir(getenv("DP_PROJECT_ROOT_DIR"));
 
@@ -71,7 +71,21 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     return false;
   }
 
+  int32_t tmp_file_id = 0;
+  determineFileID(F, tmp_file_id);
+  return tmp_file_id != 0;
+}
 
+bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
+  if (DP_DEBUG) {
+    errs() << "pass DiscoPoP: run pass on function " << F.getName().str() << "\n";
+  }
+
+  // avoid instrumenting functions which are defined outside the scope of the
+  // project, as well as helper and instrumentation functions
+  if (!isInstrumentedFunction(F)) {
+    return false;
+  }
 
   vector<CU *> CUVector;
   Node *root = new Node;
@@ -140,6 +154,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
 
     fillCUVariables(TopRegion, globalVariablesSet, CUVector, BBIDToCUIDsMap);
 
+    loopToPETNodeID.clear();
     fillStartEndLineNumbers(root, LI);
 
     secureStream();

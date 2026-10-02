@@ -114,4 +114,25 @@ void initialize_current_callpath_state() {
   calls_without_executed_transitions.push_back(0);
 }
 
+// whether the latest call of this thread updated the callpath state (see __dp_call)
+thread_local bool last_call_updated_callstate = false;
+// per active instrumented function of this thread: whether it was entered through such a call
+thread_local std::vector<bool> function_entered_through_callstate_update;
+
+void register_call_for_callstate(bool updates_callstate) { last_call_updated_callstate = updates_callstate; }
+
+void enter_function_for_callstate() {
+  function_entered_through_callstate_update.push_back(last_call_updated_callstate);
+  last_call_updated_callstate = false;
+}
+
+bool leave_function_for_callstate() {
+  if (function_entered_through_callstate_update.empty()) {
+    return false;
+  }
+  bool entered_through_callstate_update = function_entered_through_callstate_update.back();
+  function_entered_through_callstate_update.pop_back();
+  return entered_through_callstate_update;
+}
+
 } // namespace __dp

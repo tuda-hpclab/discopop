@@ -98,7 +98,10 @@ void __dp_func_exit(LID lid, int32_t isExit) {
   pthread_compatibility_mutex.unlock();
 #endif
 
-  update_callstate_from_func_exit(1); // 1 is the dummy instruction id for leaving a function
+  // only a function entered through a call which updated the callpath state leaves it again
+  if (leave_function_for_callstate()) {
+    update_callstate_from_func_exit(1); // 1 is the dummy instruction id for leaving a function
+  }
 }
 }
 

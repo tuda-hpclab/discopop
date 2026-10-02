@@ -82,6 +82,26 @@ bool DiscoPoP::sanityCheck(BasicBlock *BB) {
   return false;
 }
 
+// Returns the LID to report when a loop is left through the exit block BB: the LID of the
+// first instruction of BB carrying one. Clang emits the branch that leaves an if/else arm
+// without a debug location, so the exit block of a loop that ends an arm (e.g. a loop in an
+// `else` inside another loop) may contain no valid LID at all. Then the LID of the first
+// block along BB's chain of unique successors that has one is used, i.e. the code executed
+// right after the loop, as for an ordinary exit block.
+LID DiscoPoP::getLoopExitLID(BasicBlock *BB) {
+  std::set<BasicBlock *> visited;
+  while (BB != nullptr && visited.insert(BB).second) {
+    for (BasicBlock::iterator BI = BB->begin(), EI = BB->end(); BI != EI; ++BI) {
+      LID lid = getLID(&*BI, fileID);
+      if (lid > 0 && !isa<PHINode>(BI)) {
+        return lid;
+      }
+    }
+    BB = BB->getUniqueSuccessor();
+  }
+  return 0;
+}
+
 bool DiscoPoP::check_value_usage(llvm::Value *parentValue, llvm::Value *searchedValue) {
   // Return true, if searchedValue is used within the computation of parentValue
   if (parentValue == searchedValue) {
@@ -142,6 +162,7 @@ void DiscoPoP::fillStartEndLineNumbers(Node *root, LoopInfo &LI) {
           LID lid = 0;
           lid = (fileID << LIDSIZE) + dl->getLine();
           loopStartLines[root->ID] = dputil::decodeLID(lid);
+          loopToPETNodeID[loop] = root->ID;
           break;
         }
       }
