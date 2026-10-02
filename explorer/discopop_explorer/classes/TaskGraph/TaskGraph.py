@@ -58,6 +58,12 @@ from discopop_explorer.classes.TaskGraph.Loops.TGStartLoopNode import TGStartLoo
 from discopop_explorer.classes.TaskGraph.RootNode import RootNode
 from discopop_explorer.classes.TaskGraph.TGFunctionNode import TGFunctionNode
 from discopop_explorer.classes.TaskGraph.VisitorMarker import EndFunctionMarker, VisitorMarker
+from discopop_explorer.classes.TaskGraph.loopstate_positions import (
+    LOOPSTATE_POSITIONS_FILE,
+    LoopstatePosition,
+    read_loopstate_digit_counts,
+    read_loopstate_positions,
+)
 from discopop_explorer.classes.TaskGraph.Work.TGEndWorkNode import TGEndWorkNode
 from discopop_explorer.classes.TaskGraph.Work.TGStartWorkNode import TGStartWorkNode
 from discopop_explorer.enums.DepOrigin import DepOrigin
@@ -1645,9 +1651,28 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         warnings.warn("Not yet implemented!")
 
     def __assign_loopstate_positions_within_functions(self) -> None:
-        """Assigns loopstate positions to loops within functions in their order of occurrence in the source code.
+        """Assigns each loop the position of its iteration bucket within the "_loopstate" digits of the
+        callpaths reported by the profiler, as listed in the profiler's loopstate_positions.txt. A loop
+        the file does not list gets no position (None). Only for profiles without that file, the loops
+        of a function are numbered in the order of their start lines, which is a guess.
         This function MUST BE EXECUTED BEFORE inlining function calls."""
         logger.info("Assigning Loop state positions within functions...")
+
+        profiler_dir: Optional[str] = (
+            None if self.dynamic_dependency_file is None else str(Path(self.dynamic_dependency_file).parent)
+        )
+        mapping = (
+            None
+            if profiler_dir is None
+            else read_loopstate_positions(os.path.join(profiler_dir, LOOPSTATE_POSITIONS_FILE))
+        )
+        # only read for the line sorting fallback, to report functions whose positions are untrustworthy
+        digit_counts: Optional[Dict[str, int]] = None
+        if mapping is None:
+            logger.warning(
+                "No %s found: guessing the loopstate positions of loops from their start lines.",
+                LOOPSTATE_POSITIONS_FILE,
+            )
 
         entry_points: List[TGNode] = []
         for node in progress(self.graph.nodes):
@@ -1655,26 +1680,99 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 entry_points.append(node)
         logger.info("--> Assigning loop state ids")
         for entry_point in progress(entry_points):
-            # loop state position corresponds to the position of the iteration count for the specific loop within the "_loopstate"-information in the callpaths reported by the profiler
-            # find all loops in function, sort them by location, and assign loopstate_positions.
             function_nodes = self.get_descendants(entry_point)
             loops = [n for n in function_nodes if isinstance(n, TGStartLoopNode)]
+            if len(loops) == 0:
+                continue
+            function_name = self.pet.node_at(entry_point.pet_node_id).name
+            if mapping is not None:
+                assigned_loopstate_positions = self.__loopstate_positions_from_mapping(
+                    function_name, loops, mapping.get(function_name, [])
+                )
+                for loop in loops:
+                    loop.loopstate_position = assigned_loopstate_positions.get(loop.pet_node_id)
+                continue
+
+            # fallback: find all loops in function, sort them by location, and assign loopstate_positions.
             loops_pet_nodes = list(dict.fromkeys([n.get_pet_node(self.pet) for n in loops]))
             cleaned_loops_pet_nodes = [lpn for lpn in loops_pet_nodes if lpn is not None]
             sorted_loops_pet_nodes = sorted(cleaned_loops_pet_nodes, key=lambda x: x.start_line)
             # assign loopstate_positions to PET node ids
             next_unused_position = 0
-            assigned_loopstate_positions: Dict[PETNodeID, int] = dict()
+            assigned_loopstate_positions = dict()
             for l_pet in sorted_loops_pet_nodes:
                 if l_pet.id in assigned_loopstate_positions:
                     continue
                 assigned_loopstate_positions[l_pet.id] = next_unused_position
                 next_unused_position += 1
+            if digit_counts is None:
+                digit_counts = (
+                    dict()
+                    if profiler_dir is None
+                    else read_loopstate_digit_counts(os.path.join(profiler_dir, "stateID_to_callpath_mapping.txt"))
+                )
+            if function_name in digit_counts and digit_counts[function_name] != next_unused_position:
+                logger.warning(
+                    "Loopstate positions of function %s are untrustworthy: %d loops, but %d loopstate digits.",
+                    function_name,
+                    next_unused_position,
+                    digit_counts[function_name],
+                )
             # assign loopstate positions to TGStartLoopNode's for later use
             for loop in loops:
                 if loop.pet_node_id not in assigned_loopstate_positions:
                     raise KeyError("No entry in assigned_loopstate_positions for PET node id: " + str(loop.pet_node_id))
                 loop.loopstate_position = assigned_loopstate_positions[loop.pet_node_id]
+
+    def __loopstate_positions_from_mapping(
+        self, function_name: str, loops: List[TGStartLoopNode], entries: List[LoopstatePosition]
+    ) -> Dict[PETNodeID, int]:
+        """The loopstate positions of the given loops of function_name per loop entry node id, as listed
+        in entries (the function's lines of loopstate_positions.txt). A loop is matched by its LoopNode
+        (the PET parent of the loop's entry node) or, if the profiler did not know that node, by an
+        unambiguous start location. Loops without a match are logged and left out."""
+        by_loop_node: Dict[str, int] = {e.loop_node_id: e.position for e in entries if e.loop_node_id is not None}
+        by_location: Dict[str, Set[int]] = dict()
+        for e in entries:
+            if e.start_location is not None:
+                by_location.setdefault(e.start_location, set()).add(e.position)
+
+        result: Dict[PETNodeID, int] = dict()
+        for loop in loops:
+            if loop.pet_node_id in result:
+                continue
+            entry_node = loop.get_pet_node(self.pet)
+            candidates: List[PETNode] = []
+            if entry_node is not None:
+                # the entry node is a CU of the loop's header, a direct child of its LoopNode
+                if isinstance(entry_node, LoopNode):
+                    candidates.append(entry_node)
+                for source, _, _ in in_edges(self.pet, entry_node.id, EdgeType.CHILD):
+                    parent = self.pet.node_at(source)
+                    if isinstance(parent, LoopNode):
+                        candidates.append(parent)
+            position: Optional[int] = None
+            for candidate in candidates:
+                if candidate.id in by_loop_node:
+                    position = by_loop_node[candidate.id]
+                    break
+            if position is None:
+                # the entry node's own location only as the last resort
+                for candidate in candidates + ([] if entry_node is None else [entry_node]):
+                    positions = by_location.get(str(candidate.start_position()), set())
+                    if len(positions) == 1:
+                        position = next(iter(positions))
+                        break
+            if position is None:
+                logger.warning(
+                    "Loop %s of function %s is not listed in %s: it gets no loopstate position.",
+                    loop.pet_node_id,
+                    function_name,
+                    LOOPSTATE_POSITIONS_FILE,
+                )
+                continue
+            result[loop.pet_node_id] = position
+        return result
 
     def __calculate_context_successions(self) -> None:
         logger.info("Assigning context successions...")
