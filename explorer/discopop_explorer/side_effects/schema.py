@@ -55,13 +55,20 @@ class GlobalVariable(TypedDict):
 
 class Parameter(TypedDict):
     name: str
-    # pointer, reference or array type, or ``this``: accesses through it reach the caller's memory
+    # pointer, reference or array type (also behind a typedef), a class type passed by value (its copy
+    # may hold pointers into the caller's memory, e.g. std::shared_ptr, iterators, user structs), or
+    # ``this``: accesses through it can reach the caller's memory
     reachable: bool
 
 
 class LocalVariable(TypedDict):
+    """A local declaration. A name declared more than once (e.g. in sibling blocks) has one entry per
+    distinct declaration; the reader merges them (pointer and static win)."""
+
     name: str
-    # pointer, reference or array-of-pointer type: accesses through it may reach outside memory
+    # pointer, reference or array-of-pointer type (also behind a typedef), or a pointer wrapper such as
+    # std::shared_ptr, std::span or an iterator: accesses through it may reach outside memory. A local
+    # struct or array by value is local storage
     pointer: bool
     # static or thread_local storage: persistent state, classified like a global
     static: bool
@@ -72,7 +79,7 @@ class GlobalReference(TypedDict):
 
     name: str
     line: int
-    # "read", "write" or "unknown"
+    # "read", "write" or "unknown" (address taken, argument bound to a reference, object of a member call)
     access: str
 
 
@@ -95,7 +102,8 @@ class Function(TypedDict):
     performs_file_io: bool
     # PET function node ids of the functions called in the body (static call graph)
     static_callees: List[str]
-    # demangled names of called functions that have no definition in the project
+    # names of called functions that have no definition in the project; a call is matched by the linker
+    # name of the declaration it refers to where the AST names it, by base name otherwise
     unprofiled_calls: List[str]
     global_refs: List[GlobalReference]
     # the profiling run executed this function (BGN func / START records)
@@ -153,6 +161,7 @@ class ExecutedCall(TypedDict):
 class SideEffectExport(TypedDict):
     format_version: int
     discopop_version: str
+    # always false since the explorer writes no export with --ignore-dependency-states; kept for readers
     ignore_dependency_states: bool
     dependency_file: Optional[DependencyFileInfo]
     # file id (as string) -> absolute path
@@ -190,9 +199,13 @@ def save_export(export: SideEffectExport, path: Union[str, Path]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=6) as f:
-        json.dump(export, f, separators=(",", ":"))
-    os.replace(tmp, path)
+    try:
+        with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=6) as f:
+            json.dump(export, f, separators=(",", ":"))
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def load_export(path: Union[str, Path]) -> SideEffectExport:

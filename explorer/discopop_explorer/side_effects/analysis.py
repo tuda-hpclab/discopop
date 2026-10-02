@@ -35,6 +35,15 @@ Decisions where the design leaves room (kept here so that the code and its reaso
   and a read through a callee's parameter (it may be a global the queried function passes on)
   make the result unknown; only reads through the queried function's own parameters and reads
   of const globals keep it pure.
+- An end recorded under a linker name (``linker_names``: function-static locals, static data
+  members) is always a global, also when a local of the same name is declared in another scope.
+- An end of a callee parameter or of other memory inside the instance whose other end is unknown
+  (a first write ``INIT``, or an other end without an exported context) cannot be checked for
+  crossing the call. It yields no effect, but counts towards ``unmapped_records``, like the
+  record ends the export could not attribute to any context in the function or a function it
+  reaches. ``unmapped_records > 0`` turns ``executed`` into ``partial``.
+- The static fallback adds a referenced global per (name, access): an observed read does not hide
+  a static write. A static ``unknown`` access is only hidden by an observed read and write.
 - Allowlist matching of ``unprofiled_calls``: the argument list and trailing template arguments
   are removed, a leading ``::`` and the standard library namespaces (``std::``, ``std::__1::``,
   ``std::__cxx11::``, ``__gnu_cxx::``) are stripped, and the result or ``std::<result>`` must be
@@ -401,8 +410,11 @@ class SideEffectIndex:
     def _classify_uncached(self, function_id: str, line: int, raw_name: str) -> _Classified:
         through = raw_name.startswith(_GEP_PREFIX)
         base = raw_name[len(_GEP_PREFIX) :] if through else raw_name
-        # function-static locals and static data members are recorded under their linker name
-        base = self._linker_names.get(base, base)
+        # function-static locals and static data members are recorded under their linker name: they
+        # are persistent state, whatever a local of the same name in another scope says
+        resolved = self._linker_names.get(base)
+        if resolved is not None:
+            return _Classified(_GLOBAL, resolved, through, None)
         facts = self._facts.get(function_id)
         if facts is None or not facts.ast_facts:
             return _Classified(_OTHER, base, through, None)
@@ -548,22 +560,33 @@ class SideEffectIndex:
                         return "partial"
         return "executed"
 
-    def _observed_effects(self, function_id: str, acc: Dict[_EffectKey, _EffectAcc], touched: Set[str]) -> None:
+    def _observed_effects(
+        self,
+        function_id: str,
+        acc: Dict[_EffectKey, _EffectAcc],
+        touched: Set[str],
+        unattributed: Set[Tuple[int, str, int]],
+    ) -> None:
         for root in self._outermost.get(function_id, []):
             record_ids: Set[int] = set()
             for inst_id in self._subtree(root):
                 record_ids.update(self._records_by_instance.get(inst_id, []))
             for record_id in sorted(record_ids):
-                self._apply_record(function_id, root, self._records[record_id], acc, touched)
+                self._apply_record(function_id, root, record_id, acc, touched, unattributed)
 
     def _apply_record(
         self,
         function_id: str,
         root: int,
-        record: Record,
+        record_id: int,
         acc: Dict[_EffectKey, _EffectAcc],
         touched: Set[str],
+        unattributed: Set[Tuple[int, str, int]],
     ) -> None:
+        """Adds the effects of one record to ``acc``. An inside end of a callee parameter or of other
+        memory whose other end is unknown (a first write, or an other end without a context) cannot
+        be checked for crossing the instance; it is added to ``unattributed`` as (record, end, ctx)."""
+        record = self._records[record_id]
         record_type = record["type"]
         first_access: Access = "read" if record_type == "RAW" else "write"
         other_access: Access = "write" if record_type in ("RAW", "WAW") else "read"
@@ -594,14 +617,26 @@ class SideEffectIndex:
             entry = acc.setdefault(key, _EffectAcc())
             entry.through_pointer = entry.through_pointer or classified.through_pointer
             entry.sites.add(EffectSite(pos[0], pos[1], self._via(root, inst_id, function_id)))
-            # without the profiler's GEPRESULT_ prefix, like Effect.name
-            entry.outside_names.update(n[len(_GEP_PREFIX) :] if n.startswith(_GEP_PREFIX) else n for n in outside)
+            # without the profiler's GEPRESULT_ prefix and linker names, like Effect.name; only names that differ
+            for outside_name in outside:
+                if outside_name.startswith(_GEP_PREFIX):
+                    outside_name = outside_name[len(_GEP_PREFIX) :]
+                outside_name = self._linker_names.get(outside_name, outside_name)
+                if outside_name != classified.name:
+                    entry.outside_names.add(outside_name)
 
         def own_rule(classified: Optional[_Classified], inst_id: int) -> bool:
             """global anywhere in sub(I); parameter of F itself in own(I)."""
             if classified is None:
                 return False
             return classified.cls == _GLOBAL or (classified.cls == _PARAM and inst_id == root)
+
+        # ends with a counterpart in an exported instance, i.e. whose crossing can be decided below
+        mapped_pairs = [
+            (f, o) for f, o in record.get("pairs", []) if f in self._ctx_instance and o in self._ctx_instance
+        ]
+        paired_first = {pair[0] for pair in mapped_pairs}
+        paired_other = {pair[1] for pair in mapped_pairs}
 
         # global and own-parameter effects, per end, regardless of where the other end is
         for ctx in sorted(self._first_contexts(record)):
@@ -610,16 +645,24 @@ class SideEffectIndex:
                 continue
             touched.add(self._instance_function[inst_id])
             classified = classify_first(inst_id)
-            if classified is not None and own_rule(classified, inst_id):
+            if classified is None or classified.cls == _LOCAL:
+                continue
+            if own_rule(classified, inst_id):
                 add(classified, first_access, first_pos, inst_id)
+            elif ctx not in paired_first:
+                unattributed.add((record_id, "first", ctx))
         for ctx in sorted(self._other_contexts(record)):
             inst_id = self._ctx_instance.get(ctx)
             if inst_id is None or not self._in_subtree(inst_id, root) or other_pos is None:
                 continue
             touched.add(self._instance_function[inst_id])
             classified = classify_other(inst_id)
-            if classified is not None and own_rule(classified, inst_id):
+            if classified is None or classified.cls == _LOCAL:
+                continue
+            if own_rule(classified, inst_id):
                 add(classified, other_access, other_pos, inst_id)
+            elif ctx not in paired_other:
+                unattributed.add((record_id, "other", ctx))
 
         # callee parameters and other memory: only where the record crosses the instance
         if other_end is None:
@@ -651,19 +694,25 @@ class SideEffectIndex:
 
         acc: Dict[_EffectKey, _EffectAcc] = {}
         touched: Set[str] = set()
+        unattributed: Set[Tuple[int, str, int]] = set()
         if coverage in ("executed", "partial"):
-            self._observed_effects(function_id, acc, touched)
+            self._observed_effects(function_id, acc, touched, unattributed)
 
-        # static fallback: globals referenced in the static call closure but never observed
-        observed_globals = {key[0] for key in acc if key[1] == "global"} | {
-            key[4] for key in acc if key[1] == "global" and key[4] is not None
-        }
+        # static fallback: global accesses referenced in the static call closure but never observed;
+        # an observed read does not stand for a write of the same global, nor vice versa
+        observed_globals: Dict[str, Set[str]] = {}
+        for observed_key in acc:
+            if observed_key[1] == "global":
+                observed_globals.setdefault(observed_key[0], set()).add(observed_key[2])
+                if observed_key[4] is not None:
+                    observed_globals.setdefault(observed_key[4], set()).add(observed_key[2])
         for callee_id, chain in closure:
             callee = self._functions[callee_id]
             for ref in callee.get("global_refs", []):
-                if ref["name"] in observed_globals:
-                    continue
                 access: Access = ref["access"] if ref["access"] in ("read", "write") else "unknown"  # type: ignore[assignment]
+                observed = observed_globals.get(ref["name"], set())
+                if access in observed or (access == "unknown" and {"read", "write"} <= observed):
+                    continue
                 key: _EffectKey = (ref["name"], "global", access, "static", None)
                 entry = acc.setdefault(key, _EffectAcc())
                 entry.sites.add(EffectSite(callee["file_id"], ref["line"], chain))
@@ -703,32 +752,24 @@ class SideEffectIndex:
 
         # record ends located in the function or in a function it reaches that could not be attributed
         # to a calling context: effects may be missing, so purity cannot be decided
+        # plus the ends inside the function's instances whose other end is unknown, so that crossing
+        # the call cannot be decided: effects may be missing, so the result is partial at best
         unmapped_by_function = self.export.get("unmapped_records", {})
-        unmapped = int(unmapped_by_function.get(function_id, 0))
-        unmapped_in_reach = sum(int(unmapped_by_function.get(f, 0)) for f in fact_functions | {function_id})
+        reach = fact_functions | {function_id}
+        for root in self._outermost.get(function_id, []):
+            reach.update(self._instance_function[inst_id] for inst_id in self._subtree(root))
+        unmapped = sum(int(unmapped_by_function.get(f, 0)) for f in reach)
+        unmapped += len(unattributed)
+        if unmapped > 0 and coverage == "executed":
+            coverage = "partial"
 
         pure = self._purity(coverage, effects, performs_file_io, unprofiled_calls, ast_facts)
-        if pure is True and unmapped_in_reach > 0:
-            pure = None
 
         display = self._display_name(function_id)
-        if coverage == "not_executed":
-            notes.append(f"{display} was not executed in the profiled runs; only static facts are reported.")
-        elif coverage == "untracked":
+        if unmapped > 0:
             notes.append(
-                f"{display} was executed, but none of its calls could be attributed to a profiled calling context "
-                "(e.g. beyond the inlining depth, through a function pointer or as a callback); "
-                "only static facts are reported."
-            )
-        elif coverage == "partial":
-            notes.append(
-                f"Some calls of {display} or of functions it calls were executed beyond the inlining depth, through "
-                "a function pointer or as a callback; their effects may be missing."
-            )
-        if unmapped_in_reach > 0:
-            notes.append(
-                f"{unmapped_in_reach} recorded accesses in {display} or functions it calls could not be attributed "
-                "to a calling context; effects may be missing."
+                f"{unmapped} recorded accesses in {display} or functions it calls could not be attributed "
+                "to a calling context or to memory outside the call; effects may be missing."
             )
         if missing_facts:
             shown = ", ".join(missing_facts[:5])
@@ -739,21 +780,11 @@ class SideEffectIndex:
                 "'other' and purity cannot be decided."
             )
         if unprofiled_calls:
-            notes.append(
-                "Calls to functions that were not profiled (" + ", ".join(unprofiled_calls) + "); "
-                "their memory effects are unknown."
-            )
-        if performs_file_io:
-            notes.append(f"{display} or a function it calls performs file I/O.")
+            notes.append("The functions in unprofiled_calls were not profiled; their memory effects are unknown.")
         if any(e.source == "static" for e in effects):
             notes.append(
                 "Globals marked 'static' are referenced in the code but were not observed being accessed; "
                 "their access is taken from the source."
-            )
-        if unmapped:
-            notes.append(
-                f"{unmapped} recorded access(es) in {display} could not be attributed to a calling context "
-                "and are not included."
             )
 
         return SideEffects(

@@ -630,7 +630,7 @@ def test_unprofiled_calls_with_allowlist_and_file_io() -> None:
     assert result.unprofiled_calls == ["memset", "mylib::sqrt", "printf"]
     assert result.performs_file_io is True
     assert result.pure_on_observed_inputs is False
-    assert any("memset" in note for note in result.notes)
+    assert any("unprofiled_calls" in note for note in result.notes)
 
 
 def test_unprofiled_calls_make_purity_unknown() -> None:
@@ -668,7 +668,8 @@ def test_coverage_not_executed_reports_only_static_facts() -> None:
     assert result.coverage == "not_executed"
     assert effects(result) == [("write", "global", "g_unused", "static")]
     assert result.pure_on_observed_inputs is None
-    assert any("not executed" in note for note in result.notes)
+    # the coverage itself explains this; the MCP tool adds a next step
+    assert not any("not executed" in note for note in result.notes)
 
 
 def test_coverage_untracked_function_pointer_target_and_partial_caller() -> None:
@@ -683,7 +684,6 @@ def test_coverage_untracked_function_pointer_target_and_partial_caller() -> None
     assert target.coverage == "untracked"
     assert target.effects == []
     assert target.pure_on_observed_inputs is None
-    assert any("attributed" in note for note in target.notes)
     caller = index.compute(cvp)
     assert caller.coverage == "partial"
     assert caller.pure_on_observed_inputs is None
@@ -756,15 +756,23 @@ def test_global_access_counts_when_only_one_end_is_mapped() -> None:
     assert effects(b.index().compute(f)) == [("read", "global", "g", "observed"), ("write", "global", "g", "observed")]
 
 
-def test_unmapped_records_are_reported_not_folded_into_coverage() -> None:
+def test_unmapped_records_make_coverage_partial_and_count_over_the_reach() -> None:
     b = ExportBuilder()
-    f = b.function("1:49", "f()", 1, 1)
-    b.instance(f, b.main)
+    callee = b.function("1:80", "callee()", 2, 2)
+    f = b.function("1:49", "f()", 1, 1, static_callees=[callee])
+    i_f, _ = b.instance(f, b.main)
+    b.instance(callee, i_f)
     b.unmapped[f] = 3
-    result = b.index().compute(f)
-    assert result.unmapped_records == 3
-    assert result.coverage == "executed"
-    assert any("3 recorded" in note for note in result.notes)
+    b.unmapped[callee] = 2
+    index = b.index()
+    result = index.compute(f)
+    assert result.unmapped_records == 5
+    assert result.coverage == "partial"
+    assert result.pure_on_observed_inputs is None
+    assert sum("could not be attributed" in note for note in result.notes) == 1
+    assert index.compute(callee).unmapped_records == 2
+    # main reaches both
+    assert index.compute("1:1").unmapped_records == 5
 
 
 # ---------------------------------------------------------------------------------------------- purity
@@ -913,7 +921,11 @@ def test_unmapped_context_in_pair_is_ignored() -> None:
     f = b.function("1:73", "f()", 1, 1)
     _, c = b.instance(f, b.main)
     b.record("RAW", "call1", (111, 1), (112, 150), pairs=[(c, 999999)], other_names=["x"])
-    assert b.index().compute(f).effects == []
+    result = b.index().compute(f)
+    assert result.effects == []
+    # the crossing cannot be decided: the access is counted as not attributed
+    assert result.unmapped_records == 1
+    assert result.coverage == "partial"
 
 
 def test_sites_are_sorted_and_merged() -> None:
@@ -928,3 +940,107 @@ def test_sites_are_sorted_and_merged() -> None:
     write = find(result, "write", "g")
     assert [s.line for s in write.sites] == [3, 8]
     assert write.through_pointer is True
+
+
+# ------------------------------------------------------------------------------------- review findings
+
+
+def test_first_write_through_a_callee_parameter_is_not_pure() -> None:
+    """INIT records have no other end: whether the write reaches memory outside the call is unknown."""
+    b = ExportBuilder()
+    wtp = b.function("1:81", "write_through_param(int*, int)", 25, 30, params=[("p", True), ("n", False)])
+    wr = b.function("1:82", "wrapper(int*, int)", 33, 33, params=[("q", True), ("n", False)], static_callees=[wtp])
+    i_wr, _ = b.instance(wr, b.main)
+    _, c_wtp = b.instance(wtp, i_wr)
+    b.record("INIT", "GEPRESULT_p", (66, 27), None, first_contexts=[c_wtp])
+    index = b.index()
+    result = index.compute(wr)
+    assert result.effects == []
+    assert result.unmapped_records == 1
+    assert result.coverage == "partial"
+    assert result.pure_on_observed_inputs is None
+    # for the callee itself, p is its own parameter: an observed write
+    assert effects(index.compute(wtp)) == [("write", "parameter", "p", "observed")]
+
+
+def test_first_write_through_a_local_pointer_is_not_pure() -> None:
+    b = ExportBuilder()
+    f = b.function("1:83", "f(S*)", 40, 42, params=[("s", True)], locals=[("out", True, False)])
+    _, c = b.instance(f, b.main)
+    b.record("INIT", "GEPRESULT_out", (67, 41), None, first_contexts=[c])
+    result = b.index().compute(f)
+    assert result.pure_on_observed_inputs is None
+    assert result.unmapped_records == 1
+
+
+def test_first_write_of_a_local_stays_pure() -> None:
+    b = ExportBuilder()
+    f = b.function("1:84", "f()", 40, 42, locals=[("tmp", False, False)])
+    _, c = b.instance(f, b.main)
+    b.record("INIT", "tmp", (68, 41), None, first_contexts=[c])
+    result = b.index().compute(f)
+    assert result.pure_on_observed_inputs is True
+    assert result.coverage == "executed"
+    assert result.unmapped_records == 0
+
+
+def test_callee_write_whose_other_end_is_unmapped_is_not_pure() -> None:
+    """The earlier write lies in a context the TaskGraph did not map: no pair, only first_contexts."""
+    b = ExportBuilder()
+    wtp = b.function("1:85", "write_through_param(int*, int)", 25, 30, params=[("p", True), ("n", False)])
+    wr = b.function("1:86", "wrapper(int*, int)", 33, 33, params=[("q", True), ("n", False)], static_callees=[wtp])
+    i_wr, _ = b.instance(wr, b.main)
+    _, c_wtp = b.instance(wtp, i_wr)
+    b.record("WAW", "GEPRESULT_p", (69, 27), (70, 150), first_contexts=[c_wtp], other_names=["GEPRESULT_buf"])
+    b.unmapped["1:1"] = 1  # the export charges the unmapped end to main
+    result = b.index().compute(wr)
+    assert result.effects == []
+    assert result.unmapped_records == 1
+    assert result.pure_on_observed_inputs is None
+
+
+def test_linker_name_beats_a_local_of_the_same_name() -> None:
+    """{ int i; } { static int i; i++; }: the recorded linker name identifies the static one."""
+    b = ExportBuilder()
+    f = b.function("1:87", "f()", 80, 84, locals=[("i", False, False)])
+    b.linker_names["_ZZ1fvE1i"] = "i"
+    _, c = b.instance(f, b.main)
+    b.record("RAW", "_ZZ1fvE1i", (71, 83), (72, 83), pairs=[(c, c)], other_names=["_ZZ1fvE1i"])
+    result = b.index().compute(f)
+    assert effects(result) == [("read", "global", "i", "observed"), ("write", "global", "i", "observed")]
+    assert result.pure_on_observed_inputs is False
+
+
+def test_static_write_is_kept_next_to_an_observed_read() -> None:
+    """next_value: ++g_seq is observed as a write only; its read must still be reported."""
+    b = ExportBuilder()
+    b.glob("g_seq")
+    f = b.function("1:88", "next_value()", 90, 90, global_refs=[("g_seq", 90, "read"), ("g_seq", 90, "write")])
+    _, c = b.instance(f, b.main)
+    b.record("INIT", "g_seq", (73, 90), None, first_contexts=[c])
+    result = b.index().compute(f)
+    assert effects(result) == [("read", "global", "g_seq", "static"), ("write", "global", "g_seq", "observed")]
+
+
+def test_static_unknown_is_hidden_only_by_observed_read_and_write() -> None:
+    b = ExportBuilder()
+    b.glob("g")
+    f = b.function("1:89", "f()", 90, 91, global_refs=[("g", 91, "unknown")])
+    _, c = b.instance(f, b.main)
+    b.record("RAW", "g", (74, 90), (75, 90), first_contexts=[c], other_names=["g"])
+    assert ("unknown", "global", "g", "static") in effects(b.index().compute(f))
+    b.record("INIT", "g", (76, 90), None, first_contexts=[c])
+    assert ("unknown", "global", "g", "static") not in effects(b.index().compute(f))
+
+
+def test_outside_names_exclude_linker_names_and_the_effect_name() -> None:
+    b = ExportBuilder()
+    b.linker_names["_ZZ4mainE5state"] = "state"
+    wtp = b.function("1:90", "write_through_param(int*, int)", 25, 30, params=[("p", True), ("n", False)])
+    wr = b.function("1:91", "wrapper(int*, int)", 33, 33, params=[("p", True), ("n", False)], static_callees=[wtp])
+    i_wr, _ = b.instance(wr, b.main)
+    _, c_wtp = b.instance(wtp, i_wr)
+    b.record("RAW", "GEPRESULT_p", (77, 160), (78, 27), pairs=[(b.main_ctx, c_wtp)], other_names=["GEPRESULT_p"])
+    b.record("RAW", "_ZZ4mainE5state", (79, 161), (80, 28), pairs=[(b.main_ctx, c_wtp)], other_names=["GEPRESULT_p"])
+    effect = find(b.index().compute(wr), "write", "p")
+    assert effect.outside_names == ["state"]

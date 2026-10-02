@@ -61,7 +61,11 @@ _FUNCTION_DECL_KINDS = frozenset(
 # declarations whose VarDecl children are not locals of a function
 _SCOPE_KINDS = frozenset({"TranslationUnitDecl", "NamespaceDecl", "LinkageSpecDecl", "CXXRecordDecl", "RecordDecl"})
 # nodes that are transparent when looking for the operator a DeclRefExpr is the operand of
-_TRANSPARENT_KINDS = frozenset({"ParenExpr", "ImplicitCastExpr", "ArraySubscriptExpr", "MemberExpr"})
+_TRANSPARENT_KINDS = frozenset({"ParenExpr", "ArraySubscriptExpr", "MemberExpr"})
+# nodes a reference can be an argument of; the callee decides whether it is read or written
+_CALL_KINDS = frozenset(
+    {"CallExpr", "CXXMemberCallExpr", "CXXOperatorCallExpr", "CXXConstructExpr", "CXXTemporaryObjectExpr"}
+)
 
 
 def export_file(discopop_dir: str) -> str:
@@ -74,14 +78,22 @@ def write_export(
     task_graph: TaskGraph,
     pet: PEGraphX,
     ast_helper: Optional[ASTPatternDetectionHelper],
+    file_mapping: Optional[str] = None,
 ) -> Optional[str]:
-    """Build and write the export; returns its path, or None if it could not be built.
+    """Build and write the export; returns its path, or None if it was not built.
 
     Failures are logged and swallowed: the export is an optional by-product of the run.
+    ``file_mapping`` is the explorer's --fmap file (default: FileMapping.txt in ``discopop_dir``).
     """
+    path = export_file(discopop_dir)
     try:
-        export = build_export(discopop_dir, task_graph, pet, ast_helper)
-        path = export_file(discopop_dir)
+        if task_graph.ignore_dependency_states:
+            # without dependency states every record is static, so no access can be attributed to a
+            # call; an export would only claim effects it cannot have observed
+            _remove_stale_export(path)
+            logger.info("Side effect export skipped: the explorer runs with --ignore-dependency-states")
+            return None
+        export = build_export(discopop_dir, task_graph, pet, ast_helper, file_mapping)
         save_export(export, path)
         logger.info(
             "Wrote side effect export %s (%d functions, %d instances, %d records)",
@@ -93,7 +105,18 @@ def write_export(
         return path
     except Exception as e:  # noqa: BLE001 - the export must never fail the explorer run
         logger.warning("Could not write the side effect export: %s", e, exc_info=True)
+        _remove_stale_export(path)
         return None
+
+
+def _remove_stale_export(path: str) -> None:
+    """Remove an export of an earlier run, so that a reader reports the data as missing."""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("Could not remove the stale side effect export %s: %s", path, e)
 
 
 def build_export(
@@ -101,8 +124,9 @@ def build_export(
     task_graph: TaskGraph,
     pet: PEGraphX,
     ast_helper: Optional[ASTPatternDetectionHelper],
+    file_mapping: Optional[str] = None,
 ) -> SideEffectExport:
-    files = _read_file_mapping(os.path.join(discopop_dir, "FileMapping.txt"))
+    files = _read_file_mapping(file_mapping or os.path.join(discopop_dir, "FileMapping.txt"))
     pet_functions = sorted(all_nodes(pet, FunctionNode), key=lambda f: (f.file_id, f.start_line, str(f.id)))
     file_ids = _function_file_ids(pet, pet_functions, files)
     pet_functions.sort(key=lambda f: (file_ids[f], f.start_line, str(f.id)))
@@ -175,7 +199,7 @@ def build_export(
                 "member_accesses": facts.member_accesses,
                 "performs_file_io": _performs_file_io(pet, function),
                 "static_callees": _static_callees(pet, function),
-                "unprofiled_calls": sorted(facts.called_names - ast_facts.defined_function_names),
+                "unprofiled_calls": ast_facts.unprofiled_calls(facts),
                 "global_refs": facts.global_refs,
                 "executed": str(function.id) in executed_functions,
             }
@@ -459,9 +483,77 @@ def _demangle(names: Iterable[str]) -> Dict[str, str]:
     return dict(zip(mangled, readable))
 
 
-def _is_reachable_type(type_name: Optional[str]) -> bool:
-    """Pointer, reference or array type: accesses through it can reach memory of the caller."""
-    return type_name is not None and any(c in type_name for c in "*&[")
+# keywords a builtin (non-class) type is spelled with
+_BUILTIN_TYPE_WORDS = frozenset(
+    {
+        "void", "bool", "_Bool", "char", "wchar_t", "char8_t", "char16_t", "char32_t", "short", "int",
+        "long", "float", "double", "signed", "unsigned", "__int128", "_Complex", "__fp16", "_Float16",
+        "__bf16", "std::nullptr_t", "nullptr_t", "const", "volatile", "restrict", "__restrict",
+    }
+)  # fmt: skip
+# class templates that hold a pointer to memory they do not own (by name, without namespace)
+_POINTER_WRAPPERS = frozenset({"shared_ptr", "unique_ptr", "weak_ptr", "span", "basic_string_view", "string_view"})
+
+
+def _effective_types(type_name: Optional[str], desugared: Optional[str]) -> List[str]:
+    """The written type and, if Clang gives one, the type with typedefs and aliases resolved."""
+    return [t for t in (type_name, desugared) if t]
+
+
+def _has_pointer_syntax(type_name: str, with_arrays: bool) -> bool:
+    return any(c in type_name for c in ("*&[" if with_arrays else "*&"))
+
+
+def _without_template_arguments(type_name: str) -> str:
+    """'std::vector<int>::iterator' -> 'std::vector::iterator' (nested arguments removed as well)."""
+    result: List[str] = []
+    depth = 0
+    for c in type_name:
+        if c == "<":
+            depth += 1
+        elif c == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            result.append(c)
+    return "".join(result)
+
+
+def _is_pointer_wrapper(type_name: str) -> bool:
+    """std::shared_ptr<T>, std::span<T>, iterators, ...: by value, but referring to memory elsewhere."""
+    head = _without_template_arguments(type_name).strip().rstrip("&* ")
+    for qualifier in ("const ", "volatile ", "struct ", "class "):
+        head = head.replace(qualifier, "")
+    base = head.strip().rsplit("::", 1)[-1]
+    return base in _POINTER_WRAPPERS or "iterator" in base
+
+
+def _is_class_type(type_name: str, enum_names: Set[str]) -> bool:
+    """Class, struct or union type (incl. template specialisations): anything but a builtin or an enum."""
+    stripped = type_name.strip()
+    for keyword in ("struct ", "class ", "union "):
+        if keyword in stripped:
+            return True
+    if "<" in stripped:
+        return True
+    words = stripped.replace("const ", " ").replace("volatile ", " ").split()
+    if len(words) == 0 or all(w in _BUILTIN_TYPE_WORDS for w in words):
+        return False
+    if stripped.startswith("enum ") or (len(words) == 1 and words[0].rsplit("::", 1)[-1] in enum_names):
+        return False
+    return True
+
+
+def _is_reachable_type(
+    type_name: Optional[str], desugared: Optional[str] = None, enum_names: Optional[Set[str]] = None
+) -> bool:
+    """Type of a parameter through which accesses can reach memory of the caller: a pointer, reference
+    or array (also behind a typedef), or a class type passed by value, whose copy may hold pointers
+    into the caller's memory (std::shared_ptr, iterators, spans, user structs)."""
+    if any(_has_pointer_syntax(t, with_arrays=True) for t in _effective_types(type_name, desugared)):
+        return True
+    # the resolved type decides: a typedef of int is no class type
+    resolved = desugared or type_name
+    return resolved is not None and _is_class_type(resolved, enum_names or set())
 
 
 def _is_top_level_const(type_name: Optional[str]) -> bool:
@@ -474,8 +566,11 @@ def _is_top_level_const(type_name: Optional[str]) -> bool:
     return type_name.startswith("const ") and "*" not in type_name and "&" not in type_name
 
 
-def _is_pointer_type(type_name: Optional[str]) -> bool:
-    return type_name is not None and any(c in type_name for c in "*&")
+def _is_pointer_type(type_name: Optional[str], desugared: Optional[str] = None) -> bool:
+    """Type of a local through which accesses may reach outside memory: a pointer or reference (also
+    behind a typedef) or a well-known pointer wrapper. A local struct or array by value is local storage."""
+    types = _effective_types(type_name, desugared)
+    return any(_has_pointer_syntax(t, with_arrays=False) or _is_pointer_wrapper(t) for t in types)
 
 
 class _FunctionFacts:
@@ -487,6 +582,8 @@ class _FunctionFacts:
         self.member_accesses: Dict[str, Dict[str, str]] = {}
         self.global_refs: List[GlobalReference] = []
         self.called_names: Set[str] = set()
+        # (name as in called_names, linker name of the called declaration if the AST names it)
+        self.calls: Set[Tuple[str, Optional[str]]] = set()
 
 
 class _AstFacts:
@@ -503,7 +600,14 @@ class _AstFacts:
         pet_functions: List[FunctionNode],
     ) -> None:
         self.globals: List[GlobalVariable] = []
+        # base names of the defined functions, for calls whose declaration is unknown
         self.defined_function_names: Set[str] = set()
+        # linker names of the defined functions, for calls whose declaration is known
+        self.defined_linker_names: Set[str] = {str(f.name) for f in pet_functions}
+        self.enum_names: Set[str] = set()
+        # function declaration id -> (name, linker name); Clang ids are only unique within one
+        # translation unit, so a call's referenced id is only trusted if its name matches as well
+        self._function_decls: Dict[str, Tuple[str, str]] = {}
         self.file_ids_of_functions: Dict[FunctionNode, int] = {}
         self.linker_names: Dict[str, str] = {}
         self._by_mangled: Dict[str, _FunctionFacts] = {}
@@ -518,6 +622,19 @@ class _AstFacts:
             return
         self._file_ids = {os.path.realpath(path): file_id for file_id, path in files.items()}
         self._build(graph)
+
+    def unprofiled_calls(self, facts: _FunctionFacts) -> List[str]:
+        """Names of the called functions without a definition in the project. A call is matched by the
+        linker name of the declaration it refers to where the AST names it, so that a project's
+        Logger::write does not hide POSIX write; otherwise by base name."""
+        result: Set[str] = set()
+        for name, linker_name in facts.calls:
+            if linker_name is not None:
+                if linker_name not in self.defined_linker_names:
+                    result.add(name)
+            elif name not in self.defined_function_names:
+                result.add(name)
+        return sorted(result)
 
     def function_facts(self, function: FunctionNode) -> _FunctionFacts:
         facts = self._by_mangled.get(str(function.name))
@@ -563,11 +680,17 @@ class _AstFacts:
                 global_ids[node_id] = name
                 self._add_linker_name(attrs, name)
                 self.globals.append({"name": name, "const": _is_top_level_const(attrs.get("type"))})
+            if kind == "EnumDecl" and attrs.get("name"):
+                self.enum_names.add(str(attrs["name"]))
             if kind in _FUNCTION_DECL_KINDS:
+                if attrs.get("name") and attrs.get("mangled_name"):
+                    self._function_decls.setdefault(node_id, (str(attrs["name"]), str(attrs["mangled_name"])))
                 if any(nodes[c].get("kind") == "CompoundStmt" for c in children(node_id)):
                     function_decls.append((node_id, attrs))
                     if attrs.get("name"):
                         self.defined_function_names.add(str(attrs["name"]))
+                    if attrs.get("mangled_name"):
+                        self.defined_linker_names.add(str(attrs["mangled_name"]))
                 in_function = True
             for child in children(node_id):
                 stack.append((child, in_function))
@@ -585,15 +708,16 @@ class _AstFacts:
             facts = _FunctionFacts()
             facts.found = True
             facts.display_name = decl_attrs.get("name")
-            local_names: Set[str] = set()
+            local_seen: Set[Tuple[str, bool, bool]] = set()
             if decl_attrs.get("kind") != "FunctionDecl":
                 facts.params.append({"name": "this", "reachable": True})
             for child in children(decl_id):
                 child_attrs = nodes[child]
                 if child_attrs.get("kind") == "ParmVarDecl" and child_attrs.get("name"):
-                    facts.params.append(
-                        {"name": str(child_attrs["name"]), "reachable": _is_reachable_type(child_attrs.get("type"))}
+                    reachable = _is_reachable_type(
+                        child_attrs.get("type"), child_attrs.get("desugared_type"), self.enum_names
                     )
+                    facts.params.append({"name": str(child_attrs["name"]), "reachable": reachable})
             body_stack = [c for c in children(decl_id) if nodes[c].get("kind") == "CompoundStmt"]
             seen: Set[str] = set()
             while body_stack:
@@ -610,18 +734,15 @@ class _AstFacts:
                     name = str(attrs["name"])
                     if attrs.get("storage_class") == "static" or attrs.get("tls") is not None:
                         self._add_linker_name(attrs, name)
-                    if name not in local_names:
-                        local_names.add(name)
-                        facts.locals.append(
-                            {
-                                "name": name,
-                                "pointer": _is_pointer_type(attrs.get("type")),
-                                # static, thread_local and block-scope extern declarations name
-                                # persistent state, which is classified like a global
-                                "static": attrs.get("storage_class") in ("static", "extern")
-                                or attrs.get("tls") is not None,
-                            }
-                        )
+                    pointer = _is_pointer_type(attrs.get("type"), attrs.get("desugared_type"))
+                    # static, thread_local and block-scope extern declarations name persistent
+                    # state, which is classified like a global
+                    static = attrs.get("storage_class") in ("static", "extern") or attrs.get("tls") is not None
+                    # every distinct declaration of a name (e.g. in sibling blocks), so that the
+                    # analysis can merge them: the profiler's variable names carry no scope
+                    if (name, pointer, static) not in local_seen:
+                        local_seen.add((name, pointer, static))
+                        facts.locals.append({"name": name, "pointer": pointer, "static": static})
                 elif kind == "MemberExpr" and attrs.get("name") and line is not None:
                     facts.member_accesses.setdefault(str(line), {})[str(attrs["name"])] = self._member_base(
                         graph, node_id
@@ -630,18 +751,26 @@ class _AstFacts:
                     referenced_id = attrs.get("referenced_id")
                     name = attrs.get("referenced_name")
                     if referenced_id in global_ids and global_ids[referenced_id] == name:
-                        facts.global_refs.append(
-                            {"name": str(name), "line": line, "access": self._access_of(graph, node_id)}
-                        )
+                        access = self._access_of(graph, node_id)
+                        # x += 1, ++x: a read and a write
+                        for single in ("read", "write") if access == "readwrite" else (access,):
+                            facts.global_refs.append({"name": str(name), "line": line, "access": single})
                 elif kind in ("CallExpr", "CXXMemberCallExpr", "CXXOperatorCallExpr"):
-                    callee = self._callee_name(graph, node_id)
+                    callee = self._callee(graph, node_id)
                     if callee is not None:
-                        facts.called_names.add(callee)
+                        callee_name, declaration_id = callee
+                        facts.called_names.add(callee_name)
+                        decl = self._function_decls.get(declaration_id) if declaration_id is not None else None
+                        # trusted only if the name matches, see self._function_decls
+                        linker_name = decl[1] if decl is not None and decl[0] == callee_name else None
+                        facts.calls.add((callee_name, linker_name))
                 elif kind in ("CXXConstructExpr", "CXXTemporaryObjectExpr"):
                     # the constructor of a class type, e.g. in library code; its name is the class name
                     type_name = str(attrs.get("type") or "")
                     if type_name:
-                        facts.called_names.add(_base_name(_strip_template_arguments(type_name)))
+                        constructor = _base_name(_strip_template_arguments(type_name))
+                        facts.called_names.add(constructor)
+                        facts.calls.add((constructor, None))
                 body_stack.extend(children(node_id))
             facts.global_refs = _unique_refs(facts.global_refs)
             mangled = decl_attrs.get("mangled_name")
@@ -677,10 +806,11 @@ class _AstFacts:
 
     @staticmethod
     def _access_of(graph: Any, decl_ref: str) -> str:
-        """Whether a DeclRefExpr is written ("write"), only read ("read") or neither is clear."""
+        """Whether a DeclRefExpr is written ("write"), only read ("read"), read and written ("readwrite",
+        compound assignments and increments) or neither is clear ("unknown")."""
         child = decl_ref
         # an array decays to a pointer before it is subscripted: the access is decided further up
-        is_array = "[" in str(graph.nodes[decl_ref].get("type") or "")
+        decays = "[" in str(graph.nodes[decl_ref].get("type") or "")
         for _ in range(16):
             parents = list(graph.predecessors(child))
             if len(parents) == 0:
@@ -689,22 +819,33 @@ class _AstFacts:
             attrs = graph.nodes[parent]
             kind = attrs.get("kind")
             opcode = attrs.get("opcode")
-            if kind == "ImplicitCastExpr" and not is_array:
-                return "read"  # lvalue-to-rvalue conversion
+            if kind == "ImplicitCastExpr":
+                if not decays:
+                    return "read"  # lvalue-to-rvalue conversion
+                decays = False  # the array-to-pointer decay; a later cast is a read
+                child = parent
+                continue
             if kind in ("CompoundAssignOperator",) or (kind == "UnaryOperator" and opcode in ("++", "--")):
-                return "write"
+                return "readwrite"
             if kind == "BinaryOperator" and opcode == "=":
                 operands = list(graph.successors(parent))
                 return "write" if len(operands) > 0 and operands[0] == child else "read"
             if kind == "UnaryOperator" and opcode == "&":
                 return "unknown"  # address taken: the access happens elsewhere
+            if kind in _CALL_KINDS:
+                # an argument bound to a reference (a by-value argument is read by the cast above),
+                # an array passed as a pointer, or the object of a member call: the callee decides
+                return "unknown"
+            if kind == "ArraySubscriptExpr":
+                decays = False
             if kind not in _TRANSPARENT_KINDS:
                 return "read"
             child = parent
         return "unknown"
 
     @staticmethod
-    def _callee_name(graph: Any, call: str) -> Optional[str]:
+    def _callee(graph: Any, call: str) -> Optional[Tuple[str, Optional[str]]]:
+        """Name of the called function and the id of its declaration (None if the AST does not name it)."""
         successors = list(graph.successors(call))
         current = successors[0] if successors else None
         for _ in range(8):
@@ -717,10 +858,14 @@ class _AstFacts:
                 if not referenced:
                     return None
                 if attrs.get("referenced_kind") in ("VarDecl", "ParmVarDecl", "FieldDecl"):
-                    return f"{referenced} (call through a function pointer)"
-                return str(referenced)
+                    return f"{referenced} (call through a function pointer)", None
+                referenced_id = attrs.get("referenced_id")
+                return str(referenced), str(referenced_id) if referenced_id else None
             if kind == "MemberExpr":
-                return str(attrs.get("name")) if attrs.get("name") else None
+                if not attrs.get("name"):
+                    return None
+                member_id = attrs.get("referenced_member_id")
+                return str(attrs["name"]), str(member_id) if member_id else None
             if kind not in ("ImplicitCastExpr", "ParenExpr"):
                 return None
             nxt = list(graph.successors(current))

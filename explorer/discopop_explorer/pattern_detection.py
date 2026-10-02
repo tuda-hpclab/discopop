@@ -133,9 +133,10 @@ class PatternDetectorX(object):
                 ignore_dependency_states=ignore_dependency_states,
             )
         # The export reads the TaskGraph but does not modify it. A stale export of an earlier run
-        # cannot survive: setup_explorer removes the whole explorer directory at the start.
+        # cannot survive: setup_explorer removes the whole explorer directory at the start, and
+        # write_side_effect_export removes it when it skips or fails the export.
         with stage("Exporting side effect data"):
-            write_side_effect_export(project_path, task_graph, self.pet, self.ast_helper)
+            write_side_effect_export(project_path, task_graph, self.pet, self.ast_helper, file_mapping)
         if enable_task_graph_plot:
             task_graph.plot()
         #        if enable_context_graph_plot:

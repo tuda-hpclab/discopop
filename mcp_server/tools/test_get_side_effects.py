@@ -15,6 +15,8 @@ wording and the handling of the export file.
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -226,6 +228,18 @@ class TestGetSideEffects(unittest.TestCase):
     def test_the_summary_names_the_contributing_callees(self) -> None:
         data = self.__query([_effect("g", via=("a", "b")), _effect("h", via=("c",)), _effect("own")])
         self.assertEqual(data["summary"]["contributing_callees"], ["b", "c"])
+        self.assertEqual(data["summary"]["num_contributing_callees"], 2)
+
+    def test_contributing_callees_and_unprofiled_calls_are_capped(self) -> None:
+        many = get_side_effects.MAX_LISTED + 5
+        effects = [_effect(f"g{i}", via=(f"callee{i:02}",)) for i in range(many)]
+        calls = [f"lib{i:02}" for i in range(many)]
+        data = self.__query(effects, result_extra={"unprofiled_calls": calls})
+        self.assertEqual(data["summary"]["num_contributing_callees"], many)
+        self.assertEqual(len(data["summary"]["contributing_callees"]), get_side_effects.MAX_LISTED)
+        self.assertEqual(data["summary"]["contributing_callees"][0], "callee00")
+        self.assertEqual(data["num_unprofiled_calls"], many)
+        self.assertEqual(data["unprofiled_calls"], calls[: get_side_effects.MAX_LISTED])
 
     def test_flags_are_passed_through(self) -> None:
         extra = {"pure_on_observed_inputs": False, "performs_file_io": True, "unprofiled_calls": ["printf"]}
@@ -233,6 +247,7 @@ class TestGetSideEffects(unittest.TestCase):
         self.assertIs(data["pure_on_observed_inputs"], False)
         self.assertIs(data["performs_file_io"], True)
         self.assertEqual(data["unprofiled_calls"], ["printf"])
+        self.assertEqual(data["num_unprofiled_calls"], 1)
         self.assertEqual(data["unmapped_records"], 4)
         self.assertEqual(data["coverage"], "executed")
 
@@ -313,6 +328,19 @@ class TestGetSideEffects(unittest.TestCase):
         data = self.__query(effects, var_name="g")
         self.assertEqual([site["line"] for site in data["writes"][0]["sites"]], [11, 12, 13, 14, 15])
 
+    def test_sites_are_capped_with_var_name_too(self) -> None:
+        many = get_side_effects.MAX_VAR_SITES + 10
+        data = self.__query([_effect("g", lines=tuple(range(100, 100 + many)))], var_name="g")
+        entry = data["writes"][0]
+        self.assertEqual(entry["num_sites"], many)
+        self.assertEqual(len(entry["sites"]), get_side_effects.MAX_VAR_SITES)
+        self.assertEqual(entry["sites"][0]["line"], 100)
+
+    def test_recursion_in_via_is_collapsed(self) -> None:
+        via = ("main()", "recurse(int)", "recurse(int)", "recurse(int)", "recurse(int)", "recurse(int)", "leaf()")
+        entry = self.__query([_effect("g", via=via)])["writes"][0]
+        self.assertEqual(entry["sites"][0]["via"], ["main()", "recurse(int) x5", "leaf()"])
+
     def test_sites_in_other_files_carry_the_file(self) -> None:
         effect = _effect("g", lines=(12,))
         effect.sites.append(EffectSite(file_id=2, line=4, via=("helper(int)",)))
@@ -349,15 +377,22 @@ class TestGetSideEffects(unittest.TestCase):
     def test_the_profiled_inputs_note_is_always_there(self) -> None:
         data = self.__query([])
         self.assertIn("profiled inputs", data["notes"][0])
-        data = self.__query([], result_extra={"ast_facts": False, "notes": ["x", "x", "y"]})
-        self.assertEqual(len(data["notes"]), 4)
-        self.assertIn(get_side_effects.NO_AST_NOTE, data["notes"])
+        data = self.__query([], result_extra={"notes": ["x", "x", "y"]})
+        self.assertEqual(data["notes"][1:], ["x", "y"])
+
+    def test_missing_source_facts_are_noted_once(self) -> None:
+        analysis_note = "No source-level (AST) facts for f(int*); their accesses are classified as 'other'."
+        data = self.__query([], result_extra={"ast_facts": False, "notes": [analysis_note]})
+        self.assertEqual(data["notes"][1:], [analysis_note])
+        # without the analysis' note, the tool adds its own
+        data = self.__query([], result_extra={"ast_facts": False, "notes": []})
+        self.assertEqual(data["notes"][1:], [get_side_effects.NO_AST_NOTE])
 
     def test_coverage_next_steps(self) -> None:
         expectations = {
             "not_executed": "never executed",
             "untracked": "could be attributed",
-            "partial": "may be missing",
+            "partial": "unmapped_records",
         }
         for coverage, phrase in expectations.items():
             with self.subTest(coverage=coverage):
@@ -372,6 +407,22 @@ class TestGetSideEffects(unittest.TestCase):
         self.assertTrue(data["truncated"])
         self.assertIn("first 1 of 2", data["next_step"])
         self.assertIn("may be missing", data["next_step"])
+
+    # --- description and imports
+
+    def test_the_description_fits_before_the_client_cuts_it_off(self) -> None:
+        # like the server instructions (test_server.py): clients show only the first 2048 characters
+        self.assertLessEqual(len(get_side_effects.TOOL.description or ""), 2048)
+
+    def test_the_tool_module_imports_without_discopop_explorer(self) -> None:
+        # the server must start without the explorer installed; it is only needed on a call
+        code = (
+            "import sys; sys.modules['discopop_explorer'] = None; "
+            "import mcp_server.tools.get_side_effects, mcp_server.tools.helpers"
+        )
+        root = Path(__file__).resolve().parents[2]
+        proc = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
     # --- export problems
 

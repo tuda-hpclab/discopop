@@ -309,6 +309,13 @@ class TestSideEffects(unittest.IsolatedAsyncioTestCase):
                 "shadow": set(),
                 "count_calls": {("read", "global", "calls"), ("write", "global", "calls")},
                 "recurse": {("read", "global", "g_counter"), ("write", "global", "g_counter")},
+                # ++g_seq: the read is not observed separately, the static fallback adds it
+                "next_value": {("read", "global", "g_seq"), ("write", "global", "g_seq")},
+                "bump": {("read", "parameter", "x"), ("write", "parameter", "x")},
+                "sibling_a": set(),
+                "sibling_b": set(),
+                "read_const_table": {("read", "global", "g_table")},
+                "chain1": {("read", "global", "g_chain"), ("write", "global", "g_chain")},
             }
             for function, effects in expected.items():
                 with self.subTest(function=function):
@@ -323,12 +330,29 @@ class TestSideEffects(unittest.IsolatedAsyncioTestCase):
             (write,) = data["writes"]
             self.assertEqual(write["sites"][0]["via"], ["write_through_param(int*, int)"])
 
-            data = await query("next_value")
-            self.assertIn(("write", "global", "g_seq"), _effects(data))
+            data = await query("wrapper", include_callees=False)
+            self.assertEqual(_effects(data), set(), data)
 
             data = await query("read_const_table")
             (read,) = data["reads"]
             self.assertEqual((read["name"], read["source"]), ("g_table", "static"))
+            self.assertIs(data["pure_on_observed_inputs"], True)
+
+            # main aggregates the effects of everything it calls, also beyond the inlining depth
+            data = await query("main")
+            self.assertLessEqual(
+                {
+                    ("write", "global", "g_counter"),
+                    ("write", "global", "g_sink"),
+                    ("write", "global", "g_chain"),
+                    ("write", "global", "g_seq"),
+                    ("read", "global", "g_seq"),
+                    ("write", "global", "calls"),
+                },
+                _effects(data),
+                data,
+            )
+            self.assertIs(data["pure_on_observed_inputs"], False)
 
             data = await query("clear")
             self.assertIn("memset", data["unprofiled_calls"])

@@ -13,16 +13,21 @@ and uncut; this tool filters, ranks, cuts and words them for an agent. See
 DESIGN_get_side_effects.md, section 3.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from discopop_explorer.side_effects.result import Effect, EffectSite, FunctionInfo, SideEffects
 from mcp_server.tools.helpers import ToolContext
+
+if TYPE_CHECKING:
+    # imported for annotations only: the server starts without discopop_explorer installed
+    from discopop_explorer.side_effects.result import Effect, EffectSite, FunctionInfo, SideEffects
 
 logger = logging.getLogger("discopop-mcp")
 
@@ -31,8 +36,11 @@ TOOL_NAME = "get_side_effects"
 # A function high up in the call tree (main, a solver driver) can touch hundreds of
 # globals and buffers; beyond this many entries the answer costs more than it helps.
 MAX_EFFECTS = 100
-# Sites listed per entry, unless var_name asks for one variable: then all of them.
+# Sites listed per entry; more when var_name asks for one variable. num_sites has the total.
 MAX_SITES = 3
+MAX_VAR_SITES = 50
+# Entries of summary.contributing_callees and of unprofiled_calls; num_* fields have the totals.
+MAX_LISTED = 20
 # Candidates listed for an ambiguous name.
 MAX_CANDIDATES = 20
 
@@ -49,10 +57,12 @@ PROFILED_INPUTS_NOTE = (
     "Effects were observed on the profiled inputs only; other inputs can reach other code and data. "
     "Accesses inside library code that was not compiled with DiscoPoP are not observed (see unprofiled_calls)."
 )
+# Only added if the analysis' own note on missing source-level facts is absent.
 NO_AST_NOTE = (
     "No source-level facts are available for this function or a contributing callee, so its names "
     "could not be classified and are reported as kind 'other'."
 )
+_NO_AST_NOTE_MARKER = "No source-level"
 
 COVERAGE_NEXT_STEPS = {
     "not_executed": (
@@ -69,9 +79,9 @@ COVERAGE_NEXT_STEPS = {
     ),
     "partial": (
         "Some calls of this function, or of functions it calls, could not be followed (e.g. recursion, "
-        "deep call chains, function pointers), so effects of those calls may be missing. Treat absent "
-        "effects as unknown; get_data_dependencies on the line range of interest shows the raw observed "
-        "dependencies."
+        "deep call chains, function pointers), or some recorded accesses could not be attributed to a call "
+        "(unmapped_records), so effects may be missing. Treat absent effects as unknown; "
+        "get_data_dependencies on the line range of interest shows the raw observed dependencies."
     ),
 }
 
@@ -81,30 +91,27 @@ TOOL = Tool(
     description=(
         "Return the data a C/C++ function was observed to read and write outside of itself during "
         "profiling, including through the functions it calls: globals (also static locals and static "
-        "members), memory reached through its pointer, reference or array parameters, and other memory "
-        "that outlives the call. Use it to judge whether a call is pure, safe to run concurrently, to "
+        "members), memory reached through its pointer, reference, array or class-type parameters, and other "
+        "memory that outlives the call. Use it to judge whether a call is pure, safe to run concurrently, to "
         "reorder or to memoize, e.g. during a review or a refactoring.\n\n"
-        "The result has the effects split into writes and reads (unknown_access: statically found "
-        "references whose access is unknown). Each entry has name, kind (global, parameter, other), "
-        "source (observed, or static: referenced in the code but not observed), through_pointer, and "
-        f"up to {MAX_SITES} sites (all when var_name is set) with line and via, the call chain from the "
-        "function to the one containing the access (null for the function itself); a site in another "
-        "file also has file. outside_names are names of the same data at the other access of a dependency "
-        "(e.g. the caller's argument), when they differ.\n\n"
-        "coverage says how much of the function's execution could be observed: executed, partial, "
-        "untracked or not_executed; anything but executed means absent effects are unknown, not absent. "
-        "pure_on_observed_inputs: true = no writes, and reads only through its own parameters or of "
-        "constants (for memoizing, the pointed-to contents belong to the key); false = an observed write "
-        "or file I/O; null = cannot be decided. performs_file_io and unprofiled_calls (called functions "
-        "whose accesses were not observed) flag what the profiling cannot see; unmapped_records counts "
-        "recorded accesses of the function that could not be attributed to a call, so effects may be "
-        "missing.\n\n"
-        f"At most {MAX_EFFECTS} entries are returned: writes before reads; global, parameter, other; the "
-        "function's own accesses before those of callees, shallower callees first; observed before "
-        "static; then by name. summary counts every entry matching the filters, and truncated=true marks "
-        "a cut result.\n\n"
-        "Valid only for the profiled inputs. Requires gather_data to have been run first. Cheap to call: "
-        "the data is cached in memory after the first load."
+        "Effects are split into writes and reads (unknown_access: static references of unknown access). "
+        "Each entry has name, kind (global, parameter, other), source (observed, or static: referenced in "
+        "the code, not observed), through_pointer and sites with line and via, the call chain to the "
+        "function containing the access (null: the function itself; recursion shown as 'f(int) x5'). "
+        "Names are those at the access: a parameter reached through a callee has the parameter name of the "
+        "last via function. outside_names are other names of the same data, e.g. the caller's argument.\n\n"
+        "coverage: executed, partial, untracked or not_executed; anything but executed means absent effects "
+        "are unknown, not absent. pure_on_observed_inputs: true = no writes, and reads only through its own "
+        "parameters or of constants (for memoizing, the pointed-to contents belong to the key); false = an "
+        "observed write or file I/O; null = undecided. performs_file_io and unprofiled_calls (calls whose "
+        "accesses were not observed) flag what profiling cannot see; unmapped_records counts recorded "
+        "accesses in the function or its callees that could not be attributed to a call (coverage is then "
+        "partial).\n\n"
+        "Order: writes before reads; global, parameter, other; own accesses before callees', shallower "
+        f"first; observed before static; by name. At most {MAX_EFFECTS} entries and {MAX_SITES} sites each "
+        f"({MAX_VAR_SITES} with var_name); num_* fields give totals, summary counts every match, "
+        "truncated=true marks a cut.\n\n"
+        "Valid only for the profiled inputs. Requires gather_data. Cheap: cached after the first load."
     ),
     inputSchema={
         "type": "object",
@@ -145,7 +152,7 @@ TOOL = Tool(
                 "type": "string",
                 "description": (
                     "Only return entries for this name (also matched against member_of and outside_names), "
-                    "with all their sites."
+                    f"with up to {MAX_VAR_SITES} sites each."
                 ),
             },
             "include_callees": {
@@ -222,19 +229,33 @@ def _rank_key(effect: Effect) -> tuple[Any, ...]:
     )
 
 
+def _collapse_via(via: tuple[str, ...]) -> list[str]:
+    """Runs of the same function (recursion) as one element: ('r(int)',) * 5 -> ['r(int) x5']."""
+    collapsed: list[str] = []
+    i = 0
+    while i < len(via):
+        j = i
+        while j + 1 < len(via) and via[j + 1] == via[i]:
+            j += 1
+        count = j - i + 1
+        collapsed.append(via[i] if count == 1 else f"{via[i]} x{count}")
+        i = j + 1
+    return collapsed
+
+
 def _site(site: EffectSite, function: FunctionInfo, files: dict[int, Optional[str]]) -> dict[str, Any]:
     entry: dict[str, Any] = {}
     if site.file_id != function.file_id:
         entry["file"] = files.get(site.file_id)
     entry["line"] = site.line
-    entry["via"] = list(site.via) if site.via else None
+    entry["via"] = _collapse_via(site.via) if site.via else None
     return entry
 
 
-def _entry(effect: Effect, function: FunctionInfo, files: dict[int, Optional[str]], all_sites: bool) -> dict[str, Any]:
+def _entry(effect: Effect, function: FunctionInfo, files: dict[int, Optional[str]], max_sites: int) -> dict[str, Any]:
     # the function's own sites first, then its file, then by line
     sites = sorted(effect.sites, key=lambda s: (len(s.via), s.file_id != function.file_id, s.file_id, s.line, s.via))
-    shown = sites if all_sites else sites[:MAX_SITES]
+    shown = sites[:max_sites]
     entry: dict[str, Any] = {
         "name": effect.name,
         "kind": effect.kind,
@@ -262,7 +283,8 @@ def _summary(matched: list[Effect]) -> dict[str, Any]:
         "num_effects": len(matched),
         "by_access": by_access,
         "by_kind": by_kind,
-        "contributing_callees": sorted(callees),
+        "num_contributing_callees": len(callees),
+        "contributing_callees": sorted(callees)[:MAX_LISTED],
     }
 
 
@@ -294,15 +316,15 @@ def build_result(
     buckets: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in _BUCKETS.values()}
     for effect in shown:
         buckets[_BUCKETS.get(effect.access, "unknown_access")].append(
-            _entry(effect, function, files, all_sites=var_name is not None)
+            _entry(effect, function, files, MAX_VAR_SITES if var_name is not None else MAX_SITES)
         )
 
     notes = [PROFILED_INPUTS_NOTE]
-    if not effects.ast_facts:
-        notes.append(NO_AST_NOTE)
     for note in effects.notes:
         if note not in notes:
             notes.append(note)
+    if not effects.ast_facts and not any(note.startswith(_NO_AST_NOTE_MARKER) for note in effects.notes):
+        notes.append(NO_AST_NOTE)
 
     result: dict[str, Any] = {
         "status": "success",
@@ -316,7 +338,8 @@ def build_result(
         "coverage": effects.coverage,
         "pure_on_observed_inputs": effects.pure_on_observed_inputs,
         "performs_file_io": effects.performs_file_io,
-        "unprofiled_calls": list(effects.unprofiled_calls),
+        "num_unprofiled_calls": len(effects.unprofiled_calls),
+        "unprofiled_calls": list(effects.unprofiled_calls)[:MAX_LISTED],
         "unmapped_records": effects.unmapped_records,
         "summary": _summary(matched),
         "writes": buckets["writes"],

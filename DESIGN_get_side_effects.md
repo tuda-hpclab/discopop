@@ -498,3 +498,39 @@ Two causes were identified:
 
 On the small ground-truth program the same effect is visible in a reduced form: the
 reads of `g_seq` in the loop calls of `next_value` are lost (13 unmapped ends).
+
+## 9. Review round 2 (2026-10-02, after 70abd00b)
+
+Two independent reviews (semantics; architecture/API/tests). Fixed:
+
+- **Purity soundness.** An end of a callee parameter or of other memory whose other end
+  is unknown (a first write `INIT`, or an other end without an exported context) can not
+  be checked for crossing the call; it now counts towards `unmapped_records` instead of
+  being dropped silently. `unmapped_records` covers the whole reach of the function
+  (static closure, touched functions, instance subtree), and `> 0` turns `executed` into
+  `partial`, so purity becomes null. Cost: functions that fill memory through a pointer
+  they were given usually get purity null now, unless the write is paired.
+- **Static fallback per (name, access).** An observed write no longer hides a static
+  read (`++g_seq`). Compound assignments and increments of a global are exported as a
+  read and a write; arguments of calls/constructors/member calls give `unknown`.
+- **Classification.** A linker-named end (function-static local, static data member) is
+  always a global. Locals keep every declaration (merged pointer > static > plain).
+  Parameters of class/struct/template type (by-value copies may share pointees) and
+  typedef'd pointers (`desugaredQualType`) are reachable; locals only for pointers,
+  references and pointer wrappers (smart pointers, iterators, span, string_view).
+- **unprofiled_calls** are matched by the referenced declaration where known, so a
+  project `Logger::write` no longer hides POSIX `write`.
+- **Output.** `outside_names` without linker names or the effect's own name; duplicate
+  notes removed (coverage is explained by `next_step`); sites capped also with
+  `var_name` (50); recursive `via` runs collapsed (`recurse(int) x5`); callee and
+  unprofiled lists capped at 20 with `num_*` totals; tool description <= 2048 chars
+  (tested); `discopop_explorer` imported lazily by the tool.
+- **Export.** Skipped (and a stale export removed) under `--ignore-dependency-states`;
+  `--fmap` honoured; temporary file removed on a failed write.
+- **Tests.** The e2e ground truth now asserts `main` (aggregation), `next_value`,
+  `bump`, the siblings, `chain1`, `read_const_table` purity and `include_callees=false`.
+
+Not fixed: the dependency and instruction files are still re-read by the export; AST id
+collisions across TUs; pointer arithmetic on a global (`g_arr + 1`) is labelled `read`;
+a `parameter` effect found through a callee carries the callee's parameter name
+(documented in the tool description).

@@ -37,7 +37,8 @@ void write_through_param(int *p, int n) {
   }
 }
 
-// no own effects; writes the pointee of q through write_through_param
+// no own effects; writes the pointee of q through write_through_param. The effect is named as at
+// the access: parameter p, with via [write_through_param]; the caller's buf goes to outside_names
 void wrapper(int *q, int n) { write_through_param(q, n); }
 
 // no effects: the written buffer is its own

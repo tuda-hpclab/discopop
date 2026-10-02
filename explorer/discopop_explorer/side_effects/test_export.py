@@ -561,3 +561,326 @@ def test_export_failure_does_not_fail_the_run(
 
     assert "Could not write the side effect export" in caplog.text
     assert not (tmp_path / "explorer" / "side_effects.json.gz").exists()
+
+
+# ---------------------------------------------------------------------------
+# review fixes: types, repeated locals, access of globals, unprofiled calls, skipping
+# ---------------------------------------------------------------------------
+
+
+def _type(qual: str, desugared: Optional[str] = None) -> Dict[str, str]:
+    return {"qualType": qual, "desugaredQualType": desugared} if desugared else {"qualType": qual}
+
+
+def _function_ast(name: str, mangled: str, params: List[Any], body: List[Any], extra: List[Any]) -> Dict[str, Any]:
+    """A translation unit with the declarations ``extra`` and one function definition."""
+    return {
+        "kind": "TranslationUnitDecl",
+        "id": "0x1",
+        "inner": extra
+        + [
+            {
+                "id": "0xf0",
+                "kind": "FunctionDecl",
+                "name": name,
+                "mangledName": mangled,
+                "loc": {"file": "/src/code.cpp", "line": 3},
+                "inner": params + [{"id": "0xf1", "kind": "CompoundStmt", "inner": body}],
+            }
+        ],
+    }
+
+
+def _facts_of(ast: Dict[str, Any], mangled: str, pet_names: Tuple[str, ...] = ()) -> Tuple[Any, Any]:
+    function = _Named("1:5", mangled, 1, 3)
+    others = [_Named(f"1:{9 + i}", n, 1, 100 + i) for i, n in enumerate(pet_names)]
+    facts = _AstFacts(_AstHelper(ast), {1: "/src/code.cpp"}, [function, *others])  # type: ignore[arg-type, list-item]
+    return facts, facts.function_facts(function)  # type: ignore[arg-type]
+
+
+def test_typedef_pointers_and_class_parameters_are_reachable() -> None:
+    params = [
+        {"id": f"0x{20 + i}", "kind": "ParmVarDecl", "name": n, "type": t}
+        for i, (n, t) in enumerate(
+            [
+                ("a", _type("Real_p", "double *")),  # typedef double* Real_p
+                ("r", _type("IntRef", "int &")),
+                ("p", _type("P")),  # struct P passed by value: may hold pointers into the caller's memory
+                ("p2", _type("struct P", "P")),
+                ("s", _type("std::shared_ptr<int>")),
+                ("it", _type("std::vector<int>::iterator", "__gnu_cxx::__normal_iterator<int *, std::vector<int>>")),
+                ("c", _type("Color")),  # an enum
+                ("m", _type("myint", "int")),  # typedef int myint
+                ("z", _type("size_t", "unsigned long")),
+                ("n", _type("const int")),
+            ]
+        )
+    ]
+    extra = [{"id": "0x2", "kind": "EnumDecl", "name": "Color"}]
+    _facts, facts = _facts_of(_function_ast("F", "_Z1F", params, [], extra), "_Z1F")
+
+    assert {p["name"]: p["reachable"] for p in facts.params} == {
+        "a": True,
+        "r": True,
+        "p": True,
+        "p2": True,
+        "s": True,
+        "it": True,
+        "c": False,
+        "m": False,
+        "z": False,
+        "n": False,
+    }
+
+
+def test_typedef_pointers_and_pointer_wrappers_are_pointer_locals() -> None:
+    locals_ = [
+        ("q", _type("Real_p", "double *")),
+        ("sp", _type("std::shared_ptr<int>")),
+        ("it", _type("std::vector<int>::iterator", "__gnu_cxx::__normal_iterator<int *, std::vector<int>>")),
+        ("sv", _type("std::string_view", "std::basic_string_view<char>")),
+        ("pt", _type("P")),  # a struct by value is local storage
+        ("arr", _type("int[4]")),
+        ("m", _type("myint", "int")),
+    ]
+    body = [
+        {
+            "id": "0x30",
+            "kind": "DeclStmt",
+            "inner": [
+                {"id": f"0x{40 + i}", "kind": "VarDecl", "name": n, "type": t} for i, (n, t) in enumerate(locals_)
+            ],
+        }
+    ]
+    _facts, facts = _facts_of(_function_ast("F", "_Z1F", [], body, []), "_Z1F")
+
+    assert {l["name"]: l["pointer"] for l in facts.locals} == {
+        "q": True,
+        "sp": True,
+        "it": True,
+        "sv": True,
+        "pt": False,
+        "arr": False,
+        "m": False,
+    }
+
+
+def test_every_declaration_of_a_local_name_is_exported() -> None:
+    """{ int i; } { static int i; i++; }: the profiler's names carry no scope, the reader merges."""
+    body = [
+        {
+            "id": "0x30",
+            "kind": "CompoundStmt",
+            "inner": [{"id": "0x31", "kind": "VarDecl", "name": "i", "type": _type("int")}],
+        },
+        {
+            "id": "0x32",
+            "kind": "CompoundStmt",
+            "inner": [
+                {"id": "0x33", "kind": "VarDecl", "name": "i", "storageClass": "static", "type": _type("int")},
+                {"id": "0x34", "kind": "VarDecl", "name": "i", "storageClass": "static", "type": _type("int")},
+            ],
+        },
+    ]
+    _facts, facts = _facts_of(_function_ast("F", "_Z1F", [], body, []), "_Z1F")
+
+    entries = sorted((l["name"], l["pointer"], l["static"]) for l in facts.locals)
+    assert entries == [("i", False, False), ("i", False, True)]  # one entry per distinct declaration
+
+
+def _call(node_id: str, callee: str, callee_id: str, args: List[Any], line: int) -> Dict[str, Any]:
+    return {
+        "id": node_id,
+        "kind": "CallExpr",
+        "loc": {"line": line},
+        "inner": [
+            {
+                "id": node_id + "c",
+                "kind": "ImplicitCastExpr",
+                "inner": [_decl_ref(node_id + "d", callee, callee_id, "FunctionDecl")],
+            }
+        ]
+        + args,
+    }
+
+
+def test_global_passed_by_reference_or_as_object_of_a_member_call_has_unknown_access() -> None:
+    globals_ = [
+        {"id": "0x10", "kind": "VarDecl", "name": "g", "type": _type("int")},
+        {"id": "0x11", "kind": "VarDecl", "name": "g_vec", "type": _type("std::vector<int>")},
+        {"id": "0x12", "kind": "VarDecl", "name": "g_val", "type": _type("int")},
+        {"id": "0x13", "kind": "VarDecl", "name": "g_arr", "type": _type("int[4]")},
+    ]
+    body = [
+        _call("0x50", "inc", "0x90", [_decl_ref("0x51", "g", "0x10")], 4),  # inc(int&)
+        {
+            "id": "0x60",
+            "kind": "CXXMemberCallExpr",
+            "loc": {"line": 5},
+            "inner": [
+                {
+                    "id": "0x61",
+                    "kind": "MemberExpr",
+                    "name": "push_back",
+                    "inner": [_decl_ref("0x62", "g_vec", "0x11", type_name="std::vector<int>")],
+                }
+            ],
+        },
+        # by value: the lvalue-to-rvalue cast makes it a read
+        _call(
+            "0x70",
+            "use",
+            "0x91",
+            [{"id": "0x71", "kind": "ImplicitCastExpr", "inner": [_decl_ref("0x72", "g_val", "0x12")]}],
+            6,
+        ),
+        # an array passed as a pointer
+        _call(
+            "0x80",
+            "fill",
+            "0x92",
+            [
+                {
+                    "id": "0x81",
+                    "kind": "ImplicitCastExpr",
+                    "inner": [_decl_ref("0x82", "g_arr", "0x13", type_name="int[4]")],
+                }
+            ],
+            7,
+        ),
+    ]
+    _facts, facts = _facts_of(_function_ast("F", "_Z1F", [], body, globals_), "_Z1F")
+
+    assert {(r["name"], r["access"]) for r in facts.global_refs} == {
+        ("g", "unknown"),
+        ("g_vec", "unknown"),
+        ("g_val", "read"),
+        ("g_arr", "unknown"),
+    }
+
+
+def test_compound_assignment_and_increment_of_a_global_are_a_read_and_a_write() -> None:
+    """next_value: ++g_seq; the profiler records only the write, the read must come from the source."""
+    globals_ = [
+        {"id": "0x10", "kind": "VarDecl", "name": "g_seq", "type": _type("int")},
+        {"id": "0x11", "kind": "VarDecl", "name": "g_sum", "type": _type("int")},
+    ]
+    body = [
+        {
+            "id": "0x50",
+            "kind": "UnaryOperator",
+            "opcode": "++",
+            "loc": {"line": 4},
+            "inner": [_decl_ref("0x51", "g_seq", "0x10")],
+        },
+        {
+            "id": "0x60",
+            "kind": "CompoundAssignOperator",
+            "opcode": "+=",
+            "loc": {"line": 5},
+            "inner": [_decl_ref("0x61", "g_sum", "0x11"), {"id": "0x62", "kind": "IntegerLiteral"}],
+        },
+    ]
+    _facts, facts = _facts_of(_function_ast("F", "_Z1F", [], body, globals_), "_Z1F")
+
+    assert sorted((r["name"], r["access"]) for r in facts.global_refs) == [
+        ("g_seq", "read"),
+        ("g_seq", "write"),
+        ("g_sum", "read"),
+        ("g_sum", "write"),
+    ]
+
+
+def test_a_project_method_does_not_hide_a_library_function_of_the_same_name() -> None:
+    """Project Logger::write must not make POSIX write look profiled."""
+    extra = [
+        {"id": "0x2", "kind": "FunctionDecl", "name": "write", "mangledName": "write"},  # unistd.h
+        {
+            "id": "0x3",
+            "kind": "CXXRecordDecl",
+            "name": "Logger",
+            "inner": [{"id": "0x4", "kind": "CXXMethodDecl", "name": "write", "mangledName": "_ZN6Logger5writeEi"}],
+        },
+        {
+            "id": "0x5",
+            "kind": "CXXMethodDecl",
+            "name": "write",
+            "mangledName": "_ZN6Logger5writeEi",
+            "loc": {"file": "/src/code.cpp", "line": 50},
+            "inner": [{"id": "0x6", "kind": "CompoundStmt"}],
+        },
+    ]
+    body = [
+        {
+            "id": "0x60",
+            "kind": "CXXMemberCallExpr",
+            "inner": [
+                {
+                    "id": "0x61",
+                    "kind": "MemberExpr",
+                    "name": "write",
+                    "referencedMemberDecl": "0x4",
+                    "inner": [_decl_ref("0x62", "l", "0x21", "ParmVarDecl", "Logger")],
+                }
+            ],
+        },
+        _call("0x70", "write", "0x2", [], 5),
+        _call("0x80", "helper", "0x99", [], 6),  # declaration unknown: matched by base name
+    ]
+    facts_by_function, facts = _facts_of(
+        _function_ast("h", "_Z1hR6Logger", [], body, extra), "_Z1hR6Logger", ("_ZN6Logger5writeEi", "_Z6helperv")
+    )
+
+    assert facts_by_function.unprofiled_calls(facts) == ["write"]
+
+
+class _StatelessTaskGraph:
+    ignore_dependency_states = True
+
+
+def test_no_export_without_dependency_states_and_a_stale_one_is_removed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    stale = tmp_path / "explorer" / "side_effects.json.gz"
+    save_export({"format_version": FORMAT_VERSION}, stale)  # type: ignore[typeddict-item]
+
+    with caplog.at_level(logging.INFO, logger="Explorer"):
+        assert write_export(str(tmp_path), _StatelessTaskGraph(), None, None) is None  # type: ignore[arg-type]
+
+    assert not stale.exists()
+    assert "--ignore-dependency-states" in caplog.text
+    assert "Could not write" not in caplog.text
+
+
+def test_a_failed_save_leaves_no_temporary_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(json, "dump", broken)
+    path = tmp_path / "explorer" / "side_effects.json.gz"
+
+    with pytest.raises(RuntimeError):
+        save_export({"format_version": FORMAT_VERSION}, path)  # type: ignore[typeddict-item]
+
+    assert list((tmp_path / "explorer").iterdir()) == []
+
+
+def test_build_export_reads_the_explorers_file_mapping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    read: List[str] = []
+
+    class _Stop(Exception):
+        pass
+
+    def record(path: str) -> Dict[int, str]:
+        read.append(path)
+        raise _Stop()
+
+    monkeypatch.setattr(export_module, "_read_file_mapping", record)
+    fmap = str(tmp_path / "elsewhere" / "FileMapping.txt")
+
+    with pytest.raises(_Stop):
+        export_module.build_export(str(tmp_path), None, None, None, fmap)  # type: ignore[arg-type]
+    with pytest.raises(_Stop):
+        export_module.build_export(str(tmp_path), None, None, None)  # type: ignore[arg-type]
+
+    assert read == [fmap, str(tmp_path / "FileMapping.txt")]

@@ -418,8 +418,10 @@ def terminate_process_tree(proc: "subprocess.Popen[Any]", grace_seconds: float =
 class SideEffectDataProblem:
     """Why the side effect data of a project cannot be queried, worded for the caller.
 
-    ``reason`` is one of "missing", "unreadable" (also: written in another format
-    version), "stale" and "ignore_dependency_states".
+    ``reason`` is one of "missing" (also after a pattern detection with
+    --ignore-dependency-states, which writes no export), "unreadable" (also: written in
+    another format version), "stale" and "ignore_dependency_states" (an export written
+    by an older explorer with --ignore-dependency-states).
     """
 
     reason: str
@@ -796,9 +798,12 @@ class ToolContext:
             stat = path.stat()
         except OSError:
             self._side_effect_cache.pop(project_path, None)
+            # also the case after a pattern detection with --ignore-dependency-states (e.g. from the
+            # GUI): the explorer then writes no export and removes an earlier one
             return None, SideEffectDataProblem(
                 "missing",
-                "No side effect data found for this project. Run gather_data first.",
+                "No side effect data found for this project: gather_data has not run yet, or the last "
+                "pattern detection ran with --ignore-dependency-states, which records none. Run gather_data.",
                 "Run gather_data; its pattern detection step records the side effect data.",
             )
         key = (stat.st_mtime_ns, stat.st_size)

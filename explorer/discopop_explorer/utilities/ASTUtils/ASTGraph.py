@@ -93,6 +93,11 @@ class ClangASTGraph:
                 "kind": node.get("kind"),
                 "name": node.get("name"),
                 "type": self._extract_type(node.get("type")),
+                # the type with typedefs and aliases resolved ("double *" for "Real_p"); None if Clang
+                # gives none, i.e. if it equals "type"
+                "desugared_type": (
+                    node["type"].get("desugaredQualType") if isinstance(node.get("type"), dict) else None
+                ),
                 "loc": loc,
                 "range": range_info,
                 "inner": node.get("inner", []),
@@ -107,6 +112,8 @@ class ClangASTGraph:
                 "referenced_id": (node.get("referencedDecl") or {}).get("id"),
                 # its kind, e.g. "ParmVarDecl" for a call through a function pointer parameter
                 "referenced_kind": (node.get("referencedDecl") or {}).get("kind"),
+                # id of the member a MemberExpr names, e.g. the method of a member call
+                "referenced_member_id": node.get("referencedMemberDecl"),
                 # linker name of FunctionDecl / VarDecl nodes, which the profiler's function names match
                 "mangled_name": node.get("mangledName"),
                 # "static", "extern", ... of FunctionDecl / VarDecl nodes; None if not given

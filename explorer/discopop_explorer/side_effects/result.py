@@ -82,7 +82,8 @@ class SideEffects:
     # demangled names of called functions without a definition in the project, minus the allowlist
     unprofiled_calls: List[str]
     effects: List[Effect]
-    # record ends located in the function that matched no work context
+    # recorded accesses in the function or anything it reaches that could not be attributed to a calling
+    # context or to memory outside the call; > 0 makes the coverage partial
     unmapped_records: int
     # display names of the functions whose accesses contribute effects (excluding the queried one)
     contributing_callees: List[str]
