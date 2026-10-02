@@ -15,7 +15,7 @@ import re
 import signal
 import logging
 import sys
-from typing import Any, Deque, Dict, FrozenSet, List, Optional, Set, Tuple, Union, cast
+from typing import Any, Deque, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple, Union, cast
 import warnings
 import networkx as nx  # type: ignore
 import matplotlib
@@ -134,12 +134,29 @@ STATE_MARKER_PATTERN = re.compile(r"@\d+")
 TGConstructionQueueElement = Tuple[Optional[TGNode], Union[PETNode, VisitorMarker]]  # (Predecessor, current element)
 
 
+class MappedDependencyRecord(NamedTuple):
+    """A dynamic dependency record of the profiler with its ends mapped to work contexts (see
+    TaskGraph.map_dynamic_dependency_records). An end is (instruction id, state id, line id); the
+    first end is the first column of the profiler's line, i.e. the later access."""
+
+    dep_type: str
+    var_name: str
+    first: Tuple[int, int, Optional[LineID]]
+    other: Optional[Tuple[int, int, Optional[LineID]]]
+    # (first context, other context), filtered like the edges of the dependency insertion
+    pairs: List[Tuple[Context, Context]]
+    first_contexts: List[Context]
+    other_contexts: List[Context]
+
+
 class TaskGraph(Plottable, object):  # type: ignore[misc]
     pet: PEGraphX
     graph: nx.MultiDiGraph
     # class-level default so instances created without __init__ (e.g. the test
     # fixtures, which bypass it) still read as "states are interpreted"
     ignore_dependency_states: bool = False
+    dynamic_dependency_file: Optional[str] = None
+    static_dependency_file: Optional[str] = None
     root: TGNode
     function_id_map: Dict[PETNodeID, FunctionID] = dict()
     TGNode_pet_node_id_to_tg_node: Dict[PETNodeID, TGNode] = dict()
@@ -165,6 +182,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         self.pet = pet
         self.graph = nx.MultiDiGraph()
         self.ignore_dependency_states = ignore_dependency_states
+        # kept for map_dynamic_dependency_records (side effect export)
+        self.dynamic_dependency_file = dynamic_dependency_file
+        self.static_dependency_file = static_dependency_file
         # shadow the class-level defaults with per-instance state: the construction passes
         # look up previously created nodes in these maps, so sharing them between TaskGraph
         # instances (e.g. two runs within one GUI session) would wire a fresh graph up to
@@ -3718,6 +3738,132 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             + str(static_dependency_file)
             + " completed."
         )
+
+    def map_dynamic_dependency_records(self) -> List[MappedDependencyRecord]:
+        """All dynamic RAW/WAR/WAW/INIT records of the dependency files, with their ends mapped to work contexts.
+
+        Used by the side effect export (discopop_explorer.side_effects.export). Reads the files
+        again instead of reusing state of __insert_data_dependencies_from_files, so that the
+        TaskGraph and therefore pattern detection are not affected by the export. The mapping is
+        the one of __insert_data_dependencies_from_files: the same context lookup and the same
+        same-state rule, so the returned pairs are exactly the edges it registers for RAW and WAR
+        (and the edges it would register for WAW). INIT records have no other end; only their
+        first-column end is mapped. Records with an end without a state are skipped (they cannot
+        be attributed to a calling context), as are static ones.
+        """
+        dependencies = self.__read_dependencies_from_files(self.dynamic_dependency_file, self.static_dependency_file)
+        dependencies = self.__apply_dependency_overwrites(dependencies)
+
+        mappings_dict: Dict[str, str] = dict()  # {instructionID: lineID}
+        mappings_file = os.path.join(
+            Path(str(self.dynamic_dependency_file)).parent, "instructionID_to_lineID_mapping.txt"
+        )
+        if os.path.exists(mappings_file):
+            with open(mappings_file, "r") as f:
+                for line in f:
+                    line_split = line.split()
+                    if len(line_split) < 2 or line_split[0].startswith("#") or line_split[1].startswith("*"):
+                        continue
+                    line_id_split = line_split[1].split(":")
+                    mappings_dict[line_split[0]] = line_id_split[0] + ":" + line_id_split[1]
+        state_mappings_dict = (
+            self.__get_state_mappings_from_file(self.dynamic_dependency_file)
+            if self.dynamic_dependency_file is not None
+            else {}
+        )
+
+        location_to_work_contexts: Dict[LineID, Set[WorkContext]] = {}
+        for ctx in self.contexts:
+            if isinstance(ctx, WorkContext):
+                for line_id in ctx.get_code_scope(self.pet):
+                    location_to_work_contexts.setdefault(line_id, set()).add(ctx)
+        lookup_cache: Dict[Tuple[str, str], Set[Context]] = {}
+        state_ids_cache: Dict[Context, FrozenSet[int]] = {}
+        iteration_ancestors_cache: Dict[Context, List[Context]] = {}
+
+        def contexts_of(location: str, state_id: str) -> List[Context]:
+            found = self.__get_work_contexts_by_location_and_state_id(
+                self.pet,
+                location,
+                state_id,
+                mappings_dict,
+                state_mappings_dict,
+                location_to_work_contexts,
+                lookup_cache,
+                state_ids_cache,
+            )
+            return sorted(found, key=lambda c: c.creation_index)
+
+        def ancestors_from_closest_iteration(ctx: Context) -> List[Context]:
+            # same pruning as in __insert_data_dependencies_from_files
+            cached = iteration_ancestors_cache.get(ctx)
+            if cached is None:
+                cached = ctx.get_ancestor_contexts()
+                while len(cached) > 0 and not isinstance(cached[0], IterationContext):
+                    del cached[0]
+                iteration_ancestors_cache[ctx] = cached
+            return cached
+
+        records: List[MappedDependencyRecord] = []
+        for dep_type, dep_type_deps in dependencies.items():
+            if not dep_type.startswith("DYN_"):
+                continue
+            clean_dep_type = dep_type[len("DYN_") :]
+            if clean_dep_type not in ("RAW", "WAR", "WAW", "INIT"):
+                continue
+            for first_location, first_location_deps in dep_type_deps.items():
+                if not first_location.isdigit():
+                    # not an instruction id: data of an older profiler format
+                    continue
+                first_line = self.__line_of_location(first_location, mappings_dict)
+                for first_state_id, first_state_deps in first_location_deps.items():
+                    if first_state_id == "NO_STATE":
+                        continue
+                    first_contexts = contexts_of(first_location, first_state_id)
+                    for other_location, other_location_deps in first_state_deps.items():
+                        for other_state_id, var_infos in other_location_deps.items():
+                            var_names = list(dict.fromkeys(v.split("(")[0] for v in var_infos))
+                            if clean_dep_type == "INIT":
+                                for var_name in var_names:
+                                    records.append(
+                                        MappedDependencyRecord(
+                                            "INIT",
+                                            var_name,
+                                            (int(first_location), int(first_state_id), first_line),
+                                            None,
+                                            [],
+                                            first_contexts,
+                                            [],
+                                        )
+                                    )
+                                continue
+                            if other_state_id == "NO_STATE" or not other_location.isdigit():
+                                continue
+                            other_line = self.__line_of_location(other_location, mappings_dict)
+                            other_contexts = contexts_of(other_location, other_state_id)
+                            same_state = first_state_id == other_state_id
+                            pairs: List[Tuple[Context, Context]] = []
+                            for first_ctx in first_contexts:
+                                first_ancs = ancestors_from_closest_iteration(first_ctx) if same_state else []
+                                for other_ctx in other_contexts:
+                                    if first_ctx == other_ctx:
+                                        continue
+                                    if same_state and first_ancs != ancestors_from_closest_iteration(other_ctx):
+                                        continue
+                                    pairs.append((first_ctx, other_ctx))
+                            for var_name in var_names:
+                                records.append(
+                                    MappedDependencyRecord(
+                                        clean_dep_type,
+                                        var_name,
+                                        (int(first_location), int(first_state_id), first_line),
+                                        (int(other_location), int(other_state_id), other_line),
+                                        pairs,
+                                        first_contexts,
+                                        other_contexts,
+                                    )
+                                )
+        return records
 
     def __validate_data_dependencies(self) -> None:
         self.__validate_data_dependencies_using_initializations()

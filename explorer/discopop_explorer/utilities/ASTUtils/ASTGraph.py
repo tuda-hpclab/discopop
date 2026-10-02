@@ -103,6 +103,16 @@ class ClangASTGraph:
                 # "referencedDecl", not in the node's own "name", so without lifting it here a
                 # DeclRefExpr carries no indication of which variable it reads or writes.
                 "referenced_name": (node.get("referencedDecl") or {}).get("name"),
+                # id of that declaration, to tell e.g. a global from a local of the same name
+                "referenced_id": (node.get("referencedDecl") or {}).get("id"),
+                # its kind, e.g. "ParmVarDecl" for a call through a function pointer parameter
+                "referenced_kind": (node.get("referencedDecl") or {}).get("kind"),
+                # linker name of FunctionDecl / VarDecl nodes, which the profiler's function names match
+                "mangled_name": node.get("mangledName"),
+                # "static", "extern", ... of FunctionDecl / VarDecl nodes; None if not given
+                "storage_class": node.get("storageClass"),
+                # "tls" / "dynamic" for thread_local variables
+                "tls": node.get("tls"),
             }
 
             self.graph.add_node(node_id, **attrs)

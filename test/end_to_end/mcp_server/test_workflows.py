@@ -259,6 +259,98 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
             self.assertIn("No analysis results exist yet", result.data["next_step"])
 
 
+def _effects(data: dict[str, Any]) -> set[tuple[str, str, str]]:
+    """(access, kind, name) of every listed effect of a get_side_effects result."""
+    found: set[tuple[str, str, str]] = set()
+    for access, bucket in (("write", "writes"), ("read", "reads"), ("unknown", "unknown_access")):
+        for effect in data.get(bucket, []):
+            found.add((access, effect["kind"], effect["name"]))
+    return found
+
+
+@requires_profiler
+class TestSideEffects(unittest.IsolatedAsyncioTestCase):
+    """get_side_effects on src/side_effects/code.cpp, whose functions document their ground truth
+    (DESIGN_get_side_effects.md, section 5). Only the rows the design expects to hold are asserted;
+    rows marked as limitations (stack reuse) are not."""
+
+    def setUp(self) -> None:
+        self.project = tempfile.mkdtemp(prefix="dp_mcp_side_effects_")
+        self.addCleanup(shutil.rmtree, self.project, True)
+        shutil.copy(SRC_DIR / "side_effects" / "code.cpp", Path(self.project) / "code.cpp")
+
+    async def test_ground_truth(self) -> None:
+        project = self.project
+        async with mcp_session() as server:
+            result = await server.call("get_side_effects", {"project_path": project, "function": "main"})
+            self.assertTrue(result.is_error, result)
+
+            await set_up_project(server, self, project, "./prog\n")
+            result = await gather_data(server, project)
+            self.assertFalse(result.is_error, result)
+
+            async def query(function: str, **extra: Any) -> dict[str, Any]:
+                result = await server.call("get_side_effects", {"project_path": project, "function": function, **extra})
+                self.assertFalse(result.is_error, result)
+                self.assertEqual(result.data["status"], "success", result)
+                return result.data
+
+            expected: dict[str, set[tuple[str, str, str]]] = {
+                "pure_add": set(),
+                "read_global": {("read", "global", "g_counter")},
+                "write_global": {("write", "global", "g_counter")},
+                "write_only_global": {("write", "global", "g_sink")},
+                "write_through_param": {("write", "parameter", "p")},
+                "wrapper": {("write", "parameter", "p")},
+                "local_buffer": set(),
+                "address_taken": set(),
+                # recorded as GEPRESULT_s by the profiler, i.e. through the parameter s
+                "set_member": {("write", "parameter", "s")},
+                "shadow": set(),
+                "count_calls": {("read", "global", "calls"), ("write", "global", "calls")},
+                "recurse": {("read", "global", "g_counter"), ("write", "global", "g_counter")},
+            }
+            for function, effects in expected.items():
+                with self.subTest(function=function):
+                    data = await query(function)
+                    self.assertEqual(_effects(data), effects, data)
+
+            data = await query("pure_add")
+            self.assertEqual(data["coverage"], "executed")
+            self.assertIs(data["pure_on_observed_inputs"], True)
+
+            data = await query("wrapper")
+            (write,) = data["writes"]
+            self.assertEqual(write["sites"][0]["via"], ["write_through_param(int*, int)"])
+
+            data = await query("next_value")
+            self.assertIn(("write", "global", "g_seq"), _effects(data))
+
+            data = await query("read_const_table")
+            (read,) = data["reads"]
+            self.assertEqual((read["name"], read["source"]), ("g_table", "static"))
+
+            data = await query("clear")
+            self.assertIn("memset", data["unprofiled_calls"])
+            self.assertIsNone(data["pure_on_observed_inputs"])
+
+            data = await query("log_value")
+            self.assertTrue(data["performs_file_io"])
+            self.assertIs(data["pure_on_observed_inputs"], False)
+
+            data = await query("never_called")
+            self.assertEqual(data["coverage"], "not_executed")
+            self.assertEqual({(e["name"], e["source"]) for e in data["writes"]}, {("g_unused", "static")})
+
+            self.assertEqual((await query("recurse"))["coverage"], "partial")
+            self.assertEqual((await query("chain1"))["coverage"], "partial")
+            self.assertEqual((await query("chain7"))["coverage"], "untracked")
+            self.assertEqual((await query("pointer_target"))["coverage"], "untracked")
+
+            result = await server.call("get_side_effects", {"project_path": project, "function": "no_such_function"})
+            self.assertTrue(result.is_error, result)
+
+
 @requires_profiler
 class TestFailurePaths(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

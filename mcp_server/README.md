@@ -18,6 +18,7 @@ The DiscoPoP MCP Server bridges the gap between Claude and DiscoPoP's profiling 
 
 - Instrument a project, run profiling, detect parallel patterns, and retrieve OpenMP patches
 - Query static and dynamic data dependencies for arbitrary code regions to support code understanding, refactoring, and correctness checks
+- Report the data a function and its callees were observed to read and write outside of it (side effects)
 - Retrieve profiling information from executed instrumented code
 - List and discover available profiling data and execution configurations
 
@@ -201,6 +202,31 @@ Each entry carries `dep_type`, `var_name`, `source` and `sink`. An end in the qu
 At most 200 dependencies are returned, ordered by direction (incoming, outgoing, intra_region), then sink and source line, so a cut result is reproducible. `num_dependencies` is always the full count; a cut result adds `truncated: true`, `num_dependencies_by_direction` and a `next_step` naming the ways to narrow the query (smaller line range, `var_name`, `dep_types`, `directions`).
 
 This tool is cheap to call repeatedly — `DetectionResult` and `FileMapping` are cached in memory after the first load. Requires `gather_data` to have been run first.
+
+### `get_side_effects`
+
+Returns the data a function was observed to read and write outside of itself during profiling, including through the functions it calls: globals (also static locals and static data members), memory reached through its pointer, reference or array parameters, and other memory that outlives the call. It answers whether a call is pure, safe to run concurrently, to reorder or to memoize, during code review and refactoring as well as for parallelization. Results are only valid for the profiled inputs.
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `function` (string, required): Name with or without signature (`scale`, `scale(double*, int)`, `ns::Cls::scale`), or the mangled name
+- `file_path` (string, optional), `line` (integer, optional): Source file (absolute or relative to `project_path`) and any line inside the definition, to pick one of several functions of that name
+- `access` (`"read"` or `"write"`, optional): Only reads or only writes; entries of unknown access are kept with either
+- `kinds` (array of `"global"`, `"parameter"`, `"other"`, optional): Default all
+- `var_name` (string, optional): Only entries for this name (also matched against `member_of` and `outside_names`, with or without the `GEPRESULT_` prefix), with all their sites
+- `include_callees` (boolean, optional): Default `true`; `false` keeps only the accesses made by the function itself
+
+**Returns:**
+- `function`: display name, file and line range of the resolved function
+- `coverage`: `executed`; `partial` (some calls of it or of its callees could not be followed: recursion, deep call chains, function pointers); `untracked` (executed, but no call could be attributed to it); `not_executed` (only statically found global references are listed). Anything but `executed` means that an absent effect is unknown, and comes with a `next_step`
+- `pure_on_observed_inputs` (`true`/`false`/`null`), `performs_file_io`, `unprofiled_calls` (called functions without a definition in the project, whose accesses are not observed), `unmapped_records`
+- `summary`: `num_effects`, `by_access`, `by_kind` and `contributing_callees` over every entry matching the filters, never cut
+- `writes`, `reads` and, when present, `unknown_access` (statically found global references whose access could not be derived). One entry per name, kind and access with `kind`, `source` (`observed`, or `static`: referenced in the code, not observed), `through_pointer`, `member_of` (for a struct member), `num_sites`, up to 3 `sites` (all with `var_name`) and `outside_names` (the caller's names for the same data). A site is `{"line", "via"}`, where `via` is the call chain from the function to the function containing the access (`null` for the function itself), plus `file` for a site in another file
+- `notes`: always says that the effects were observed on the profiled inputs only
+
+At most 100 entries are returned, ranked writes before reads; global, parameter, other; the function's own accesses before those of callees, shallower callees first; observed before static; then by name. A cut result has `truncated: true` and a `next_step` naming the filters. An ambiguous name returns `status: "ambiguous"` with the `candidates` (name, file, lines).
+
+The tool reads `.discopop/explorer/side_effects.json.gz`, which `discopop_explorer` writes during `gather_data`; it never loads the PET. It refuses, with a `next_step` to run `gather_data` (again), when that file is missing, unreadable or of another format version, stale (`profiler/dynamic_dependencies.txt` changed since it was written), or written by a run with `--ignore-dependency-states`. Semantics and limits: `DESIGN_get_side_effects.md`.
 
 ### `explain_parallelization`
 
@@ -419,12 +445,14 @@ discopop_mcp_server --daemon-port 8888
 
 ### What is cached
 
-The daemon's `ToolContext` maintains two caches:
+The daemon's `ToolContext` maintains three caches:
 
 - **`DetectionResult`** — loaded from `.discopop/explorer/detection_result_dump.json` using `jsonpickle` on the first call that needs it (`get_data_dependencies`). Subsequent calls skip the deserialization step entirely.
 - **`FileMapping`** — loaded from `.discopop/FileMapping.txt` on the first call to `get_data_dependencies`. Maps numeric file IDs to absolute source file paths.
 
-Both caches are keyed by `project_path` and automatically invalidated when the underlying file's modification time changes (i.e., after `gather_data` runs again).
+- **Side effect index** — built from `.discopop/explorer/side_effects.json.gz` on the first call to `get_side_effects`, keyed by the file's modification time and size; the staleness test against `profiler/dynamic_dependencies.txt` runs on every call.
+
+All caches are keyed by `project_path` and automatically invalidated when the underlying file's modification time changes (i.e., after `gather_data` runs again).
 
 ## Architecture
 
