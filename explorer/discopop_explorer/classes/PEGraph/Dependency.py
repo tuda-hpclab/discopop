@@ -16,6 +16,9 @@ from discopop_explorer.enums.DepOrigin import DepOrigin
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
 
+# marker for Dependency.carried_by_loop: carried by a loop outside of the contexts of its ends
+CARRIED_OUTSIDE = object()
+
 
 class Dependency:
     etype: EdgeType
@@ -37,6 +40,10 @@ class Dependency:
     # an end of the dependency could not be attributed to the calling context of its callpath state
     # and was mapped to a wider scope (see TaskGraph._ContextFallback)
     approximate_context: bool = False
+    # the loop whose iterations the dependency crosses, if the callpath states of its ends tell
+    # (see TaskGraph.__carried_frame_and_position): a LoopParentContext, CARRIED_OUTSIDE if that loop has no
+    # context on the chain of the ends, or None if unknown
+    carried_by_loop: Optional[object] = None
 
     def __init__(self, type: EdgeType):
         self.etype = type

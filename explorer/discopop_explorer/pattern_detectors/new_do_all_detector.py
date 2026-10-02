@@ -319,7 +319,13 @@ def identify_simple_doall_and_reduction(
                     if dep.etype == EdgeType.DATA and dep.dtype == DepType.WAR:
                         continue
 
-                    if out_dep_target in shared_by_iterations:
+                    if dep.carried_by_loop is not None:
+                        # the callpath states of the ends tell which loop's iterations the
+                        # dependency crosses. The iteration copies cannot: two consecutive
+                        # iterations with the buckets 2 and 0 share the copy [0, 2], so a
+                        # dependency carried by an outer loop would look carried by this one.
+                        crosses_iterations = dep.carried_by_loop is node.created_context
+                    elif out_dep_target in shared_by_iterations:
                         crosses_iterations = True
                     else:
                         target_iteration_index = iteration_index_of.get(out_dep_target)

@@ -647,3 +647,41 @@ def test_a_call_in_a_loop_header_gets_the_states_of_all_iterations(
     [call] = _contexts_of_type(tg, InlinedFunctionContext)
     [inlined] = call.contained_contexts
     assert sorted(inlined.state_ids) == [30, 31, 32]
+
+
+# main's outer loop (position 0, 1:2) and inner loop (position 1, 1:3); the body 1:4 accesses x.
+# 40 -> 41: outer bucket 2 -> 0, i.e. consecutive outer iterations, which share the copy [0, 2];
+# 42 -> 43: the same outer iteration (bucket 1), inner bucket 0 -> 2
+NESTED_LOOP_STATES = "\n".join(
+    [
+        "1 1 ROOT",
+        "11 1 main",
+        "40 11 main_loopstate20",
+        "41 11 main_loopstate01",
+        "42 11 main_loopstate10",
+        "43 11 main_loopstate12",
+        "",
+    ]
+)
+NESTED_LOOP_DEPENDENCIES = "1:4@41 NOM RAW 1:4@40|x(100)\n1:4@43 NOM RAW 1:4@42|y(101)\n"
+
+
+def test_a_dependency_knows_the_loop_whose_iterations_it_crosses(
+    build_pet_graph: Any, make_node: Any, tmp_path: Path
+) -> None:
+    """Consecutive iterations with the buckets 2 and 0 share the iteration copy [0, 2], so the
+    copies alone make a dependency carried by the outer loop look like one between iterations of
+    the inner loop (a false loop-carried dependency of the inner loop, and a missed one of the outer
+    loop). The callpath states of the ends tell which loop it crosses."""
+    pet = _build_program(build_pet_graph, make_node, NESTED_LOOPS, NESTED_LOOPS_CALLS)
+
+    tg = _construct(tmp_path, pet, NESTED_LOOP_DEPENDENCIES, state_mappings=NESTED_LOOP_STATES)
+
+    carried: Dict[str, Set[Optional[str]]] = {}
+    for context in _all_contexts(tg):
+        for _, dependency in context.outgoing_dependencies:
+            loop = dependency.carried_by_loop
+            carried.setdefault(str(dependency.var_name), set()).add(
+                loop.parent_loop if isinstance(loop, LoopParentContext) else None
+            )
+    assert carried == {"x": {"1:2"}, "y": {"1:3"}}

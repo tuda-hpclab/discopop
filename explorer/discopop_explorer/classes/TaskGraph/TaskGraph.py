@@ -27,7 +27,7 @@ from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.MemoryRegion import MemoryRegion
 from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.PEGraph.CUNode import CUNode
-from discopop_explorer.classes.PEGraph.Dependency import Dependency
+from discopop_explorer.classes.PEGraph.Dependency import CARRIED_OUTSIDE, Dependency
 
 from discopop_explorer.classes.TaskGraph.Branching.TGEndBranchNode import TGEndBranchNode
 from discopop_explorer.classes.TaskGraph.Branching.TGEndBranchParentNode import TGEndBranchParentNode
@@ -3525,6 +3525,54 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         return frames
 
     @staticmethod
+    def __carried_frame_and_position(
+        source_frames: List[Tuple[str, Optional[int], Dict[int, int]]],
+        sink_frames: List[Tuple[str, Optional[int], Dict[int, int]]],
+    ) -> Optional[Tuple[int, int]]:
+        """(frame index counted from the innermost frame, loop position) of the loop a dependency
+        between two callpath states crosses: the first loop, from the outermost frame on, which is
+        active in both states with different iteration buckets. Different buckets mean different
+        iterations; equal buckets are taken as the same iteration. None if the callpaths part
+        before such a loop is found (different calls, or a loop active in only one of them)."""
+        for index, ((name, call, buckets), (other_name, other_call, other_buckets)) in enumerate(
+            zip(source_frames, sink_frames)
+        ):
+            if name != other_name or (index > 0 and call != other_call):
+                return None
+            for position in sorted(set(buckets) | set(other_buckets)):
+                if position not in buckets or position not in other_buckets:
+                    # a loop active in one of them only: the ends are not in one execution of it
+                    return None
+                if buckets[position] != other_buckets[position]:
+                    return len(source_frames) - 1 - index, position
+        return None
+
+    @staticmethod
+    def __loop_context_at(ctx: Context, frame_from_innermost: int, loopstate_position: int) -> object:
+        """The LoopParentContext on the chain of ctx for the loop at loopstate_position of the frame
+        frame_from_innermost (0: the function ctx lies in), or CARRIED_OUTSIDE if the chain does
+        not reach that frame (a standalone copy of a function) or the loop has no context."""
+        chain: List[Context] = []
+        current: Optional[Context] = ctx
+        while current is not None and len(chain) < 100000:
+            chain.append(current)
+            current = current.parent_context
+        frame = -1
+        for element in chain:  # innermost first
+            if isinstance(element, FunctionContext):
+                frame += 1
+                if frame > frame_from_innermost:
+                    break
+            elif (
+                frame + 1 == frame_from_innermost
+                and isinstance(element, LoopParentContext)
+                and element.loopstate_position == loopstate_position
+            ):
+                # loops are found before the FunctionContext of their frame (walking upwards)
+                return element
+        return CARRIED_OUTSIDE
+
+    @staticmethod
     def __contexts_matching_frames(
         index: Dict[
             Tuple[Tuple[str, Optional[int], Tuple[int, ...]], ...],
@@ -4007,6 +4055,16 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         closest_function_ancestor_cache: Dict[Context, Optional[Context]] = {}
         iteration_ancestors_cache: Dict[Context, List[Context]] = {}
 
+        # callpath frames per state, and the loop crossed per pair of states (see __carried_frame_and_position)
+        frames_cache: Dict[str, Optional[List[Tuple[str, Optional[int], Dict[int, int]]]]] = {}
+        carried_cache: Dict[Tuple[str, str], Optional[Tuple[int, int]]] = {}
+
+        def state_frames(state_id: str) -> Optional[List[Tuple[str, Optional[int], Dict[int, int]]]]:
+            if state_id not in frames_cache:
+                callpath = state_mappings_dict.get(state_id)
+                frames_cache[state_id] = self._callpath_frames(callpath) if callpath is not None else None
+            return frames_cache[state_id]
+
         def _is_approximate(location: str, state_id: str) -> bool:
             return state_id.isdigit() and (location, int(state_id)) in context_fallback.approximate
 
@@ -4131,10 +4189,33 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 # TODO: add states to contexts to allow a more robust search in __get_work_contexts_by_location_and_state_id
                                 # TODO: The fact the following condition is necessary is a result of incorrect behavior of __get_work_contexts_by_location_and_state_id, which should be fixed!
                                 same_state = source_state_id == sink_state_id
+                                carried: Optional[Tuple[int, int]] = None
+                                if not same_state and source_state_id.isdigit() and sink_state_id.isdigit():
+                                    carried_key = (source_state_id, sink_state_id)
+                                    if carried_key not in carried_cache:
+                                        source_frames = state_frames(source_state_id)
+                                        sink_frames = state_frames(sink_state_id)
+                                        carried_cache[carried_key] = (
+                                            self.__carried_frame_and_position(source_frames, sink_frames)
+                                            if source_frames is not None and sink_frames is not None
+                                            else None
+                                        )
+                                    carried = carried_cache[carried_key]
                                 for source_ctx in source_contexts:
                                     source_ancs = ancestors_from_closest_iteration(source_ctx) if same_state else []
+                                    # an approximately mapped end may not lie on its state's callpath
+                                    carried_by_loop = (
+                                        self.__loop_context_at(source_ctx, carried[0], carried[1])
+                                        if carried is not None and not source_is_approximate
+                                        else None
+                                    )
                                     for target_ctx in target_contexts:
-                                        if source_ctx == target_ctx:
+                                        if source_ctx == target_ctx and not isinstance(
+                                            carried_by_loop, LoopParentContext
+                                        ):
+                                            # (a dependency between the iterations with the buckets 0
+                                            # and 2 of a loop has both ends in its copy [0, 2]; it is
+                                            # kept, as it tells the loop it crosses)
                                             continue
                                         if same_state:
                                             # both pruned to their closest iteration context, so that
@@ -4150,6 +4231,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             dependency.source_line = dependency_source_line
                                             dependency.sink_line = dependency_sink_line
                                             dependency.approximate_context = approximate_context
+                                            dependency.carried_by_loop = (
+                                                None if approximate_context else carried_by_loop
+                                            )
 
                                             if dependency.var_name == "error":
                                                 print(
