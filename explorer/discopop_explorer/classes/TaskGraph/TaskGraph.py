@@ -171,6 +171,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     # __inline_function_calls stops at this depth ("depth >= limit"), so calls are inlined at most
     # CALL_PATH_LIMIT - 1 levels deep
     CALL_PATH_LIMIT: int = 6
+    # CUs reachable only through an early exit out of a loop (exit(), abort()), deleted by
+    # __fix_loop_structures together with their dependencies
+    cus_deleted_by_early_exits: Set[PETNodeID] = set()
     # counters of the last __assign_state_ids run, see there
     state_assignment_statistics: Dict[str, int] = dict()
 
@@ -1044,6 +1047,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     def __fix_loop_structures(self, plot_problematic_loops: bool = False) -> None:
         # in case a loop contains a branch to a non-iteration node (e.g. via "break"- statement), delete this edge and cleanup the graph
         logger.info("Fixing loop structures...")
+        self.cus_deleted_by_early_exits = set()
         for function_node in progress(self.TGFunctionNode_pet_node_id_to_tg_node.values()):
             logger.info("--> " + function_node.get_label())
             modification_found = True
@@ -1055,7 +1059,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 end_iteration_nodes = [d for d in descendants if isinstance(d, TGEndIterationNode)]
                 for sin in start_iteration_nodes:
                     for ein in end_iteration_nodes:
-                        if sin.pet_node_id != ein.pet_node_id:
+                        # the markers of one iteration belong to the same loop. (Their own pet node
+                        # ids are the first and the last node of the iteration and differ in general.)
+                        if sin.parent_loop_pet_node_id != ein.parent_loop_pet_node_id:
                             continue
                         # filter corresponding start and end iteration nodes
                         if not nx.has_path(self.graph, sin, ein):
@@ -1066,7 +1072,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 [
                                     n
                                     for n in shortest_path
-                                    if (n.pet_node_id == sin.pet_node_id) and isinstance(n, TGStartIterationNode)
+                                    if isinstance(n, TGStartIterationNode)
+                                    and n.parent_loop_pet_node_id == sin.parent_loop_pet_node_id
                                 ]
                             )
                             > 1
@@ -1078,7 +1085,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 [
                                     n
                                     for n in shortest_path
-                                    if (n.pet_node_id == ein.pet_node_id) and isinstance(n, TGEndIterationNode)
+                                    if isinstance(n, TGEndIterationNode)
+                                    and n.parent_loop_pet_node_id == ein.parent_loop_pet_node_id
                                 ]
                             )
                             > 1
@@ -1153,6 +1161,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                     queue += [s for s in self.get_successors(current) if s not in queue]
                                     # delete current node
                                     logger.warning("---> deleting node: " + current.get_label())
+                                    if type(current) is TGNode and current.pet_node_id is not None:
+                                        self.cus_deleted_by_early_exits.add(current.pet_node_id)
                                     self.graph.remove_node(current)
                                     modification_found = True
                         if modification_found:

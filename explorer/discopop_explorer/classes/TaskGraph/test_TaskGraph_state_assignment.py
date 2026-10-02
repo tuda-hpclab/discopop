@@ -250,29 +250,30 @@ def _unbalanced_markers(tg: TaskGraph, max_depth: int = 80) -> List[Tuple[str, s
 
 # --- profile tests ----------------------------------------------------------------------------
 
-_EARLY_EXIT = "break/exit/return paths leave an iteration without its end marker, corrupting context nesting"
 _CROSSING_BRANCHES = "short-circuit conditions create crossing branch regions with unbalanced markers"
 
 # program -> reasons it currently fails "every assignable state is assigned"
-_PROFILES_ALL_ASSIGNED = {
+_PROFILES_ALL_ASSIGNED: Dict[str, List[str]] = {
     "ground_truth": [],
     "loopcall": [],
     "nested": [],
     "recursion": [],
     "whileand": [],
     "dowhile": [],
-    "breakexit": [_EARLY_EXIT],
+    "breakexit": [],
+    "exitinloop": [],
     "shortcircuit": [],
 }
 # program -> reasons it currently fails "no state is assigned to several contexts"
-_PROFILES_UNIQUE = {
+_PROFILES_UNIQUE: Dict[str, List[str]] = {
     "ground_truth": [],
     "loopcall": [],
     "nested": [],
     "recursion": [],
     "whileand": [],
     "dowhile": [],
-    "breakexit": [_EARLY_EXIT],
+    "breakexit": [],
+    "exitinloop": [],
     "shortcircuit": [],
 }
 
@@ -280,14 +281,15 @@ _PROFILES_UNIQUE = {
 _NONDETERMINISTIC: Set[str] = set()
 
 # program -> reasons it currently fails "markers are balanced"
-_PROFILES_BALANCED = {
+_PROFILES_BALANCED: Dict[str, List[str]] = {
     "ground_truth": [],
     "loopcall": [],
     "nested": [],
     "recursion": [],
     "whileand": [],
     "dowhile": [],
-    "breakexit": [_EARLY_EXIT],
+    "breakexit": [],
+    "exitinloop": [],
     "shortcircuit": [_CROSSING_BRANCHES],
 }
 
