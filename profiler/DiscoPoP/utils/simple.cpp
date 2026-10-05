@@ -82,15 +82,27 @@ bool DiscoPoP::sanityCheck(BasicBlock *BB) {
   return false;
 }
 
-// Returns the LID to report when a loop is left through the exit block BB: the LID of the
+// Returns the LID to report when the loop L is left through the exit block BB: the LID of the
 // first instruction of BB carrying one. Clang emits the branch that leaves an if/else arm
 // without a debug location, so the exit block of a loop that ends an arm (e.g. a loop in an
 // `else` inside another loop) may contain no valid LID at all. Then the LID of the first
 // block along BB's chain of unique successors that has one is used, i.e. the code executed
-// right after the loop, as for an ordinary exit block.
-LID DiscoPoP::getLoopExitLID(BasicBlock *BB) {
+// right after the loop, as for an ordinary exit block. The chain ends before the header or the
+// latch (e.g. `for.inc`) of an enclosing loop: their LIDs belong to the enclosing loop's
+// statement, which starts before L. Without a LID up to there, the end location of L is used.
+LID DiscoPoP::getLoopExitLID(BasicBlock *BB, Loop *L) {
   std::set<BasicBlock *> visited;
   while (BB != nullptr && visited.insert(BB).second) {
+    bool belongs_to_enclosing_loop_statement = false;
+    for (Loop *P = (L != nullptr ? L->getParentLoop() : nullptr); P != nullptr; P = P->getParentLoop()) {
+      if (BB == P->getHeader() || P->isLoopLatch(BB)) {
+        belongs_to_enclosing_loop_statement = true;
+        break;
+      }
+    }
+    if (belongs_to_enclosing_loop_statement) {
+      break;
+    }
     for (BasicBlock::iterator BI = BB->begin(), EI = BB->end(); BI != EI; ++BI) {
       LID lid = getLID(&*BI, fileID);
       if (lid > 0 && !isa<PHINode>(BI)) {
@@ -98,6 +110,12 @@ LID DiscoPoP::getLoopExitLID(BasicBlock *BB) {
       }
     }
     BB = BB->getUniqueSuccessor();
+  }
+  if (L != nullptr && fileID > 0) {
+    DebugLoc end_loc = L->getLocRange().getEnd();
+    if (end_loc && end_loc.getLine() > 0) {
+      return ((LID)fileID << LIDSIZE) + end_loc.getLine();
+    }
   }
   return 0;
 }

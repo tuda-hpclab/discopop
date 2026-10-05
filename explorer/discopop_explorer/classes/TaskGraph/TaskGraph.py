@@ -227,8 +227,29 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     cus_deleted_by_early_exits: Set[PETNodeID] = set()
     # CUs reachable only through exception landing pads, see __cut_exception_unwind_paths
     cus_deleted_by_exception_unwinding: Set[PETNodeID] = set()
+    # source of TGNode.creation_index, see add_node
+    __node_counter: int = 0
+    # the loops (by their entry CU, LoopParentContext.parent_loop) whose exits __fix_loop_structures
+    # cut (break, return, exit()), with the lines of the cut edges' sources. Such a loop is no
+    # candidate for a parallel loop: an OpenMP for loop cannot be left early.
+    loops_with_cut_exits: Dict[PETNodeID, Set[str]] = dict()
+    # the LoopNodes whose lines contain a catch handler deleted by __cut_exception_unwind_paths: the
+    # dependencies of the handler were never inserted
+    loop_nodes_with_cut_exception_handlers: Set[NodeID] = set()
+    # the PET loops (by their entry CU) per (function name, loopstate position), see
+    # __assign_loopstate_positions_within_functions. Used to name the loop a dependency is carried
+    # by from the callpath states of its ends alone (Dependency.carried_by_pet_loop).
+    loop_pet_ids_by_loopstate_position: Dict[Tuple[str, int], Set[PETNodeID]] = dict()
+    # dynamic dependency records with an end on a line only covered by CUs deleted by the cuts
+    # (early exits, exception unwind paths), see __insert_data_dependencies_from_files
+    records_on_deleted_lines: int = 0
+    # the lines of the ends of the dynamic dependency records, i.e. code executed during profiling
+    lines_with_dynamic_records: Set[LineID] = set()
     # counters of __split_branch_region_side_entries over all functions
     branch_region_side_entry_statistics: Dict[str, int] = dict()
+    # copy -> original of every node __split_branch_region_side_entries duplicated, so that the
+    # intended copies of a context can be told apart from structural errors (see the tests)
+    tail_duplication_origins: Dict[TGNode, TGNode] = dict()
     # states __assign_state_ids attached by the suffix fallback, see there
     approximately_assigned_state_ids: Set[int] = set()
     # counters of the approximately mapped dependency ends, see _ContextFallback
@@ -264,6 +285,12 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         self.contexts = []
         self.current_level = 0
         self.current_position = {0: 0}
+        self.loops_with_cut_exits = dict()
+        self.loop_nodes_with_cut_exception_handlers = set()
+        self.loop_pet_ids_by_loopstate_position = dict()
+        self.records_on_deleted_lines = 0
+        self.lines_with_dynamic_records = set()
+        self._loop_nodes_by_size = None
 
         # start processing
         with stage("Assigning function ids", 1, total=6):
@@ -324,6 +351,10 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         # self.__validate_data_dependencies()
 
     def add_node(self, node: TGNode) -> None:
+        # a stable tie-breaker for orders among nodes of one pet node (copies of iterations,
+        # inlined functions and duplicated tails), see __pet_node_order
+        self.__node_counter += 1
+        node.creation_index = self.__node_counter
         self.graph.add_node(node)
 
     def add_edge(self, source: Optional[TGNode], target: Optional[TGNode]) -> None:
@@ -781,12 +812,64 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             if type(current) is TGNode and current.pet_node_id is not None:
                 self.cus_deleted_by_exception_unwinding.add(current.pet_node_id)
             self.graph.remove_node(current)
+        self.loop_nodes_with_cut_exception_handlers = self.__loops_containing_catch_handlers(
+            self.cus_deleted_by_exception_unwinding
+        )
         if len(self.cus_deleted_by_exception_unwinding) > 0:
             logger.info(
                 "Cut the exception unwind paths: deleted "
                 + str(len(self.cus_deleted_by_exception_unwinding))
                 + " CUs reachable only through landing pads"
             )
+
+    def __ends_without_return(self, node: TGNode, limit: int = 8) -> bool:
+        """whether every path from node reaches the function's exit CU (the one added by
+        PEGraphX.enforce_single_function_exit_node) within limit nodes, without passing a return
+        instruction: the code behind a call which does not return (exit(), abort(), a throw) ends
+        without successors, and is linked to that exit CU."""
+        seen: Set[TGNode] = set()
+        queue: Deque[TGNode] = deque([node])
+        while len(queue) > 0:
+            current = queue.popleft()
+            if current in seen:
+                continue
+            seen.add(current)
+            if len(seen) > limit:
+                return False
+            if type(current) is TGNode and current.pet_node_id is not None and current.pet_node_id in self.pet.g:
+                pet_node = self.pet.node_at(current.pet_node_id)
+                if pet_node.name is not None and pet_node.name.startswith("FuncExit_"):
+                    continue
+                if isinstance(pet_node, CUNode) and pet_node.return_instructions_count > 0:
+                    return False
+            successors = self.get_successors(current)
+            if len(successors) == 0:
+                # the end of a function without passing its exit CU
+                return False
+            queue.extend(successors)
+        return True
+
+    def __loops_containing_catch_handlers(self, deleted_cus: Set[PETNodeID]) -> Set[NodeID]:
+        """The LoopNodes whose lines contain one of the deleted CUs that belongs to a catch handler
+        (basic block "catch..."). A destructor cleanup only runs while an exception leaves the loop,
+        but a handler inside the loop continues it, and its accesses are missing from the graph."""
+        handler_lines: Set[Tuple[int, int]] = set()
+        for cu_id in deleted_cus:
+            if cu_id is None:
+                continue
+            pet_node = self.pet.node_at(cu_id)
+            block = getattr(pet_node, "basic_block_id", "") or ""
+            if block.startswith("catch"):
+                handler_lines.add((int(pet_node.file_id), int(pet_node.start_line)))
+        if len(handler_lines) == 0:
+            return set()
+        result: Set[NodeID] = set()
+        for loop in all_nodes(self.pet, type=LoopNode):
+            for file_id, line in handler_lines:
+                if int(loop.file_id) == file_id and loop.start_line <= line <= loop.end_line:
+                    result.add(loop.id)
+                    break
+        return result
 
     def __visit_pet(self, pet: PEGraphX) -> None:
         # construct Taskgraph by visiting the PET Graph
@@ -985,8 +1068,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
     @staticmethod
     def __pet_node_order(node: TGNode) -> Tuple[int, ...]:
-        """A deterministic order of TGNodes by their PET node id "<file>:<cu>", numerically."""
-        return tuple(int(part) if part.isdigit() else -1 for part in str(node.pet_node_id).split(":"))
+        """A deterministic order of TGNodes by their PET node id "<file>:<cu>", numerically, and by
+        creation among nodes of the same PET node (set iteration order would follow addresses)."""
+        return tuple(int(part) if part.isdigit() else -1 for part in str(node.pet_node_id).split(":")) + (
+            node.creation_index,
+        )
 
     def __break_cycles(self) -> None:
         # search for cycles in each function and replace them with two distinct iteraions
@@ -1160,6 +1246,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         # in case a loop contains a branch to a non-iteration node (e.g. via "break"- statement), delete this edge and cleanup the graph
         logger.info("Fixing loop structures...")
         self.cus_deleted_by_early_exits = set()
+        self.loops_with_cut_exits = dict()
         for function_node in progress(self.TGFunctionNode_pet_node_id_to_tg_node.values()):
             logger.info("--> " + function_node.get_label())
             modification_found = True
@@ -1256,6 +1343,18 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                             "Typical reasons include break statements and similar. Treat results using this loop with caution."
                         )
 
+                        # A call which does not return (exit(), abort(), a throw) ends the program from
+                        # within the iteration, which is no reason against a parallel loop, while
+                        # break, return and goto leave the loop.
+                        early_exit_lines = [
+                            str(self.pet.node_at(source.pet_node_id).start_position())
+                            for source, target in invalid_edges
+                            if source.pet_node_id is not None and not self.__ends_without_return(target)
+                        ]
+                        if len(early_exit_lines) > 0:
+                            self.loops_with_cut_exits.setdefault(sin.parent_loop_pet_node_id, set()).update(
+                                early_exit_lines
+                            )
                         for invalid_edge_source, invalid_edge_target in invalid_edges:
                             if self.graph.has_edge(invalid_edge_source, invalid_edge_target):
                                 self.graph.remove_edge(invalid_edge_source, invalid_edge_target)
@@ -1797,6 +1896,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 )
                 for loop in loops:
                     loop.loopstate_position = assigned_loopstate_positions.get(loop.pet_node_id)
+                self.__register_loopstate_positions(function_name, loops)
                 continue
 
             # fallback: find all loops in function, sort them by location, and assign loopstate_positions.
@@ -1829,6 +1929,16 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 if loop.pet_node_id not in assigned_loopstate_positions:
                     raise KeyError("No entry in assigned_loopstate_positions for PET node id: " + str(loop.pet_node_id))
                 loop.loopstate_position = assigned_loopstate_positions[loop.pet_node_id]
+            self.__register_loopstate_positions(function_name, loops)
+
+    def __register_loopstate_positions(self, function_name: str, loops: List[TGStartLoopNode]) -> None:
+        """remembers which PET loop the loopstate positions of function_name stand for, see
+        loop_pet_ids_by_loopstate_position"""
+        for loop in loops:
+            if loop.loopstate_position is not None and loop.pet_node_id is not None:
+                self.loop_pet_ids_by_loopstate_position.setdefault((function_name, loop.loopstate_position), set()).add(
+                    loop.pet_node_id
+                )
 
     def __loopstate_positions_from_mapping(
         self, function_name: str, loops: List[TGStartLoopNode], entries: List[LoopstatePosition]
@@ -2121,8 +2231,24 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         depends on the iteration order."""
         return sorted(contexts, key=lambda ctx: ctx.creation_index)
 
+    def __induction_variables(self, loop_ctx: LoopParentContext) -> Tuple[Optional[Set[str]], Optional[LineID]]:
+        """(the loop indices of the loop's LoopNode, see PEGraphX.calculateLoopMetadata, or None if
+        the loop has no LoopNode; the line of the loop's header)"""
+        if loop_ctx.parent_loop is None or loop_ctx.parent_loop not in self.pet.g:
+            return None, None
+        entry = self.pet.node_at(loop_ctx.parent_loop)
+        header_line = LineID(str(entry.file_id) + ":" + str(entry.start_line))
+        loop_node = self.__loop_node_of_entry(loop_ctx.parent_loop)
+        return (None if loop_node is None else set(loop_node.loop_indices)), header_line
+
     def __determine_loop_variables(self) -> None:
-        """determine loop variables."""
+        """determine loop variables: the variables the loop header and the iterations exchange values
+        of (RAW dependencies between them) which the loop itself advances. That is the case for an
+        induction variable of the loop's LoopNode, and for a variable read and written on the line of
+        the loop header (the increment of a for loop). A variable only written in the loop body and
+        read in the condition, as in `while (x < n) x = ...;` or `while (v >= end[i]) i++;`, is no
+        loop variable: its dependencies are carried by the loop, and exempting them would make such a
+        loop look parallel."""
         logger.info("Determine loop variables...")
         logger.info("--> classify entry points...")
         entry_points: List[LoopParentContext] = []
@@ -2165,6 +2291,24 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
             # remove duplicates
             loop_vars = list(dict.fromkeys(loop_vars))
+            loop_indices, header_line = self.__induction_variables(loop_ctx)
+            advanced_on_header_line: Set[Tuple[str, MemoryRegion]] = set()
+            for _, dep in list(loop_header_ctx.outgoing_dependencies) + list(loop_header_ctx.incoming_dependencies):
+                if (
+                    dep is not None
+                    and dep.dtype == DepType.RAW
+                    and dep.var_name is not None
+                    and dep.memory_region is not None
+                    and header_line is not None
+                    and dep.source_line == header_line
+                    and dep.sink_line == header_line
+                ):
+                    advanced_on_header_line.add((dep.var_name, dep.memory_region))
+            loop_vars = [
+                v
+                for v in loop_vars
+                if (loop_indices is not None and v[0] in loop_indices) or v in advanced_on_header_line
+            ]
             # save loop variables
             loop_ctx.loop_variables = loop_vars
 
@@ -2407,19 +2551,24 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         nested. A side entry y of the region of n (a node of the region with a predecessor p
         outside of it) is resolved in one of two ways:
 
-        - short-circuit edge: if p also reaches y through a few CUs without calls or loops (the
+        - short-circuit edge: if p also reaches y through a few nodes without loops (the
           remaining parts of the condition), the edge p -> y is removed, so that `a && b` becomes
           the chain a -> b. The paths through the graph keep their nodes, except that these
           condition parts now count as always evaluated - an over-approximation of the executed
           code, which loses no dependency.
         - tail duplication: otherwise, if the nodes from y to the region's exit are few and
-          contain no loop or call, y is split: a copy takes over the edges from outside and keeps
+          contain no loop, y is split: a copy takes over the edges from outside and keeps
           the outgoing edges, and its successors become side entries in turn. Splitting does not
           change the paths through the graph. The copies are made before contexts exist, so a
           copied block becomes a second copy of its context, as copies of loop iterations do.
 
         Side entries matching neither are left as they are (the branching markers of their region
-        may then not nest)."""
+        may then not nest).
+
+        The short-circuit test is plain reachability, so it also applies to other edges into a shared
+        tail (a switch fallthrough, a goto). The code such an edge skipped then counts as executed on
+        that path as well: contexts and their dependencies are unaffected, the exclusivity of the
+        branch arms is not preserved."""
         removed_edges = 0
         copied = 0
         unresolved = 0
@@ -2476,6 +2625,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         continue
                     node_copy = copy.deepcopy(node)
                     self.add_node(node_copy)
+                    self.__dict__.setdefault("tail_duplication_origins", {})[node_copy] = node
                     copied += 1
                     modified = True
                     for pred in outside_preds:
@@ -2748,6 +2898,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
     def __add_branching_nodes(self) -> None:
         self.branch_region_side_entry_statistics = {"removed_edges": 0, "copied_nodes": 0, "unresolved": 0}
+        self.tail_duplication_origins = dict()
         for function_node in progress(
             list(self.TGFunctionNode_pet_node_id_to_tg_node.values()), desc="Adding branching nodes per function"
         ):
@@ -2888,12 +3039,15 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         self.add_node(exit)
 
         copied_nodes: Dict[TGNode, TGNode] = dict()
-        function_body_nodes = self.get_descendants(inlined_function) + [inlined_function]
+        # copied in a deterministic order, which gives the copies deterministic creation indices
+        function_body_nodes = sorted(
+            self.get_descendants(inlined_function) + [inlined_function], key=self.__pet_node_order
+        )
         # copy function body nodes
         for fbn in function_body_nodes:
             fbn_copy = copy.deepcopy(fbn)
             copied_nodes[fbn] = fbn_copy
-            self.graph.add_node(fbn_copy)
+            self.add_node(fbn_copy)
         # copy function body edges
         for fbn in function_body_nodes:
             for succ in self.get_successors(fbn):
@@ -3015,8 +3169,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         continue
                     if self.ignore_dependency_states:
                         # Drop the callpath state markers before any of them is interpreted below.
-                        # Every source/sink then reads as NO_STATE, which also reclassifies the
-                        # affected dependencies from DYN_* to STAT_*.
+                        # Every source/sink then reads as NO_STATE: the dependencies stay dynamic, but
+                        # are treated like the records without states (see
+                        # __insert_data_dependencies_from_files).
                         line = STATE_MARKER_PATTERN.sub("", line)
                     # split and sanitize line
                     line_split = [elem for elem in line.split(" ") if len(elem) > 0]
@@ -3068,8 +3223,12 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         else:
                             sink_state_id = "NO_STATE"
 
-                        # prepend DYN or STAT to the dependency type to distinguish between dynamic and static dependencies
-                        if dep_is_dynamic_based_on_source or dep_is_dynamic_based_on_sink:
+                        # prepend DYN or STAT to the dependency type to distinguish between dynamic and
+                        # static dependencies. Every record of the dynamic dependency file was observed
+                        # during profiling, whether or not it carries callpath states: the records of
+                        # stack variables (hybrid analysis) carry none. Treated as static, they got the
+                        # privatisation exemption of static dependencies in the do-all detection.
+                        if idx == 0:
                             dep_type = "DYN_" + dep_type
                         else:
                             dep_type = "STAT_" + dep_type
@@ -3529,11 +3688,12 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         source_frames: List[Tuple[str, Optional[int], Dict[int, int]]],
         sink_frames: List[Tuple[str, Optional[int], Dict[int, int]]],
     ) -> Optional[Tuple[int, int]]:
-        """(frame index counted from the innermost frame, loop position) of the loop a dependency
+        """(frame index counted from the outermost frame, loop position) of the loop a dependency
         between two callpath states crosses: the first loop, from the outermost frame on, which is
         active in both states with different iteration buckets. Different buckets mean different
         iterations; equal buckets are taken as the same iteration. None if the callpaths part
-        before such a loop is found (different calls, or a loop active in only one of them)."""
+        before such a loop is found (different calls, or a loop active in only one of them).
+        Both callpaths agree up to that frame, so the index is valid in both."""
         for index, ((name, call, buckets), (other_name, other_call, other_buckets)) in enumerate(
             zip(source_frames, sink_frames)
         ):
@@ -3544,33 +3704,245 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     # a loop active in one of them only: the ends are not in one execution of it
                     return None
                 if buckets[position] != other_buckets[position]:
-                    return len(source_frames) - 1 - index, position
+                    return index, position
+        return None
+
+    def __loop_context_at(self, ctx: Context, function_name: str, loopstate_position: int) -> object:
+        """The LoopParentContext on the chain of ctx for the loop at loopstate_position of the
+        closest enclosing copy of function_name, or CARRIED_OUTSIDE if the chain does not reach
+        that function (a standalone copy of a function) or the loop has no context there.
+
+        The frame is found by its function rather than by counting frames: the profiler cuts the
+        callpath at a recursive call, so a state of a recursive function stands for every recursion
+        level, while the TaskGraph inlines several of them. A function occurs at most once on a
+        callpath of the profiler, so the closest copy of it is the frame of the callpath."""
+        current: Optional[Context] = ctx
+        candidate: Optional[LoopParentContext] = None
+        steps = 0
+        while current is not None and steps < 100000:
+            if isinstance(current, FunctionContext):
+                if (
+                    current.parent_function is not None
+                    and self.pet.node_at(current.parent_function).name == function_name
+                ):
+                    return candidate if candidate is not None else CARRIED_OUTSIDE
+                candidate = None
+            elif (
+                candidate is None
+                and isinstance(current, LoopParentContext)
+                and current.loopstate_position == loopstate_position
+            ):
+                # the innermost loop at that position of the frame (walking upwards, the loops of
+                # a frame are found before its FunctionContext)
+                candidate = current
+            current = current.parent_context
+            steps += 1
+        return CARRIED_OUTSIDE
+
+    # orders of the two instructions of a record without states, see __stateless_record_order
+    _STATELESS_CARRIED = "carried"
+    _STATELESS_FORWARD = "forward"
+
+    @staticmethod
+    def __stateless_record_order(later_location: str, earlier_location: str) -> Optional[str]:
+        """How the instructions of a dynamic record without callpath states are ordered. The first
+        column of a record is the later access, the second one the earlier access. Instruction ids
+        are assigned in the order of the instructions in the function's basic block layout, which
+        is the source order of the loop bodies (condition, body, increment). If the earlier access
+        does not come before the later one in that order, the record has to cross iterations of a
+        loop containing both (_STATELESS_CARRIED). Otherwise it is taken as a dependency within one
+        iteration (_STATELESS_FORWARD); this misses a value carried over iterations past a write
+        before the read that is not executed in every iteration (e.g. a conditional write). None if
+        the ends are no instruction ids."""
+        if not later_location.isdigit() or not earlier_location.isdigit():
+            return None
+        if int(earlier_location) >= int(later_location):
+            return TaskGraph._STATELESS_CARRIED
+        return TaskGraph._STATELESS_FORWARD
+
+    @staticmethod
+    def __common_loop(
+        first: Context, second: Context, chain_cache: Dict[Context, List[Context]]
+    ) -> Tuple[Optional[LoopParentContext], bool]:
+        """(the innermost LoopParentContext containing both contexts, whether they lie in different
+        iteration copies of it). A context in the loop's header lies in no iteration copy."""
+
+        def chain(ctx: Context) -> List[Context]:
+            cached = chain_cache.get(ctx)
+            if cached is None:
+                cached = []
+                current: Optional[Context] = ctx
+                while current is not None and len(cached) < 100000:
+                    cached.append(current)
+                    current = current.parent_context
+                chain_cache[ctx] = cached
+            return cached
+
+        first_chain = chain(first)
+        second_chain = chain(second)
+        second_index = {ctx: index for index, ctx in enumerate(second_chain)}
+        for first_position, ctx in enumerate(first_chain):
+            if ctx not in second_index:
+                continue
+            # ctx is the closest common ancestor
+            crosses = (
+                isinstance(ctx, LoopParentContext)
+                and first_position > 0
+                and second_index[ctx] > 0
+                and isinstance(first_chain[first_position - 1], IterationContext)
+                and isinstance(second_chain[second_index[ctx] - 1], IterationContext)
+            )
+            for outer in first_chain[first_position:]:
+                if isinstance(outer, LoopParentContext):
+                    return outer, crosses
+            return None, crosses
+        return None, False
+
+    def __loop_node_of_entry(self, entry: PETNodeID) -> Optional[LoopNode]:
+        """the LoopNode of a loop, given by its entry CU (LoopParentContext.parent_loop), or None"""
+        if entry is None or entry not in self.pet.g:
+            return None
+        node = self.pet.node_at(entry)
+        if isinstance(node, LoopNode):
+            return node
+        for source, _, _ in in_edges(self.pet, node.id, EdgeType.CHILD):
+            parent = self.pet.node_at(source)
+            if isinstance(parent, LoopNode) and parent.file_id == node.file_id and parent.start_line == node.start_line:
+                return parent
         return None
 
     @staticmethod
-    def __loop_context_at(ctx: Context, frame_from_innermost: int, loopstate_position: int) -> object:
-        """The LoopParentContext on the chain of ctx for the loop at loopstate_position of the frame
-        frame_from_innermost (0: the function ctx lies in), or CARRIED_OUTSIDE if the chain does
-        not reach that frame (a standalone copy of a function) or the loop has no context."""
-        chain: List[Context] = []
-        current: Optional[Context] = ctx
-        while current is not None and len(chain) < 100000:
-            chain.append(current)
-            current = current.parent_context
-        frame = -1
-        for element in chain:  # innermost first
-            if isinstance(element, FunctionContext):
-                frame += 1
-                if frame > frame_from_innermost:
-                    break
-            elif (
-                frame + 1 == frame_from_innermost
-                and isinstance(element, LoopParentContext)
-                and element.loopstate_position == loopstate_position
+    def __file_and_line(line: Optional[LineID]) -> Optional[Tuple[int, int]]:
+        if line is None or ":" not in line:
+            return None
+        file_id, _, line_number = str(line).partition(":")
+        if not file_id.isdigit() or not line_number.isdigit():
+            return None
+        return int(file_id), int(line_number)
+
+    def __innermost_loop_containing(self, first: Optional[LineID], second: Optional[LineID]) -> object:
+        """the innermost LoopNode whose lines contain both lines, None if there is none, or
+        _NO_LOOP_NODES if the PET has no LoopNodes at all (then the loop is taken from the contexts,
+        see __stateless_carrying_loops)"""
+        loops = self._loop_nodes_by_size
+        if loops is None:
+            loops = sorted(all_nodes(self.pet, type=LoopNode), key=lambda n: (n.end_line - n.start_line, str(n.id)))
+            self._loop_nodes_by_size = loops
+        if len(loops) == 0:
+            return TaskGraph._NO_LOOP_NODES
+        first_position = self.__file_and_line(first)
+        second_position = self.__file_and_line(second)
+        if first_position is None or second_position is None or first_position[0] != second_position[0]:
+            return None
+        for loop in loops:  # innermost first
+            if int(loop.file_id) != first_position[0]:
+                continue
+            if (
+                loop.start_line <= first_position[1] <= loop.end_line
+                and loop.start_line <= second_position[1] <= loop.end_line
             ):
-                # loops are found before the FunctionContext of their frame (walking upwards)
-                return element
-        return CARRIED_OUTSIDE
+                return loop
+        return None
+
+    # see __innermost_loop_containing
+    _NO_LOOP_NODES = object()
+    # the LoopNodes of the PET, smallest first, see __innermost_loop_containing
+    _loop_nodes_by_size: Optional[List[LoopNode]] = None
+
+    def __stateless_carrying_loops(
+        self, first: Context, second: Context, innermost_loop: object, chain_cache: Dict[Context, List[Context]]
+    ) -> Optional[List[LoopParentContext]]:
+        """The loops of the function frame of two contexts which a record without states between
+        them can cross, innermost first: the copy of innermost_loop (see __innermost_loop_containing)
+        containing both and the loops around it, up to the function. None if the contexts do not lie
+        in one copy of innermost_loop. [] if no loop contains both ends."""
+        self.__common_loop(first, second, chain_cache)  # fills the chains of both into chain_cache
+        first_chain = chain_cache[first]
+        second_members = set(chain_cache[second])
+        common_index = next((i for i, ctx in enumerate(first_chain) if ctx in second_members), None)
+        if common_index is None:
+            return None
+        loops: List[LoopParentContext] = []
+        for ctx in first_chain[common_index:]:
+            if isinstance(ctx, FunctionContext):
+                break
+            if isinstance(ctx, LoopParentContext):
+                loops.append(ctx)
+        if innermost_loop is TaskGraph._NO_LOOP_NODES:
+            return loops
+        if innermost_loop is None:
+            return []
+        if len(loops) == 0 or self.__loop_node_of_entry(loops[0].parent_loop) is not innermost_loop:
+            return None
+        return loops
+
+    def __blamed_loops(
+        self,
+        carrying: List[LoopParentContext],
+        var_name: str,
+        memory_region: Optional[MemoryRegion],
+        write_lines: Dict[Tuple[str, Optional[MemoryRegion]], Set[Tuple[int, int]]],
+    ) -> List[LoopParentContext]:
+        """The loops a record without states, carried by the loop carrying[0], is taken to cross:
+        that loop, and the loops around it unless the variable is set again before the inner loop
+        in every iteration of the outer one - it is an induction variable of the inner loop
+        (initialized by the for statement), or it is written in the outer loop on a line before the
+        inner loop. Without the states, which iterations of the outer loops the ends lie in is
+        unknown, so the outer loops are blamed otherwise (e.g. `for i { for j { sum += a; } }`).
+        A write executed only in some iterations is taken as one executed in all of them."""
+        if len(carrying) == 0:
+            return []
+        blamed = [carrying[0]]
+        for inner, outer in zip(carrying, carrying[1:]):
+            inner_node = self.__loop_node_of_entry(inner.parent_loop)
+            outer_node = self.__loop_node_of_entry(outer.parent_loop)
+            if inner_node is not None and var_name in inner_node.loop_indices:
+                break
+            if (
+                inner_node is not None
+                and outer_node is not None
+                and any(
+                    file_id == int(inner_node.file_id) and outer_node.start_line <= line < inner_node.start_line
+                    for file_id, line in write_lines.get((var_name, memory_region), set())
+                )
+            ):
+                break
+            blamed.append(outer)
+        return blamed
+
+    def __write_lines_of_variables(
+        self,
+        dependencies: Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, List[str]]]]]],
+        instruction_id_to_line: Dict[str, str],
+    ) -> Dict[Tuple[str, Optional[MemoryRegion]], Set[Tuple[int, int]]]:
+        """the (file id, line) pairs each variable of the dynamic records is written on"""
+        result: Dict[Tuple[str, Optional[MemoryRegion]], Set[Tuple[int, int]]] = {}
+        # which column of a record holds a write: (first, second), the first column being the later access
+        writes_by_type = {
+            "DYN_RAW": (False, True),
+            "DYN_WAR": (True, False),
+            "DYN_WAW": (True, True),
+            "DYN_INIT": (True, False),
+        }
+        for dep_type, (first_writes, second_writes) in writes_by_type.items():
+            for first_location, first_location_deps in dependencies.get(dep_type, {}).items():
+                first_line = self.__file_and_line(self.__line_of_location(first_location, instruction_id_to_line))
+                for first_state_deps in first_location_deps.values():
+                    for second_location, second_location_deps in first_state_deps.items():
+                        second_line = self.__file_and_line(
+                            self.__line_of_location(second_location, instruction_id_to_line)
+                        )
+                        for var_infos in second_location_deps.values():
+                            for var_info in var_infos:
+                                key = (
+                                    var_info.split("(")[0],
+                                    MemoryRegion(var_info.split("(")[1].strip(")")) if "(" in var_info else None,
+                                )
+                                if first_writes and first_line is not None:
+                                    result.setdefault(key, set()).add(first_line)
+                                if second_writes and second_line is not None:
+                                    result.setdefault(key, set()).add(second_line)
+        return result
 
     @staticmethod
     def __contexts_matching_frames(
@@ -4059,6 +4431,25 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         frames_cache: Dict[str, Optional[List[Tuple[str, Optional[int], Dict[int, int]]]]] = {}
         carried_cache: Dict[Tuple[str, str], Optional[Tuple[int, int]]] = {}
 
+        # parent chains, for the records without states (see __common_loop)
+        chain_cache: Dict[Context, List[Context]] = {}
+        # the lines each variable is written on, for the records without states (see __blamed_loops)
+        write_lines = self.__write_lines_of_variables(dependencies, mappings_dict)
+
+        # lines only covered by code the cuts deleted (early exits, exception unwind paths): the
+        # records observed there have no context, which is reported below
+        deleted_lines: Set[Optional[LineID]] = set()
+        for deleted_cu in self.cus_deleted_by_early_exits | self.cus_deleted_by_exception_unwinding:
+            if deleted_cu is None:
+                continue
+            deleted_node = self.pet.node_at(deleted_cu)
+            for line_number in range(deleted_node.start_line, deleted_node.end_line + 1):
+                deleted_line = LineID(str(deleted_node.file_id) + ":" + str(line_number))
+                if deleted_line not in location_to_work_contexts:
+                    deleted_lines.add(deleted_line)
+        self.records_on_deleted_lines = 0
+        deleted_line_examples: List[str] = []
+
         def state_frames(state_id: str) -> Optional[List[Tuple[str, Optional[int], Dict[int, int]]]]:
             if state_id not in frames_cache:
                 callpath = state_mappings_dict.get(state_id)
@@ -4093,7 +4484,6 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             # innermost level, once the ancestry of every pair of contexts had been computed.
             if dep_type_enum_obj == DepType.WAW or dep_type_enum_obj == DepType.INIT:
                 continue
-            dep_origin = DepOrigin.STATIC_ANALYSIS if is_static_dep_type else DepOrigin.DYNAMIC_ANALYSIS
 
             for source_location, source_location_deps in progress(
                 dep_type_deps.items(), desc="Source locations", leave=False
@@ -4145,11 +4535,52 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 for var_info in var_infos
                             ]
 
+                            if not is_static_dep_type:
+                                for executed_line in (dependency_sink_line, dependency_source_line):
+                                    if executed_line is not None:
+                                        self.lines_with_dynamic_records.add(executed_line)
+                            if dependency_sink_line in deleted_lines or dependency_source_line in deleted_lines:
+                                if not is_static_dep_type:
+                                    self.records_on_deleted_lines += 1
+                                    if len(deleted_line_examples) < 5:
+                                        deleted_line_examples.append(
+                                            str(dependency_sink_line) + " <- " + str(dependency_source_line)
+                                        )
+
+                            def make_dependency(
+                                var_name: str,
+                                memory_region: Optional[MemoryRegion],
+                                origin: DepOrigin,
+                                carried_by_loop: Optional[object] = None,
+                                carried_by_pet_loops: Optional[FrozenSet[str]] = None,
+                            ) -> Dependency:
+                                dependency = Dependency(type=EdgeType.DATA)
+                                dependency.dtype = dep_type_enum_obj
+                                dependency.var_name = var_name
+                                dependency.memory_region = memory_region
+                                dependency.origin = origin
+                                dependency.source_line = dependency_source_line
+                                dependency.sink_line = dependency_sink_line
+                                dependency.approximate_context = approximate_context
+                                dependency.carried_by_loop = carried_by_loop
+                                dependency.carried_by_pet_loops = carried_by_pet_loops
+                                return dependency
+
+                            # Records of the dynamic file without states on both ends (stack variables,
+                            # recorded by the hybrid analysis, or --ignore-dependency-states): which
+                            # iterations they cross is read from the order of their instructions, see
+                            # __stateless_record_order. Without instruction ids (an older profiler
+                            # format) that order is unknown, and they are treated like static ones.
+                            stateless_order: Optional[str] = None
+                            if not is_static_dep_type and source_state_id == "NO_STATE" == sink_state_id:
+                                stateless_order = self.__stateless_record_order(source_location, sink_location)
+
                             # handle static and dynamic dependencies separately
-                            if is_static_dep_type:
+                            if is_static_dep_type or (
+                                source_state_id == "NO_STATE" == sink_state_id and stateless_order is None
+                            ):
                                 # static dependencies must not leave the current function scope
                                 # source and target have to share a parent function context.
-
                                 # TODO (or consider other branches)
                                 for source_ctx in source_contexts:
                                     # check for shared closest function parent
@@ -4159,28 +4590,73 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                         continue
                                     for target_ctx in target_contexts:
                                         if source_ctx == target_ctx:
-                                            # print("SKIPPING POTENTIAL DEP: ", dep_type, var_infos)
                                             continue
-                                        target_closest_fn = closest_function_ancestor(target_ctx)
-                                        if target_closest_fn is None:
-                                            # no shared parent function context can exist
-                                            continue
-                                        if source_closest_fn != target_closest_fn:
+                                        if closest_function_ancestor(target_ctx) != source_closest_fn:
                                             # closest parent function contexts are not equal.
                                             # static dependencies are only valid within a functions scope.
                                             continue
-
                                         for var_name, memory_region in parsed_var_infos:
-                                            dependency = Dependency(type=EdgeType.DATA)
-                                            dependency.dtype = dep_type_enum_obj
-                                            dependency.var_name = var_name
-                                            dependency.memory_region = memory_region
-                                            dependency.origin = dep_origin
-                                            dependency.source_line = dependency_source_line
-                                            dependency.sink_line = dependency_sink_line
-                                            dependency.approximate_context = approximate_context
-
-                                            source_ctx.register_outgoing_dependency(target_ctx, dependency)
+                                            source_ctx.register_outgoing_dependency(
+                                                target_ctx,
+                                                make_dependency(var_name, memory_region, DepOrigin.STATIC_ANALYSIS),
+                                            )
+                            elif stateless_order is not None:
+                                # a variable of the stack frame: both ends lie in the same call, and only
+                                # the loops of that call can carry it
+                                innermost_loop = (
+                                    self.__innermost_loop_containing(dependency_sink_line, dependency_source_line)
+                                    if stateless_order == self._STATELESS_CARRIED
+                                    else None
+                                )
+                                for source_ctx in source_contexts:
+                                    source_closest_fn = closest_function_ancestor(source_ctx)
+                                    if source_closest_fn is None:
+                                        continue
+                                    for target_ctx in target_contexts:
+                                        if closest_function_ancestor(target_ctx) != source_closest_fn:
+                                            continue
+                                        if stateless_order == self._STATELESS_FORWARD:
+                                            # the earlier access comes first in the code: taken as a
+                                            # dependency within one iteration (see __stateless_record_order)
+                                            _, crosses_iterations = self.__common_loop(
+                                                source_ctx, target_ctx, chain_cache
+                                            )
+                                            if source_ctx == target_ctx or crosses_iterations:
+                                                continue
+                                            for var_name, memory_region in parsed_var_infos:
+                                                source_ctx.register_outgoing_dependency(
+                                                    target_ctx,
+                                                    make_dependency(
+                                                        var_name, memory_region, DepOrigin.DYNAMIC_ANALYSIS
+                                                    ),
+                                                )
+                                            continue
+                                        # the earlier access comes later in the code: the dependency
+                                        # crosses iterations of the innermost loop containing both ends
+                                        carrying = self.__stateless_carrying_loops(
+                                            source_ctx, target_ctx, innermost_loop, chain_cache
+                                        )
+                                        if carrying is None or (len(carrying) == 0 and source_ctx == target_ctx):
+                                            # the contexts do not lie in one execution of that loop: the
+                                            # location of an end only matches a context of another CU
+                                            # on its line (e.g. the initialization of a for loop)
+                                            continue
+                                        for var_name, memory_region in parsed_var_infos:
+                                            blamed = self.__blamed_loops(carrying, var_name, memory_region, write_lines)
+                                            source_ctx.register_outgoing_dependency(
+                                                target_ctx,
+                                                make_dependency(
+                                                    var_name,
+                                                    memory_region,
+                                                    DepOrigin.DYNAMIC_ANALYSIS,
+                                                    blamed[0] if len(blamed) > 0 else None,
+                                                    (
+                                                        frozenset(str(loop.parent_loop) for loop in blamed)
+                                                        if len(blamed) > 0
+                                                        else None
+                                                    ),
+                                                ),
+                                            )
                             else:
                                 # dynamic dependencies are allowed to leave the current function
                                 # register dependencies between all pairs of source and target contexts
@@ -4190,29 +4666,53 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 # TODO: The fact the following condition is necessary is a result of incorrect behavior of __get_work_contexts_by_location_and_state_id, which should be fixed!
                                 same_state = source_state_id == sink_state_id
                                 carried: Optional[Tuple[int, int]] = None
-                                if not same_state and source_state_id.isdigit() and sink_state_id.isdigit():
+                                source_frames = state_frames(source_state_id) if source_state_id.isdigit() else None
+                                sink_frames = state_frames(sink_state_id) if sink_state_id.isdigit() else None
+                                if not same_state and source_frames is not None and sink_frames is not None:
                                     carried_key = (source_state_id, sink_state_id)
                                     if carried_key not in carried_cache:
-                                        source_frames = state_frames(source_state_id)
-                                        sink_frames = state_frames(sink_state_id)
-                                        carried_cache[carried_key] = (
-                                            self.__carried_frame_and_position(source_frames, sink_frames)
-                                            if source_frames is not None and sink_frames is not None
-                                            else None
+                                        carried_cache[carried_key] = self.__carried_frame_and_position(
+                                            source_frames, sink_frames
                                         )
                                     carried = carried_cache[carried_key]
+                                carried_function: Optional[str] = None
+                                carried_pet_loop: Optional[PETNodeID] = None
+                                if carried is not None and source_frames is not None:
+                                    # the PET loop follows from the states alone, also for an end
+                                    # mapped to a standalone copy or approximately
+                                    carried_function = source_frames[carried[0]][0]
+                                    pet_loops = self.loop_pet_ids_by_loopstate_position.get(
+                                        (carried_function, carried[1]), set()
+                                    )
+                                    if len(pet_loops) == 1:
+                                        carried_pet_loop = next(iter(pet_loops))
+                                sink_is_approximate = _is_approximate(sink_location, sink_state_id)
                                 for source_ctx in source_contexts:
                                     source_ancs = ancestors_from_closest_iteration(source_ctx) if same_state else []
-                                    # an approximately mapped end may not lie on its state's callpath
-                                    carried_by_loop = (
-                                        self.__loop_context_at(source_ctx, carried[0], carried[1])
-                                        if carried is not None and not source_is_approximate
+                                    # the loop context is looked up from an end mapped exactly: an
+                                    # approximately mapped end may not lie on its state's callpath
+                                    source_carried_by_loop: Optional[object] = (
+                                        self.__loop_context_at(source_ctx, carried_function, carried[1])
+                                        if carried is not None
+                                        and carried_function is not None
+                                        and not source_is_approximate
                                         else None
                                     )
                                     for target_ctx in target_contexts:
-                                        if source_ctx == target_ctx and not isinstance(
-                                            carried_by_loop, LoopParentContext
+                                        carried_by_loop = source_carried_by_loop
+                                        if (
+                                            carried_by_loop is None
+                                            and carried is not None
+                                            and carried_function is not None
+                                            and not sink_is_approximate
                                         ):
+                                            carried_by_loop = self.__loop_context_at(
+                                                target_ctx, carried_function, carried[1]
+                                            )
+                                        pet_loop = carried_pet_loop
+                                        if pet_loop is None and isinstance(carried_by_loop, LoopParentContext):
+                                            pet_loop = carried_by_loop.parent_loop
+                                        if source_ctx == target_ctx and pet_loop is None:
                                             # (a dependency between the iterations with the buckets 0
                                             # and 2 of a loop has both ends in its copy [0, 2]; it is
                                             # kept, as it tells the loop it crosses)
@@ -4223,41 +4723,24 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             if source_ancs != ancestors_from_closest_iteration(target_ctx):
                                                 continue
                                         for var_name, memory_region in parsed_var_infos:
-                                            dependency = Dependency(type=EdgeType.DATA)
-                                            dependency.dtype = dep_type_enum_obj
-                                            dependency.var_name = var_name
-                                            dependency.memory_region = memory_region
-                                            dependency.origin = dep_origin
-                                            dependency.source_line = dependency_source_line
-                                            dependency.sink_line = dependency_sink_line
-                                            dependency.approximate_context = approximate_context
-                                            dependency.carried_by_loop = (
-                                                None if approximate_context else carried_by_loop
+                                            source_ctx.register_outgoing_dependency(
+                                                target_ctx,
+                                                make_dependency(
+                                                    var_name,
+                                                    memory_region,
+                                                    DepOrigin.DYNAMIC_ANALYSIS,
+                                                    carried_by_loop,
+                                                    None if pet_loop is None else frozenset([str(pet_loop)]),
+                                                ),
                                             )
 
-                                            if dependency.var_name == "error":
-                                                print(
-                                                    "REGISTER DEP: ",
-                                                    source_ctx,
-                                                    target_ctx,
-                                                    dependency.dtype,
-                                                    dependency.source_line,
-                                                    dependency.sink_line,
-                                                    dependency.var_name,
-                                                )
-                                                print("source: ", source_ctx)
-                                                print("source_ancs: ", source_ctx.get_ancestor_contexts())
-                                                print("sink: ", target_ctx)
-                                                print("sink ancs:", target_ctx.get_ancestor_contexts())
-                                                print("source_state: ", source_state_id)
-                                                print("sink_state: ", sink_state_id)
-                                                print("source_location: ", source_location)
-                                                print("sink_location: ", sink_location)
-                                                print("source_states: ", source_ctx.get_state_ids())
-                                                print("sink_states: ", target_ctx.get_state_ids())
-                                                print()
-                                            source_ctx.register_outgoing_dependency(target_ctx, dependency)
-
+        if self.records_on_deleted_lines > 0:
+            logger.warning(
+                "%d dynamic dependency records have an end on a line of code deleted by cutting early exits "
+                "or exception unwind paths (e.g. %s); they are not part of the TaskGraph.",
+                self.records_on_deleted_lines,
+                ", ".join(deleted_line_examples),
+            )
         logger.info(
             "Mapped "
             + str(len(context_fallback.approximate))
@@ -4287,10 +4770,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         again instead of reusing state of __insert_data_dependencies_from_files, so that the
         TaskGraph and therefore pattern detection are not affected by the export. The mapping is
         the one of __insert_data_dependencies_from_files: the same context lookup and the same
-        same-state rule, so the returned pairs are exactly the edges it registers for RAW and WAR
-        (and the edges it would register for WAW). INIT records have no other end; only their
-        first-column end is mapped. Records with an end without a state are skipped (they cannot
-        be attributed to a calling context), as are static ones.
+        same-state rule, but without its approximate fallback (_ContextFallback): an end whose state no
+        context at its location carries stays unmapped here, so that the side effect analysis reports
+        it as such instead of attributing it to a calling context it may not belong to. The returned
+        pairs are therefore the exactly attributed subset of the edges registered for RAW and WAR (and
+        of those it would register for WAW), without the dependencies of a context on itself. INIT
+        records have no other end; only their first-column end is mapped. Records with an end without
+        a state are skipped (they cannot be attributed to a calling context), as are static ones.
         """
         dependencies = self.__read_dependencies_from_files(self.dynamic_dependency_file, self.static_dependency_file)
         dependencies = self.__apply_dependency_overwrites(dependencies)

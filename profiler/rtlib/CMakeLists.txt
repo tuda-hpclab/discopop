@@ -33,6 +33,7 @@ set(DiscoPoP_SOURCES
         injected_functions/dp_finalize.cpp
         injected_functions/dp_func_entry.cpp
         injected_functions/dp_func_exit.cpp
+        injected_functions/dp_landing_pad.cpp
         injected_functions/dp_incr_taken_branch_counter.cpp
         injected_functions/dp_loop_entry.cpp
         injected_functions/dp_loop_exit.cpp

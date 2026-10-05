@@ -38,16 +38,13 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_func_entry(LID lid, int32_t isStart) {
+void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID) {
   if (targetTerminated) {
     // prevent deleting generated results after the main function has been
     // exited. This might happen, e.g., if a destructor of a global struct is
     // called after exiting the main function.
     return;
   }
-
-  // remember whether this function was entered through a call which updated the callpath state
-  enter_function_for_callstate();
 
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
   std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
@@ -153,6 +150,9 @@ void __dp_func_entry(LID lid, int32_t isStart) {
   } else {
     function_manager->register_function_start(lid);
   }
+
+  // follow the pending call into this function (or switch to the function's own root state)
+  enter_function_for_callstate(functionEntryID);
 
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);

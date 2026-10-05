@@ -54,6 +54,10 @@ DUPLICATE_PATTERN = "duplicate_pattern"  # an equivalent pattern was reported fo
 # neither is reported. Only with outcome not_reported, see PatternDecisionLog.finalize.
 DUPLICATE_OF_REJECTED_PATTERN = "duplicate_of_rejected_pattern"
 NO_PATTERN_NODE = "no_pattern_node"  # the checks passed, but there is no node to attach the pattern to
+# the loop can be left early (break, return, exit()); the analysis cut these exits
+CUT_EARLY_EXIT = "early_exit"
+# the loop contains an exception handler, which the analysis cut together with its dependencies
+CUT_EXCEPTION_HANDLER = "exception_handler"
 
 # the profiler's name for an access through a computed address, e.g. an array element or a field
 GEP_RESULT_PREFIX = "GEPRESULT_"

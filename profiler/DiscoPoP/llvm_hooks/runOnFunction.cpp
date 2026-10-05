@@ -96,9 +96,18 @@ bool DiscoPoP::isInstrumentedFunction(Function &F) {
     return false;
   }
 
-  int32_t tmp_file_id = 0;
-  determineFileID(F, tmp_file_id);
-  return tmp_file_id != 0;
+  return getCachedFileID(F) != 0;
+}
+
+int32_t DiscoPoP::getCachedFileID(Function &F) {
+  auto pos = file_id_cache.find(&F);
+  if (pos != file_id_cache.end()) {
+    return pos->second;
+  }
+  int32_t file_id = 0;
+  determineFileID(F, file_id);
+  file_id_cache[&F] = file_id;
+  return file_id;
 }
 
 bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
@@ -118,7 +127,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
   // one basic block
   map<string, vector<CU *>> BBIDToCUIDsMap;
 
-  determineFileID(F, fileID);
+  fileID = getCachedFileID(F);
 
   // only instrument functions belonging to project source files
   if (!fileID)

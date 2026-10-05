@@ -85,7 +85,6 @@ AbstractShadow *singleThreadedExecutionSMem = nullptr; // used if NUM_WORKERS==0
 thread_local depMap *myMap = nullptr;
 
 CallState *current_callpath_state = 0;
-std::vector<uint32_t> calls_without_executed_transitions;
 CallStateGraph *call_state_graph;
 
 // statistics

@@ -77,6 +77,8 @@ bool DiscoPoP::doInitialization(Module &M) {
     setenv("DP_PROJECT_ROOT_DIR", "/", 1);
   }
 
+  file_id_cache.clear();
+
   // InstructionID assignment
   {
     // required for consecutive and unique assignment of instructionIDs across multiple modules.

@@ -97,7 +97,7 @@ void DiscoPoP::CFA(Function &F, LoopInfo &LI) {
       bool hasValidExit = false;
       for (SmallVectorImpl<BasicBlock *>::iterator EI = RealExitBlocks.begin(), END = RealExitBlocks.end(); EI != END;
            ++EI) {
-        hasValidExit = getLoopExitLID(*EI) > 0;
+        hasValidExit = getLoopExitLID(*EI, L) > 0;
         if (hasValidExit == true)
           break;
       }
@@ -119,7 +119,7 @@ void DiscoPoP::CFA(Function &F, LoopInfo &LI) {
         // Instrument loop exit block(s).
         for (SmallVectorImpl<BasicBlock *>::iterator EI = RealExitBlocks.begin(), END = RealExitBlocks.end(); EI != END;
              ++EI) {
-          instrumentLoopExit(*EI, tmp_loop_id);
+          instrumentLoopExit(*EI, tmp_loop_id, L);
         }
       }
     }

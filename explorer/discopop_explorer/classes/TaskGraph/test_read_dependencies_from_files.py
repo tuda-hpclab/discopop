@@ -9,10 +9,11 @@
 profiled dependency files are parsed.
 
 The callpath state markers ("<line_id>@<state_id>") in dynamic_dependencies.txt
-serve double duty: they carry the state a dependency was observed in, and their
-mere presence is what classifies a dependency as dynamic (DYN_*) rather than
-static (STAT_*). --ignore-dependency-states drops them, so both effects are
-asserted here."""
+carry the state a dependency was observed in. Whether a dependency is dynamic (DYN_*)
+or static (STAT_*) follows from the file it is read from: every record of
+dynamic_dependencies.txt was observed during profiling, also those without states
+(the stack variables of the hybrid analysis). --ignore-dependency-states drops the
+markers, which leaves the records dynamic."""
 
 from __future__ import annotations
 
@@ -57,11 +58,22 @@ def test_state_markers_are_kept_and_classify_the_dependency_as_dynamic(
     # the dependency carrying markers keeps its state ids and is reported as dynamic
     assert "DYN_RAW" in deps
     assert deps["DYN_RAW"]["772"]["5294"]["1265"]["56"] == ["GEPRESULT_temp(99381316572105)"]
-    # the dependency without markers is static, with both state ids unspecified
-    assert deps["STAT_RAW"]["503"]["NO_STATE"]["772"]["NO_STATE"] == ["GEPRESULT_result(99381316572120)"]
+    # the dependency without markers is dynamic as well, with both state ids unspecified
+    assert deps["DYN_RAW"]["503"]["NO_STATE"]["772"]["NO_STATE"] == ["GEPRESULT_result(99381316572120)"]
+    assert "STAT_RAW" not in deps
 
 
-def test_ignore_dependency_states_drops_markers_and_makes_every_dependency_static(
+def test_records_of_the_static_file_are_static(build_task_graph: Any, build_pet_graph: Any, tmp_path: Any) -> None:
+    tg = build_task_graph(build_pet_graph([]))
+    static_file = tmp_path / "static_dependencies.txt"
+    static_file.write_text("503 NOM  RAW 772|x(S1)\n")
+
+    deps: Dependencies = tg._TaskGraph__read_dependencies_from_files(None, str(static_file))
+
+    assert deps == {"STAT_RAW": {"503": {"NO_STATE": {"772": {"NO_STATE": ["x(S1)"]}}}}}
+
+
+def test_ignore_dependency_states_drops_markers_and_keeps_the_dependencies_dynamic(
     build_task_graph: Any, build_pet_graph: Any, dep_file: str
 ) -> None:
     tg = build_task_graph(build_pet_graph([]))
@@ -69,11 +81,11 @@ def test_ignore_dependency_states_drops_markers_and_makes_every_dependency_stati
 
     deps = _read(tg, dep_file)
 
-    # nothing is dynamic any more: with no "@" left, both endpoints read as NO_STATE
-    assert "DYN_RAW" not in deps
-    assert deps["STAT_RAW"]["772"]["NO_STATE"]["1265"]["NO_STATE"] == ["GEPRESULT_temp(99381316572105)"]
+    # with no "@" left, both endpoints read as NO_STATE
+    assert "STAT_RAW" not in deps
+    assert deps["DYN_RAW"]["772"]["NO_STATE"]["1265"]["NO_STATE"] == ["GEPRESULT_temp(99381316572105)"]
     # the line that never had markers is unaffected
-    assert deps["STAT_RAW"]["503"]["NO_STATE"]["772"]["NO_STATE"] == ["GEPRESULT_result(99381316572120)"]
+    assert deps["DYN_RAW"]["503"]["NO_STATE"]["772"]["NO_STATE"] == ["GEPRESULT_result(99381316572120)"]
 
 
 def test_ignore_dependency_states_leaves_locations_and_variable_info_intact(
@@ -86,8 +98,8 @@ def test_ignore_dependency_states_leaves_locations_and_variable_info_intact(
 
     deps = _read(tg, dep_file)
 
-    assert sorted(deps["STAT_RAW"].keys()) == ["503", "772"]
-    for source_deps in deps["STAT_RAW"].values():
+    assert sorted(deps["DYN_RAW"].keys()) == ["503", "772"]
+    for source_deps in deps["DYN_RAW"].values():
         for sink_deps in source_deps["NO_STATE"].values():
             for var_infos in sink_deps.values():
                 assert all("@" not in var_info for var_info in var_infos)
