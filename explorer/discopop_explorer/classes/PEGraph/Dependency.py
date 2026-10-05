@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import FrozenSet, List, Optional
 
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.MemoryRegion import MemoryRegion
@@ -44,6 +44,14 @@ class Dependency:
     # (see TaskGraph.__carried_frame_and_position): a LoopParentContext, CARRIED_OUTSIDE if that loop has no
     # context on the chain of the ends, or None if unknown
     carried_by_loop: Optional[object] = None
+    # the PET identity of the loops whose iterations the dependency crosses: the node ids of the loops'
+    # entry CUs (LoopParentContext.parent_loop). Derived from the callpath states of the ends (the
+    # frame's function and loopstate position, see TaskGraph.__assign_loopstate_positions_within_functions)
+    # or, for records without states, from the instruction order of the ends (then possibly several
+    # nested loops). Unlike carried_by_loop, it does not depend on the contexts the ends were mapped
+    # to, so it is also known for ends mapped to a standalone copy of a function or approximately.
+    # None if unknown.
+    carried_by_pet_loops: Optional[FrozenSet[str]] = None
 
     def __init__(self, type: EdgeType):
         self.etype = type

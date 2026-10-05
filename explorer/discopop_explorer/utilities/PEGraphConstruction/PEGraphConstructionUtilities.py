@@ -147,6 +147,29 @@ def parse_cu(node: ObjectifiedElement) -> Node:
 
     _, n.start_line = parse_id(node.get("startsAtLine"))
     _, n.end_line = parse_id(node.get("endsAtLine"))
+    if node_type == NodeType.CU and n.start_line == 0:
+        # an instruction without a source location (e.g. the phi of a short-circuit condition)
+        # makes the profiler report line 0 as the start of the CU, which would then span every
+        # line of its file up to its end - and contain the code before it, e.g. the code before
+        # the loop around it
+        n.start_line = _first_known_instruction_line(node, n.end_line)
     n.name = node.get("name")
 
     return n
+
+
+def _first_known_instruction_line(node: ObjectifiedElement, end_line: int) -> int:
+    """the smallest line other than 0 among the instruction lines of a CU node, or end_line"""
+    lines: List[int] = []
+    if hasattr(node, "instructionLines") and node.instructionLines.text is not None:
+        for entry in str(node.instructionLines.text).split(","):
+            entry = entry.strip()
+            if ":" not in entry:
+                continue
+            try:
+                line = int(entry.split(":")[1])
+            except ValueError:
+                continue
+            if line != 0:
+                lines.append(line)
+    return min(lines) if len(lines) > 0 else end_line
