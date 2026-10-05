@@ -1,0 +1,2 @@
+_Z19write_through_paramPii 0 0 1:14 1:35
+main 0 1 1:121 1:135
