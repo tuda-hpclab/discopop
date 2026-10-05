@@ -479,17 +479,10 @@ def test_start_and_end_markers_are_balanced_on_every_path(program: str, tmp_path
 
 # program -> {line: reason} of the dependency ends the oracle accepts without a context of their
 # state at their line, because the profiler records them under a state of another callpath
-_ORACLE_KNOWN_DEVIATIONS: Dict[str, Dict[str, str]] = {
-    "ground_truth": {
-        # profiler P3: an indirect call does not enter a callpath state
-        "1:117": "pointer_target, called through a function pointer, records under call_via_pointer's state",
-    },
-    "trycatch": {
-        # profiler P5: unwinding does not leave the callpath state of the throwing function
-        "1:8": "the Guard destructor run by the unwinding records under work's state",
-        "1:25": "main after the caught exception records under work's state",
-    },
-}
+# program -> {line: reason} of record ends the profiler attributes to a wrong callpath state. Empty since
+# the profiler fixes of 098187f1 (indirect calls, caught exceptions); list a new deviation here only with
+# its profiler cause
+_ORACLE_KNOWN_DEVIATIONS: Dict[str, Dict[str, str]] = {}
 
 
 def _instruction_lines(profile: Path) -> Dict[int, str]:
