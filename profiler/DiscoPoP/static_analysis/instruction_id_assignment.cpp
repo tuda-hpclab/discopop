@@ -82,6 +82,15 @@ void DiscoPoP::update_argument_instruction_ids(Module &M){
                 ci->setArgOperand(1, ConstantInt::get(Int32, callInstructionID));
               }
             }
+            if (fn == "__dp_func_entry")
+            {
+              // the instruction id of the entry call identifies the function at runtime, see
+              // callpath_function_entries.txt
+              int32_t callInstructionID = get_dp_instruction_id(&*BI);
+              if(callInstructionID != 0){
+                ci->setArgOperand(2, ConstantInt::get(Int32, callInstructionID));
+              }
+            }
             if (fn.find("__dp_loop_exit") != string::npos)
             {
               // Get InstructionID of callinstruction
@@ -101,6 +110,38 @@ void DiscoPoP::update_argument_instruction_ids(Module &M){
           }
         }
       }
+    }
+  }
+}
+
+// Inserts a call of __dp_landing_pad(<function entry id>) at the start of every landing pad of an
+// instrumented function. An exception leaves functions without their __dp_func_exit calls; the
+// runtime library discards their callpath states when the exception reaches a landing pad.
+// Requires the function entry ids assigned by update_argument_instruction_ids.
+void DiscoPoP::instrument_landing_pads(Module &M){
+  FunctionCallee DpLandingPad = M.getOrInsertFunction("__dp_landing_pad", Type::getVoidTy(M.getContext()), Int32);
+  for (Function &F : M) {
+    if (F.isDeclaration()) {
+      continue;
+    }
+    // the function entry id is the last argument of the function's __dp_func_entry call
+    ConstantInt* function_entry_id = nullptr;
+    for (Instruction &I : F.getEntryBlock()) {
+      auto ci = dyn_cast<CallInst>(&I);
+      if (ci && ci->getCalledFunction() && ci->getCalledFunction()->getName() == "__dp_func_entry") {
+        function_entry_id = dyn_cast<ConstantInt>(ci->getArgOperand(2));
+        break;
+      }
+    }
+    if (function_entry_id == nullptr || function_entry_id->isZero()) {
+      continue;
+    }
+    for (BasicBlock &BB : F) {
+      if (!BB.isLandingPad()) {
+        continue;
+      }
+      IRBuilder<> IRB(&*BB.getFirstInsertionPt());
+      IRB.CreateCall(DpLandingPad, {function_entry_id});
     }
   }
 }

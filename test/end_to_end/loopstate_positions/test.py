@@ -3,7 +3,11 @@
 loop of a function has one loopstate digit, numbered in the pre-order of the loop nesting forest, and
 names its loop node in Data.xml. Covers a loop nested in an `else` inside another loop, whose exit
 block carries no debug location (it used to be skipped by the loop entry/exit instrumentation), and
-sibling loops in if / else."""
+sibling loops in if / else, and an early return placed before an inner loop. The nesting of the loops
+(from LoopInfo, independent of the basic block layout) is checked on the loopstate labels: a loop is
+active only while its parent loop is active, and loops that are not nested are never active together.
+The END line of a loop lies after its start, also for a loop ending an `else` arm inside another loop,
+whose exit block has no debug location."""
 
 import os
 import pathlib
@@ -16,6 +20,14 @@ from test.utils.subprocess_wrapper.command_execution_wrapper import run_cmd
 EXPECTED_POSITIONS = {
     "_Z6kerneliiPdS_": [8, 13, 20, 21],
     "_Z8siblingsiPd": [32, 36, 40, 41],
+    "_Z12early_returniPiPd": [50, 54],
+}
+
+# {function: [position of the parent loop of the loop at each loopstate position, or None]}
+EXPECTED_PARENTS = {
+    "_Z6kerneliiPdS_": [None, 0, None, 2],
+    "_Z8siblingsiPd": [None, None, None, 2],
+    "_Z12early_returniPiPd": [None, 0],
 }
 
 
@@ -72,3 +84,44 @@ class TestMethods(unittest.TestCase):
         with open(os.path.join(self.profiler_dir, "dynamic_dependencies.txt")) as f:
             content = f.read()
         self.assertRegex(content, r"\b1:13 BGN loop 80 10 ")
+
+    def test_loopstates_follow_the_loop_nesting(self):
+        with open(os.path.join(self.profiler_dir, "stateID_to_callpath_mapping.txt")) as f:
+            labels = set(re.findall(r"(\S+)_loopstate(\d+)", f.read()))
+        for function, parents in EXPECTED_PARENTS.items():
+
+            def ancestors(position):
+                result = set()
+                while parents[position] is not None:
+                    position = parents[position]
+                    result.add(position)
+                return result
+
+            states = [digits for name, digits in labels if name == function]
+            with self.subTest(function=function):
+                # every loop has states in which it is active
+                for position in range(len(parents)):
+                    self.assertTrue(any(digits[position] != "3" for digits in states), position)
+                for digits in states:
+                    active = [position for position, digit in enumerate(digits) if digit != "3"]
+                    for position in active:
+                        # the parent loop is active, too
+                        self.assertTrue(ancestors(position) <= set(active), digits)
+                        # loops that are not nested are not active together
+                        for other in active:
+                            if other != position:
+                                self.assertTrue(other in ancestors(position) or position in ancestors(other), digits)
+
+    def test_loop_end_lines_lie_after_the_loop_starts(self):
+        with open(os.path.join(self.profiler_dir, "dynamic_dependencies.txt")) as f:
+            lines = f.read().splitlines()
+        loops = set()
+        for index, line in enumerate(lines[:-1]):
+            begin = re.match(r"^1:(\d+) BGN loop", line)
+            end = re.match(r"^1:(\d+) END loop", lines[index + 1])
+            if begin and end:
+                loops.add(int(begin.group(1)))
+                with self.subTest(loop=line):
+                    self.assertGreater(int(end.group(1)), int(begin.group(1)))
+        # every executed loop: 8, 13 (in the else arm), 32, 40, 41, 50 and 54 (after the early return)
+        self.assertTrue({8, 13, 32, 40, 41, 50, 54} <= loops, loops)

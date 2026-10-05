@@ -12,9 +12,9 @@
 
 #include "../../DiscoPoP.hpp"
 
-void DiscoPoP::instrumentLoopExit(BasicBlock *bb, int32_t id) {
+void DiscoPoP::instrumentLoopExit(BasicBlock *bb, int32_t id, Loop *L) {
   // see getLoopExitLID for exit blocks without a valid LID of their own
-  LID lid = getLoopExitLID(bb);
+  LID lid = getLoopExitLID(bb, L);
   if (lid == 0) {
     return;
   }

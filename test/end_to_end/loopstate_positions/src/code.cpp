@@ -45,6 +45,19 @@ double siblings(int n, double* a) {
   return s;
 }
 
+// an early return placed before an inner loop
+int early_return(int n, int* err, double* a) {
+  for (int i = 0; i < n; ++i) {
+    if (err[i]) {
+      return i;
+    }
+    for (int j = 0; j < 4; ++j) {
+      a[i] += j;
+    }
+  }
+  return -1;
+}
+
 int main(int argc, char** argv) {
   int n = 10;
   int threads = argc > 5 ? 2 : 1;
@@ -52,6 +65,10 @@ int main(int argc, char** argv) {
   double* b = (double*)calloc(n, sizeof(double));
   kernel(n, threads, a, b);
   double s = siblings(n, a);
+  int* err = (int*)calloc(n, sizeof(int));
+  err[7] = 1;
+  s += early_return(n, err, a);
+  free(err);
   printf("%f %f\n", b[3], s);
   free(a);
   free(b);

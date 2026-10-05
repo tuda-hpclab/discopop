@@ -259,7 +259,10 @@ StaticCallPathTree* DiscoPoP::enumerate_paths(StaticCalltree& calltree, std::uno
   // select entry nodes
   std::vector<StaticCalltreeNode*> entry_nodes;
   for(auto pair: calltree.function_map){
-    if(pair.second->predecessors.size() == 0){
+    // functions without callers in this module, including those with loops (whose loop iteration
+    // states lead back to the function node). They can be called from other modules, indirectly,
+    // or by library code, and are entered at their root state then (see save_function_entries).
+    if(pair.second->is_uncalled_function()){
       entry_nodes.push_back(pair.second);
     }
     else{
@@ -460,6 +463,35 @@ void DiscoPoP::save_path_state_transitions(StaticCallPathTree* call_path_tree_pt
     callpath_state_transitions_file->close();
   }
   cout << "Done saving path state transitions..\n";
+}
+
+// Saves which states are entry states of function instances, and the root entry state of each
+// function without callers in this module, to callpath_function_entries.txt. Functions are
+// identified by the instruction id of their __dp_func_entry call. The runtime library follows a
+// call's transition into a function only if it leads to an entry state of the entered function,
+// and else switches to the function's root entry state (see enter_function_for_callstate).
+void DiscoPoP::save_function_entries(StaticCallPathTree* call_path_tree_ptr){
+  std::ofstream file;
+  std::string path(getenv("DOT_DISCOPOP_PROFILER"));
+  path += "/callpath_function_entries.txt";
+  file.open(path.data(), std::ios_base::app);
+  file << "# Format: S <state_id> <function_entry_instruction_id> | E <function_entry_instruction_id> <root_state_id>\n";
+  std::string buffer;
+  for(auto path_node: call_path_tree_ptr->all_nodes){
+    if(path_node->base_node == nullptr || path_node->base_node->get_type()){
+      continue;
+    }
+    int32_t function_entry_id = path_node->base_node->function_entry_instruction_id;
+    if(function_entry_id == 0){
+      continue;
+    }
+    buffer += "S " + std::to_string(path_node->path_id) + " " + std::to_string(function_entry_id) + "\n";
+    if(path_node->prefix == call_path_tree_ptr->root){
+      buffer += "E " + std::to_string(function_entry_id) + " " + std::to_string(path_node->path_id) + "\n";
+    }
+  }
+  file << buffer;
+  file.close();
 }
 
 void DiscoPoP::save_static_calltree_to_dot(StaticCalltree *calltree){
