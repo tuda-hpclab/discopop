@@ -17,8 +17,7 @@
 void DiscoPoP::instrument_function(llvm::Function *function, map<string, string> *trueVarNamesFromMetadataMap, llvm::LoopInfo &loop_info) {
 
   // get the corresponding file id
-  int32_t tmp_file_id;
-  determineFileID(*function, tmp_file_id);
+  int32_t tmp_file_id = getCachedFileID(*function);
   if (tmp_file_id == 0) {
     return;
   }

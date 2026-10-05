@@ -83,6 +83,7 @@ StaticCalltreeNode* StaticCalltree::get_or_insert_function_node(std::string func
     if(function_map.count(function_name) == 0){
 //        std::cout << "first encountered function name: " << function_name << "\n";
         StaticCalltreeNode* node_ptr = new StaticCalltreeNode(node_count++, 0, function_name, 0);
+        node_ptr->is_loopstate = true;
         function_map[function_name] = node_ptr;
         return node_ptr;
     }

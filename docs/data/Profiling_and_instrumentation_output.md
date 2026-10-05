@@ -84,3 +84,11 @@ The used format is as follows: `<function_name> <position> <loop_id> <loop_node_
 The positions follow a pre-order traversal of the function's loop nesting forest.
 Loops which are not instrumented for loop entry and exit, and thus are not part of the callpath states, are not listed.
 Since every compiled module appends to the file, a function compiled in multiple modules (e.g. an inline function defined in a header) is listed once per module.
+The loop nesting forest is taken from LLVM's loop analysis: the parent of a loop is its closest enclosing instrumented loop, and siblings keep the order of their loop entries in the code.
+
+## Callpath Function Entries
+The runtime library follows a call into a function's callpath state only when the call enters an instrumented function, i.e. on the callee's function entry, and only if the call's transition leads to a state of that function.
+Otherwise (a call from another module, an indirect or virtual call, a call by library code) it continues in the root callpath state of the entered function, i.e. the state of the function without a caller in its module, if one exists; the callpaths of such states start with the entered function instead of `main`.
+If neither exists, the caller's state is kept, without transitions, until the function is left. Leaving a function always restores the caller's state.
+The required information is stored in a file named `callpath_function_entries.txt`, which identifies a function by the instruction id of its function entry instrumentation.
+The used format is as follows: `S <state_id> <function_entry_id>` marks a state as the entry state of an instance of the function, and `E <function_entry_id> <state_id>` names the root entry state of the function.

@@ -87,7 +87,9 @@ void DiscoPoP::instrumentFuncEntry(Function &F) {
     lid = getLID(&*BI, fileID);
     if (lid > 0 && !isa<PHINode>(BI)) {
       IRBuilder<> IRB(&*entryBB.begin());
-      IRB.CreateCall(DpFuncEntry, {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, isStart)});
+      // the third argument (function entry id) is set to the call's own instruction id in
+      // update_argument_instruction_ids
+      IRB.CreateCall(DpFuncEntry, {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, isStart), ConstantInt::get(Int32, 0)});
       if (DP_DEBUG) {
         errs() << "DiscoPoP: funcEntry instrumented\n";
       }

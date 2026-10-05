@@ -19,7 +19,8 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_func_entry(LID lid, int32_t isStart);
+// functionEntryID: instruction id of this __dp_func_entry call, identifies the function
+void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID);
 }
 
 } // namespace __dp

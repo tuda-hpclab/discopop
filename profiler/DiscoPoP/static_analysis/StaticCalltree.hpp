@@ -31,6 +31,25 @@ class StaticCalltreeNode {
     public:
         std::unordered_map<int32_t, std::vector<StaticCalltreeNode*>> successors;  // first element of the pairs is the trigger instructionID for the transition
         std::vector<StaticCalltreeNode*> predecessors;
+        // function nodes of functions instrumented in this module: instruction id of the function's
+        // __dp_func_entry call, which identifies the function at runtime (0 otherwise)
+        int32_t function_entry_instruction_id = 0;
+        // node of a loop iteration state "<function>_loopstate<digits>" of a function
+        bool is_loopstate = false;
+        // true if the node is the node of a function (not a loop iteration state) and no call
+        // instruction of the module leads to it. Its loop iteration states lead back to it on loop
+        // exits, so predecessors of other kinds do not count.
+        bool is_uncalled_function(){
+            if (type || is_loopstate) {
+                return false;
+            }
+            for (auto pred : predecessors) {
+                if (pred->get_type()) {
+                    return false;
+                }
+            }
+            return true;
+        }
         StaticCalltreeNode(uint32_t node_id_arg, bool type_arg, std::string functionName_arg, int32_t instructionID_arg):node_id(node_id_arg),type(type_arg),functionName(functionName_arg),instructionID(instructionID_arg){
             // type 0: function -> functionName; type 1: call instruction -> "call_<instructionID>"
             label = type ? ("call_" + std::to_string(instructionID)) : functionName;
