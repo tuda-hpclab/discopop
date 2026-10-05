@@ -20,7 +20,9 @@ namespace __dp {
 extern "C" {
 
 // hybrid analysis
-void __dp_report_bb_pair(int32_t counter, uint32_t bbIndex);
+void __dp_report_bb_pair(int32_t semaphore, uint32_t bbIndex);
+
+uint32_t __dp_bb_state();
 // End HA
 }
 

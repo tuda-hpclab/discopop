@@ -150,7 +150,68 @@ typedef std::unordered_map<LID, depSet *> depMap;
 
 // Hybrid anaysis
 typedef std::unordered_map<std::string, std::unordered_set<std::string>> stringDepMap;
-typedef std::unordered_set<std::uint32_t> ReportedBBSet;
+// One observed execution of a reporting basic block of the hybrid analysis (see
+// __dp_report_bb / __dp_report_bb_pair): which entry of the handed over
+// dependency strings it reports, the callpath state of the most recent execution
+// of the basic block holding the dependencies' sources, and the callpath state
+// of the reporting (sink) basic block's execution.
+struct ReportedBB {
+  std::uint32_t bb_index;
+  std::uint32_t source_state;
+  std::uint32_t sink_state;
+
+  bool operator==(const ReportedBB &other) const {
+    return bb_index == other.bb_index && source_state == other.source_state && sink_state == other.sink_state;
+  }
+};
+
+struct ReportedBBHasher {
+  size_t operator()(const ReportedBB &key) const {
+    std::uint64_t states = (((std::uint64_t)key.source_state) << 32) | key.sink_state;
+    return std::hash<std::uint64_t>{}(states) ^ (std::hash<std::uint32_t>{}(key.bb_index) * 0x9E3779B97F4A7C15ULL);
+  }
+};
+
+typedef std::unordered_set<ReportedBB, ReportedBBHasher> ReportedBBSet;
+
+// Collects the reported executions. A reporting basic block executes very
+// often, mostly in a few recurring pairs of states (e.g. the iteration buckets
+// of its loop), so the last few distinct pairs of each basic block are kept in
+// a small cache in front of the hash set, which saves the hashing for repeated
+// executions in the same states.
+class ReportedBBRecorder {
+public:
+  inline void record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
+    if (bb_index >= recent.size()) {
+      recent.resize(((std::size_t)bb_index) + 1);
+    }
+    RecentStates &cache = recent[bb_index];
+    const std::uint64_t states = (((std::uint64_t)source_state) << 32) | sink_state;
+    for (std::size_t i = 0; i < cache.used; ++i) {
+      if (cache.states[i] == states) {
+        return;
+      }
+    }
+    executions.insert(ReportedBB{bb_index, source_state, sink_state});
+    cache.states[cache.next] = states;
+    cache.next = (cache.next + 1) % RECENT_STATES;
+    if (cache.used < RECENT_STATES) {
+      ++cache.used;
+    }
+  }
+
+  const ReportedBBSet &get_executions() const { return executions; }
+
+private:
+  static constexpr std::size_t RECENT_STATES = 4;
+  struct RecentStates {
+    std::uint64_t states[RECENT_STATES] = {0, 0, 0, 0};
+    std::uint8_t used = 0;
+    std::uint8_t next = 0;
+  };
+  std::vector<RecentStates> recent;
+  ReportedBBSet executions;
+};
 // End HA
 
 class FirstAccessQueueChunk {

@@ -62,7 +62,7 @@ extern thread_local std::unordered_set<DependencyMetadata> local_dependency_meta
 #endif
 
 // hybrid analysis
-extern ReportedBBSet *bbList;
+extern ReportedBBRecorder *bbList;
 extern stringDepMap *outPutDeps;
 // end hybrid analysis
 

@@ -12,6 +12,31 @@
 
 #include "../DiscoPoP.hpp"
 
+// Returns the instruction before which the hybrid analysis reports an execution
+// of BB (__dp_report_bb / __dp_report_bb_pair) or records it in a semaphore
+// (__dp_bb_state): the terminator, but in front of the instrumentation of a
+// call or return right before it (__dp_call before an invoke, __dp_func_exit /
+// __dp_finalize before a return), as these change the callpath state and the
+// report has to see the state of BB's accesses.
+static Instruction *getHybridReportInsertionPoint(BasicBlock *BB) {
+  Instruction *insertionPoint = BB->getTerminator();
+  for (Instruction *prev = insertionPoint->getPrevNode(); prev; prev = prev->getPrevNode()) {
+    if (isa<DbgInfoIntrinsic>(prev)) {
+      continue;
+    }
+    CallInst *call = dyn_cast<CallInst>(prev);
+    if (!call || !call->getCalledFunction()) {
+      break;
+    }
+    StringRef fn = call->getCalledFunction()->getName();
+    if (fn != "__dp_call" && fn != "__dp_func_exit" && fn != "__dp_finalize") {
+      break;
+    }
+    insertionPoint = prev;
+  }
+  return insertionPoint;
+}
+
 // Returns true if runOnFunction instruments F, i.e. F reports its entry and exit to the runtime.
 // Calls to functions without instrumentation must not update the callpath state (see
 // runOnBasicBlock): the runtime would wait for the callee's __dp_func_exit forever.
@@ -305,7 +330,22 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     // Perform the SPA dependence analysis
     int32_t fid;
     determineFileID(F, fid);
+    // The dependencies are reported per execution of the basic block holding
+    // their sinks, together with the callpath states of their ends, so that
+    // they can be attributed to calling contexts and loop iterations like the
+    // dynamically profiled ones. The callpath state only changes at the
+    // beginning of a basic block (loop entry, iteration, exit) and around calls,
+    // which restore it on their return; hence the state at the end of a basic
+    // block is the one of all of its accesses.
+    // sink BB -> dependencies whose source lies in the same execution of the
+    // sink BB, before the sink, or which have no source instruction (INIT):
+    // both ends get the state of the sink BB's execution
     map<BasicBlock *, set<string>> conditionalBBDepMap;
+    // source BB -> sink BB -> dependencies whose source lies in an earlier
+    // execution of the source BB (or of the sink BB itself): the source gets
+    // the state of the most recent execution of the source BB, recorded in a
+    // per-invocation semaphore, the sink the state of the sink BB's execution.
+    // Only reported once the source BB was executed in the current invocation.
     map<BasicBlock *, map<BasicBlock *, set<string>>> conditionalBBPairDepMap;
 
     //auto &DT = getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
@@ -343,7 +383,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
       if (staticallyPredictableValues.find(V) == staticallyPredictableValues.end())
         continue;
 
-      if (Src != Dst && DT.dominates(Dst, Src)) {
+      if (Src != Dst && DT.dominates(Dst, Src) && (isa<AllocaInst>(Dst) || Dst->getParent() == Src->getParent())) {
         if (!conditionalBBDepMap.count(Src->getParent())) {
           set<string> tmp;
           conditionalBBDepMap[Src->getParent()] = tmp;
@@ -394,14 +434,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     // Add observation of execution of single basic blocks
     for (auto pair : conditionalBBDepMap) {
       // Insert call to reportbb
-      Instruction *insertionPoint = pair.first->getTerminator();
-      if (isa<ReturnInst>(pair.first->getTerminator())) {
-#if LLVM_VERSION_MAJOR >= 22
-        insertionPoint = insertionPoint->getPrevNode();
-#else
-        insertionPoint = insertionPoint->getPrevNonDebugInstruction();
-#endif
-      }
+      Instruction *insertionPoint = getHybridReportInsertionPoint(pair.first);
 #if LLVM_VERSION_MAJOR >= 22
       CallInst::Create(ReportBB, ConstantInt::get(Int32, bbDepCount), "", insertionPoint->getIterator());
 #else
@@ -436,14 +469,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
 
       for (auto pair2 : pair1.second) {
         // Insert check for semaphore
-        Instruction *insertionPoint = pair2.first->getTerminator();
-        if (isa<ReturnInst>(pair2.first->getTerminator())) {
-#if LLVM_VERSION_MAJOR >= 22
-          insertionPoint = insertionPoint->getPrevNode();
-#else
-          insertionPoint = insertionPoint->getPrevNonDebugInstruction();
-#endif
-        }
+        Instruction *insertionPoint = getHybridReportInsertionPoint(pair2.first);
 
 #if LLVM_VERSION_MAJOR >= 22
         auto LI = new LoadInst(Int32, AI, Twine(""), false, insertionPoint->getIterator());
@@ -468,11 +494,21 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
         // ----------------------------------
         ++bbDepCount;
       }
-      // Insert semaphore update to true
+      // Insert semaphore update to the current callpath state (+1, so that 0
+      // keeps meaning "not executed"). Placed behind the reports of this
+      // block, so that a dependency on an earlier execution of the same block
+      // sees the state of that execution.
+      if (isa<ReturnInst>(pair1.first->getTerminator())) {
+        // no later execution of a sink in this invocation
+        continue;
+      }
+      Instruction *semaphoreUpdatePoint = getHybridReportInsertionPoint(pair1.first);
 #if LLVM_VERSION_MAJOR >= 22
-      new StoreInst(ConstantInt::get(Int32, 1), AI, false, pair1.first->getTerminator()->getIterator());
+      auto BBStateCall = CallInst::Create(BBState, "", semaphoreUpdatePoint->getIterator());
+      new StoreInst(BBStateCall, AI, false, semaphoreUpdatePoint->getIterator());
 #else
-      new StoreInst(ConstantInt::get(Int32, 1), AI, false, pair1.first->getTerminator());
+      auto BBStateCall = CallInst::Create(BBState, "", semaphoreUpdatePoint);
+      new StoreInst(BBStateCall, AI, false, semaphoreUpdatePoint);
 #endif
     }
 
