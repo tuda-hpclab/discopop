@@ -231,6 +231,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     __node_counter: int = 0
     # counters of __split_branch_region_side_entries over all functions
     branch_region_side_entry_statistics: Dict[str, int] = dict()
+    # copy -> original of every node __split_branch_region_side_entries duplicated, so that the
+    # intended copies of a context can be told apart from structural errors (see the tests)
+    tail_duplication_origins: Dict[TGNode, TGNode] = dict()
     # states __assign_state_ids attached by the suffix fallback, see there
     approximately_assigned_state_ids: Set[int] = set()
     # counters of the approximately mapped dependency ends, see _ContextFallback
@@ -2490,6 +2493,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         continue
                     node_copy = copy.deepcopy(node)
                     self.add_node(node_copy)
+                    self.__dict__.setdefault("tail_duplication_origins", {})[node_copy] = node
                     copied += 1
                     modified = True
                     for pred in outside_preds:
@@ -2762,6 +2766,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
     def __add_branching_nodes(self) -> None:
         self.branch_region_side_entry_statistics = {"removed_edges": 0, "copied_nodes": 0, "unresolved": 0}
+        self.tail_duplication_origins = dict()
         for function_node in progress(
             list(self.TGFunctionNode_pet_node_id_to_tg_node.values()), desc="Adding branching nodes per function"
         ):
