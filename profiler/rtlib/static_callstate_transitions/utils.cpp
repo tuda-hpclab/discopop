@@ -32,9 +32,15 @@ struct CallstateFrame {
 thread_local bool callstate_owner = false;
 // instruction id of the latest call of this thread which has not entered an instrumented function yet
 thread_local int32_t pending_call_instruction = 0;
-// the following are used by the owner thread only
-std::vector<CallstateFrame> callstate_frames;
-bool callstate_frozen = false;
+// the following are used by the owner thread only. They are written on every function entry and
+// exit, so they get cache lines of their own: sharing one with a global the worker threads read
+// for every dependency (e.g. DP_DEBUG in addDep, which a different link layout put next to
+// the frozen flag) doubled LULESH's profiling time through false sharing.
+struct alignas(64) CallstateHotData {
+  std::vector<CallstateFrame> frames;
+  bool frozen = false;
+};
+CallstateHotData callstate_hot;
 
 // the target of the transition triggered by instructionID, following a fall-through transition
 CallState *get_transition_target_with_fallthrough(CallState *state, int32_t instructionID) {
@@ -52,7 +58,7 @@ CallState *get_transition_target_with_fallthrough(CallState *state, int32_t inst
 } // namespace
 
 void update_callstate(int32_t instructionID) {
-  if (!callstate_owner || callstate_frozen) {
+  if (!callstate_owner || callstate_hot.frozen) {
     return;
   }
   CallState *transition_target = get_transition_target_with_fallthrough(current_callpath_state, instructionID);
@@ -63,8 +69,8 @@ void update_callstate(int32_t instructionID) {
 
 void reset_callstate_tracking(CallState *initial_state) {
   current_callpath_state = initial_state;
-  callstate_frames.clear();
-  callstate_frozen = false;
+  callstate_hot.frames.clear();
+  callstate_hot.frozen = false;
   pending_call_instruction = 0;
   callstate_owner = true;
 }
@@ -91,10 +97,10 @@ void enter_function_for_callstate(int32_t function_entry_id) {
   if (!callstate_owner) {
     return;
   }
-  callstate_frames.push_back({current_callpath_state, callstate_frozen, function_entry_id});
+  callstate_hot.frames.push_back({current_callpath_state, callstate_hot.frozen, function_entry_id});
 
   CallState *target = nullptr;
-  if (call_instruction != 0 && !callstate_frozen) {
+  if (call_instruction != 0 && !callstate_hot.frozen) {
     target = get_transition_target_with_fallthrough(current_callpath_state, call_instruction);
     // the call's transition is valid only if it leads into the entered function. Otherwise the
     // callee was not the entered function (a call into code without instrumentation, which called
@@ -108,21 +114,21 @@ void enter_function_for_callstate(int32_t function_entry_id) {
   }
   if (target) {
     current_callpath_state = target;
-    callstate_frozen = false;
+    callstate_hot.frozen = false;
   } else {
     // the state of the entered function is unknown: keep the caller's state, do not transition
-    callstate_frozen = true;
+    callstate_hot.frozen = true;
   }
 }
 
 void leave_function_for_callstate() {
   pending_call_instruction = 0;
-  if (!callstate_owner || callstate_frames.empty()) {
+  if (!callstate_owner || callstate_hot.frames.empty()) {
     return;
   }
-  current_callpath_state = callstate_frames.back().caller_state;
-  callstate_frozen = callstate_frames.back().caller_frozen;
-  callstate_frames.pop_back();
+  current_callpath_state = callstate_hot.frames.back().caller_state;
+  callstate_hot.frozen = callstate_hot.frames.back().caller_frozen;
+  callstate_hot.frames.pop_back();
 }
 
 void resume_function_for_callstate(int32_t function_entry_id) {
@@ -131,8 +137,8 @@ void resume_function_for_callstate(int32_t function_entry_id) {
     return;
   }
   // the frame of the function's latest instance
-  std::size_t frame_count = callstate_frames.size();
-  while (frame_count > 0 && callstate_frames[frame_count - 1].function_entry_id != function_entry_id) {
+  std::size_t frame_count = callstate_hot.frames.size();
+  while (frame_count > 0 && callstate_hot.frames[frame_count - 1].function_entry_id != function_entry_id) {
     --frame_count;
   }
   if (frame_count == 0) {
@@ -140,13 +146,13 @@ void resume_function_for_callstate(int32_t function_entry_id) {
     return;
   }
   // leave the functions entered by it
-  while (callstate_frames.size() > frame_count) {
+  while (callstate_hot.frames.size() > frame_count) {
     leave_function_for_callstate();
   }
 }
 
-bool callstate_transitions_frozen() { return callstate_frozen; }
+bool callstate_transitions_frozen() { return callstate_hot.frozen; }
 
-std::size_t callstate_frame_count() { return callstate_frames.size(); }
+std::size_t callstate_frame_count() { return callstate_hot.frames.size(); }
 
 } // namespace __dp
