@@ -41,7 +41,7 @@ thread_local std::unordered_set<DependencyMetadata> local_dependency_metadata_re
 #endif
 
 // hybrid analysis
-ReportedBBSet *bbList = nullptr;
+ReportedBBRecorder *bbList = nullptr;
 stringDepMap *outPutDeps = nullptr;
 // end hybrid analysis
 

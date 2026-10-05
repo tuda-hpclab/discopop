@@ -246,7 +246,7 @@ private:
   string bbDepString;
   string fileName;
   int32_t fid;
-  FunctionCallee ReportBB, ReportBBPair;
+  FunctionCallee ReportBB, ReportBBPair, BBState;
   dputil::VariableNameFinder *VNF;
   std::ofstream *staticDependencyFile;
   int nextFreeStaticMemoryRegionID;

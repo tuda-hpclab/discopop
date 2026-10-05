@@ -79,7 +79,7 @@ void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID) {
     // hybrid analysis
     allDeps = new depMap();
     outPutDeps = new stringDepMap();
-    bbList = new ReportedBBSet();
+    bbList = new ReportedBBRecorder();
     // End HA
 
     memory_manager->allocate_dummy_region();
