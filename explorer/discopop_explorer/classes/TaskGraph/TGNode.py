@@ -18,6 +18,8 @@ from discopop_explorer.classes.TaskGraph.Aliases import LevelIndex, PETNode, PET
 
 
 class TGNode(object):
+    # set by TaskGraph.add_node; orders nodes created for the same PET node deterministically
+    creation_index: int = -1
     pet_node_id: PETNodeID
     level: LevelIndex  # for plotting and predecessor / successor detection
     position: PositionIndex  # for plotting

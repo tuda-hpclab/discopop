@@ -227,6 +227,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     cus_deleted_by_early_exits: Set[PETNodeID] = set()
     # CUs reachable only through exception landing pads, see __cut_exception_unwind_paths
     cus_deleted_by_exception_unwinding: Set[PETNodeID] = set()
+    # source of TGNode.creation_index, see add_node
+    __node_counter: int = 0
     # counters of __split_branch_region_side_entries over all functions
     branch_region_side_entry_statistics: Dict[str, int] = dict()
     # states __assign_state_ids attached by the suffix fallback, see there
@@ -324,6 +326,10 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         # self.__validate_data_dependencies()
 
     def add_node(self, node: TGNode) -> None:
+        # a stable tie-breaker for orders among nodes of one pet node (copies of iterations,
+        # inlined functions and duplicated tails), see __pet_node_order
+        self.__node_counter += 1
+        node.creation_index = self.__node_counter
         self.graph.add_node(node)
 
     def add_edge(self, source: Optional[TGNode], target: Optional[TGNode]) -> None:
@@ -985,8 +991,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
     @staticmethod
     def __pet_node_order(node: TGNode) -> Tuple[int, ...]:
-        """A deterministic order of TGNodes by their PET node id "<file>:<cu>", numerically."""
-        return tuple(int(part) if part.isdigit() else -1 for part in str(node.pet_node_id).split(":"))
+        """A deterministic order of TGNodes by their PET node id "<file>:<cu>", numerically, and by
+        creation among nodes of the same PET node (set iteration order would follow addresses)."""
+        return tuple(int(part) if part.isdigit() else -1 for part in str(node.pet_node_id).split(":")) + (
+            node.creation_index,
+        )
 
     def __break_cycles(self) -> None:
         # search for cycles in each function and replace them with two distinct iteraions
@@ -2407,19 +2416,24 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         nested. A side entry y of the region of n (a node of the region with a predecessor p
         outside of it) is resolved in one of two ways:
 
-        - short-circuit edge: if p also reaches y through a few CUs without calls or loops (the
+        - short-circuit edge: if p also reaches y through a few nodes without loops (the
           remaining parts of the condition), the edge p -> y is removed, so that `a && b` becomes
           the chain a -> b. The paths through the graph keep their nodes, except that these
           condition parts now count as always evaluated - an over-approximation of the executed
           code, which loses no dependency.
         - tail duplication: otherwise, if the nodes from y to the region's exit are few and
-          contain no loop or call, y is split: a copy takes over the edges from outside and keeps
+          contain no loop, y is split: a copy takes over the edges from outside and keeps
           the outgoing edges, and its successors become side entries in turn. Splitting does not
           change the paths through the graph. The copies are made before contexts exist, so a
           copied block becomes a second copy of its context, as copies of loop iterations do.
 
         Side entries matching neither are left as they are (the branching markers of their region
-        may then not nest)."""
+        may then not nest).
+
+        The short-circuit test is plain reachability, so it also applies to other edges into a shared
+        tail (a switch fallthrough, a goto). The code such an edge skipped then counts as executed on
+        that path as well: contexts and their dependencies are unaffected, the exclusivity of the
+        branch arms is not preserved."""
         removed_edges = 0
         copied = 0
         unresolved = 0
@@ -2888,12 +2902,15 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         self.add_node(exit)
 
         copied_nodes: Dict[TGNode, TGNode] = dict()
-        function_body_nodes = self.get_descendants(inlined_function) + [inlined_function]
+        # copied in a deterministic order, which gives the copies deterministic creation indices
+        function_body_nodes = sorted(
+            self.get_descendants(inlined_function) + [inlined_function], key=self.__pet_node_order
+        )
         # copy function body nodes
         for fbn in function_body_nodes:
             fbn_copy = copy.deepcopy(fbn)
             copied_nodes[fbn] = fbn_copy
-            self.graph.add_node(fbn_copy)
+            self.add_node(fbn_copy)
         # copy function body edges
         for fbn in function_body_nodes:
             for succ in self.get_successors(fbn):
@@ -4287,10 +4304,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         again instead of reusing state of __insert_data_dependencies_from_files, so that the
         TaskGraph and therefore pattern detection are not affected by the export. The mapping is
         the one of __insert_data_dependencies_from_files: the same context lookup and the same
-        same-state rule, so the returned pairs are exactly the edges it registers for RAW and WAR
-        (and the edges it would register for WAW). INIT records have no other end; only their
-        first-column end is mapped. Records with an end without a state are skipped (they cannot
-        be attributed to a calling context), as are static ones.
+        same-state rule, but without its approximate fallback (_ContextFallback): an end whose state no
+        context at its location carries stays unmapped here, so that the side effect analysis reports
+        it as such instead of attributing it to a calling context it may not belong to. The returned
+        pairs are therefore the exactly attributed subset of the edges registered for RAW and WAR (and
+        of those it would register for WAW), without the dependencies of a context on itself. INIT
+        records have no other end; only their first-column end is mapped. Records with an end without
+        a state are skipped (they cannot be attributed to a calling context), as are static ones.
         """
         dependencies = self.__read_dependencies_from_files(self.dynamic_dependency_file, self.static_dependency_file)
         dependencies = self.__apply_dependency_overwrites(dependencies)
