@@ -44,11 +44,23 @@ double sum_guarded(const double *a, int n) {
   return s;
 }
 
+// the inner loop variable is re-initialised in each outer iteration: its
+// dependencies never cross an outer iteration
+double nested(const double *a, int n) {
+  double s = 0.0;
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < 4; j++) {
+      s += a[(i + j) % n];
+    }
+  }
+  return s;
+}
+
 int main() {
   double a[8];
   for (int k = 0; k < 8; k++) {
     a[k] = k;
   }
-  double r = sum(a, 8) + sum_guarded(a, 8);
+  double r = sum(a, 8) + sum_guarded(a, 8) + nested(a, 8);
   return r > 0.0 ? 0 : 1;
 }

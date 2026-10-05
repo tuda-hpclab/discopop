@@ -22,6 +22,7 @@ SUM = "_Z3sumPKdi"
 LS = [SUM + "_loopstate" + str(i) for i in range(3)]
 GUARDED = "_Z11sum_guardedPKdi"
 GLS = [GUARDED + "_loopstate" + str(i) for i in range(3)]
+NESTED_LS = "_Z6nestedPKdi_loopstate"
 
 
 class TestMethods(unittest.TestCase):
@@ -102,17 +103,23 @@ class TestMethods(unittest.TestCase):
                     self.assertRegex(source, r"^\d+@\d+$")
 
     def test_loop_carried_accumulation_crosses_one_iteration(self):
-        # s += t (line 14): read of s <- write of s in the previous iteration, or s = 0.0 (line 9)
-        expected = {(LS[i], LS[(i - 1) % 3]) for i in range(3)} | {(LS[i], SUM) for i in range(3)}
+        # s += t (line 14): read of s <- write of s in the previous iteration
         self.assertEqual(self.state_pairs(14, "RAW", 14, "s"), {(LS[i], LS[(i - 1) % 3]) for i in range(3)})
-        self.assertEqual(self.state_pairs(14, "RAW", 14, "s") | self.state_pairs(14, "RAW", 9, "s"), expected)
+        # s = 0.0 (line 9) is only the source in the first iteration, the later ones read the loop's write
+        from_init = self.state_pairs(14, "RAW", 9, "s")
+        self.assertEqual(len(from_init), 1)
+        self.assertIn(next(iter(from_init))[0], LS)
+        self.assertEqual(next(iter(from_init))[1], SUM)
         # the write of s follows its read in the same iteration
         self.assertEqual(self.state_pairs(14, "WAR", 14, "s"), {(LS[i], LS[i]) for i in range(3)})
 
     def test_conditional_accumulation_crosses_one_iteration(self):
         # c += 1.0 (line 16), executed in the iterations with t > 4.0 (i >= 3, consecutive)
         self.assertEqual(self.state_pairs(16, "RAW", 16, "c"), {(LS[i], LS[(i - 1) % 3]) for i in range(3)})
-        self.assertEqual(self.state_pairs(16, "RAW", 10, "c"), {(LS[i], SUM) for i in range(3)})
+        # c = 0.0 (line 10) is only the source in the first of them
+        from_init = self.state_pairs(16, "RAW", 10, "c")
+        self.assertEqual(len(from_init), 1)
+        self.assertEqual(next(iter(from_init))[1], SUM)
 
     def test_intra_iteration_temporary_stays_in_its_iteration(self):
         # t = a[i] * 2.0 (line 12); observe(i) (line 13); s += t (line 14); if (t > 4.0) (line 15)
@@ -139,6 +146,27 @@ class TestMethods(unittest.TestCase):
         # double t = a[i] (line 40); observe_or_throw(i) (line 41, invoke); s += t (line 42)
         self.assertEqual(self.state_pairs(42, "RAW", 40, "t"), {(GLS[i], GLS[i]) for i in range(3)})
         self.assertEqual(self.state_pairs(42, "RAW", 42, "s"), {(GLS[i], GLS[(i - 1) % 3]) for i in range(3)})
+
+    def test_reinitialised_inner_loop_variable_stays_in_its_outer_iteration(self):
+        # nested (line 49): for i (line 51) { for (int j = 0; j < 4; j++) (line 52) { ... } }
+        # "j = 0" replaces the "j++" of the previous outer iteration as the source of the header's read
+        # (anti and output dependencies of j do cross it: the last "j < 4" / "j++" precede the next "j = 0")
+        pairs = {
+            (r[1], r[4], r[2]) for r in self.records if r[0] == 52 and r[3] == 52 and r[5] == "j" and r[2] == "RAW"
+        }
+        self.assertGreater(len(pairs), 0)
+        crossing_inner = 0
+        for sink_label, source_label, dep_type in pairs:
+            with self.subTest(sink=sink_label, source=source_label, type=dep_type):
+                self.assertTrue(sink_label.startswith(NESTED_LS) and source_label.startswith(NESTED_LS))
+                # loopstate<outer bucket><inner bucket>, 3 = outside of the loop
+                outer_sink, inner_sink = sink_label[len(NESTED_LS) :]
+                outer_source, inner_source = source_label[len(NESTED_LS) :]
+                self.assertEqual(outer_sink, outer_source)
+                if inner_sink != inner_source:
+                    crossing_inner += 1
+        # the inner loop's own iterations are crossed (j++ -> j < 4, j++ -> j++)
+        self.assertGreater(crossing_inner, 0)
 
 
 if __name__ == "__main__":

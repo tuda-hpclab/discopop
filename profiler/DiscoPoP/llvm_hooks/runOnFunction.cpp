@@ -350,12 +350,16 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     // sink BB, before the sink, or which have no source instruction (INIT):
     // both ends get the state of the sink BB's execution
     map<BasicBlock *, set<string>> conditionalBBDepMap;
-    // source BB -> sink BB -> dependencies whose source lies in an earlier
-    // execution of the source BB (or of the sink BB itself): the source gets
-    // the state of the most recent execution of the source BB, recorded in a
-    // per-invocation semaphore, the sink the state of the sink BB's execution.
-    // Only reported once the source BB was executed in the current invocation.
-    map<BasicBlock *, map<BasicBlock *, set<string>>> conditionalBBPairDepMap;
+    // source BB -> variable -> sink BB -> dependencies whose source lies in an
+    // earlier execution of the source BB (or of the sink BB itself). Per source
+    // BB and variable, a per-invocation semaphore holds the state of the most
+    // recent execution of the source BB, and is reset when another BB writes
+    // the variable: that write replaces the source, so the dependency does not
+    // exist anymore (e.g. "j = 0" before an inner loop ends the dependency of
+    // the loop's header on the "j++" of its previous execution). The source
+    // gets the semaphore's state, the sink the state of the sink BB's
+    // execution. Only reported while the semaphore is set.
+    map<BasicBlock *, map<Value *, map<BasicBlock *, set<string>>>> conditionalBBPairDepMap;
 
     //auto &DT = getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
     llvm::FunctionAnalysisManager &fam = MAM.getResult<FunctionAnalysisManagerModuleProxy>(*module_).getManager();
@@ -399,14 +403,6 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
         }
         conditionalBBDepMap[Src->getParent()].insert(DG.edgeToInstructionBasedDPDep(edge, staticValueNameToMemRegIDMap));
       } else {
-        if (!conditionalBBPairDepMap.count(Dst->getParent())) {
-          map<BasicBlock *, set<string>> tmp;
-          conditionalBBPairDepMap[Dst->getParent()] = tmp;
-        }
-        if (!conditionalBBPairDepMap[Dst->getParent()].count(Src->getParent())) {
-          set<string> tmp;
-          conditionalBBPairDepMap[Dst->getParent()][Src->getParent()] = tmp;
-        }
         // Prevent reporting of false-positive WAW Dependencies due to alloca movement from e.g. loops to function entry
         bool insertDep = true;
         if(Dst == Src){ // check if instruciton are the same
@@ -422,7 +418,7 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
         }
 
         if(insertDep){
-          conditionalBBPairDepMap[Dst->getParent()][Src->getParent()].insert(
+          conditionalBBPairDepMap[Dst->getParent()][V][Src->getParent()].insert(
             DG.edgeToInstructionBasedDPDep(edge, staticValueNameToMemRegIDMap));
         }
       }
@@ -466,59 +462,114 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
     }
 
     // Add observation of in-order execution of pairs of basic blocks
-    for (auto pair1 : conditionalBBPairDepMap) {
-      // Alloca and init semaphore var for BB
-#if LLVM_VERSION_MAJOR >= 22
-      auto AI = new AllocaInst(Int32, 0, "__dp_bb", F.getEntryBlock().getFirstNonPHI()->getNextNode()->getIterator());
-      new StoreInst(ConstantInt::get(Int32, 0), AI, false, AI->getNextNode()->getIterator());
-#else
-      auto AI = new AllocaInst(Int32, 0, "__dp_bb", F.getEntryBlock().getFirstNonPHI()->getNextNonDebugInstruction());
-      new StoreInst(ConstantInt::get(Int32, 0), AI, false, AI->getNextNonDebugInstruction());
-#endif
-
-      for (auto pair2 : pair1.second) {
-        // Insert check for semaphore
-        Instruction *insertionPoint = getHybridReportInsertionPoint(pair2.first);
-
-#if LLVM_VERSION_MAJOR >= 22
-        auto LI = new LoadInst(Int32, AI, Twine(""), false, insertionPoint->getIterator());
-        CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint->getIterator());
-#else
-        auto LI = new LoadInst(Int32, AI, Twine(""), false, insertionPoint);
-        CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint);
-#endif
-
-        // ---- Insert deps into string ----
-        if (bbDepCount)
-          bbDepString += "/";
-        bbDepString += to_string(bbDepCount);
-        bbDepString += "=";
-        bool first = true;
-        for (auto dep : pair2.second) {
-          if (!first)
-            bbDepString += ",";
-          bbDepString += dep;
-          first = false;
-        }
-        // ----------------------------------
-        ++bbDepCount;
+    // the basic blocks writing each variable which is the source of a pair dependency
+    map<Value *, set<BasicBlock *>> writersOfVariable;
+    for (auto &sourceBlock : conditionalBBPairDepMap) {
+      for (auto &variable : sourceBlock.second) {
+        writersOfVariable[variable.first];
       }
-      // Insert semaphore update to the current callpath state (+1, so that 0
-      // keeps meaning "not executed"). Placed behind the reports of this
-      // block, so that a dependency on an earlier execution of the same block
-      // sees the state of that execution.
-      if (isa<ReturnInst>(pair1.first->getTerminator())) {
+    }
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        if (StoreInst *store = dyn_cast<StoreInst>(&I)) {
+          auto writers = writersOfVariable.find(store->getPointerOperand());
+          if (writers != writersOfVariable.end()) {
+            writers->second.insert(&BB);
+          }
+        }
+      }
+    }
+    // one semaphore per (source BB, variable)
+    map<pair<BasicBlock *, Value *>, AllocaInst *> semaphores;
+    for (auto &sourceBlock : conditionalBBPairDepMap) {
+      for (auto &variable : sourceBlock.second) {
+#if LLVM_VERSION_MAJOR >= 22
+        auto AI = new AllocaInst(Int32, 0, "__dp_bb", F.getEntryBlock().getFirstNonPHI()->getNextNode()->getIterator());
+        new StoreInst(ConstantInt::get(Int32, 0), AI, false, AI->getNextNode()->getIterator());
+#else
+        auto AI = new AllocaInst(Int32, 0, "__dp_bb", F.getEntryBlock().getFirstNonPHI()->getNextNonDebugInstruction());
+        new StoreInst(ConstantInt::get(Int32, 0), AI, false, AI->getNextNonDebugInstruction());
+#endif
+        semaphores[{sourceBlock.first, variable.first}] = AI;
+      }
+    }
+    // sink BB -> (semaphore, dependencies)
+    map<BasicBlock *, vector<pair<AllocaInst *, const set<string> *>>> reportsOfBlock;
+    for (auto &sourceBlock : conditionalBBPairDepMap) {
+      for (auto &variable : sourceBlock.second) {
+        for (auto &sinkBlock : variable.second) {
+          reportsOfBlock[sinkBlock.first].push_back(
+              {semaphores[{sourceBlock.first, variable.first}], &sinkBlock.second});
+        }
+      }
+    }
+    // At the end of each basic block, in this order: report the pair
+    // dependencies whose sinks it holds, reset the semaphores of the variables
+    // it writes (of other source BBs), record its own state in its semaphores.
+    // Reporting first lets a dependency on an earlier execution of the same
+    // block see the state of that execution.
+    for (BasicBlock &BB : F) {
+      Instruction *insertionPoint = getHybridReportInsertionPoint(&BB);
+      auto reports = reportsOfBlock.find(&BB);
+      if (reports != reportsOfBlock.end()) {
+        for (auto &report : reports->second) {
+#if LLVM_VERSION_MAJOR >= 22
+          auto LI = new LoadInst(Int32, report.first, Twine(""), false, insertionPoint->getIterator());
+          CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint->getIterator());
+#else
+          auto LI = new LoadInst(Int32, report.first, Twine(""), false, insertionPoint);
+          CallInst::Create(ReportBBPair, ArrayRef<Value *>({LI, ConstantInt::get(Int32, bbDepCount)}), "", insertionPoint);
+#endif
+          // ---- Insert deps into string ----
+          if (bbDepCount)
+            bbDepString += "/";
+          bbDepString += to_string(bbDepCount);
+          bbDepString += "=";
+          bool first = true;
+          for (auto &dep : *report.second) {
+            if (!first)
+              bbDepString += ",";
+            bbDepString += dep;
+            first = false;
+          }
+          // ----------------------------------
+          ++bbDepCount;
+        }
+      }
+      if (isa<ReturnInst>(BB.getTerminator())) {
         // no later execution of a sink in this invocation
         continue;
       }
-      Instruction *semaphoreUpdatePoint = getHybridReportInsertionPoint(pair1.first);
+      for (auto &writers : writersOfVariable) {
+        if (writers.second.count(&BB) == 0) {
+          continue;
+        }
+        for (auto &semaphore : semaphores) {
+          if (semaphore.first.second == writers.first && semaphore.first.first != &BB) {
 #if LLVM_VERSION_MAJOR >= 22
-      auto BBStateCall = CallInst::Create(BBState, "", semaphoreUpdatePoint->getIterator());
-      new StoreInst(BBStateCall, AI, false, semaphoreUpdatePoint->getIterator());
+            new StoreInst(ConstantInt::get(Int32, 0), semaphore.second, false, insertionPoint->getIterator());
 #else
-      auto BBStateCall = CallInst::Create(BBState, "", semaphoreUpdatePoint);
-      new StoreInst(BBStateCall, AI, false, semaphoreUpdatePoint);
+            new StoreInst(ConstantInt::get(Int32, 0), semaphore.second, false, insertionPoint);
 #endif
+          }
+        }
+      }
+      auto sourceBlock = conditionalBBPairDepMap.find(&BB);
+      if (sourceBlock != conditionalBBPairDepMap.end()) {
+        // the current callpath state + 1, so that 0 keeps meaning "no source"
+#if LLVM_VERSION_MAJOR >= 22
+        auto BBStateCall = CallInst::Create(BBState, "", insertionPoint->getIterator());
+#else
+        auto BBStateCall = CallInst::Create(BBState, "", insertionPoint);
+#endif
+        for (auto &variable : sourceBlock->second) {
+#if LLVM_VERSION_MAJOR >= 22
+          new StoreInst(BBStateCall, semaphores[{&BB, variable.first}], false, insertionPoint->getIterator());
+#else
+          new StoreInst(BBStateCall, semaphores[{&BB, variable.first}], false, insertionPoint);
+#endif
+        }
+      }
     }
 
     if (DumpToDot) {
@@ -536,12 +587,14 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
       }
 
       errs() << "--- Conditional BB-Pair Dependences:\n";
-      for (auto pair1 : conditionalBBPairDepMap) {
-        for (auto pair2 : pair1.second) {
-          errs() << pair1.first->getName() << "-";
-          errs() << pair2.first->getName() << ":\n";
-          for (auto s : pair2.second)
-            errs() << "\t" << s << "\n";
+      for (auto &pair1 : conditionalBBPairDepMap) {
+        for (auto &variable : pair1.second) {
+          for (auto &pair2 : variable.second) {
+            errs() << pair1.first->getName() << "-";
+            errs() << pair2.first->getName() << ":\n";
+            for (auto s : pair2.second)
+              errs() << "\t" << s << "\n";
+          }
         }
       }
     }
@@ -615,10 +668,12 @@ bool DiscoPoP::runOnFunction(Function &F, ModuleAnalysisManager &MAM) {
         *staticDependencyFile << s << "\n";
       }
     }
-    for (auto pair1 : conditionalBBPairDepMap) {
-      for (auto pair2 : pair1.second) {
-        for (auto s : pair2.second) {
-          *staticDependencyFile << s << "\n";
+    for (auto &pair1 : conditionalBBPairDepMap) {
+      for (auto &variable : pair1.second) {
+        for (auto &pair2 : variable.second) {
+          for (auto s : pair2.second) {
+            *staticDependencyFile << s << "\n";
+          }
         }
       }
     }
