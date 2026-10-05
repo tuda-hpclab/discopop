@@ -479,10 +479,17 @@ def test_start_and_end_markers_are_balanced_on_every_path(program: str, tmp_path
 
 # program -> {line: reason} of the dependency ends the oracle accepts without a context of their
 # state at their line, because the profiler records them under a state of another callpath
-# program -> {line: reason} of record ends the profiler attributes to a wrong callpath state. Empty since
-# the profiler fixes of 098187f1 (indirect calls, caught exceptions); list a new deviation here only with
-# its profiler cause
-_ORACLE_KNOWN_DEVIATIONS: Dict[str, Dict[str, str]] = {}
+# program -> {line: reason} of record ends the profiler attributes to a wrong callpath state, each with its
+# profiler cause (the entries for indirect calls and caught exceptions were removed with 098187f1)
+_ORACLE_KNOWN_DEVIATIONS: Dict[str, Dict[str, str]] = {
+    "exitinloop": {
+        # profiler: leaving a loop through `return` executes no loop exit transition, so the shared return
+        # block of the function records under the state of the loop iteration it returned from (the
+        # function's return then restores the caller's state). Detection is unaffected: such ends are
+        # mapped by _ContextFallback, and loops left by return are rejected (cut exits).
+        "1:26": "find's return block, reached by `return i;` from inside the loop, records under the loop state",
+    },
+}
 
 
 def _instruction_lines(profile: Path) -> Dict[int, str]:
@@ -1270,9 +1277,10 @@ def _record_ends_at_cut_lines(tg: TaskGraph, profile: Path) -> Dict[str, int]:
 _RECORD_ENDS_AT_CUT_LINES: Dict[str, Dict[str, int]] = {
     # exit() never runs
     "breakexit": {"early exits": 0, "exception unwinding": 0},
-    # exit() never runs, but the `return i;` inside find's loop does (the stack accesses of i and
-    # of the return value, without states)
-    "exitinloop": {"early exits": 3, "exception unwinding": 0},
+    # exit() never runs, but the `return i;` inside find's loop does (the stack accesses of i and of the
+    # return value; since the hybrid-analysis records carry states, one end per state of the returning
+    # iteration)
+    "exitinloop": {"early exits": 9, "exception unwinding": 0},
     # the catch handler runs once (g_caught, under the state work threw from) and the landing pads
     # copy the exception object (exn.slot, ehselector.slot)
     "trycatch": {"early exits": 0, "exception unwinding": 6},
