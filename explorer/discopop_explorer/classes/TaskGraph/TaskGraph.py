@@ -140,6 +140,14 @@ STATE_MARKER_PATTERN = re.compile(r"@\d+")
 TGConstructionQueueElement = Tuple[Optional[TGNode], Union[PETNode, VisitorMarker]]  # (Predecessor, current element)
 
 
+def _is_stack_local_record(var_info: str) -> bool:
+    """Whether a "<name>(<memory region>)" entry of a dependency record names a static memory region
+    S<n> of the profiler's hybrid analysis, i.e. a function-local scalar that does not escape its
+    function."""
+    region = var_info.rpartition("(")[2]
+    return region.startswith("S")
+
+
 class MappedDependencyRecord(NamedTuple):
     """A dynamic dependency record of the profiler with its ends mapped to work contexts (see
     TaskGraph.map_dynamic_dependency_records). An end is (instruction id, state id, line id); the
@@ -4861,7 +4869,16 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     first_contexts = contexts_of(first_location, first_state_id)
                     for other_location, other_location_deps in first_state_deps.items():
                         for other_state_id, var_infos in other_location_deps.items():
-                            var_names = list(dict.fromkeys(v.split("(")[0] for v in var_infos))
+                            # memory regions S<n>: function-local scalars of the profiler's hybrid
+                            # analysis, which never escape their function (address not taken or
+                            # passed on), e.g. the local copy of a pointer parameter. They carry the
+                            # variable's name, so they would pass for an access to the parameter's
+                            # pointee, but are no effect outside of their function.
+                            var_names = list(
+                                dict.fromkeys(v.split("(")[0] for v in var_infos if not _is_stack_local_record(v))
+                            )
+                            if len(var_names) == 0:
+                                continue
                             if clean_dep_type == "INIT":
                                 for var_name in var_names:
                                     records.append(

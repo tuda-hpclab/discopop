@@ -102,6 +102,29 @@ def test_records_map_both_ends_and_keep_only_dynamic_ones(
     assert (record.first_contexts, record.other_contexts) == ([a], [b])
 
 
+def test_stack_local_records_with_states_are_not_exported(
+    build_task_graph: Any, build_pet_graph: Any, tmp_path: Path
+) -> None:
+    # the hybrid analysis records the local copy of a pointer parameter p under the name p, with
+    # callpath states; it must not pass for an access to the pointee of p
+    a, b = WorkContext(), WorkContext()
+    tg = _task_graph_with_mapping(
+        build_task_graph,
+        build_pet_graph,
+        tmp_path,
+        [
+            "2@7 NOM  RAW 1@8|p(S12) RAW 1@8|g(123)",
+            "4@7 NOM  INIT *|p(S-3)",
+            "START 1:1",
+        ],
+        {("2", "7"): {a}, ("1", "8"): {b}, ("4", "7"): {a}},
+    )
+
+    records = tg.map_dynamic_dependency_records()
+
+    assert [(r.dep_type, r.var_name) for r in records] == [("RAW", "g")]
+
+
 def test_init_maps_only_its_first_end(build_task_graph: Any, build_pet_graph: Any, tmp_path: Path) -> None:
     a = WorkContext()
     tg = _task_graph_with_mapping(
