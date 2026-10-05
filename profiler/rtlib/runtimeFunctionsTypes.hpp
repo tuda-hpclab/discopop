@@ -175,42 +175,84 @@ struct ReportedBBHasher {
 typedef std::unordered_set<ReportedBB, ReportedBBHasher> ReportedBBSet;
 
 // Collects the reported executions. A reporting basic block executes very
-// often, mostly in a few recurring pairs of states (e.g. the iteration buckets
-// of its loop), so the last few distinct pairs of each basic block are kept in
-// a small cache in front of the hash set, which saves the hashing for repeated
-// executions in the same states.
+// often, but mostly in pairs of states it was already reported with, so the
+// common case is a lookup of an existing entry. The executions are kept in an
+// open-addressing hash table of plain entries (linear probing, power-of-two
+// capacity, at most half full), which makes that lookup much cheaper than one
+// in a std::unordered_set. The entries are only needed as a set at
+// termination, see get_executions.
 class ReportedBBRecorder {
 public:
+  ReportedBBRecorder() : slots(INITIAL_CAPACITY) {}
+
   inline void record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
-    if (bb_index >= recent.size()) {
-      recent.resize(((std::size_t)bb_index) + 1);
-    }
-    RecentStates &cache = recent[bb_index];
     const std::uint64_t states = (((std::uint64_t)source_state) << 32) | sink_state;
-    for (std::size_t i = 0; i < cache.used; ++i) {
-      if (cache.states[i] == states) {
+    std::size_t mask = slots.size() - 1;
+    for (std::size_t pos = slot_of(bb_index, states) & mask;; pos = (pos + 1) & mask) {
+      Slot &slot = slots[pos];
+      if (!slot.used) {
+        slot.used = true;
+        slot.bb_index = bb_index;
+        slot.states = states;
+        if (2 * (++count) > slots.size()) {
+          grow();
+        }
+        return;
+      }
+      if (slot.states == states && slot.bb_index == bb_index) {
         return;
       }
     }
-    executions.insert(ReportedBB{bb_index, source_state, sink_state});
-    cache.states[cache.next] = states;
-    cache.next = (cache.next + 1) % RECENT_STATES;
-    if (cache.used < RECENT_STATES) {
-      ++cache.used;
+  }
+
+  std::size_t size() const { return count; }
+
+  ReportedBBSet get_executions() const {
+    ReportedBBSet executions;
+    executions.reserve(count);
+    for (const Slot &slot : slots) {
+      if (slot.used) {
+        executions.insert(
+            ReportedBB{slot.bb_index, (std::uint32_t)(slot.states >> 32), (std::uint32_t)(slot.states & 0xFFFFFFFF)});
+      }
+    }
+    return executions;
+  }
+
+private:
+  static constexpr std::size_t INITIAL_CAPACITY = 1024;
+  struct Slot {
+    std::uint64_t states = 0;
+    std::uint32_t bb_index = 0;
+    bool used = false;
+  };
+
+  static inline std::size_t slot_of(std::uint32_t bb_index, std::uint64_t states) {
+    std::uint64_t h = states * 0x9E3779B97F4A7C15ULL ^ (((std::uint64_t)bb_index) * 0xC2B2AE3D27D4EB4FULL);
+    h ^= h >> 29;
+    h *= 0xBF58476D1CE4E5B9ULL;
+    h ^= h >> 32;
+    return (std::size_t)h;
+  }
+
+  void grow() {
+    std::vector<Slot> old(slots.size() * 2);
+    old.swap(slots);
+    const std::size_t mask = slots.size() - 1;
+    for (const Slot &slot : old) {
+      if (!slot.used) {
+        continue;
+      }
+      std::size_t pos = slot_of(slot.bb_index, slot.states) & mask;
+      while (slots[pos].used) {
+        pos = (pos + 1) & mask;
+      }
+      slots[pos] = slot;
     }
   }
 
-  const ReportedBBSet &get_executions() const { return executions; }
-
-private:
-  static constexpr std::size_t RECENT_STATES = 4;
-  struct RecentStates {
-    std::uint64_t states[RECENT_STATES] = {0, 0, 0, 0};
-    std::uint8_t used = 0;
-    std::uint8_t next = 0;
-  };
-  std::vector<RecentStates> recent;
-  ReportedBBSet executions;
+  std::vector<Slot> slots;
+  std::size_t count = 0;
 };
 // End HA
 

@@ -117,24 +117,25 @@ TEST_F(HybridAnalysisBBDepsTest, testRepeatedExecutionsInTheSameStatesAreRecorde
 }
 
 TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsEveryDistinctExecution) {
-  // more distinct state pairs per basic block than the recorder caches, cycled
-  // repeatedly and interleaved with another basic block
+  // repeated executions in recurring states, interleaved between basic blocks,
+  // and enough distinct ones to make the recorder's table grow several times
   __dp::ReportedBBRecorder recorder;
+  __dp::ReportedBBSet expected;
   for (int round = 0; round < 3; ++round) {
-    for (std::uint32_t state = 0; state < 6; ++state) {
+    for (std::uint32_t state = 0; state < 3000; ++state) {
       recorder.record(2, state, state + 1);
-      recorder.record(5, 9, state);
+      recorder.record(5, 9, state % 7);
+      if (round == 0) {
+        expected.insert(__dp::ReportedBB{2, state, state + 1});
+        expected.insert(__dp::ReportedBB{5, 9, state % 7});
+      }
     }
   }
-  // state pair (0, 0) must not be mistaken for an empty cache entry
-  recorder.record(7, 0, 0);
+  // the pair of states (0, 0) of basic block 0 is an ordinary entry
+  recorder.record(0, 0, 0);
+  expected.insert(__dp::ReportedBB{0, 0, 0});
 
-  __dp::ReportedBBSet expected;
-  for (std::uint32_t state = 0; state < 6; ++state) {
-    expected.insert(__dp::ReportedBB{2, state, state + 1});
-    expected.insert(__dp::ReportedBB{5, 9, state});
-  }
-  expected.insert(__dp::ReportedBB{7, 0, 0});
+  EXPECT_EQ(recorder.size(), expected.size());
   EXPECT_EQ(recorder.get_executions(), expected);
 }
 
