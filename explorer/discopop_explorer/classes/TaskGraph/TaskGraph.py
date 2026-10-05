@@ -4547,6 +4547,19 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             str(dependency_sink_line) + " <- " + str(dependency_source_line)
                                         )
 
+                            # The Dependency objects of the record are shared by all pairs of contexts
+                            # it is registered between, one per variable and set of the values that
+                            # depend on the pair. Nothing modifies a registered Dependency, and a
+                            # Context stores (context, dependency) pairs, so the registered
+                            # dependencies are the same as with one object per pair. One object per
+                            # pair of contexts and variable used to dominate the memory of the
+                            # TaskGraph on large programs (4.2 million, several GB on NPB BT).
+                            # Not shared if two entries parse to the same variable, as their shared
+                            # object would be registered only once per pair of contexts.
+                            record_dependencies: Optional[
+                                Dict[Tuple[str, Optional[MemoryRegion], DepOrigin, object, object], Dependency]
+                            ] = ({} if len(set(parsed_var_infos)) == len(parsed_var_infos) else None)
+
                             def make_dependency(
                                 var_name: str,
                                 memory_region: Optional[MemoryRegion],
@@ -4554,6 +4567,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 carried_by_loop: Optional[object] = None,
                                 carried_by_pet_loops: Optional[FrozenSet[str]] = None,
                             ) -> Dependency:
+                                key = (var_name, memory_region, origin, carried_by_loop, carried_by_pet_loops)
+                                if record_dependencies is not None:
+                                    shared = record_dependencies.get(key)
+                                    if shared is not None:
+                                        return shared
                                 dependency = Dependency(type=EdgeType.DATA)
                                 dependency.dtype = dep_type_enum_obj
                                 dependency.var_name = var_name
@@ -4564,6 +4582,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 dependency.approximate_context = approximate_context
                                 dependency.carried_by_loop = carried_by_loop
                                 dependency.carried_by_pet_loops = carried_by_pet_loops
+                                if record_dependencies is not None:
+                                    record_dependencies[key] = dependency
                                 return dependency
 
                             # Records of the dynamic file without states on both ends (stack variables,

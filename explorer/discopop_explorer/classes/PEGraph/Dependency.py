@@ -54,7 +54,25 @@ class Dependency:
     carried_by_pet_loops: Optional[FrozenSet[str]] = None
 
     def __init__(self, type: EdgeType):
+        # Every attribute is assigned here, in one fixed order, although most have class-level
+        # defaults: CPython keeps the attributes of instances whose attributes were added in the
+        # same order in a compact, key-sharing layout. Setting the defaulted attributes only later,
+        # in an order that differs between the creators (PEGraphConstructionUtilities, the
+        # TaskGraph's dependency insertion), materializes a full dict per instance, which more than
+        # doubles the size of a Dependency (568 -> 1224 bytes).
         self.etype = type
+        self.dtype = None
+        self.var_name = None
+        self.memory_region = None
+        self.source_line = None
+        self.sink_line = None
+        self.intra_iteration = False
+        self.intra_iteration_level = -1
+        self.origin = None
+        self.is_gep_result_dependency = False
+        self.approximate_context = False
+        self.carried_by_loop = None
+        self.carried_by_pet_loops = None
         self.metadata_intra_iteration_dep = []
         self.metadata_inter_iteration_dep = []
         self.metadata_intra_call_dep = []
