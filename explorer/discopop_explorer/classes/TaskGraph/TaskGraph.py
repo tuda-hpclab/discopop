@@ -27,7 +27,7 @@ from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.MemoryRegion import MemoryRegion
 from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.PEGraph.CUNode import CUNode
-from discopop_explorer.classes.PEGraph.Dependency import CARRIED_OUTSIDE, Dependency
+from discopop_explorer.classes.PEGraph.Dependency import CARRIED_OUTSIDE, CarriedByLoop, Dependency
 
 from discopop_explorer.classes.TaskGraph.Branching.TGEndBranchNode import TGEndBranchNode
 from discopop_explorer.classes.TaskGraph.Branching.TGEndBranchParentNode import TGEndBranchParentNode
@@ -161,10 +161,13 @@ class _ContextFallback:
     dependency is unsound for parallelism detection, since a missing loop-carried dependency
     allows a false do-all or reduction suggestion.
 
-    The end is mapped to the work contexts at the location below the closest common scope: the
-    contexts carrying the state itself (or their closest ancestor) whose subtree contains contexts
-    at the location; if there is none, to all contexts at the location. Both over-approximate.
-    The (location, state) pairs mapped this way are collected in `approximate`."""
+    The end is mapped to the work contexts at the location below the closest common scope: for
+    every context carrying the state, the closest of it and its ancestors whose subtree contains
+    contexts at the location (a state on several copies - see the ambiguous states of
+    __assign_state_ids - contributes the contexts below each copy); if there is none, to all
+    contexts at the location. Both over-approximate. The (location, state) pairs mapped this way
+    are collected in `approximate`, those resolved by scope in `scoped` and the others in
+    `location_only`; results are cached per pair."""
 
     def __init__(self, contexts: List[Context]) -> None:
         self.contexts_by_state: Dict[int, List[Context]] = {}
@@ -173,8 +176,9 @@ class _ContextFallback:
                 self.contexts_by_state.setdefault(int(state_id), []).append(ctx)
         self.ancestors: Dict[Context, Set[Context]] = {}
         self.approximate: Set[Tuple[str, int]] = set()
-        self.location_only = 0
-        self.scoped = 0
+        self.scoped: Set[Tuple[str, int]] = set()
+        self.location_only: Set[Tuple[str, int]] = set()
+        self.resolved: Dict[Tuple[str, int], Set[Context]] = {}
 
     def _ancestors(self, ctx: Context) -> Set[Context]:
         cached = self.ancestors.get(ctx)
@@ -185,19 +189,29 @@ class _ContextFallback:
         return cached
 
     def resolve(self, location: str, state_id: int, contexts: Set[Context]) -> Set[Context]:
-        self.approximate.add((location, state_id))
+        key = (location, state_id)
+        cached = self.resolved.get(key)
+        if cached is not None:
+            return set(cached)
+        self.approximate.add(key)
+        result: Set[Context] = set()
         for anchor in self.contexts_by_state.get(state_id, []):
             scope: Optional[Context] = anchor
             depth = 0
             while scope is not None and depth < 10000:
                 below = {ctx for ctx in contexts if scope in self._ancestors(ctx)}
                 if len(below) > 0:
-                    self.scoped += 1
-                    return below
+                    result |= below
+                    break
                 scope = scope.parent_context
                 depth += 1
-        self.location_only += 1
-        return set(contexts)
+        if len(result) > 0:
+            self.scoped.add(key)
+        else:
+            self.location_only.add(key)
+            result = set(contexts)
+        self.resolved[key] = result
+        return set(result)
 
 
 class TaskGraph(Plottable, object):  # type: ignore[misc]
@@ -1183,15 +1197,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         iteration_exit_points[0].position,
                         entry_node.pet_node_id,
                     )
-                    iem_list: List[TGEndIterationNode] = [iem]
                     self.add_node(iem)
                     for itexp in iteration_exit_points:
                         self.add_edge(itexp, iem)
 
-                    # redirect edge from entry -> end_loop to iteration_exit markers -> end_loop
+                    # redirect edge from entry -> end_loop to iteration_exit marker -> end_loop
                     self.graph.remove_edge(entry_node, lem)
-                    for iem in iem_list:
-                        self.add_edge(iem, lem)
+                    self.add_edge(iem, lem)
 
                 else:
                     logger.warning(
@@ -3300,18 +3312,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                                         and check_sink_state_id != "NO_STATE"
                                                     ) or (sink_state_id == check_sink_state_id):
                                                         # more specific sink_state_id exists. Mark current dependency for removal and skip to next dependency.
-                                                        # DEBUG
-                                                        print("step 1 overwrites: ")
-                                                        print(
-                                                            "-> original: ",
+                                                        logger.debug(
+                                                            "step 1 overwrites: %s %s %s %s %s -> %s %s %s %s %s",
                                                             dep_type,
                                                             source_location,
                                                             source_state_id,
                                                             sink_location,
                                                             sink_state_id,
-                                                        )
-                                                        print(
-                                                            "-> override: ",
                                                             dep_type,
                                                             source_location,
                                                             check_source_state_id,
@@ -3334,21 +3341,16 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 for check_sink_state_id, check_var_infos in sink_location_deps.items():
                                     if check_sink_state_id != "NO_STATE":
                                         # more specific sink_state_id exists. Mark current dependency for removal and skip to next dependency.
-                                        # DEBUG
-                                        print("step 1 overwrites: ")
-                                        print(
-                                            "-> original: ",
+                                        logger.debug(
+                                            "step 1 overwrites: %s %s %s %s %s -> %s %s %s %s %s",
                                             dep_type,
                                             source_location,
                                             source_state_id,
                                             sink_location,
                                             sink_state_id,
-                                        )
-                                        print(
-                                            "-> override: ",
                                             dep_type,
                                             source_location,
-                                            source_state_id,  # the overriding entry differs in its sink state only
+                                            source_state_id,  # the overriding entry differs in its sink state only,
                                             sink_location,
                                             check_sink_state_id,
                                         )
@@ -3405,18 +3407,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                                 ) in check_sink_location_deps.items():
                                                     if sink_state_id == check_sink_state_id:
                                                         # more specific sink_state_id exists. Mark current dependency for removal and skip to next dependency.
-                                                        # DEBUG
-                                                        print("step 2 overwrites: ")
-                                                        print(
-                                                            "-> original: ",
+                                                        logger.debug(
+                                                            "step 2 overwrites: %s %s %s %s %s -> %s %s %s %s %s",
                                                             dep_type,
                                                             source_location,
                                                             source_state_id,
                                                             sink_location,
                                                             sink_state_id,
-                                                        )
-                                                        print(
-                                                            "-> override: ",
                                                             dep_type,
                                                             source_location,
                                                             check_source_state_id,
@@ -3439,21 +3436,16 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 for check_sink_state_id, check_var_infos in sink_location_deps.items():
                                     if check_sink_state_id != "NO_STATE":
                                         # more specific sink_state_id exists. Mark current dependency for removal and skip to next dependency.
-                                        # DEBUG
-                                        print("step 2 overwrites: ")
-                                        print(
-                                            "-> original: ",
+                                        logger.debug(
+                                            "step 2 overwrites: %s %s %s %s %s -> %s %s %s %s %s",
                                             dep_type,
                                             source_location,
                                             source_state_id,
                                             sink_location,
                                             sink_state_id,
-                                        )
-                                        print(
-                                            "-> override: ",
                                             dep_type,
                                             source_location,
-                                            source_state_id,  # the overriding entry differs in its sink state only
+                                            source_state_id,  # the overriding entry differs in its sink state only,
                                             sink_location,
                                             check_sink_state_id,
                                         )
@@ -3707,7 +3699,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     return index, position
         return None
 
-    def __loop_context_at(self, ctx: Context, function_name: str, loopstate_position: int) -> object:
+    def __loop_context_at(self, ctx: Context, function_name: str, loopstate_position: int) -> CarriedByLoop:
         """The LoopParentContext on the chain of ctx for the loop at loopstate_position of the
         closest enclosing copy of function_name, or CARRIED_OUTSIDE if the chain does not reach
         that function (a standalone copy of a function) or the loop has no context there.
@@ -4564,7 +4556,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 var_name: str,
                                 memory_region: Optional[MemoryRegion],
                                 origin: DepOrigin,
-                                carried_by_loop: Optional[object] = None,
+                                carried_by_loop: CarriedByLoop = None,
                                 carried_by_pet_loops: Optional[FrozenSet[str]] = None,
                             ) -> Dependency:
                                 key = (var_name, memory_region, origin, carried_by_loop, carried_by_pet_loops)
@@ -4711,7 +4703,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                     source_ancs = ancestors_from_closest_iteration(source_ctx) if same_state else []
                                     # the loop context is looked up from an end mapped exactly: an
                                     # approximately mapped end may not lie on its state's callpath
-                                    source_carried_by_loop: Optional[object] = (
+                                    source_carried_by_loop: CarriedByLoop = (
                                         self.__loop_context_at(source_ctx, carried_function, carried[1])
                                         if carried is not None
                                         and carried_function is not None
@@ -4765,15 +4757,15 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             "Mapped "
             + str(len(context_fallback.approximate))
             + " dependency ends without a context carrying their state approximately ("
-            + str(context_fallback.scoped)
+            + str(len(context_fallback.scoped))
             + " within the scope of their state, "
-            + str(context_fallback.location_only)
+            + str(len(context_fallback.location_only))
             + " by location only)"
         )
         self.approximate_dependency_end_statistics = {
             "ends": len(context_fallback.approximate),
-            "scoped": context_fallback.scoped,
-            "location_only": context_fallback.location_only,
+            "scoped": len(context_fallback.scoped),
+            "location_only": len(context_fallback.location_only),
         }
         logger.info(
             "Inserting data dependencies from files: "

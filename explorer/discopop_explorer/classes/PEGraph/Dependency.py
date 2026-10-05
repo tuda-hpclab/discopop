@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from typing import FrozenSet, List, Optional
+from typing import TYPE_CHECKING, FrozenSet, List, Optional, Union
 
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.MemoryRegion import MemoryRegion
@@ -16,8 +16,22 @@ from discopop_explorer.enums.DepOrigin import DepOrigin
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
 
-# marker for Dependency.carried_by_loop: carried by a loop outside of the contexts of its ends
-CARRIED_OUTSIDE = object()
+if TYPE_CHECKING:
+    from discopop_explorer.classes.TaskGraph.Contexts.LoopParentContext import LoopParentContext
+
+
+class CarriedOutside:
+    """Type of CARRIED_OUTSIDE, the marker for Dependency.carried_by_loop: carried by a loop outside of
+    the contexts of its ends."""
+
+    def __repr__(self) -> str:
+        return "CARRIED_OUTSIDE"
+
+
+CARRIED_OUTSIDE = CarriedOutside()
+
+# the loop whose iterations a dependency crosses, see Dependency.carried_by_loop
+CarriedByLoop = Optional[Union["LoopParentContext", CarriedOutside]]
 
 
 class Dependency:
@@ -43,7 +57,7 @@ class Dependency:
     # the loop whose iterations the dependency crosses, if the callpath states of its ends tell
     # (see TaskGraph.__carried_frame_and_position): a LoopParentContext, CARRIED_OUTSIDE if that loop has no
     # context on the chain of the ends, or None if unknown
-    carried_by_loop: Optional[object] = None
+    carried_by_loop: CarriedByLoop = None
     # the PET identity of the loops whose iterations the dependency crosses: the node ids of the loops'
     # entry CUs (LoopParentContext.parent_loop). Derived from the callpath states of the ends (the
     # frame's function and loopstate position, see TaskGraph.__assign_loopstate_positions_within_functions)
