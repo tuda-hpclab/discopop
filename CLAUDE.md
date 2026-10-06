@@ -35,12 +35,12 @@ This document contains critical information about working with this codebase. Fo
 
 ## Type checking
 ### Python
-- install prerequisites via `venv/bin/pip install mypy`
+- install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the mypy version CI uses; a different version can report different errors)
 - to execute type checking of python files use the following command as the basis: `venv/bin/python -m mypy --config-file=mypy.ini -p`
 
 ## Formatting
 ### Python
-- install prerequisites via `venv/bin/pip install black`
+- install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
 - to execute formatting check, use `venv/bin/pyton -m black -l 120 --check .`
 - to execute automatic formatting, use `venv/bin/pyton -m black -l 120 .`
 
@@ -72,7 +72,7 @@ This document contains critical information about working with this codebase. Fo
 
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
-- install prerequisites via `venv/bin/pip install pytest pytest-cov`
+- install prerequisites via `venv/bin/pip install -r requirements-dev.txt pytest-cov`
 - to run all of them, from the repository root: `venv/bin/python -m pytest explorer/discopop_explorer`
 - to run a single file: `venv/bin/python -m pytest explorer/discopop_explorer/test_utils.py -v`
 - to run tests matching a name substring: `venv/bin/python -m pytest explorer/discopop_explorer -k "detect_do_all"`

@@ -198,8 +198,6 @@ def __parallel_get_random_configuration(param_tuple: None) -> List[int]:
         raise ValueError("global_experiment is None!")
     if global_arguments is None:
         raise ValueError("global_arguments is None!")
-    if global_population is None:
-        raise ValueError("global_population is None!")
     if global_available_decisions is None:
         raise ValueError("global_available_decisions is None!")
     return __get_random_configuration(global_experiment, global_available_decisions, global_arguments)
