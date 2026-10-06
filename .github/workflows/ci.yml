@@ -93,8 +93,7 @@ jobs:
         run: |
           rm -rf venv
           python3 -m venv venv
-          venv/bin/pip install -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
-          venv/bin/pip install pytest
+          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
       - name: Run MyPy Type Checking
         run: |
