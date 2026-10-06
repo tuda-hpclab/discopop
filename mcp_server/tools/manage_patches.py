@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from mcp.types import TextContent, Tool
+from mcp.types import TextContent, Tool, ToolAnnotations
 
 from mcp_server.tools.helpers import (
     APPLICATOR_OK_RETURNCODES,
@@ -25,6 +25,10 @@ logger = logging.getLogger("discopop-mcp")
 
 TOOL = Tool(
     name="manage_patches",
+    # Edits the project's source files in place. Not idempotent: apply and rollback skip
+    # ids that are already in the requested state, but a second clear overwrites the
+    # selection the first one saved for load with an empty one.
+    annotations=ToolAnnotations(destructiveHint=True, idempotentHint=False, openWorldHint=False),
     description=(
         "Apply, roll back, clear, load, or list applied parallelization patches via "
         "discopop_patch_applicator. Call get_parallelization_patches first to "
@@ -39,9 +43,8 @@ TOOL = Tool(
         "The list of applied suggestions is preserved on disk so it can be restored "
         "with load. Existing saves are overwritten.\n"
         "  load    — Re-apply suggestions that were saved by a previous clear operation.\n\n"
-        "Which patches to apply is a question run_auto_tuning answers by measuring; prefer "
-        "it over picking ids by hand, and run it BEFORE applying anything, since it needs "
-        "an un-patched project.\n\n"
+        "Which ids to apply is what run_auto_tuning measures (apply=true applies its "
+        "selection); prefer it over picking ids by hand.\n\n"
         "Rollback and clear reverse each patch in the source file it was applied to, so they "
         "only work while that file still matches the patch. Editing a patched file by hand "
         "and then rolling back fails; make manual changes on top of a selection you intend "
@@ -204,6 +207,17 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             result["message"] = "Some patches were applied; others may have failed. Check stderr for details."
         if proc.returncode == 3:
             result["message"] = "Nothing to do (no patches to roll back or load)."
+        elif action == "apply" and result.get("applied_now"):
+            result["next_step"] = (
+                "Undo with manage_patches(action='rollback', suggestion_ids=[...]); that works only "
+                "while the patched files are not edited by hand."
+            )
+        elif action == "clear":
+            # Spelled out because clear is the one action that is not safe to repeat.
+            result["next_step"] = (
+                "The cleared selection was saved: manage_patches(action='load') re-applies it. "
+                "Another clear before that would overwrite the save with an empty selection."
+            )
         if stderr:
             result["stderr"] = stderr
 

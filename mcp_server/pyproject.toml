@@ -65,6 +65,12 @@ version = {file = "VERSION"}
 [tool.setuptools.packages.find]
 where = [".."]
 include = ["mcp_server*"]
+# Namespace discovery would otherwise also pick up the build output inside this
+# directory (mcp_server.build.lib.mcp_server...), nesting it one level deeper per build.
+exclude = ["mcp_server.build*", "mcp_server.dist*"]
 
 [tool.setuptools]
 zip-safe = true
+# Package data is not needed; with it on, a stale egg-info SOURCES.txt listing
+# build/lib/... files would bring the build output back in as package data.
+include-package-data = false

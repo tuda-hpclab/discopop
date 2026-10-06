@@ -51,6 +51,7 @@ from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.json_serializer import PatternBaseSerializer
 from discopop_explorer.utilities.PEGraphConstruction.parser import parse_inputs
 from discopop_explorer.pattern_detection import PatternDetectorX
+from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
 from discopop_library.tools.update_notifications.update_notifier import run as check_for_updates
@@ -92,6 +93,8 @@ class ExplorerArguments(GeneralArguments):
     enable_context_graph_plot: bool
     enable_visualizer: bool
     visualize_on: Optional["tk.Frame"]
+    # None means no file, otherwise the path. Why candidates were (not) suggested, see PatternDecisions
+    enable_pattern_decisions_file: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.__validate()
@@ -147,7 +150,10 @@ def __run(
     enable_visualizer: bool = False,
     visualize_on: Optional["tk.Frame"] = None,
     ignore_dependency_states: bool = False,
+    pattern_decisions: Optional[PatternDecisionLog] = None,
 ) -> DetectionResult:
+    """pattern_decisions, if given, receives which candidates the pattern detection considered and
+    why it rejected them. It stays empty when existing patterns are loaded."""
     # check for updates
     module_name = "discopop"
     module_api_url = "https://api.github.com/repos/tuda-hpclab/DiscoPoP/releases/latest"
@@ -185,7 +191,7 @@ def __run(
         with stage(f"Running plugin: {plugin_name}"):
             pet = p.run_before(pet)
 
-    pattern_detector = PatternDetectorX(pet)
+    pattern_detector = PatternDetectorX(pet, pattern_decisions)
 
     if load_existing_doall_and_reduction_patterns:
         res: DetectionResult = pattern_detector.load_existing_doall_and_reduction_patterns(
@@ -273,6 +279,7 @@ def run(arguments: ExplorerArguments) -> None:
             )
 
         start = time.time()
+        pattern_decisions = PatternDecisionLog() if arguments.enable_pattern_decisions_file is not None else None
 
         with stage("Detecting patterns"):
             res = __run(
@@ -297,6 +304,7 @@ def run(arguments: ExplorerArguments) -> None:
                 enable_visualizer=arguments.enable_visualizer,
                 visualize_on=arguments.visualize_on,
                 ignore_dependency_states=arguments.ignore_dependency_states,
+                pattern_decisions=pattern_decisions,
             )
 
         end = time.time()
@@ -331,6 +339,14 @@ def run(arguments: ExplorerArguments) -> None:
             del res.pet
             with open(arguments.enable_json_file, "w+") as f:
                 json.dump(res, f, indent=2, cls=PatternBaseSerializer)
+
+        # Written after the patterns, so that a decision file older than the patterns reveals
+        # patterns it does not describe. Left alone when existing patterns are loaded instead
+        # of detected, since nothing was decided then.
+        decisions_file = arguments.enable_pattern_decisions_file
+        if pattern_decisions is not None and decisions_file is not None:
+            if not arguments.load_existing_doall_and_reduction_patterns:
+                pattern_decisions.save(decisions_file)
 
         # create applicable patch files from the found suggestions
         with stage("Generating parallelization patches"):

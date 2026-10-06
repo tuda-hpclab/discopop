@@ -9,31 +9,37 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from discopop_library.ProjectManager.utilities.deriveSettingsFiles import derive_settings_files
 from discopop_library.ProjectManager.utilities.reset import reset_project
-from mcp_server.tools.helpers import ToolContext
+from mcp_server.tools.helpers import (
+    COMPILE_SCRIPT_PLACEHOLDER_MARKER,
+    ToolContext,
+    applicator_failure_details,
+    recorded_applied_suggestions,
+    run_patch_applicator,
+    setup_next_step,
+)
 
 logger = logging.getLogger("discopop-mcp")
 
 TOOL = Tool(
     name="initialize_discopop_directory",
-    annotations=ToolAnnotations(idempotentHint=True),
+    # reset=true deletes every analysis artefact; idempotent nonetheless, since a second
+    # call with the same arguments leaves the same state behind.
+    annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True, openWorldHint=False),
     description=(
         "Set up the DiscoPoP directory structure for a project. Call this as the very "
         "first step before any other DiscoPoP tool. "
         "\n\n"
         "NORMAL MODE (reset=false, the default):\n"
-        "If the project is already initialized (.discopop/project/configs/ exists), "
-        "this tool returns the current configuration status without modifying any files:\n"
-        "  - already_initialized: true\n"
-        "  - compile_script_configured: whether compile.sh has been customised\n"
-        "  - settings_files: which of the seq/dp/hd/par settings JSON files are present\n"
-        "  - configurations: list of named execution configurations with has_execute_sh flag\n"
-        "  - num_configurations: total number of execution configurations\n"
+        "If the project is already initialized, nothing is modified and the result only says "
+        "so (already_initialized: true) and names the next setup step; a file missing from an "
+        "initialized project is recreated. Use get_project_status to see what is set up and "
+        "analysed.\n"
         "\n"
         "If the project is not yet initialized, this tool creates:\n"
         "  - .discopop/project/configs/          — configuration directory\n"
@@ -52,8 +58,9 @@ TOOL = Tool(
         "Removes all DiscoPoP analysis artefacts (profiler output, explorer results, "
         "patch files, hotspot data, execution results) while preserving the project "
         "configuration directory (.discopop/project/) so that compile.sh and execution "
-        "configurations are kept intact. Use this to force a clean re-run of gather_data "
-        "when the pipeline is in a broken or inconsistent state.\n"
+        "configurations are kept intact. Applied suggestions are rolled back first. Use this "
+        "to force a clean re-run of gather_data when the pipeline is in a broken or "
+        "inconsistent state.\n"
         "\n"
         "After initializing, call set_compile_script to describe how to build the "
         "project, then create_execution_configuration to describe how to run it."
@@ -108,6 +115,24 @@ TOOL = Tool(
 )
 
 
+def _roll_back_applied(project_path: str, ctx: ToolContext) -> tuple[list[str], Optional[str]]:
+    """Roll back the applied suggestions; the ids rolled back, and a warning if that failed."""
+    applied, _ = recorded_applied_suggestions(project_path)
+    if not applied:
+        return [], None
+    proc, run_error = run_patch_applicator(project_path, ["--clear"])
+    # 3: nothing was applied after all; 2 (partly rolled back) leaves patches behind
+    if proc is not None and proc.returncode in (0, 3):
+        ctx.log_action(project_path, "initialize_discopop_directory", f"Reset: rolled back {applied}")
+        return applied, None
+    details = run_error if proc is None else applicator_failure_details(proc)[0]
+    return [], (
+        f"The applied suggestions {applied} could not be rolled back ({details}), and the reset deleted "
+        "the record of them. The sources may still contain these patches; revert them by hand, e.g. "
+        "with version control, before analysing the project again."
+    )
+
+
 def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
     try:
         project_path = arguments.get("project_path", "")
@@ -125,6 +150,9 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
 
         # === Reset mode ===
         if reset:
+            # The reset deletes the applicator's record of what it applied; without it,
+            # applied suggestions could no longer be rolled back.
+            rolled_back, rollback_warning = _roll_back_applied(project_path, ctx)
             pm_args = ctx.make_pm_args(project_path)
             pm_args.reset = True
             pm_args.reset_execution_results = True
@@ -139,43 +167,28 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                     ".discopop/patch_generator, .discopop/hotspot_detection, execution_results.json). "
                     "Project configuration (.discopop/project/) was preserved."
                 ),
+                "next_step": setup_next_step(p / ".discopop" / "project" / "configs"),
             }
+            if rolled_back:
+                result["rolled_back_suggestions"] = rolled_back
+            if rollback_warning is not None:
+                result["warning"] = rollback_warning
             ctx.log_response("initialize_discopop_directory", result)
             return [TextContent(type="text", text=json.dumps(result))]
 
         configs_dir = p / ".discopop" / "project" / "configs"
 
-        if configs_dir.exists():
-            compile_sh = configs_dir / "compile.sh"
-            compile_script_configured = False
-            if compile_sh.exists():
-                content = compile_sh.read_text()
-                compile_script_configured = "Use set_compile_script" not in content and "exit 1" not in content
-
-            settings_files = {
-                key: (configs_dir / filename).exists()
-                for key, filename in [
-                    ("seq", "seq_settings.json"),
-                    ("dp", "dp_settings.json"),
-                    ("hd", "hd_settings.json"),
-                    ("par", "par_settings.json"),
-                ]
-            }
-
-            configurations = [
-                {"name": d.name, "has_execute_sh": (d / "execute.sh").exists()}
-                for d in sorted(configs_dir.iterdir())
-                if d.is_dir()
-            ]
-
+        # An initialized project with a file missing (an initialization that was interrupted,
+        # a file deleted by hand) falls through to the creation below, which only creates what
+        # is missing: answering "already initialized" would leave every tool that needs the
+        # file pointing back here.
+        expected = ["seq_settings.json", "dp_settings.json", "hd_settings.json", "par_settings.json", "compile.sh"]
+        if configs_dir.exists() and all((configs_dir / name).exists() for name in expected):
             result = {
                 "status": "success",
                 "project_path": project_path,
                 "already_initialized": True,
-                "compile_script_configured": compile_script_configured,
-                "settings_files": settings_files,
-                "configurations": configurations,
-                "num_configurations": len(configurations),
+                "next_step": setup_next_step(configs_dir),
             }
             ctx.log_response("initialize_discopop_directory", result)
             return [TextContent(type="text", text=json.dumps(result))]
@@ -200,15 +213,17 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         else:
             skipped.append(str(seq_settings_path.relative_to(p)))
 
+        derived = [configs_dir / name for name in ("dp_settings.json", "hd_settings.json", "par_settings.json")]
+        derived_before = {f for f in derived if f.exists()}
         derive_settings_files(str(configs_dir), overwrite=False)
         ctx.log_action(
             project_path, "initialize_discopop_directory", "Derived dp/hd/par settings files from seq_settings.json"
         )
-        for name in ("dp_settings.json", "hd_settings.json", "par_settings.json"):
-            f = configs_dir / name
-            if str(f.relative_to(p)) not in skipped:
-                if f.exists():
-                    created.append(str(f.relative_to(p)))
+        for f in derived:
+            if f in derived_before:
+                skipped.append(str(f.relative_to(p)))
+            elif f.exists():
+                created.append(str(f.relative_to(p)))
 
         compile_sh = configs_dir / "compile.sh"
         if not compile_sh.exists():
@@ -217,7 +232,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 "# This script is executed from the project root directory.\n"
                 "# Use $CC/$CXX/$CFLAGS/$CXXFLAGS — do NOT hardcode compiler names.\n"
                 "# Replace this placeholder via the set_compile_script MCP tool.\n"
-                "echo 'compile.sh has not been configured yet. Use set_compile_script.'\n"
+                f"echo '{COMPILE_SCRIPT_PLACEHOLDER_MARKER}. Use set_compile_script.'\n"
                 "exit 1\n"
             )
             compile_sh.write_text(initial_content)
@@ -232,6 +247,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             "project_path": project_path,
             "created_files": created,
             "skipped_files": skipped,
+            "next_step": setup_next_step(configs_dir),
         }
         ctx.log_response("initialize_discopop_directory", result)
         return [TextContent(type="text", text=json.dumps(result))]

@@ -11,7 +11,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from unittest import mock
 
 from mcp_server.tools import run_auto_tuning
@@ -43,6 +43,9 @@ class _FakeProcess:
     def terminate(self) -> None:
         self.terminated = True
         self.returncode = -15
+
+    def poll(self) -> Optional[int]:
+        return self.returncode
 
     def kill(self) -> None:
         self.terminated = True
@@ -199,12 +202,15 @@ class TestRunAutoTuning(unittest.TestCase):
         applied: Optional[list[str]] = None,
         applicator: Any = None,
         application_result: Optional[dict[str, Any]] = None,
+        on_start: Optional[Callable[[], None]] = None,
         **overrides: Any,
     ) -> Any:
         def start(*args: Any, **_kwargs: Any) -> _FakeProcess:
             self._popen_cmd = list(args[0]) if args else []
             if self._pending_progress is not None:
                 self.__write_progress_now(self._pending_progress)
+            if on_start is not None:
+                on_start()
             return process
 
         with (
@@ -233,6 +239,12 @@ class TestRunAutoTuning(unittest.TestCase):
         self.assertIn("line_mapping.json", data["message"])
         self.assertIn("gather_data", data["message"])
 
+    def test_a_configuration_name_outside_the_configuration_directory_is_refused(self) -> None:
+        data = self.__run_with_fake_tuner(_FakeProcess(), config_name="../..")
+        self.assertEqual(data["status"], "error")
+        self.assertIn("Invalid config_name", data["message"])
+        self.assertEqual(self._popen_cmd, [])
+
     def test_unknown_configuration(self) -> None:
         data = self.__handle(config_name="does_not_exist")
         self.assertEqual(data["status"], "error")
@@ -252,7 +264,7 @@ class TestRunAutoTuning(unittest.TestCase):
     def test_hotspot_guided_search_is_chosen_when_hotspots_exist(self) -> None:
         self.__completed_run_progress()
         data = self.__run_with_fake_tuner(_FakeProcess())
-        self.assertEqual(data["algorithm"], 6)
+        self.assertEqual(data["algorithm"], "hotspot_guided")
         self.assertIn("hotspot results are available", data["algorithm_selection"])
         self.assertIn("-A", self._popen_cmd)
         self.assertEqual(self._popen_cmd[self._popen_cmd.index("-A") + 1], "6")
@@ -262,7 +274,7 @@ class TestRunAutoTuning(unittest.TestCase):
         self.__completed_run_progress()
         data = self.__run_with_fake_tuner(_FakeProcess())
         self.assertEqual(data["status"], "success")
-        self.assertEqual(data["algorithm"], 4)
+        self.assertEqual(data["algorithm"], "greedy")
         self.assertIn("no hotspot detection results", data["algorithm_selection"])
         self.assertEqual(self._popen_cmd[self._popen_cmd.index("-A") + 1], "4")
 
@@ -272,27 +284,39 @@ class TestRunAutoTuning(unittest.TestCase):
         self.__write_hotspots(node_type="FUNCTION")
         self.__completed_run_progress()
         data = self.__run_with_fake_tuner(_FakeProcess())
-        self.assertEqual(data["algorithm"], 4)
+        self.assertEqual(data["algorithm"], "greedy")
         self.assertIn("no hotspot detection results", data["algorithm_selection"])
 
     def test_explicit_algorithm_6_without_hotspots_is_refused(self) -> None:
         os.remove(os.path.join(self.dot_dp, "hotspot_detection", "Hotspots.json"))
-        data = self.__handle(algorithm=6)
+        data = self.__handle(algorithm="hotspot_guided")
         self.assertEqual(data["status"], "error")
         self.assertIn("hotspot", data["message"])
         self.assertIn("hotspot_config_names", data["message"])
 
     def test_explicit_algorithm_6_without_hot_loops_is_refused(self) -> None:
         self.__write_hotspots(node_type="FUNCTION")
-        data = self.__handle(algorithm=6)
+        data = self.__handle(algorithm="hotspot_guided")
         self.assertEqual(data["status"], "error")
         self.assertIn("hot loops", data["message"])
 
-    def test_explicit_algorithm_is_not_replaced(self) -> None:
+    def test_an_algorithm_number_of_earlier_versions_is_still_accepted(self) -> None:
         self.__completed_run_progress()
         data = self.__run_with_fake_tuner(_FakeProcess(), algorithm=5)
+        self.assertEqual(data["algorithm"], "coordinate_descent")
+        self.assertEqual(self._popen_cmd[self._popen_cmd.index("-A") + 1], "5")
+
+    def test_an_unknown_algorithm_lists_the_known_ones(self) -> None:
+        for algorithm in (2, "fastest"):
+            data = self.__handle(algorithm=algorithm)
+            self.assertEqual(data["status"], "error")
+            self.assertIn("hotspot_guided", data["message"])
+
+    def test_explicit_algorithm_is_not_replaced(self) -> None:
+        self.__completed_run_progress()
+        data = self.__run_with_fake_tuner(_FakeProcess(), algorithm="coordinate_descent")
         self.assertEqual(data["status"], "success")
-        self.assertEqual(data["algorithm"], 5)
+        self.assertEqual(data["algorithm"], "coordinate_descent")
         self.assertNotIn("algorithm_selection", data)
         self.assertEqual(self._popen_cmd[self._popen_cmd.index("-A") + 1], "5")
 
@@ -325,6 +349,38 @@ class TestRunAutoTuning(unittest.TestCase):
         self.assertEqual(data["status"], "error")
         self.assertEqual(self._applicator_calls, [["--clear"], ["--load"]])
         self.assertIn("restored", data["message"])
+
+    def test_a_cancelled_search_stops_and_restores_the_cleared_selection(self) -> None:
+        self.__completed_run_progress()
+        process = _FakeProcess()
+        finish = process.wait
+
+        def wait_until_cancelled(timeout: Optional[float] = None) -> int:
+            self.ctx.cancel()  # what the server does when the client cancels the call
+            return finish(timeout)
+
+        process.wait = wait_until_cancelled  # type: ignore[method-assign]
+        # the fake tuner's pid is the test's own, so the processes must not really be stopped
+        with self.ctx.cancellable(), mock.patch("mcp_server.tools.helpers.terminate_process_tree"):
+            data = self.__run_with_fake_tuner(process, applied=["3"])
+        self.assertEqual(data["status"], "error")
+        self.assertIn("Cancelled", data["message"])
+        self.assertEqual(self._applicator_calls, [["--clear"], ["--load"]])
+
+    def test_a_cancel_while_clearing_does_not_start_the_tuner(self) -> None:
+        clear = self.__applicator()
+
+        def clear_and_get_cancelled(*args: Any, **kwargs: Any) -> Any:
+            if not self._applicator_calls:
+                self.ctx.cancel()
+            return clear(*args, **kwargs)
+
+        with self.ctx.cancellable():
+            data = self.__run_with_fake_tuner(_FakeProcess(), applied=["3"], applicator=clear_and_get_cancelled)
+        self.assertEqual(data["status"], "error")
+        self.assertIn("Cancelled", data["message"])
+        self.assertEqual(self._popen_cmd, [])
+        self.assertEqual(self._applicator_calls, [["--clear"], ["--load"]])
 
     # -- applying the selection -------------------------------------------------------
 
@@ -410,6 +466,11 @@ class TestRunAutoTuning(unittest.TestCase):
         self.assertEqual(data["evaluated_configurations"], 14)
         self.assertEqual(data["valid_count"], 9)
         self.assertIn("manage_patches", data["message"])
+        # Rejected candidates are counted; where their reason is recorded is named.
+        self.assertIn("get_execution_results", data["diagnosis_hint"])
+        self.assertIn("invalid_count=2", data["diagnosis_hint"])
+        self.assertIn("failed_count=1", data["diagnosis_hint"])
+        self.assertNotIn("not_applied_count", data["diagnosis_hint"])
 
     def test_empty_selection_is_a_success(self) -> None:
         self.__write_progress(
@@ -422,6 +483,7 @@ class TestRunAutoTuning(unittest.TestCase):
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["suggestion_ids"], [])
         self.assertIn("No combination", data["message"])
+        self.assertNotIn("diagnosis_hint", data)
 
     def test_timeout_returns_the_best_measurement_so_far(self) -> None:
         self.__write_progress(
@@ -471,17 +533,27 @@ class TestRunAutoTuning(unittest.TestCase):
 
     def test_timeout_removes_leftover_project_copies(self) -> None:
         leftover = os.path.join(self._tmp_dir.name, "tiny_par_settings.json_project_3")
+        # a hotspot-instrumented candidate, as the refinement of a selection builds one
+        hotspot_leftover = os.path.join(self._tmp_dir.name, "tiny_hd_settings.json_project_4")
         unrelated = os.path.join(self._tmp_dir.name, "some_other_directory")
+        # a copy of a sibling project whose name starts with this one's, e.g. one being tuned right now
+        sibling_copy = os.path.join(self._tmp_dir.name, "tiny_par_settings.json_project_x_3")
         os.makedirs(leftover)
+        os.makedirs(hotspot_leftover)
         os.makedirs(unrelated)
+        os.makedirs(sibling_copy)
         self.__write_progress([{"event": "baseline", "runtime": 10.0, "valid": True}])
 
         data = self.__run_with_fake_tuner(_FakeProcess(timeout_on_wait=True), timeout_seconds=1)
 
         self.assertEqual(data["status"], "timeout")
         self.assertFalse(os.path.exists(leftover))
+        self.assertFalse(os.path.exists(hotspot_leftover))
         self.assertTrue(os.path.exists(unrelated))
-        self.assertEqual(data["removed_project_copies"], ["tiny_par_settings.json_project_3"])
+        self.assertTrue(os.path.exists(sibling_copy))
+        self.assertEqual(
+            data["removed_project_copies"], ["tiny_hd_settings.json_project_4", "tiny_par_settings.json_project_3"]
+        )
 
     def test_no_measurements_is_an_error_carrying_the_output(self) -> None:
         data = self.__run_with_fake_tuner(_FakeProcess(returncode=1, output="compile.sh: command not found\n"))
@@ -548,6 +620,229 @@ class TestRunAutoTuning(unittest.TestCase):
         )
         data = self.__run_with_fake_tuner(_FakeProcess())
         self.assertNotIn("warnings", data)
+
+    # -- measuring a given selection ------------------------------------------------
+
+    def __create_suggestions(self, *suggestion_ids: str) -> None:
+        for suggestion_id in suggestion_ids:
+            os.makedirs(os.path.join(self.dot_dp, "patch_generator", suggestion_id), exist_ok=True)
+
+    def __selection_progress(self, suggestions: list[int], **overrides: Any) -> None:
+        measurement: dict[str, Any] = {
+            "event": "measurement",
+            "index": 1,
+            "suggestions": suggestions,
+            "runtime": 4.0,
+            "return_code": 0,
+            "valid": True,
+            "tsan": True,
+            "application_failed": False,
+            "failed_suggestions": [],
+            "speedup": 2.5,
+        }
+        measurement.update(overrides)
+        if measurement["application_failed"]:
+            measurement["speedup"] = None  # nothing was run
+        if measurement["application_failed"] or measurement["return_code"] != 0 or not measurement["valid"]:
+            # the tuner then falls back to the un-patched reference as its best configuration
+            final: dict[str, Any] = {"event": "result", "suggestions": [], "speedup": 1.0, "runtime": 10.0}
+        else:
+            final = {"event": "result", "suggestions": suggestions, "speedup": 2.4, "runtime": 4.2}
+        self.__write_progress(
+            [{"event": "baseline", "runtime": 10.0, "valid": True, "thread_count": 4}, measurement, final]
+        )
+
+    def test_a_selection_is_measured_instead_of_searched(self) -> None:
+        self.__create_suggestions("3", "5")
+        self.__selection_progress([3, 5])
+        data = self.__run_with_fake_tuner(_FakeProcess(), suggestion_ids=["3", "5"])
+        self.assertEqual(self._popen_cmd[self._popen_cmd.index("-s") + 1], "3,5")
+        # exactly the named selection: no search, and no refinement of the selection
+        self.assertNotIn("-A", self._popen_cmd)
+        self.assertIn("--skip-removal-pass", self._popen_cmd)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["mode"], "selection")
+        self.assertNotIn("algorithm", data)
+        self.assertEqual(data["outcome"], "valid")
+        self.assertIs(data["result_valid"], True)
+        self.assertEqual(data["suggestion_ids"], ["3", "5"])
+        # the selection's own measurement, not the tuner's re-run of its best configuration
+        self.assertEqual(data["runtime"], 4.0)
+        self.assertEqual(data["speedup"], 2.5)
+        self.assertEqual(data["baseline_runtime"], 10.0)
+        self.assertEqual(data["efficiency"], 0.625)
+        self.assertIs(data["applied"], False)
+        self.assertIn("manage_patches", data["message"])
+
+    def test_measuring_a_selection_keeps_the_result_of_the_last_search(self) -> None:
+        self.__create_suggestions("3", "5")
+        auto_tuner_dir = os.path.join(self.dot_dp, "auto_tuner")
+        os.makedirs(auto_tuner_dir, exist_ok=True)
+        results_json = os.path.join(auto_tuner_dir, "results.json")
+        progress_jsonl = os.path.join(auto_tuner_dir, "progress.jsonl")
+        search = {"tiny": {"applied_suggestions": ["1", "2"], "speedup": 3.0}}
+        with open(results_json, "w") as f:
+            json.dump(search, f)
+        self.__write_progress_now([{"event": "result", "suggestions": [1, 2], "speedup": 3.0}])
+        os.utime(progress_jsonl, (1000.0, 1000.0))
+        with open(progress_jsonl) as f:
+            search_progress = f.read()
+
+        def tuner_writes_its_result() -> None:
+            with open(results_json, "w") as f:
+                json.dump({"tiny": {"applied_suggestions": ["3", "5"], "speedup": 0.5}}, f)
+            with open(os.path.join(auto_tuner_dir, "measurements.json"), "w") as f:
+                f.write("[]")
+
+        self.__selection_progress([3, 5])
+        data = self.__run_with_fake_tuner(_FakeProcess(), on_start=tuner_writes_its_result, suggestion_ids=["3", "5"])
+
+        self.assertEqual(data["outcome"], "valid")
+        self.assertEqual(data["runtime"], 4.0)
+        with open(results_json) as f:
+            self.assertEqual(json.load(f), search)
+        with open(progress_jsonl) as f:
+            self.assertEqual(f.read(), search_progress)
+        self.assertEqual(os.path.getmtime(progress_jsonl), 1000.0)
+        self.assertFalse(os.path.exists(os.path.join(auto_tuner_dir, "measurements.json")))
+
+    def test_measuring_a_selection_keeps_the_last_search_also_when_running_the_tuner_raises(self) -> None:
+        self.__create_suggestions("3", "5")
+        statistics_svg = os.path.join(self.dot_dp, "dp_autotuner_statistics.svg")
+        with open(statistics_svg, "w") as f:
+            f.write("<svg>search</svg>")
+
+        class _Broken(_FakeProcess):
+            def wait(self, timeout: Optional[float] = None) -> int:
+                raise RuntimeError("lost the tuner")
+
+        def tuner_writes_its_graph() -> None:
+            with open(statistics_svg, "w") as f:
+                f.write("<svg>selection</svg>")
+
+        data = self.__run_with_fake_tuner(_Broken(), on_start=tuner_writes_its_graph, suggestion_ids=["3", "5"])
+        self.assertEqual(data["status"], "error")
+        with open(statistics_svg) as f:
+            self.assertEqual(f.read(), "<svg>search</svg>")
+
+    def test_integer_and_duplicate_suggestion_ids_are_accepted(self) -> None:
+        self.__create_suggestions("3", "5")
+        self.__selection_progress([3, 5])
+        data = self.__run_with_fake_tuner(_FakeProcess(), suggestion_ids=[3, "5", "3"])
+        self.assertEqual(self._popen_cmd[self._popen_cmd.index("-s") + 1], "3,5")
+        self.assertEqual(data["suggestion_ids"], ["3", "5"])
+
+    def test_suggestion_ids_are_coerced_from_strings_and_integers(self) -> None:
+        from mcp_server.argument_coercion import coerce_arguments, validation_error
+
+        schema = run_auto_tuning.TOOL.inputSchema
+        for sent, expected in (("3,5", ["3", "5"]), ("[3, 5]", [3, 5]), ("7", ["7"])):
+            arguments, _ = coerce_arguments({"project_path": "/p", "config_name": "c", "suggestion_ids": sent}, schema)
+            self.assertEqual(arguments["suggestion_ids"], expected)
+            self.assertIsNone(validation_error("run_auto_tuning", arguments, schema))
+
+    def test_unknown_suggestion_ids_are_rejected_before_anything_runs(self) -> None:
+        self.__create_suggestions("3")
+        data = self.__run_with_fake_tuner(_FakeProcess(), applied=["3"], suggestion_ids=["3", "42"])
+        self.assertEqual(data["status"], "error")
+        self.assertIn("42", data["message"])
+        self.assertIn("get_parallelization_patches", data["message"])
+        self.assertEqual(self._popen_cmd, [])
+        self.assertEqual(self._applicator_calls, [])
+
+    def test_malformed_or_empty_suggestion_ids_are_rejected(self) -> None:
+        for suggestion_ids in ([], ["3a"], [True]):
+            data = self.__run_with_fake_tuner(_FakeProcess(), suggestion_ids=suggestion_ids)
+            self.assertEqual(data["status"], "error")
+            self.assertIn("suggestion_ids", data["message"])
+        self.assertEqual(self._popen_cmd, [])
+
+    def test_suggestion_ids_and_algorithm_cannot_be_combined(self) -> None:
+        self.__create_suggestions("3")
+        data = self.__run_with_fake_tuner(_FakeProcess(), suggestion_ids=["3"], algorithm="greedy")
+        self.assertEqual(data["status"], "error")
+        self.assertIn("cannot be combined", data["message"])
+        self.assertEqual(self._popen_cmd, [])
+
+    def test_a_valid_selection_is_applied_when_asked(self) -> None:
+        self.__create_suggestions("3", "5")
+        self.__selection_progress([3, 5])
+        data = self.__run_with_fake_tuner(
+            _FakeProcess(),
+            applied=["7"],
+            suggestion_ids=["5", "3"],
+            apply=True,
+            application_result={"applied": ["5", "3"], "failed": [], "unknown": []},
+        )
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["applied"], ["5", "3"])
+        self.assertEqual(self._applicator_calls, [["--clear"], ["--apply", "5", "3"]])
+
+    def test_a_valid_but_slower_selection_is_applied_when_asked(self) -> None:
+        # apply=true applies the caller's choice; the speedup is reported, not enforced
+        self.__create_suggestions("3")
+        self.__selection_progress([3], runtime=12.0, speedup=10.0 / 12.0)
+        data = self.__run_with_fake_tuner(
+            _FakeProcess(),
+            suggestion_ids=["3"],
+            apply=True,
+            application_result={"applied": ["3"], "failed": [], "unknown": []},
+        )
+        self.assertEqual(data["outcome"], "valid")
+        self.assertLess(data["speedup"], 1)
+        self.assertEqual(data["applied"], ["3"])
+        self.assertEqual(self._applicator_calls, [["--apply", "3"]])
+        self.assertIn("not faster", data["message"])
+
+    def test_an_invalid_selection_is_rejected_and_not_applied(self) -> None:
+        self.__create_suggestions("3")
+        self.__selection_progress([3], valid=False, runtime=0.5)
+        data = self.__run_with_fake_tuner(_FakeProcess(), applied=["7"], suggestion_ids=["3"], apply=True)
+        self.assertEqual(data["status"], "rejected")
+        self.assertEqual(data["outcome"], "invalid")
+        self.assertIs(data["result_valid"], False)
+        # a wrong program is fast for the wrong reason
+        self.assertIsNone(data["speedup"])
+        self.assertIs(data["applied"], False)
+        self.assertEqual(self._applicator_calls, [["--clear"], ["--load"]])
+        self.assertTrue(any("not applied" in warning for warning in data["warnings"]))
+        self.assertIn("get_execution_results", data["diagnosis_hint"])
+
+    def test_a_failing_selection_is_reported(self) -> None:
+        self.__create_suggestions("3")
+        self.__selection_progress([3], return_code=1, valid=False)
+        data = self.__run_with_fake_tuner(_FakeProcess(), suggestion_ids=["3"])
+        self.assertEqual(data["status"], "rejected")
+        self.assertEqual(data["outcome"], "failed")
+        self.assertIsNone(data["result_valid"])
+        self.assertEqual(data["return_code"], 1)
+
+    def test_a_selection_whose_patches_do_not_apply_is_reported(self) -> None:
+        self.__create_suggestions("3", "5")
+        self.__selection_progress([3, 5], application_failed=True, failed_suggestions=[5], runtime=0.0)
+        data = self.__run_with_fake_tuner(_FakeProcess(), suggestion_ids=["3", "5"])
+        self.assertEqual(data["outcome"], "not_applied")
+        self.assertEqual(data["not_applied"], ["5"])
+        self.assertIsNone(data["runtime"])
+        self.assertIsNone(data["speedup"])
+
+    def test_a_timeout_before_the_selection_was_measured_is_an_error(self) -> None:
+        self.__create_suggestions("3")
+        self.__write_progress([{"event": "baseline", "runtime": 10.0, "valid": True}])
+        data = self.__run_with_fake_tuner(
+            _FakeProcess(timeout_on_wait=True), applied=["7"], suggestion_ids=["3"], timeout_seconds=1
+        )
+        self.assertEqual(data["status"], "error")
+        self.assertIn("not measured", data["message"])
+        self.assertEqual(self._applicator_calls, [["--clear"], ["--load"]])
+
+    def test_a_timeout_after_the_selection_was_measured_keeps_the_measurement(self) -> None:
+        self.__create_suggestions("3")
+        self.__selection_progress([3])
+        data = self.__run_with_fake_tuner(_FakeProcess(timeout_on_wait=True), suggestion_ids=["3"], timeout_seconds=1)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["runtime"], 4.0)
+        self.assertIn("measurement above is complete", data["message"])
 
     def test_progress_file_of_an_earlier_run_is_not_reported(self) -> None:
         # a tuner that dies before it starts writing leaves the previous run's file in

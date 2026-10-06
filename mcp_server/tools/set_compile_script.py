@@ -21,13 +21,18 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 )
 from discopop_library.ProjectManager.configurations.validation import VALIDATE_SCRIPT_NAME
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
-from mcp_server.tools.helpers import ToolContext
+from mcp_server.tools.helpers import (
+    ToolContext,
+    invalid_configuration_name,
+    setup_next_step,
+    unknown_configuration_message,
+)
 
 logger = logging.getLogger("discopop-mcp")
 
 TOOL = Tool(
     name="set_compile_script",
-    annotations=ToolAnnotations(idempotentHint=True),
+    annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True, openWorldHint=False),
     description=(
         "Write a compilation script compile.sh for a DiscoPoP project. "
         "Call this after initialize_discopop_directory, once you know how the project is built. "
@@ -152,10 +157,14 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             return ctx.error("DiscoPoP directory not initialized. Run initialize_discopop_directory first.")
 
         if config_name:
+            name_error = invalid_configuration_name(config_name)
+            if name_error is not None:
+                return ctx.error(name_error, project_path, "set_compile_script")
             if not (configs_dir / config_name).is_dir():
                 return ctx.error(
-                    f"Execution configuration '{config_name}' does not exist. "
-                    "Call create_execution_configuration first.",
+                    unknown_configuration_message(configs_dir, config_name)
+                    + " A per-configuration compile.sh needs an existing configuration "
+                    "(create_execution_configuration).",
                     project_path,
                     "set_compile_script",
                 )
@@ -181,6 +190,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             result["config_name"] = config_name
         if purpose == "validate":
             result["applies_to"] = __describe_validation_scope(configs_dir, config_name)
+        result["next_step"] = setup_next_step(configs_dir)
         ctx.log_response("set_compile_script", result)
         return [TextContent(type="text", text=json.dumps(result))]
 

@@ -20,7 +20,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     get_shared_validation_compile_script_path,
 )
 from discopop_library.ProjectManager.configurations.validation import VALIDATE_SCRIPT_NAME
-from mcp_server.tools.helpers import ToolContext
+from mcp_server.tools.helpers import ToolContext, compile_script_configured, configuration_names, setup_next_step
 
 logger = logging.getLogger("discopop-mcp")
 
@@ -31,7 +31,7 @@ def __read_if_present(path: Path) -> Optional[str]:
 
 TOOL = Tool(
     name="get_configurations",
-    annotations=ToolAnnotations(readOnlyHint=True),
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(
         "Retrieve all execution configurations defined for a DiscoPoP project, "
         "including the content of the shared compile.sh and each configuration's execute.sh. "
@@ -107,6 +107,10 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             "settings": settings,
             "configurations": configurations,
         }
+        # Only an incomplete setup gets a next step: a caller inspecting a project that
+        # is ready has a reason of its own, and is not to be steered into the pipeline.
+        if not (compile_script_configured(configs_dir) and configuration_names(configs_dir)):
+            result["next_step"] = setup_next_step(configs_dir)
         ctx.log_response("get_configurations", result)
         return [TextContent(type="text", text=json.dumps(result))]
 

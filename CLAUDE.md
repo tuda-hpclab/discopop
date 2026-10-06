@@ -35,12 +35,12 @@ This document contains critical information about working with this codebase. Fo
 
 ## Type checking
 ### Python
-- install prerequisites via `venv/bin/pip install mypy`
+- install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the mypy version CI uses; a different version can report different errors)
 - to execute type checking of python files use the following command as the basis: `venv/bin/python -m mypy --config-file=mypy.ini -p`
 
 ## Formatting
 ### Python
-- install prerequisites via `venv/bin/pip install black`
+- install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
 - to execute formatting check, use `venv/bin/pyton -m black -l 120 --check .`
 - to execute automatic formatting, use `venv/bin/pyton -m black -l 120 .`
 
@@ -50,6 +50,12 @@ This document contains critical information about working with this codebase. Fo
 - **Important:** The profiler module must be installed without the `-e` (editable) flag. Use `pip install ./profiler`, not `pip install -e ./profiler`. Editable mode breaks the relative paths required by `CXX_wrapper.sh` to locate compiled artifacts like `LLVMDiscoPoP.so`.
 ### Python end-to-end tests
 - to execute the python end-to-end tests, use 'venv/bin/python -m unittest -v -k "*.end_to_end.*"'
+
+### MCP server end-to-end tests
+- `test/end_to_end/mcp_server` drives the MCP server as a client does: it starts `python -m mcp_server.server` from the repository root (so the server code of the checkout is tested) as a stdio subprocess and calls it with the MCP SDK client
+- run only them via `venv/bin/python -m unittest -v -k "*.end_to_end.mcp_server.*"` or `venv/bin/python -m pytest test/end_to_end/mcp_server`; they are also part of the end-to-end command above, but not of the bare `pytest` run
+- `test_stdio_server.py` (protocol, tool listing, setup tools, error paths) and `test_daemon_proxy.py` (stdio proxy forwarding to a `--daemon`) need no profiler; `test_workflows.py` (pipeline, auto-tuning, patches, failure paths, cancellation) runs the real pipeline on `src/code.cpp` and is skipped when `discopop_cc`/`discopop_cxx` are not installed
+- every server gets a free `--daemon-port`, so a developer's daemon on the default port never takes over the calls; known server bugs are marked `unittest.expectedFailure` with a comment naming the cause
 
 ### Python unit tests (all)
 - to run all Python unit tests at once, from the repository root: `venv/bin/python -m pytest`
@@ -66,7 +72,7 @@ This document contains critical information about working with this codebase. Fo
 
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
-- install prerequisites via `venv/bin/pip install pytest pytest-cov`
+- install prerequisites via `venv/bin/pip install -r requirements-dev.txt pytest-cov`
 - to run all of them, from the repository root: `venv/bin/python -m pytest explorer/discopop_explorer`
 - to run a single file: `venv/bin/python -m pytest explorer/discopop_explorer/test_utils.py -v`
 - to run tests matching a name substring: `venv/bin/python -m pytest explorer/discopop_explorer -k "detect_do_all"`

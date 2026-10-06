@@ -38,6 +38,8 @@ from discopop_library.ParallelRegionMerger.inflated_parallel_region_pattern impo
 )
 from discopop_explorer.pattern_detectors.new_task_detector import run_detection as detect_tasking
 from discopop_explorer.pattern_detectors.new_do_all_detector import run_detection as detect_do_all_and_reduction_new
+from discopop_explorer.pattern_detectors.new_do_all_detector import DECISION_DETECTOR as DO_ALL_AND_REDUCTION_DETECTOR
+from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 
 try:
     from discopop_gui.Visualizers.Base import Base as Visualizer
@@ -49,12 +51,15 @@ class PatternDetectorX(object):
     pet: PEGraphX
     ast_helper: ASTPatternDetectionHelper
 
-    def __init__(self, pet_graph: PEGraphX) -> None:
+    def __init__(self, pet_graph: PEGraphX, pattern_decisions: Optional[PatternDecisionLog] = None) -> None:
         """This class runs detection algorithms on CU graph
 
         :param pet_graph: CU graph
         """
         self.pet = pet_graph
+        # which candidates detect_patterns considered and why they were rejected. Kept apart from
+        # the DetectionResult, whose serialization covers all of its attributes.
+        self.pattern_decisions = pattern_decisions if pattern_decisions is not None else PatternDecisionLog()
         self.ast_helper = ASTPatternDetectionHelper()
 
     def __merge(self, loop_type: bool, remove_dummies: bool) -> None:
@@ -136,11 +141,20 @@ class PatternDetectorX(object):
             res.patterns.task = detect_tasking(self.pet, task_graph, visualizer)
 
         if "*" in enable_patterns or "doall" in enable_patterns or "reduction" in enable_patterns:
-            tmp_result = detect_do_all_and_reduction_new(self.pet, task_graph, self.ast_helper)
+            tmp_result = detect_do_all_and_reduction_new(
+                self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions
+            )
             if "*" in enable_patterns or "doall" in enable_patterns:
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]
             if "*" in enable_patterns or "reduction" in enable_patterns:
                 res.patterns.reduction = [p for p in tmp_result if isinstance(p, ReductionInfo)]
+            self.pattern_decisions.ran(
+                DO_ALL_AND_REDUCTION_DETECTOR,
+                [t for t in ("doall", "reduction") if "*" in enable_patterns or t in enable_patterns],
+            )
+            self.pattern_decisions.finalize(
+                DO_ALL_AND_REDUCTION_DETECTOR, list(res.patterns.do_all) + list(res.patterns.reduction)
+            )
 
         # reduction before doall!
 

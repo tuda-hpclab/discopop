@@ -395,7 +395,6 @@ discopop_mcp_server --verify claude_code || {
 
 - [CLAUDE_INTEGRATION.md](./CLAUDE_INTEGRATION.md) - Manual setup guide
 - [README.md](./README.md) - MCP server overview
-- [QUICKSTART.md](./QUICKSTART.md) - Quick start guide
 - [DiscoPoP Documentation](https://www.discopop.tu-darmstadt.de/)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 

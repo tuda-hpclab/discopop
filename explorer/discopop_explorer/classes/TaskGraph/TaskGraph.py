@@ -2541,6 +2541,15 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         for target_parent_ctx in target_tg.parent_context:
                             source_parent_ctx.register_outgoing_dependency(target_parent_ctx, dependency)
 
+    @staticmethod
+    def __line_of_location(location: str, instruction_id_to_line: Dict[str, str]) -> Optional[LineID]:
+        """the file_id:line of a location in a dependency file, which is an instruction id or a
+        file_id:line, or None if it has no line (e.g. '*')"""
+        if ":" not in location:
+            mapped = instruction_id_to_line.get(location)
+            return LineID(mapped) if mapped is not None else None
+        return LineID(":".join(location.split(":")[:2]))
+
     def __read_dependencies_from_files(
         self, dynamic_dependency_file: Optional[str], static_dependency_file: Optional[str]
     ) -> Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, List[str]]]]]]:
@@ -3574,6 +3583,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             for source_location, source_location_deps in progress(
                 dep_type_deps.items(), desc="Source locations", leave=False
             ):
+                # The line of each end, kept on the dependency to explain the decisions based on it
+                # (see PatternDecisions). The first column of a dependency file line is the sink of
+                # the dependency in the sense of Dependency.sink_line, so the names are swapped
+                # relative to the ones used here. Resolved once per location.
+                dependency_sink_line = self.__line_of_location(source_location, mappings_dict)
                 for source_state_id, source_state_deps in source_location_deps.items():
                     # find source and target contexts based on locations and state ids
                     # only work contexts can be source or target of data dependencies
@@ -3588,6 +3602,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                         _state_ids_cache,
                     )
                     for sink_location, sink_location_deps in source_state_deps.items():
+                        dependency_source_line = self.__line_of_location(sink_location, mappings_dict)
                         for sink_state_id, var_infos in sink_location_deps.items():
                             # find source and target contexts based on locations and state ids
                             # only work contexts can be source or target of data dependencies
@@ -3642,6 +3657,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             dependency.var_name = var_name
                                             dependency.memory_region = memory_region
                                             dependency.origin = dep_origin
+                                            dependency.source_line = dependency_source_line
+                                            dependency.sink_line = dependency_sink_line
 
                                             source_ctx.register_outgoing_dependency(target_ctx, dependency)
                             else:
@@ -3668,6 +3685,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                             dependency.var_name = var_name
                                             dependency.memory_region = memory_region
                                             dependency.origin = dep_origin
+                                            dependency.source_line = dependency_source_line
+                                            dependency.sink_line = dependency_sink_line
 
                                             if dependency.var_name == "error":
                                                 print(
