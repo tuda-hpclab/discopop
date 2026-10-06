@@ -9,7 +9,7 @@ using namespace __dp;
 class AccessQueueIntegrationTest : public ::testing::Test {
     void SetUp() override{
         __dp::allDeps = new __dp::depMap();
-        __dp::mainThread_AccessInfoBuffer = __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_SIZES);
+        __dp::mainThread_AccessInfoBuffer = __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
         __dp::initParallelization();
     }
 

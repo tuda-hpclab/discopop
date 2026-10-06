@@ -248,6 +248,10 @@ void readRuntimeInfo() {
             SIG_NUM_HASH = intValue;
           } else if (variable.compare("NUM_WORKERS") == 0) {
             NUM_WORKERS = intValue;
+          } else if (variable.compare("FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER") == 0) {
+            FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER = intValue;
+          } else if (variable.compare("SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER") == 0) {
+            SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER = intValue;
           } else if (variable.compare("USE_PERFECT") == 0) {
             USE_PERFECT = intValue != 0;
           }
@@ -262,6 +266,8 @@ void readRuntimeInfo() {
     cout << "sig_num_elem = " << SIG_NUM_ELEM << "\n";
     cout << "sig_num_hash = " << SIG_NUM_HASH << "\n";
     cout << "num_workers  = " << NUM_WORKERS << "\n";
+    cout << "faq_chunks_per_worker   = " << FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER << "\n";
+    cout << "saq_elements_per_worker = " << SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER << "\n";
     sleep(2);
   }
 
@@ -283,6 +289,10 @@ void initParallelization() {
 
   // Initialize count of accesses
   numAccesses = new uint64_t[NUM_WORKERS]();
+
+  // bound the memory held by the access queues
+  firstAccessQueue.set_max_size((std::size_t)FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER * NUM_WORKERS);
+  secondAccessQueue.set_max_size((std::size_t)SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER * NUM_WORKERS);
 
   // initialize and set thread detached attribute
   finalizeParallelizationCalled = false; // mostly for unit-tests.
@@ -515,7 +525,7 @@ void *processFirstAccessQueue(void *arg) {
         break;
       } else {
         // let thread sleep and try fetching a chunk again after potentially preparing an new chunk
-        firstAccessQueueChunkBuffer.prepare_chunk_if_required(FIRST_ACCESS_QUEUE_SIZES);
+        firstAccessQueueChunkBuffer.prepare_chunk_if_required(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
         usleep(1000);
       }
     }
@@ -656,7 +666,7 @@ void finalizeParallelization() {
 
   // push last state of the mainThread_AccessInfoBuffer to the global FirstAccessQueue
   firstAccessQueue.push(mainThread_AccessInfoBuffer);
-  mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_SIZES);
+  mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
 
   // fake signaling: just notify the workers that no more addresses will be
   // collected

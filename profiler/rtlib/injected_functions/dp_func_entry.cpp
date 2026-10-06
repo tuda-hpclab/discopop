@@ -72,7 +72,7 @@ void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID) {
 //    dependency_metadata_results = new std::unordered_set<DependencyMetadata>();
 #endif
 
-    mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_SIZES);
+    mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
 
     out = new ofstream();
 

@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 #include "../../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
 #include "../../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
 #include "../../../../profiler/rtlib/runtimeFunctions.hpp"
@@ -49,4 +53,38 @@ TEST_F(SecondAccessQueueTest, testPushAndGet) {
     ASSERT_EQ(chunk_ptr, FAQC_ptr);
     ASSERT_TRUE(FAQ.empty());
     delete FAQC_ptr;
+}
+
+// SAQ test: push blocks while the queue is at its limit and continues once the consumer takes an element
+TEST_F(SecondAccessQueueTest, testPushBlocksWhenFull) {
+    auto SAQ = SecondAccessQueue(1);
+    int dummy_1 = 1, dummy_2 = 2;
+    SAQ.push((SecondAccessQueueElement*) &dummy_1);
+
+    std::atomic<bool> pushed(false);
+    std::thread producer([&]() {
+        SAQ.push((SecondAccessQueueElement*) &dummy_2);
+        pushed = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ASSERT_FALSE(pushed);
+
+    ASSERT_EQ((void*) SAQ.get(), (void*) &dummy_1);
+    producer.join();
+    ASSERT_TRUE(pushed);
+    ASSERT_EQ((void*) SAQ.get(), (void*) &dummy_2);
+    ASSERT_TRUE(SAQ.empty());
+}
+
+// SAQ test: set_max_size raises the limit, a limit of 0 is clamped to 1
+TEST_F(SecondAccessQueueTest, testSetMaxSize) {
+    auto SAQ = SecondAccessQueue(1);
+    SAQ.set_max_size(0);
+    int dummy = 42;
+    SAQ.push((SecondAccessQueueElement*) &dummy);  // must not block: the limit is at least 1
+    SAQ.set_max_size(2);
+    SAQ.push((SecondAccessQueueElement*) &dummy);  // must not block: the limit is 2 now
+    ASSERT_NE(SAQ.get(), nullptr);
+    ASSERT_NE(SAQ.get(), nullptr);
+    ASSERT_TRUE(SAQ.empty());
 }

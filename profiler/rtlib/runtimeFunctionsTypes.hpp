@@ -22,6 +22,7 @@
 #include "calltree/CallTreeNode.hpp"
 #endif
 
+#include <algorithm>
 #include <cstdint>
 #include <future>
 #include <mutex>
@@ -298,14 +299,21 @@ public:
   SecondAccessQueue(std::size_t arg_max_size) : max_size(arg_max_size) {}
 
   void push(SecondAccessQueueElement *elem) {
-    // spin-lock to prevent endless queue growth
-    while (internal_queue.size() > max_size) {
-      // std::cout << "SAQ: push: sleep." << std::endl;
+    // wait until the consumer has made room: every element keeps the shadow memory of a whole chunk alive,
+    // so an unbounded queue grows by gigabytes when the single consumer falls behind the workers
+    while (true) {
+      {
+        const std::lock_guard<std::mutex> lock(internal_mtx);
+        if (internal_queue.size() < max_size) {
+          internal_queue.push(elem);
+          return;
+        }
+      }
       usleep(1000);
     }
-    const std::lock_guard<std::mutex> lock(internal_mtx);
-    internal_queue.push(elem);
   }
+
+  void set_max_size(std::size_t arg_max_size) { max_size = std::max<std::size_t>(arg_max_size, 1); }
 
   SecondAccessQueueElement *get() {
     const std::lock_guard<std::mutex> lock(internal_mtx);
@@ -326,14 +334,19 @@ public:
 private:
   std::queue<SecondAccessQueueElement *> internal_queue;
   std::mutex internal_mtx;
-  const std::size_t max_size;
+  std::size_t max_size;
 };
 
 class FirstAccessQueue {
 public:
   FirstAccessQueue(std::size_t arg_max_size) : max_size(arg_max_size) {}
 
-  bool can_accept_entries() { return internal_queue.size() < max_size; }
+  bool can_accept_entries() {
+    const std::lock_guard<std::mutex> lock(internal_mtx);
+    return internal_queue.size() < max_size;
+  }
+
+  void set_max_size(std::size_t arg_max_size) { max_size = std::max<std::size_t>(arg_max_size, 1); }
 
   void push(FirstAccessQueueChunk *elem) {
     const std::lock_guard<std::mutex> lock(internal_mtx);
@@ -365,7 +378,7 @@ public:
 private:
   std::queue<FirstAccessQueueChunk *> internal_queue;
   std::mutex internal_mtx;
-  const std::size_t max_size;
+  std::size_t max_size;
 };
 
 class FirstAccessQueueChunkBuffer {

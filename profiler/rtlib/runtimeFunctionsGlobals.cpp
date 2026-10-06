@@ -66,8 +66,9 @@ pthread_t *workers = nullptr; // worker threads
 volatile bool finalizeParallelizationCalled =
     false; // signals to worker threads that no further data access will be registered in the first queue
 FirstAccessQueueChunk *mainThread_AccessInfoBuffer = nullptr;
-FirstAccessQueue firstAccessQueue(FIRST_ACCESS_QUEUE_SIZES);
-SecondAccessQueue secondAccessQueue(SECOND_ACCESS_QUEUE_SIZES);
+// the limits are scaled by NUM_WORKERS in initParallelization
+FirstAccessQueue firstAccessQueue(DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER);
+SecondAccessQueue secondAccessQueue(DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER);
 pthread_t *secondAccessQueue_worker_thread = nullptr;
 FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer(10);
 
@@ -79,6 +80,9 @@ int32_t NUM_WORKERS = DP_NUM_WORKERS;
 int32_t NUM_WORKERS = 4; // default number of worker threads (multiple workers
                          // can potentially lead to non-deterministic results)
 #endif
+
+int32_t FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER = DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER;
+int32_t SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER = DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER;
 
 AbstractShadow *singleThreadedExecutionSMem = nullptr; // used if NUM_WORKERS==0
 
