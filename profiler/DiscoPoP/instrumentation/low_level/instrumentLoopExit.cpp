@@ -12,25 +12,21 @@
 
 #include "../../DiscoPoP.hpp"
 
-void DiscoPoP::instrumentLoopExit(BasicBlock *bb, int32_t id) {
-  BasicBlock *currentBB = bb;
-  vector<Value *> args;
-  LID lid = 0;
-
-  for (BasicBlock::iterator BI = currentBB->begin(), EI = currentBB->end(); BI != EI; ++BI) {
-    lid = getLID(&*BI, fileID);
-    if (lid > 0 && !isa<PHINode>(BI)) {
-      args.push_back(ConstantInt::get(Int32, lid));
-      args.push_back(ConstantInt::get(Int32, id));
-      args.push_back(ConstantInt::get(Int32, 0));  // instruction id will be replaced after the assignment of unique instruction ids
-#if LLVM_VERSION_MAJOR >= 22
-      CallInst::Create(DpLoopExit, args, "",
-                       currentBB->begin()); // always insert to the beiginning
-#else
-      CallInst::Create(DpLoopExit, args, "",
-                       &*currentBB->begin()); // always insert to the beiginning
-#endif
-      break;
-    }
+void DiscoPoP::instrumentLoopExit(BasicBlock *bb, int32_t id, Loop *L) {
+  // see getLoopExitLID for exit blocks without a valid LID of their own
+  LID lid = getLoopExitLID(bb, L);
+  if (lid == 0) {
+    return;
   }
+  vector<Value *> args;
+  args.push_back(ConstantInt::get(Int32, lid));
+  args.push_back(ConstantInt::get(Int32, id));
+  args.push_back(ConstantInt::get(Int32, 0));  // instruction id will be replaced after the assignment of unique instruction ids
+#if LLVM_VERSION_MAJOR >= 22
+  CallInst::Create(DpLoopExit, args, "",
+                   bb->begin()); // always insert to the beiginning
+#else
+  CallInst::Create(DpLoopExit, args, "",
+                   &*bb->begin()); // always insert to the beiginning
+#endif
 }

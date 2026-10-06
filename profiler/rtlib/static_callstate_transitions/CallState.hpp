@@ -20,6 +20,9 @@ private:
   std::int32_t id;
   std::unordered_map<int32_t, CallState *> transitions;
   CallState *implicit_return_transition_target = nullptr;
+  // instruction id of the __dp_func_entry call of the function this state lies in, if the state
+  // is the entry state of a function instance (see callpath_function_entries.txt), else 0
+  std::int32_t function_entry_id = 0;
 
 public:
   CallState(int32_t id_arg) : id(id_arg) {}
@@ -28,4 +31,6 @@ public:
   int32_t get_id();
   CallState *get_transition_target(int32_t trigger_instruction);
   CallState *get_implicit_return_transition_target();
+  void set_function_entry_id(int32_t function_entry_id_arg) { function_entry_id = function_entry_id_arg; }
+  int32_t get_function_entry_id() const { return function_entry_id; }
 };

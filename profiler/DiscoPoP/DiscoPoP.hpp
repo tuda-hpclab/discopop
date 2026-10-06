@@ -78,6 +78,29 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+// The function called by the call or invoke I, looking through pointer casts and aliases, or
+// nullptr for an indirect call. Clang emits the complete-object constructor (C1) of a class without
+// virtual bases as an alias of the base-object constructor (C2), so `new T(...)` and `T t(...)` call
+// an alias, for which CallBase::getCalledFunction returns nullptr.
+inline llvm::Function *getCalledFunctionThroughAliases(llvm::Instruction *I) {
+  auto *CB = llvm::dyn_cast<llvm::CallBase>(I);
+  if (CB == nullptr || CB->getCalledOperand() == nullptr) {
+    return nullptr;
+  }
+  return llvm::dyn_cast<llvm::Function>(CB->getCalledOperand()->stripPointerCastsAndAliases());
+}
+
+// the unique instruction id assigned to I (metadata "dp.md.instr.id"), or 0 if it has none
+inline int32_t get_dp_instruction_id(llvm::Instruction *I) {
+  llvm::MDNode *md = I->getMetadata("dp.md.instr.id");
+  if (md == nullptr) {
+    return 0;
+  }
+  std::string id_str = llvm::cast<llvm::MDString>(md->getOperand(0))->getString().str();
+  id_str.erase(0, 15); // "dp.md.instr.id:"
+  return std::stoi(id_str);
+}
+
 #include <stdlib.h>
 
 #include "Globals.hpp"
@@ -114,6 +137,9 @@ private:
   ofstream *outCallpathStateIDCounter;
   // Mohammad 23.12.2020
   map<string, string> loopStartLines;
+  // id of the loop node in Data.xml, per llvm::Loop of the function processed last
+  // (filled by fillStartEndLineNumbers, read by CFA for loopstate_positions.txt)
+  map<llvm::Loop *, string> loopToPETNodeID;
 
   // structures to get list of global variables
   set<string> programGlobalVariablesSet;
@@ -132,6 +158,9 @@ private:
   bool isaCallOrInvoke(Instruction *BI);
 
   bool sanityCheck(BasicBlock *BB);
+
+  // LID to report for leaving the loop L through the exit block BB (see CFA)
+  LID getLoopExitLID(BasicBlock *BB, Loop *L);
 
   void collectDebugInfo();
 
@@ -180,7 +209,7 @@ private:
 
   void instrumentLoopEntry(BasicBlock *bb, int32_t id);
 
-  void instrumentLoopExit(BasicBlock *bb, int32_t id);
+  void instrumentLoopExit(BasicBlock *bb, int32_t id, Loop *L);
 
   int64_t uniqueNum;
 
@@ -217,7 +246,7 @@ private:
   string bbDepString;
   string fileName;
   int32_t fid;
-  FunctionCallee ReportBB, ReportBBPair;
+  FunctionCallee ReportBB, ReportBBPair, BBState;
   dputil::VariableNameFinder *VNF;
   std::ofstream *staticDependencyFile;
   int nextFreeStaticMemoryRegionID;
@@ -275,6 +304,11 @@ public:
   void createTakenBranchInstrumentation(Region *TopRegion, map<string, vector<CU *>> &BBIDToCUIDsMap);
 
   StaticCalltree buildStaticCalltree(Module &M);
+  bool isInstrumentedFunction(Function &F);
+  // determineFileID, cached per function of the current module (the lookup walks the function and
+  // resolves its file path)
+  int32_t getCachedFileID(Function &F);
+  std::unordered_map<const Function *, int32_t> file_id_cache;
   //std::pair<std::unordered_map<int32_t, std::vector<StaticCalltreeNode*>>, std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>>> enumerate_paths(StaticCalltree& calltree);
   StaticCallPathTree* enumerate_paths(StaticCalltree& calltree, std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>> *state_transitions,
   std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>> *inverse_state_transitions, std::uint32_t start_path_id);
@@ -285,8 +319,10 @@ public:
   // void save_path_state_transitions(std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>> *transitions);
   void save_path_state_transitions(StaticCallPathTree* call_path_tree_ptr);
   void save_static_calltree_to_dot(StaticCalltree* calltree);
+  void save_function_entries(StaticCallPathTree* call_path_tree_ptr);
   void assign_instruction_ids_to_dp_reduction_functions(Module &M);
   void update_argument_instruction_ids(Module &M);
+  void instrument_landing_pads(Module &M);
 // hasher used for std::vector<StaticCalltreeNode*>
 template <typename Container>
 struct container_hash {
@@ -373,6 +409,13 @@ struct container_hash {
   std::vector<instr_info_t> instructions_;
   std::map<std::string, int> path_to_id_;
   std::map<llvm::Loop*, int> loop_to_id;
+  // per loop id of the current module: id of its loop node in Data.xml and its start
+  // location (file_id:line), as written to loopstate_positions.txt
+  struct LoopIdentity {
+    std::string pet_node_id;
+    std::string start_location;
+  };
+  std::map<int32_t, LoopIdentity> loop_id_to_identity;
 
   // DPReduction end
 

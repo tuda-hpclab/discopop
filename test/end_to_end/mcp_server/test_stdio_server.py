@@ -31,6 +31,7 @@ ANALYSIS_TOOLS = {
     "get_configurations",
     "get_execution_results",
     "get_data_dependencies",
+    "get_side_effects",
     "gather_data",
     "get_hotspots",
     "get_parallelization_patches",
@@ -311,6 +312,7 @@ class TestSetupWorkflow(unittest.IsolatedAsyncioTestCase):
                 ("get_parallelization_patches", {}),
                 ("manage_patches", {"action": "list"}),
                 ("explain_parallelization", {"file_path": str(Path(project) / "code.cpp"), "start_line": 1}),
+                ("get_side_effects", {"function": "main"}),
             ]
             for tool, extra in before_analysis:
                 with self.subTest(f"{tool} before gather_data"):

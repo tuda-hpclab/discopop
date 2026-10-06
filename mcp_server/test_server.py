@@ -95,7 +95,13 @@ class TestToolSets(unittest.TestCase):
         names = self.__names("analysis")
         self.assertFalse(names & self._SETUP_TOOL_NAMES)
         # everything the analysis route needs is still there
-        for expected in ("gather_data", "get_parallelization_patches", "run_auto_tuning", "manage_patches"):
+        for expected in (
+            "gather_data",
+            "get_parallelization_patches",
+            "run_auto_tuning",
+            "manage_patches",
+            "get_side_effects",
+        ):
             self.assertIn(expected, names)
 
     def test_a_hidden_tool_is_not_dispatchable_and_says_why(self) -> None:

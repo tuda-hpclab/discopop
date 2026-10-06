@@ -26,7 +26,10 @@ from discopop_explorer.classes.TaskGraph.Contexts.WorkContext import WorkContext
 from discopop_explorer.classes.TaskGraph.Loops.TGStartLoopNode import TGStartLoopNode
 from discopop_explorer.classes.TaskGraph.TGNode import TGNode
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
+from discopop_explorer.classes.PEGraph.LoopNode import LoopNode
 from discopop_explorer.classes.patterns.PatternDecisions import (
+    CUT_EARLY_EXIT,
+    CUT_EXCEPTION_HANDLER,
     LOOP_CARRIED_DEPENDENCY,
     NO_PATTERN_NODE,
     TOO_FEW_ITERATIONS,
@@ -41,6 +44,8 @@ from discopop_explorer.classes.patterns.PatternDecisions import (
 from discopop_explorer.classes.patterns.PatternInfo import PatternInfo
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
+from discopop_explorer.functions.PEGraph.queries.edges import in_edges
+from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.pattern_detectors.clause_classification import filter_classifications, merge_classifications
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
 from discopop_explorer.pattern_detectors.loop_collapse_analysis import identify_collapsible_loop_nests
@@ -182,6 +187,107 @@ def get_pattern_key(
     )
 
 
+def _all_contexts(tg: TaskGraph) -> List[Context]:
+    """every context of the task graph reachable from its nodes and tg.contexts, in creation order"""
+    collected: Set[Context] = set()
+    queue: List[Context] = list(tg.contexts)
+    for tg_node in tg.graph.nodes():
+        if tg_node.created_context is not None:
+            queue.append(tg_node.created_context)
+        queue += list(tg_node.parent_context)
+    collected.update(queue)
+    while len(queue) > 0:
+        current = queue.pop()
+        related: List[Optional[Context]] = [current.parent_context, current.successor, current.predecessor]
+        related += list(current.contained_contexts)
+        for ctx in related:
+            if ctx is not None and ctx not in collected:
+                collected.add(ctx)
+                queue.append(ctx)
+    return sorted(collected, key=lambda ctx: ctx.creation_index)
+
+
+def dependencies_by_carried_loop(tg: TaskGraph) -> Dict[PETNodeID, List[Tuple[Context, Context, Dependency]]]:
+    """the dependencies whose carrying loops are known (Dependency.carried_by_pet_loops), per loop. A
+    dependency carried by a loop prevents it wherever its ends were mapped to: an end can lie in
+    the loop's header, outside the iteration copies, or in the standalone copy of a called function
+    rather than in the copy inlined into the loop."""
+    result: Dict[PETNodeID, List[Tuple[Context, Context, Dependency]]] = dict()
+    for ctx in _all_contexts(tg):
+        for target, dep in ctx.outgoing_dependencies:
+            if dep is not None and dep.carried_by_pet_loops is not None:
+                for pet_loop in sorted(dep.carried_by_pet_loops):
+                    result.setdefault(NodeID(pet_loop), []).append((ctx, target, dep))
+    return result
+
+
+def loop_node_of(pet: PEGraphX, node_id: NodeID) -> Optional[LoopNode]:
+    """the LoopNode of a loop candidate, which is attached to the loop's entry CU (see
+    region_of_pet_node), or None"""
+    if node_id not in pet.g:
+        return None
+    node = pet.node_at(node_id)
+    if isinstance(node, LoopNode):
+        return node
+    for parent_id, _, _ in in_edges(pet, node_id, EdgeType.CHILD):
+        parent = pet.node_at(parent_id)
+        if isinstance(parent, LoopNode) and parent.file_id == node.file_id and parent.start_line == node.start_line:
+            return parent
+    return None
+
+
+def _has_dynamic_records_within(tg: TaskGraph, loop_node: LoopNode) -> bool:
+    lines = tg.lines_with_dynamic_records
+    return any(
+        LineID(str(loop_node.file_id) + ":" + str(line)) in lines
+        for line in range(loop_node.start_line, loop_node.end_line + 1)
+    )
+
+
+def structural_rejection(
+    tg: TaskGraph, pet_node_id: NodeID, loop_node: Optional[LoopNode], profile_has_loop_data: bool
+) -> Optional[DecisionReason]:
+    """why a loop is no candidate regardless of its dependencies, or None: its exits or catch
+    handlers were cut from the task graph, or fewer than two of its iterations were observed in
+    one execution of it."""
+    cut_exit_lines = tg.loops_with_cut_exits.get(pet_node_id)
+    if cut_exit_lines is not None:
+        return DecisionReason(
+            kind=CUT_EARLY_EXIT,
+            message="The loop can be left early (break, return, exit), which a parallel loop does not allow. "
+            "The analysis cut these exits, so the dependencies of the code behind them are not known either.",
+            details={"exit_lines": sorted(cut_exit_lines)},
+        )
+    if loop_node is not None and loop_node.id in tg.loop_nodes_with_cut_exception_handlers:
+        return DecisionReason(
+            kind=CUT_EXCEPTION_HANDLER,
+            message="The loop contains an exception handler. The analysis cut it, so the dependencies of the "
+            "handler are not known.",
+        )
+    loop_data = None if loop_node is None else getattr(loop_node, "loop_data", None)
+    if loop_node is not None and profile_has_loop_data:
+        if loop_data is None and not _has_dynamic_records_within(tg, loop_node):
+            # Without a loop record, the loop may also be one an older profiler did not instrument
+            # (e.g. one ending an else arm); the records of its body tell that it was executed.
+            return DecisionReason(
+                kind=TOO_FEW_ITERATIONS,
+                message="The loop was not executed during profiling, so there is no evidence that its "
+                "iterations are independent.",
+                details={"maximum_iteration_count": 0},
+            )
+        if loop_data is not None and loop_data.maximum_iteration_count < 2:
+            return DecisionReason(
+                kind=TOO_FEW_ITERATIONS,
+                message="Fewer than two iterations of this loop were observed in one execution of it during "
+                "profiling, so there is no evidence that its iterations are independent.",
+                details={
+                    "maximum_iteration_count": loop_data.maximum_iteration_count,
+                    "entry_count": loop_data.entry_count,
+                },
+            )
+    return None
+
+
 def identify_simple_doall_and_reduction(
     tg: TaskGraph,
     ast_helper: ASTPatternDetectionHelper,
@@ -224,6 +330,7 @@ def identify_simple_doall_and_reduction(
     counts: Dict[str, int] = {
         "candidates": 0,
         "skipped_prevented": 0,
+        "skipped_structurally": 0,
         "skipped_too_few_iterations": 0,
         "skipped_dependency_found": 0,
         "skipped_before_classification": 0,
@@ -236,6 +343,9 @@ def identify_simple_doall_and_reduction(
     # heavily duplicated loop nests) is indistinguishable from a hang. The order of
     # tg.graph.nodes() is preserved, so the detection result is unaffected.
     loop_parent_nodes = [n for n in tg.graph.nodes() if isinstance(n.created_context, LoopParentContext)]
+    carried_index = dependencies_by_carried_loop(tg)
+    # without any loop record (an older profile, or a synthetic one) the iteration counts are unknown
+    profile_has_loop_data = any(getattr(n, "loop_data", None) is not None for n in all_nodes(tg.pet, LoopNode))
 
     for node in progress(loop_parent_nodes, desc="Checking loops for doall/reduction"):
         # check if node is LoopParent
@@ -249,6 +359,14 @@ def identify_simple_doall_and_reduction(
         # check if loop is not already preventedvariables
         if node.pet_node_id in prevented_loops:
             counts["skipped_prevented"] += 1
+            continue
+        rejection = structural_rejection(
+            tg, node.pet_node_id, loop_node_of(tg.pet, node.pet_node_id), profile_has_loop_data
+        )
+        if rejection is not None:
+            counts["skipped_structurally"] += 1
+            prevented_loops.add(node.pet_node_id)
+            record_rejection(node.pet_node_id, rejection)
             continue
         # get child iterations. Sorted, because get_contained_contexts returns a set: contexts
         # are hashed by identity, so its iteration order follows memory addresses and varies
@@ -309,16 +427,119 @@ def identify_simple_doall_and_reduction(
         dependency_found = False
         reduction_info: List[Tuple[Context, Context, Dependency, Dict[str, str]]] = []
         potential_breaking_dependencies: List[Tuple[Context, Context, Dependency]] = []
+        # only needed for reduction candidates, and then at most once per context
+        code_scopes: Dict[Context, Set[LineID]] = dict()
+
+        def code_scope_of(ctx: Context) -> Set[LineID]:
+            scope = code_scopes.get(ctx)
+            if scope is None:
+                scope = ctx.get_code_scope_set(tg.pet)
+                code_scopes[ctx] = scope
+            return scope
+
+        def prevents_doall(source_ctx: Context, out_dep_target: Context, dep: Dependency) -> bool:
+            """examines a dependency between iterations of the candidate: True if it definitely
+            prevents the loop, a static one is kept for the check after the classification"""
+            # check if the preventing dependency is a reduction dependency: does a
+            # reduction of this variable happen on a line which both ends of the
+            # dependency cover?
+            matched_reduction_entry: Optional[Dict[str, str]] = None
+            candidate_reduction_entries = reduction_entries_by_var.get(dep.var_name)  # type: ignore[arg-type]
+            if candidate_reduction_entries is not None:
+                source_code_scope = code_scope_of(source_ctx)
+                target_code_scope = code_scope_of(out_dep_target)
+                for reduction_line, reduction_entry in candidate_reduction_entries:
+                    if reduction_line in source_code_scope and reduction_line in target_code_scope:
+                        matched_reduction_entry = reduction_entry
+                        break
+            if matched_reduction_entry is not None:
+                # not a valid doall loop. The operation has to come from the entry
+                # which matched: reporting the last entry of pet.reduction_vars
+                # instead labelled every reduction of a project with the operation of
+                # whichever one happened to be listed last in reduction.txt, e.g.
+                # reduction(max:delta) for a "delta += 1.0" accumulation.
+                reduction_info.append((source_ctx, out_dep_target, dep, matched_reduction_entry))
+                return False
+            # check for and allow accesses to the loop variable
+            if (dep.var_name, dep.memory_region) in loop_variable_keys:
+                return False
+            # check if dep.origin is static. If so, give it a "second chance", which is tested after classifying variables in the loop.
+            # --> In this case it is a valid doall, if the variable is firstwritten inside the loop
+            # the message is built eagerly, and get_code_scope(inclusive=True) is the
+            # uncached, fully recursive variant. Building it unconditionally in this
+            # innermost loop dominated the whole analysis (measured on LULESH: 88s of
+            # a 146s run, 120M LineID objects), so it is only assembled when a DEBUG
+            # handler will actually consume it.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Prevents doall: "
+                    + str(dep.dtype)
+                    + " "
+                    + str(dep.source_line)
+                    + " "
+                    + str(dep.sink_line)
+                    + " "
+                    + str(dep.var_name)
+                    + " "
+                    + str(dep.memory_region)
+                    + " "
+                    + "origin: "
+                    + str(dep.origin)
+                    + " "
+                    + "source: "
+                    + str(source_ctx.get_code_scope(tg.pet, inclusive=True))
+                    + " "
+                    + "out_dep_target: "
+                    + str(out_dep_target.get_code_scope(tg.pet, inclusive=True))
+                    + " "
+                    + "carried_by_pet_loops: "
+                    + str(dep.carried_by_pet_loops)
+                )
+            if dep.origin == DepOrigin.DYNAMIC_ANALYSIS:
+                # dependency is trustworthy and definitely breaks doall
+                if decisions is not None:
+                    record = DependencyRecord.from_dependency(dep)
+                    record_rejection(
+                        node.pet_node_id,
+                        DecisionReason(
+                            kind=LOOP_CARRIED_DEPENDENCY,
+                            message="A "
+                            + record.describe()
+                            + " between different iterations was observed during profiling.",
+                            dependency=record,
+                        ),
+                    )
+                return True
+            # dependency is static and may be too pessimistic.
+            # dependency is not problematic, if the variable is first written in the loop
+            potential_breaking_dependencies.append((source_ctx, out_dep_target, dep))
+            return False
+
+        # the dependencies known to be carried by this loop, wherever their ends lie
+        for source_ctx, out_dep_target, dep in carried_index.get(node.pet_node_id, []):
+            # WAR dependencies between iterations are non-critical, as they overwrite data and thus can be privatized
+            if dep.etype == EdgeType.DATA and dep.dtype == DepType.WAR:
+                continue
+            if prevents_doall(source_ctx, out_dep_target, dep):
+                dependency_found = True
+                break
+        # the dependencies without a known carrying loop, by the iteration copies of their ends
         for source_index, ic_source in enumerate(iteration_contexts):
+            if dependency_found:
+                break
             # check for do-all preventing dependencies
             for subnode in subtrees[ic_source]:
-                # only needed for reduction candidates, and then at most once per subnode
-                subnode_code_scope: Optional[Set[LineID]] = None
                 for out_dep_target, dep in subnode.outgoing_dependencies:
                     # WAR dependencies between iterations are non-critical, as they overwrite data and thus can be privatized
                     if dep.etype == EdgeType.DATA and dep.dtype == DepType.WAR:
                         continue
-
+                    if dep.carried_by_pet_loops is not None:
+                        # the callpath states (or the instruction order) of the ends tell which
+                        # loop's iterations the dependency crosses: if this one, it was examined
+                        # above. The iteration copies cannot tell: two consecutive iterations with
+                        # the buckets 2 and 0 share the copy [0, 2], so a dependency carried by an
+                        # outer loop would look carried by this one.
+                        continue
                     if out_dep_target in shared_by_iterations:
                         crosses_iterations = True
                     else:
@@ -326,95 +547,11 @@ def identify_simple_doall_and_reduction(
                         crosses_iterations = (
                             target_iteration_index is not None and target_iteration_index != source_index
                         )
-                    if crosses_iterations:
-                        # check if the preventing dependency is a reduction dependency: does a
-                        # reduction of this variable happen on a line which both ends of the
-                        # dependency cover?
-                        matched_reduction_entry: Optional[Dict[str, str]] = None
-                        candidate_reduction_entries = reduction_entries_by_var.get(dep.var_name)  # type: ignore[arg-type]
-                        if candidate_reduction_entries is not None:
-                            if subnode_code_scope is None:
-                                subnode_code_scope = subnode.get_code_scope_set(tg.pet)
-                            target_code_scope = out_dep_target.get_code_scope_set(tg.pet)
-                            for reduction_line, reduction_entry in candidate_reduction_entries:
-                                if reduction_line in subnode_code_scope and reduction_line in target_code_scope:
-                                    matched_reduction_entry = reduction_entry
-                                    break
-                        is_reduction_dependency = matched_reduction_entry is not None
-                        if matched_reduction_entry is not None:
-                            # not a valid doall loop. The operation has to come from the entry
-                            # which matched: reporting the last entry of pet.reduction_vars
-                            # instead labelled every reduction of a project with the operation of
-                            # whichever one happened to be listed last in reduction.txt, e.g.
-                            # reduction(max:delta) for a "delta += 1.0" accumulation.
-                            reduction_info.append((subnode, out_dep_target, dep, matched_reduction_entry))
-                        #                            dependency_found = True
-                        #                            break
-
-                        # check for and allow accesses to the loop variable
-                        if (dep.var_name, dep.memory_region) in loop_variable_keys or is_reduction_dependency:
-                            # dependency on loop variable or reduction variable
-                            pass
-                        else:
-                            # check if dep.origin is static. If so, give it a "second chance", which is tested after classifying variables in the loop.
-                            # --> In this case it is a valid doall, if the variable is firstwritten inside the loop
-                            # the message is built eagerly, and get_code_scope(inclusive=True) is the
-                            # uncached, fully recursive variant. Building it unconditionally in this
-                            # innermost loop dominated the whole analysis (measured on LULESH: 88s of
-                            # a 146s run, 120M LineID objects), so it is only assembled when a DEBUG
-                            # handler will actually consume it.
-                            if logger.isEnabledFor(logging.DEBUG):
-                                logger.debug(
-                                    "Prevents doall: "
-                                    + str(dep.dtype)
-                                    + " "
-                                    + str(dep.source_line)
-                                    + " "
-                                    + str(dep.sink_line)
-                                    + " "
-                                    + str(dep.var_name)
-                                    + " "
-                                    + str(dep.memory_region)
-                                    + " "
-                                    + "origin: "
-                                    + str(dep.origin)
-                                    + " "
-                                    + "source: "
-                                    + str(subnode.get_code_scope(tg.pet, inclusive=True))
-                                    + " "
-                                    + "out_dep_target: "
-                                    + str(out_dep_target.get_code_scope(tg.pet, inclusive=True))
-                                    + " "
-                                    + "source_ctx: "
-                                    + str(ic_source)
-                                    + " "
-                                    + "target_ctx: "
-                                    + str(out_dep_target)
-                                )
-                            if dep.origin == DepOrigin.DYNAMIC_ANALYSIS:
-                                # dependency is trustworthy and definitely breaks doall
-                                dependency_found = True
-                                if decisions is not None:
-                                    record = DependencyRecord.from_dependency(dep)
-                                    record_rejection(
-                                        node.pet_node_id,
-                                        DecisionReason(
-                                            kind=LOOP_CARRIED_DEPENDENCY,
-                                            message="A "
-                                            + record.describe()
-                                            + " between different iterations was observed during profiling.",
-                                            dependency=record,
-                                        ),
-                                    )
-                                break
-                            else:
-                                # dependency is static and may be too pessimistic.
-                                # dependency is not problematic, if the variable is first written in the loop
-                                potential_breaking_dependencies.append((ic_source, out_dep_target, dep))
+                    if crosses_iterations and prevents_doall(subnode, out_dep_target, dep):
+                        dependency_found = True
+                        break
                 if dependency_found:
                     break
-            if dependency_found:
-                break
         if dependency_found:
             # node is not a valid doall loop
             prevented_loops.add(node.pet_node_id)

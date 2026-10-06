@@ -74,3 +74,24 @@ The format is quite simple and will be explained using the following example:
 `Loop Line Number` refers to the source code line of the loop which contains the identified operation.
 `Reduction Line Number` refers to the source code line where the operation is located.
 The name of the affected reduction variable is presented by `Variable Name` and `Operation Name` shows which operation is used for the reduction.
+
+## Loopstate Positions
+The callpath states written to `stateID_to_callpath_mapping.txt` describe the loops active within a function by labels of the form `<function>_loopstate<digits>`, carrying one digit per loop of the function: `0`, `1` or `2` name the iteration bucket of an active loop, `3` marks an inactive loop.
+Which loop each digit position stands for is stored in a file named `loopstate_positions.txt`.
+Each line of the file describes one digit position of one function.
+The used format is as follows: `<function_name> <position> <loop_id> <loop_node_id> <file_id>:<start_line>`.
+
+`function_name` is the (mangled) name used in the `_loopstate` labels, `position` the index of the digit within `<digits>`, counted from 0.
+`loop_id` is the loop's id within its module, as used in `loop_meta.txt`.
+`loop_node_id` is the id of the loop's node in `Data.xml`, and `<file_id>:<start_line>` the loop's start location, equal to that node's `startsAtLine`. Both are `-` if they are unknown.
+The positions follow a pre-order traversal of the function's loop nesting forest.
+Loops which are not instrumented for loop entry and exit, and thus are not part of the callpath states, are not listed.
+Since every compiled module appends to the file, a function compiled in multiple modules (e.g. an inline function defined in a header) is listed once per module.
+The loop nesting forest is taken from LLVM's loop analysis: the parent of a loop is its closest enclosing instrumented loop, and siblings keep the order of their loop entries in the code.
+
+## Callpath Function Entries
+The runtime library follows a call into a function's callpath state only when the call enters an instrumented function, i.e. on the callee's function entry, and only if the call's transition leads to a state of that function.
+Otherwise (a call from another module, an indirect or virtual call, a call by library code) it continues in the root callpath state of the entered function, i.e. the state of the function without a caller in its module, if one exists; the callpaths of such states start with the entered function instead of `main`.
+If neither exists, the caller's state is kept, without transitions, until the function is left. Leaving a function always restores the caller's state.
+The required information is stored in a file named `callpath_function_entries.txt`, which identifies a function by the instruction id of its function entry instrumentation.
+The used format is as follows: `S <state_id> <function_entry_id>` marks a state as the entry state of an instance of the function, and `E <function_entry_id> <state_id>` names the root entry state of the function.

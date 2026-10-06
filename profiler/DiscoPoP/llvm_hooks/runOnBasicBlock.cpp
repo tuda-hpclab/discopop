@@ -162,11 +162,8 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
     }
     // call and invoke
     else if (isaCallOrInvoke(&*BI)) {
-      Function *F = nullptr;
-      if (isa<CallInst>(BI))
-        F = (cast<CallInst>(BI))->getCalledFunction();
-      else if (isa<InvokeInst>(BI))
-        F = (cast<InvokeInst>(BI))->getCalledFunction();
+      // resolves aliases, e.g. calls of constructors (see getCalledFunctionThroughAliases)
+      Function *F = getCalledFunctionThroughAliases(&*BI);
 
       // For ordinary function calls, F has a name.
       // However, sometimes the function being called
@@ -238,11 +235,9 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
       if (lid > 0) // calls on non-user code are not instrumented
       {
         IRBuilder<> IRBCall(&*BI);
-        int8_t F_is_library_function = 0;
-        if(F){
-          F_is_library_function = (int8_t) F->isDeclaration();
-        }
-        IRBCall.CreateCall(DpCallOrInvoke, {ConstantInt::get(Int32, llvm_ir_instruction_id), ConstantInt::get(Int8, F_is_library_function)});
+        // the callpath state follows the call only if it enters an instrumented function, see
+        // enter_function_for_callstate in the runtime library
+        IRBCall.CreateCall(DpCallOrInvoke, {ConstantInt::get(Int32, llvm_ir_instruction_id)});
         if (DP_DEBUG) {
           if (isa<CallInst>(BI)) {
             if (!(fn.str() == ""))

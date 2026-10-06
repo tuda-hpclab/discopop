@@ -1,0 +1,1 @@
+ FileID : 1 Loop Line Number : 12 Reduction Line Number : 14 Variable Name : s Operation Name : +
