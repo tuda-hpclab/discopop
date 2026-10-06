@@ -373,13 +373,16 @@ def test_break_cycles_wraps_a_loop_with_several_back_edges_only_once(
             "the loop at " + header + " must be wrapped in exactly one TGEndLoopNode"
         )
 
-    # both back edges end an iteration of the outer loop
-    outer_iteration_ends = [
+    # both back edges and the exit source end an iteration of the outer loop, all through its one
+    # iteration end marker
+    [outer_iteration_end] = [
         n
         for n in tg.graph.nodes
         if isinstance(n, TGEndIterationNode) and n.parent_loop_pet_node_id == M_HEADER  # type: ignore[attr-defined]
     ]
-    assert sorted(str(n.pet_node_id) for n in outer_iteration_ends) == sorted([M_LATCH_A, M_LATCH_B, M_COND])
+    assert sorted(str(n.pet_node_id) for n in tg.get_predecessors(outer_iteration_end)) == sorted(
+        [M_LATCH_A, M_LATCH_B, M_COND]
+    )
 
     assert nx.is_directed_acyclic_graph(tg.graph), "the cycles were not broken"
     function_node = tg.TGFunctionNode_pet_node_id_to_tg_node["3:0"]

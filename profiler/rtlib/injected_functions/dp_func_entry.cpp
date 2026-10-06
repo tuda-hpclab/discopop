@@ -38,7 +38,7 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_func_entry(LID lid, int32_t isStart) {
+void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID) {
   if (targetTerminated) {
     // prevent deleting generated results after the main function has been
     // exited. This might happen, e.g., if a destructor of a global struct is
@@ -79,7 +79,7 @@ void __dp_func_entry(LID lid, int32_t isStart) {
     // hybrid analysis
     allDeps = new depMap();
     outPutDeps = new stringDepMap();
-    bbList = new ReportedBBSet();
+    bbList = new ReportedBBRecorder();
     // End HA
 
     memory_manager->allocate_dummy_region();
@@ -150,6 +150,9 @@ void __dp_func_entry(LID lid, int32_t isStart) {
   } else {
     function_manager->register_function_start(lid);
   }
+
+  // follow the pending call into this function (or switch to the function's own root state)
+  enter_function_for_callstate(functionEntryID);
 
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);

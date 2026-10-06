@@ -150,7 +150,110 @@ typedef std::unordered_map<LID, depSet *> depMap;
 
 // Hybrid anaysis
 typedef std::unordered_map<std::string, std::unordered_set<std::string>> stringDepMap;
-typedef std::unordered_set<std::uint32_t> ReportedBBSet;
+// One observed execution of a reporting basic block of the hybrid analysis (see
+// __dp_report_bb / __dp_report_bb_pair): which entry of the handed over
+// dependency strings it reports, the callpath state of the most recent execution
+// of the basic block holding the dependencies' sources, and the callpath state
+// of the reporting (sink) basic block's execution.
+struct ReportedBB {
+  std::uint32_t bb_index;
+  std::uint32_t source_state;
+  std::uint32_t sink_state;
+
+  bool operator==(const ReportedBB &other) const {
+    return bb_index == other.bb_index && source_state == other.source_state && sink_state == other.sink_state;
+  }
+};
+
+struct ReportedBBHasher {
+  size_t operator()(const ReportedBB &key) const {
+    std::uint64_t states = (((std::uint64_t)key.source_state) << 32) | key.sink_state;
+    return std::hash<std::uint64_t>{}(states) ^ (std::hash<std::uint32_t>{}(key.bb_index) * 0x9E3779B97F4A7C15ULL);
+  }
+};
+
+typedef std::unordered_set<ReportedBB, ReportedBBHasher> ReportedBBSet;
+
+// Collects the reported executions. A reporting basic block executes very
+// often, but mostly in pairs of states it was already reported with, so the
+// common case is a lookup of an existing entry. The executions are kept in an
+// open-addressing hash table of plain entries (linear probing, power-of-two
+// capacity, at most half full), which makes that lookup much cheaper than one
+// in a std::unordered_set. The entries are only needed as a set at
+// termination, see get_executions.
+class ReportedBBRecorder {
+public:
+  ReportedBBRecorder() : slots(INITIAL_CAPACITY) {}
+
+  inline void record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
+    const std::uint64_t states = (((std::uint64_t)source_state) << 32) | sink_state;
+    std::size_t mask = slots.size() - 1;
+    for (std::size_t pos = slot_of(bb_index, states) & mask;; pos = (pos + 1) & mask) {
+      Slot &slot = slots[pos];
+      if (!slot.used) {
+        slot.used = true;
+        slot.bb_index = bb_index;
+        slot.states = states;
+        if (2 * (++count) > slots.size()) {
+          grow();
+        }
+        return;
+      }
+      if (slot.states == states && slot.bb_index == bb_index) {
+        return;
+      }
+    }
+  }
+
+  std::size_t size() const { return count; }
+
+  ReportedBBSet get_executions() const {
+    ReportedBBSet executions;
+    executions.reserve(count);
+    for (const Slot &slot : slots) {
+      if (slot.used) {
+        executions.insert(
+            ReportedBB{slot.bb_index, (std::uint32_t)(slot.states >> 32), (std::uint32_t)(slot.states & 0xFFFFFFFF)});
+      }
+    }
+    return executions;
+  }
+
+private:
+  static constexpr std::size_t INITIAL_CAPACITY = 1024;
+  struct Slot {
+    std::uint64_t states = 0;
+    std::uint32_t bb_index = 0;
+    bool used = false;
+  };
+
+  static inline std::size_t slot_of(std::uint32_t bb_index, std::uint64_t states) {
+    std::uint64_t h = states * 0x9E3779B97F4A7C15ULL ^ (((std::uint64_t)bb_index) * 0xC2B2AE3D27D4EB4FULL);
+    h ^= h >> 29;
+    h *= 0xBF58476D1CE4E5B9ULL;
+    h ^= h >> 32;
+    return (std::size_t)h;
+  }
+
+  void grow() {
+    std::vector<Slot> old(slots.size() * 2);
+    old.swap(slots);
+    const std::size_t mask = slots.size() - 1;
+    for (const Slot &slot : old) {
+      if (!slot.used) {
+        continue;
+      }
+      std::size_t pos = slot_of(slot.bb_index, slot.states) & mask;
+      while (slots[pos].used) {
+        pos = (pos + 1) & mask;
+      }
+      slots[pos] = slot;
+    }
+  }
+
+  std::vector<Slot> slots;
+  std::size_t count = 0;
+};
 // End HA
 
 class FirstAccessQueueChunk {

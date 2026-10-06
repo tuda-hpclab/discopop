@@ -231,9 +231,10 @@ void determineFileID(Function &F, int32_t &fileID) {
 
           if (absolutePathFileName) {
             fileID = dputil::getFileID(FileMappingPath, string(absolutePathFileName));
-            delete[] absolutePathFileName;
+            free(absolutePathFileName); // allocated by realpath
           }
-          break;
+          // the first instruction with a debug location determines the file
+          return;
         }
       }
     }

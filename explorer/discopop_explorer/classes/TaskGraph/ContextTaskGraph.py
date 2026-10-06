@@ -320,6 +320,10 @@ class ContextTaskGraph(Plottable, object):  # type: ignore[misc]
         for ctx in progress(self.graph.nodes):
             ctx_parent_component = inverse_component_dict[ctx]
             for sink_ctx, dep in ctx.outgoing_dependencies:
+                if sink_ctx is ctx:
+                    # a dependency between two iterations of one iteration copy (see
+                    # Dependency.carried_by_loop); it orders nothing within the graph
+                    continue
                 sink_ctx_parent_component = inverse_component_dict[sink_ctx]
                 if ctx_parent_component != sink_ctx_parent_component:
                     # not an intra-component dependency

@@ -1,0 +1,2824 @@
+<Nodes>
+
+	<Node id="0:0" type="1" name="_Z8pure_addii" startsAtLine = "1:22" endsAtLine = "1:22">
+		<childrenNodes>1:1,1:2</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:22" accessMode="RW">a</arg>
+			<arg type="i32" defLine="1:22" accessMode="RW">b</arg>
+		</funcArguments>
+		<funcReturnLines>1:22, </funcReturnLines>
+	</Node>
+
+	<Node id="1:1" type="0" name="" startsAtLine = "1:22" endsAtLine = "1:22">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>128</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:22</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:22</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:2</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">a</local>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">b</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:2" type="0" name="" startsAtLine = "1:22" endsAtLine = "1:22">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:22</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:22</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:3" type="1" name="_Z11read_globalv" startsAtLine = "1:25" endsAtLine = "1:25">
+		<childrenNodes>1:4</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:25, </funcReturnLines>
+	</Node>
+
+	<Node id="1:4" type="0" name="" startsAtLine = "1:25" endsAtLine = "1:25">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:25</instructionLines>
+		<readPhaseLines count="1">1:25</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:25</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_counter</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:5" type="1" name="_Z12write_globali" startsAtLine = "1:28" endsAtLine = "1:28">
+		<childrenNodes>1:6,1:7</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:28" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines>1:28, </funcReturnLines>
+	</Node>
+
+	<Node id="1:6" type="0" name="" startsAtLine = "1:28" endsAtLine = "1:28">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:28</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:28</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:7</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">v</local>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">g_counter</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:7" type="0" name="" startsAtLine = "1:28" endsAtLine = "1:28">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:28</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:28</writePhaseLines>
+		<returnInstructions count="1">1:28</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:8" type="1" name="_Z17write_only_globali" startsAtLine = "1:31" endsAtLine = "1:31">
+		<childrenNodes>1:9,1:10</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:31" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines>1:31, </funcReturnLines>
+	</Node>
+
+	<Node id="1:9" type="0" name="" startsAtLine = "1:31" endsAtLine = "1:31">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:31</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:31</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:10</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">v</local>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">g_sink</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:10" type="0" name="" startsAtLine = "1:31" endsAtLine = "1:31">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:31</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:31</writePhaseLines>
+		<returnInstructions count="1">1:31</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:11" type="1" name="_Z19write_through_paramPii" startsAtLine = "1:34" endsAtLine = "1:38">
+		<childrenNodes>1:12,1:13,1:14,1:18</childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="1:34" accessMode="RW">p</arg>
+			<arg type="i32" defLine="1:34" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines>1:38, </funcReturnLines>
+	</Node>
+
+	<Node id="1:12" type="0" name="" startsAtLine = "1:34" endsAtLine = "1:34">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>128</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>5</instructionsCount>
+		<instructionLines count="1">1:34</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:34</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:13</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="LineNotFound" accessMode="W">n</global>
+			<global type="ptr" defLine="LineNotFound" accessMode="W">p</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:13" type="0" name="" startsAtLine = "1:35" endsAtLine = "1:35">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:35</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:35</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:15</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:35" accessMode="W">i</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:14" type="2" name="" startsAtLine = "1:35" endsAtLine = "1:37">
+		<childrenNodes>1:15,1:16,1:17</childrenNodes>
+	</Node>
+
+	<Node id="1:15" type="0" name="" startsAtLine = "1:35" endsAtLine = "1:35">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.cond</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:35</instructionLines>
+		<readPhaseLines count="1">1:35</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:16</CU>
+			<CU>1:18</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:35" accessMode="R">i</global>
+			<global type="ptr" defLine="1:34" accessMode="R">n</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:16" type="0" name="" startsAtLine = "1:36" endsAtLine = "1:37">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.body</BasicBlockID>
+		<readDataSize>128</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>7</instructionsCount>
+		<instructionLines count="2">1:36,1:37</instructionLines>
+		<readPhaseLines count="1">1:36</readPhaseLines>
+		<writePhaseLines count="1">1:36</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:17</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:35" accessMode="R">i</global>
+			<global type="ptr" defLine="1:34" accessMode="R">p</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:17" type="0" name="" startsAtLine = "1:35" endsAtLine = "1:35">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.inc</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:35</instructionLines>
+		<readPhaseLines count="1">1:35</readPhaseLines>
+		<writePhaseLines count="1">1:35</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:15</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:35" accessMode="R">i</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:18" type="0" name="" startsAtLine = "1:38" endsAtLine = "1:38">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:38</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:38</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:19" type="1" name="_Z7wrapperPii" startsAtLine = "1:41" endsAtLine = "1:41">
+		<childrenNodes>1:20,1:21</childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="1:41" accessMode="RW">q</arg>
+			<arg type="i32" defLine="1:41" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines>1:41, </funcReturnLines>
+	</Node>
+
+	<Node id="1:20" type="0" name="" startsAtLine = "1:41" endsAtLine = "1:41">
+		<childrenNodes>1:22</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>128</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:41</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:41</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:21</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">n</local>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">q</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:41" callInstId="77">1:22</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:22" type="3" name="_Z19write_through_paramPii" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="34" accessMode="RW">p</arg>
+			<arg type="i32" defLine="34" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:21" type="0" name="" startsAtLine = "1:41" endsAtLine = "1:41">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>96</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:41</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:41</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:23" type="1" name="_Z12local_bufferv" startsAtLine = "1:44" endsAtLine = "1:47">
+		<childrenNodes>1:24</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:47, </funcReturnLines>
+	</Node>
+
+	<Node id="1:24" type="0" name="" startsAtLine = "1:44" endsAtLine = "1:47">
+		<childrenNodes>1:25</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>6</instructionsCount>
+		<instructionLines count="3">1:44,1:46,1:47</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:47</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+			<local type="ARRAY,ptr" defLine="LineNotFound" accessMode="R">local</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:46" callInstId="85">1:25</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:25" type="3" name="_Z19write_through_paramPii" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="34" accessMode="RW">p</arg>
+			<arg type="i32" defLine="34" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:26" type="1" name="_Z10next_valuev" startsAtLine = "1:51" endsAtLine = "1:51">
+		<childrenNodes>1:27</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:51, </funcReturnLines>
+	</Node>
+
+	<Node id="1:27" type="0" name="" startsAtLine = "1:51" endsAtLine = "1:51">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:51</instructionLines>
+		<readPhaseLines count="1">1:51</readPhaseLines>
+		<writePhaseLines count="1">1:51</writePhaseLines>
+		<returnInstructions count="1">1:51</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_seq</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:28" type="1" name="_Z4bumpPi" startsAtLine = "1:54" endsAtLine = "1:54">
+		<childrenNodes>1:29,1:30</childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="1:54" accessMode="RW">x</arg>
+		</funcArguments>
+		<funcReturnLines>1:54, </funcReturnLines>
+	</Node>
+
+	<Node id="1:29" type="0" name="" startsAtLine = "1:54" endsAtLine = "1:54">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:54</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:54</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:30</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">x</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:30" type="0" name="" startsAtLine = "1:54" endsAtLine = "1:54">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>96</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>5</instructionsCount>
+		<instructionLines count="1">1:54</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:54</writePhaseLines>
+		<returnInstructions count="1">1:54</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:31" type="1" name="_Z13address_takeni" startsAtLine = "1:55" endsAtLine = "1:57">
+		<childrenNodes>1:32,1:33</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:55" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines>1:57, </funcReturnLines>
+	</Node>
+
+	<Node id="1:32" type="0" name="" startsAtLine = "1:55" endsAtLine = "1:55">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:55</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:55</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:33</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">v</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:33" type="0" name="" startsAtLine = "1:56" endsAtLine = "1:57">
+		<childrenNodes>1:34</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="2">1:56,1:57</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:57</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="1:55" accessMode="R">v</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:56" callInstId="109">1:34</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:34" type="3" name="_Z4bumpPi" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="54" accessMode="RW">x</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:35" type="1" name="_Z9sibling_av" startsAtLine = "1:61" endsAtLine = "1:64">
+		<childrenNodes>1:36,1:37</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:64, </funcReturnLines>
+	</Node>
+
+	<Node id="1:36" type="0" name="" startsAtLine = "1:61" endsAtLine = "1:63">
+		<childrenNodes>1:38</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="3">1:61,1:62,1:63</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:62</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:37</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="1:62" accessMode="W">a</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:63" callInstId="117">1:38</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:38" type="3" name="_Z4bumpPi" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="54" accessMode="RW">x</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:37" type="0" name="" startsAtLine = "1:64" endsAtLine = "1:64">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:64</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:64</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="1:62" accessMode="R">a</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:39" type="1" name="_Z9sibling_bv" startsAtLine = "1:66" endsAtLine = "1:69">
+		<childrenNodes>1:40,1:41</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:69, </funcReturnLines>
+	</Node>
+
+	<Node id="1:40" type="0" name="" startsAtLine = "1:66" endsAtLine = "1:68">
+		<childrenNodes>1:42</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="3">1:66,1:67,1:68</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:67</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:41</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="1:67" accessMode="W">b</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:68" callInstId="125">1:42</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:42" type="3" name="_Z4bumpPi" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="54" accessMode="RW">x</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:41" type="0" name="" startsAtLine = "1:69" endsAtLine = "1:69">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:69</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:69</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="1:67" accessMode="R">b</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:43" type="1" name="_Z5clearPii" startsAtLine = "1:73" endsAtLine = "1:73">
+		<childrenNodes>1:44,1:45</childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="1:73" accessMode="RW">p</arg>
+			<arg type="i32" defLine="1:73" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines>1:73, </funcReturnLines>
+	</Node>
+
+	<Node id="1:44" type="0" name="" startsAtLine = "1:73" endsAtLine = "1:73">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>128</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:73</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:73</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:45</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">n</local>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">p</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:45" type="0" name="" startsAtLine = "1:73" endsAtLine = "1:73">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>96</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>6</instructionsCount>
+		<instructionLines count="1">1:73</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:73</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:46" type="1" name="_Z10set_memberP4Pair" startsAtLine = "1:76" endsAtLine = "1:76">
+		<childrenNodes>1:47,1:48</childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="1:76" accessMode="RW">s</arg>
+		</funcArguments>
+		<funcReturnLines>1:76, </funcReturnLines>
+	</Node>
+
+	<Node id="1:47" type="0" name="" startsAtLine = "1:76" endsAtLine = "1:76">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:76</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:76</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:48</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">s</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:48" type="0" name="" startsAtLine = "1:76" endsAtLine = "1:76">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:76</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:76</writePhaseLines>
+		<returnInstructions count="1">1:76</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:49" type="1" name="_Z6shadowv" startsAtLine = "1:79" endsAtLine = "1:82">
+		<childrenNodes>1:50,1:51,1:52</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:82, </funcReturnLines>
+	</Node>
+
+	<Node id="1:50" type="0" name="" startsAtLine = "1:79" endsAtLine = "1:80">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="2">1:79,1:80</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:80</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:51</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:80" accessMode="W">g_counter</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:51" type="0" name="" startsAtLine = "1:81" endsAtLine = "1:81">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:81</instructionLines>
+		<readPhaseLines count="1">1:81</readPhaseLines>
+		<writePhaseLines count="1">1:81</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:52</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:80" accessMode="R">g_counter</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:52" type="0" name="" startsAtLine = "1:82" endsAtLine = "1:82">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:82</instructionLines>
+		<readPhaseLines count="1">1:82</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:82</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:80" accessMode="R">g_counter</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:53" type="1" name="_Z11count_callsv" startsAtLine = "1:88" endsAtLine = "1:89">
+		<childrenNodes>1:54,1:55</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:89, </funcReturnLines>
+	</Node>
+
+	<Node id="1:54" type="0" name="" startsAtLine = "1:88" endsAtLine = "1:88">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:88</instructionLines>
+		<readPhaseLines count="1">1:88</readPhaseLines>
+		<writePhaseLines count="1">1:88</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:55</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">_ZZ11count_callsvE5calls</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:55" type="0" name="" startsAtLine = "1:89" endsAtLine = "1:89">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:89</instructionLines>
+		<readPhaseLines count="1">1:89</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:89</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">_ZZ11count_callsvE5calls</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:56" type="1" name="_Z16read_const_tablei" startsAtLine = "1:93" endsAtLine = "1:93">
+		<childrenNodes>1:57,1:58</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:93" accessMode="RW">i</arg>
+		</funcArguments>
+		<funcReturnLines>1:93, </funcReturnLines>
+	</Node>
+
+	<Node id="1:57" type="0" name="" startsAtLine = "1:93" endsAtLine = "1:93">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:93</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:93</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:58</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">i</local>
+		</localVariables>
+		<globalVariables>
+			<global type="ARRAY,ptr" defLine="GlobalVar" accessMode="R">_ZL7g_table</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:58" type="0" name="" startsAtLine = "1:93" endsAtLine = "1:93">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>6</instructionsCount>
+		<instructionLines count="1">1:93</instructionLines>
+		<readPhaseLines count="1">1:93</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:93</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:59" type="1" name="_Z12never_calledv" startsAtLine = "1:96" endsAtLine = "1:96">
+		<childrenNodes>1:60</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:96, </funcReturnLines>
+	</Node>
+
+	<Node id="1:60" type="0" name="" startsAtLine = "1:96" endsAtLine = "1:96">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:96</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:96</writePhaseLines>
+		<returnInstructions count="1">1:96</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">g_unused</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:61" type="1" name="_Z7recursei" startsAtLine = "1:99" endsAtLine = "1:105">
+		<childrenNodes>1:62,1:63,1:64,1:65,1:66,1:67</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:99" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines>1:105, </funcReturnLines>
+	</Node>
+
+	<Node id="1:62" type="0" name="" startsAtLine = "1:99" endsAtLine = "1:99">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:99</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:99</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:63</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">n</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:63" type="0" name="" startsAtLine = "1:100" endsAtLine = "1:100">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:100</instructionLines>
+		<readPhaseLines count="1">1:100</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:64</CU>
+			<CU>1:66</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:99" accessMode="R">n</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:64" type="0" name="" startsAtLine = "1:101" endsAtLine = "1:102">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>if.then</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>128</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>5</instructionsCount>
+		<instructionLines count="2">1:101,1:102</instructionLines>
+		<readPhaseLines count="1">1:101</readPhaseLines>
+		<writePhaseLines count="2">1:101,1:102</writePhaseLines>
+		<returnInstructions count="1">1:102</returnInstructions>
+		<successors>
+			<CU>1:65</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_counter</global>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">retval</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:65" type="0" name="" startsAtLine = "1:105" endsAtLine = "1:105">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>return</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:105</instructionLines>
+		<readPhaseLines count="1">1:105</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:105</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">retval</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:66" type="0" name="" startsAtLine = "1:104" endsAtLine = "1:104">
+		<childrenNodes>1:68</childrenNodes>
+		<BasicBlockID>if.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:104</instructionLines>
+		<readPhaseLines count="1">1:104</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:67</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:99" accessMode="R">n</global>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">retval</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:104" callInstId="200">1:68</nodeCalled>
+				<recursiveFunctionCall>_Z7recursei 1:104,</recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:68" type="3" name="_Z7recursei" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="99" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:67" type="0" name="" startsAtLine = "1:104" endsAtLine = "1:104">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>if.end</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:104</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:104</writePhaseLines>
+		<returnInstructions count="1">1:104</returnInstructions>
+		<successors>
+			<CU>1:65</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:69" type="1" name="_Z6chain7v" startsAtLine = "1:108" endsAtLine = "1:108">
+		<childrenNodes>1:70</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:108, </funcReturnLines>
+	</Node>
+
+	<Node id="1:70" type="0" name="" startsAtLine = "1:108" endsAtLine = "1:108">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:108</instructionLines>
+		<readPhaseLines count="1">1:108</readPhaseLines>
+		<writePhaseLines count="1">1:108</writePhaseLines>
+		<returnInstructions count="1">1:108</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_chain</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:71" type="1" name="_Z6chain6v" startsAtLine = "1:109" endsAtLine = "1:109">
+		<childrenNodes>1:72</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:109, </funcReturnLines>
+	</Node>
+
+	<Node id="1:72" type="0" name="" startsAtLine = "1:109" endsAtLine = "1:109">
+		<childrenNodes>1:73</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:109</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:109</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:109" callInstId="212">1:73</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:73" type="3" name="_Z6chain7v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:74" type="1" name="_Z6chain5v" startsAtLine = "1:110" endsAtLine = "1:110">
+		<childrenNodes>1:75</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:110, </funcReturnLines>
+	</Node>
+
+	<Node id="1:75" type="0" name="" startsAtLine = "1:110" endsAtLine = "1:110">
+		<childrenNodes>1:76</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:110</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:110</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:110" callInstId="215">1:76</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:76" type="3" name="_Z6chain6v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:77" type="1" name="_Z6chain4v" startsAtLine = "1:111" endsAtLine = "1:111">
+		<childrenNodes>1:78</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:111, </funcReturnLines>
+	</Node>
+
+	<Node id="1:78" type="0" name="" startsAtLine = "1:111" endsAtLine = "1:111">
+		<childrenNodes>1:79</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:111</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:111</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:111" callInstId="218">1:79</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:79" type="3" name="_Z6chain5v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:80" type="1" name="_Z6chain3v" startsAtLine = "1:112" endsAtLine = "1:112">
+		<childrenNodes>1:81</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:112, </funcReturnLines>
+	</Node>
+
+	<Node id="1:81" type="0" name="" startsAtLine = "1:112" endsAtLine = "1:112">
+		<childrenNodes>1:82</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:112</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:112</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:112" callInstId="221">1:82</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:82" type="3" name="_Z6chain4v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:83" type="1" name="_Z6chain2v" startsAtLine = "1:113" endsAtLine = "1:113">
+		<childrenNodes>1:84</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:113, </funcReturnLines>
+	</Node>
+
+	<Node id="1:84" type="0" name="" startsAtLine = "1:113" endsAtLine = "1:113">
+		<childrenNodes>1:85</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:113</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:113</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:113" callInstId="224">1:85</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:85" type="3" name="_Z6chain3v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:86" type="1" name="_Z6chain1v" startsAtLine = "1:114" endsAtLine = "1:114">
+		<childrenNodes>1:87</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:114, </funcReturnLines>
+	</Node>
+
+	<Node id="1:87" type="0" name="" startsAtLine = "1:114" endsAtLine = "1:114">
+		<childrenNodes>1:88</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:114</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:114</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:114" callInstId="227">1:88</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:88" type="3" name="_Z6chain2v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:89" type="1" name="_Z14pointer_targetv" startsAtLine = "1:117" endsAtLine = "1:117">
+		<childrenNodes>1:90</childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines>1:117, </funcReturnLines>
+	</Node>
+
+	<Node id="1:90" type="0" name="" startsAtLine = "1:117" endsAtLine = "1:117">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:117</instructionLines>
+		<readPhaseLines count="1">1:117</readPhaseLines>
+		<writePhaseLines count="1">1:117</writePhaseLines>
+		<returnInstructions count="1">1:117</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_pointer_target</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:91" type="1" name="_Z16call_via_pointerPFvvE" startsAtLine = "1:118" endsAtLine = "1:118">
+		<childrenNodes>1:92,1:93</childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="1:118" accessMode="RW">f</arg>
+		</funcArguments>
+		<funcReturnLines>1:118, </funcReturnLines>
+	</Node>
+
+	<Node id="1:92" type="0" name="" startsAtLine = "1:118" endsAtLine = "1:118">
+		<childrenNodes>1:94</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:118</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:118</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:93</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">f</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:118" callInstId="240">1:94</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:94" type="3" name="" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:93" type="0" name="" startsAtLine = "1:118" endsAtLine = "1:118">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:118</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:118</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:95" type="1" name="_Z9log_valuei" startsAtLine = "1:121" endsAtLine = "1:121">
+		<childrenNodes>1:96,1:97</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:121" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines>1:121, </funcReturnLines>
+	</Node>
+
+	<Node id="1:96" type="0" name="" startsAtLine = "1:121" endsAtLine = "1:121">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:121</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:121</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:97</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">v</local>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:97" type="0" name="" startsAtLine = "1:121" endsAtLine = "1:121">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>1</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:121</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:121</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>
+
+
+<Nodes>
+
+	<Node id="1:98" type="1" name="main" startsAtLine = "1:123" endsAtLine = "1:161">
+		<childrenNodes>1:99,1:100,1:101,1:102,1:103,1:104,1:105,1:106,1:107,1:108,1:109,1:110,1:111,1:112,1:121,1:126,1:127,1:128,1:129,1:130,1:131,1:132,1:133,1:134,1:135,1:136,1:137,1:138,1:139,1:140,1:141,1:154,1:156,1:157,1:158</childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="1:123" accessMode="RW">argc</arg>
+			<arg type="ptr" defLine="1:123" accessMode="RW">argv</arg>
+		</funcArguments>
+		<funcReturnLines>1:161, </funcReturnLines>
+	</Node>
+
+	<Node id="1:99" type="0" name="" startsAtLine = "1:123" endsAtLine = "1:123">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>192</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>11</instructionsCount>
+		<instructionLines count="1">1:123</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:123</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:100</CU>
+		</successors>
+		<localVariables>
+			<local type="ptr" defLine="LineNotFound" accessMode="W">argv</local>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="W"></global>
+			<global type="ptr" defLine="GlobalVar" accessMode="W">argc</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:100" type="0" name="" startsAtLine = "1:124" endsAtLine = "1:124">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:124</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:124</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:101</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:124" accessMode="W">n</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:101" type="0" name="" startsAtLine = "1:125" endsAtLine = "1:125">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:125</instructionLines>
+		<readPhaseLines count="1">1:125</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:102</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="W">buf</global>
+			<global type="ptr" defLine="1:124" accessMode="R">n</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:102" type="0" name="" startsAtLine = "1:125" endsAtLine = "1:126">
+		<childrenNodes>1:113</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="2">1:125,1:126</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:125</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:103</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="W">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:126" callInstId="286">1:113</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:113" type="3" name="_Z8pure_addii" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="22" accessMode="RW">a</arg>
+			<arg type="i32" defLine="22" accessMode="RW">b</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:103" type="0" name="" startsAtLine = "1:126" endsAtLine = "1:126">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:126</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:126</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:104</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:104" type="0" name="" startsAtLine = "1:127" endsAtLine = "1:127">
+		<childrenNodes>1:114</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:127</instructionLines>
+		<readPhaseLines count="1">1:127</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:105</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:127" callInstId="289">1:114</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:114" type="3" name="_Z12write_globali" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="28" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:105" type="0" name="" startsAtLine = "1:128" endsAtLine = "1:128">
+		<childrenNodes>1:115</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:128</instructionLines>
+		<readPhaseLines count="1">1:128</readPhaseLines>
+		<writePhaseLines count="1">1:128</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:106</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="W">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:128" callInstId="290">1:115</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:115" type="3" name="_Z11read_globalv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:106" type="0" name="" startsAtLine = "1:129" endsAtLine = "1:129">
+		<childrenNodes>1:116</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:129</instructionLines>
+		<readPhaseLines count="1">1:129</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:107</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:129" callInstId="295">1:116</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:116" type="3" name="_Z17write_only_globali" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="31" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:107" type="0" name="" startsAtLine = "1:130" endsAtLine = "1:130">
+		<childrenNodes>1:117</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>96</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:130</instructionLines>
+		<readPhaseLines count="1">1:130</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:108</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="R">buf</global>
+			<global type="ptr" defLine="1:124" accessMode="R">n</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:130" callInstId="298">1:117</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:117" type="3" name="_Z19write_through_paramPii" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="34" accessMode="RW">p</arg>
+			<arg type="i32" defLine="34" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:108" type="0" name="" startsAtLine = "1:131" endsAtLine = "1:131">
+		<childrenNodes>1:118</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>96</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:131</instructionLines>
+		<readPhaseLines count="1">1:131</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:109</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="R">buf</global>
+			<global type="ptr" defLine="1:124" accessMode="R">n</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:131" callInstId="301">1:118</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:118" type="3" name="_Z7wrapperPii" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="41" accessMode="RW">q</arg>
+			<arg type="i32" defLine="41" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:109" type="0" name="" startsAtLine = "1:132" endsAtLine = "1:133">
+		<childrenNodes>1:119</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>128</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>7</instructionsCount>
+		<instructionLines count="2">1:132,1:133</instructionLines>
+		<readPhaseLines count="1">1:132</readPhaseLines>
+		<writePhaseLines count="1">1:132</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:110</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="R">buf</global>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:133" callInstId="308">1:119</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:119" type="3" name="_Z12local_bufferv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:110" type="0" name="" startsAtLine = "1:133" endsAtLine = "1:134">
+		<childrenNodes>1:120</childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="2">1:133,1:134</instructionLines>
+		<readPhaseLines count="1">1:133</readPhaseLines>
+		<writePhaseLines count="1">1:133</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:111</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:134" callInstId="312">1:120</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:120" type="3" name="_Z10next_valuev" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:111" type="0" name="" startsAtLine = "1:134" endsAtLine = "1:134">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:134</instructionLines>
+		<readPhaseLines count="1">1:134</readPhaseLines>
+		<writePhaseLines count="1">1:134</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:112</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:135" accessMode="W">i</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:112" type="0" name="" startsAtLine = "1:135" endsAtLine = "1:135">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>entry</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:135</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="1">1:135</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:122</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:121" type="2" name="" startsAtLine = "1:135" endsAtLine = "1:137">
+		<childrenNodes>1:122,1:123,1:125</childrenNodes>
+	</Node>
+
+	<Node id="1:122" type="0" name="" startsAtLine = "1:135" endsAtLine = "1:135">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.cond</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:135</instructionLines>
+		<readPhaseLines count="1">1:135</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:123</CU>
+			<CU>1:126</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:135" accessMode="R">i</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:123" type="0" name="" startsAtLine = "1:136" endsAtLine = "1:137">
+		<childrenNodes>1:124</childrenNodes>
+		<BasicBlockID>for.body</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>5</instructionsCount>
+		<instructionLines count="2">1:136,1:137</instructionLines>
+		<readPhaseLines count="1">1:136</readPhaseLines>
+		<writePhaseLines count="1">1:136</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:125</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:136" callInstId="322">1:124</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:124" type="3" name="_Z10next_valuev" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:125" type="0" name="" startsAtLine = "1:135" endsAtLine = "1:135">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.inc</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:135</instructionLines>
+		<readPhaseLines count="1">1:135</readPhaseLines>
+		<writePhaseLines count="1">1:135</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:122</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:135" accessMode="R">i</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:126" type="0" name="" startsAtLine = "1:138" endsAtLine = "1:138">
+		<childrenNodes>1:142</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:138</instructionLines>
+		<readPhaseLines count="1">1:138</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:127</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:138" callInstId="333">1:142</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:142" type="3" name="_Z13address_takeni" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="55" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:127" type="0" name="" startsAtLine = "1:138" endsAtLine = "1:139">
+		<childrenNodes>1:143</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="2">1:138,1:139</instructionLines>
+		<readPhaseLines count="1">1:138</readPhaseLines>
+		<writePhaseLines count="1">1:138</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:128</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:139" callInstId="337">1:143</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:143" type="3" name="_Z9sibling_av" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:128" type="0" name="" startsAtLine = "1:139" endsAtLine = "1:140">
+		<childrenNodes>1:144</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="2">1:139,1:140</instructionLines>
+		<readPhaseLines count="1">1:139</readPhaseLines>
+		<writePhaseLines count="1">1:139</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:129</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:140" callInstId="341">1:144</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:144" type="3" name="_Z9sibling_bv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:129" type="0" name="" startsAtLine = "1:140" endsAtLine = "1:141">
+		<childrenNodes>1:145</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>128</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>6</instructionsCount>
+		<instructionLines count="2">1:140,1:141</instructionLines>
+		<readPhaseLines count="2">1:140,1:141</readPhaseLines>
+		<writePhaseLines count="1">1:140</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:130</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="R">buf</global>
+			<global type="ptr" defLine="1:124" accessMode="R">n</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:141" callInstId="347">1:145</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:145" type="3" name="_Z5clearPii" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="73" accessMode="RW">p</arg>
+			<arg type="i32" defLine="73" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:130" type="0" name="" startsAtLine = "1:142" endsAtLine = "1:143">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>128</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>7</instructionsCount>
+		<instructionLines count="2">1:142,1:143</instructionLines>
+		<readPhaseLines count="1">1:142</readPhaseLines>
+		<writePhaseLines count="1">1:142</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:131</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="R">buf</global>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:131" type="0" name="" startsAtLine = "1:144" endsAtLine = "1:146">
+		<childrenNodes>1:146,1:147</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>7</instructionsCount>
+		<instructionLines count="3">1:144,1:145,1:146</instructionLines>
+		<readPhaseLines count="1">1:145</readPhaseLines>
+		<writePhaseLines count="1">1:145</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:132</CU>
+		</successors>
+		<localVariables>
+			<local type="ARRAY,ptr" defLine="LineNotFound" accessMode="R">pair</local>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:144" callInstId="355">1:146</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+			<nodeCalled atLine="1:146" callInstId="361">1:147</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:146" type="3" name="_Z10set_memberP4Pair" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="76" accessMode="RW">s</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:147" type="3" name="_Z6shadowv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:132" type="0" name="" startsAtLine = "1:146" endsAtLine = "1:147">
+		<childrenNodes>1:148</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="2">1:146,1:147</instructionLines>
+		<readPhaseLines count="1">1:146</readPhaseLines>
+		<writePhaseLines count="1">1:146</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:133</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:147" callInstId="365">1:148</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:148" type="3" name="_Z11count_callsv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:133" type="0" name="" startsAtLine = "1:147" endsAtLine = "1:148">
+		<childrenNodes>1:149</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="2">1:147,1:148</instructionLines>
+		<readPhaseLines count="1">1:147</readPhaseLines>
+		<writePhaseLines count="1">1:147</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:134</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:148" callInstId="369">1:149</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:149" type="3" name="_Z11count_callsv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:134" type="0" name="" startsAtLine = "1:148" endsAtLine = "1:148">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:148</instructionLines>
+		<readPhaseLines count="1">1:148</readPhaseLines>
+		<writePhaseLines count="1">1:148</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:135</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:135" type="0" name="" startsAtLine = "1:149" endsAtLine = "1:149">
+		<childrenNodes>1:150</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:149</instructionLines>
+		<readPhaseLines count="1">1:149</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:136</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:149" callInstId="374">1:150</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:150" type="3" name="_Z16read_const_tablei" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="93" accessMode="RW">i</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:136" type="0" name="" startsAtLine = "1:149" endsAtLine = "1:150">
+		<childrenNodes>1:151</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="2">1:149,1:150</instructionLines>
+		<readPhaseLines count="1">1:149</readPhaseLines>
+		<writePhaseLines count="1">1:149</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:137</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:150" callInstId="378">1:151</nodeCalled>
+				<recursiveFunctionCall>_Z7recursei 1:150,</recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:151" type="3" name="_Z7recursei" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="99" accessMode="RW">n</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:137" type="0" name="" startsAtLine = "1:150" endsAtLine = "1:150">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>96</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:150</instructionLines>
+		<readPhaseLines count="1">1:150</readPhaseLines>
+		<writePhaseLines count="1">1:150</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:138</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_counter</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:138" type="0" name="" startsAtLine = "1:151" endsAtLine = "1:152">
+		<childrenNodes>1:152</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="2">1:151,1:152</instructionLines>
+		<readPhaseLines count="1">1:151</readPhaseLines>
+		<writePhaseLines count="1">1:151</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:139</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:152" callInstId="386">1:152</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:152" type="3" name="_Z6chain1v" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:139" type="0" name="" startsAtLine = "1:153" endsAtLine = "1:154">
+		<childrenNodes>1:153</childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>5</instructionsCount>
+		<instructionLines count="2">1:153,1:154</instructionLines>
+		<readPhaseLines count="1">1:153</readPhaseLines>
+		<writePhaseLines count="1">1:153</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:140</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_chain</global>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:154" callInstId="391">1:153</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:153" type="3" name="_Z16call_via_pointerPFvvE" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="ptr" defLine="118" accessMode="RW">f</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:140" type="0" name="" startsAtLine = "1:155" endsAtLine = "1:155">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>64</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>4</instructionsCount>
+		<instructionLines count="1">1:155</instructionLines>
+		<readPhaseLines count="1">1:155</readPhaseLines>
+		<writePhaseLines count="1">1:155</writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:141</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="GlobalVar" accessMode="R">g_pointer_target</global>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:141" type="0" name="" startsAtLine = "1:156" endsAtLine = "1:156">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>for.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>3</instructionsCount>
+		<instructionLines count="1">1:156</instructionLines>
+		<readPhaseLines count="1">1:156</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:154</CU>
+			<CU>1:156</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:123" accessMode="R">argc</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:154" type="0" name="" startsAtLine = "1:157" endsAtLine = "1:158">
+		<childrenNodes>1:155</childrenNodes>
+		<BasicBlockID>if.then</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="2">1:157,1:158</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:158</returnInstructions>
+		<successors>
+			<CU>1:156</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:157" callInstId="399">1:155</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:155" type="3" name="_Z12never_calledv" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:156" type="0" name="" startsAtLine = "1:159" endsAtLine = "1:159">
+		<childrenNodes>1:159</childrenNodes>
+		<BasicBlockID>if.end</BasicBlockID>
+		<readDataSize>32</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:159</instructionLines>
+		<readPhaseLines count="1">1:159</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:157</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:126" accessMode="R">sum</global>
+		</globalVariables>
+		<callsNode>
+			<nodeCalled atLine="1:159" callInstId="402">1:159</nodeCalled>
+				<recursiveFunctionCall></recursiveFunctionCall>
+		</callsNode>
+	</Node>
+
+	<Node id="1:159" type="3" name="_Z9log_valuei" startsAtLine = "262143:16383" endsAtLine = "262143:16383">
+		<childrenNodes></childrenNodes>
+		<funcArguments>
+			<arg type="i32" defLine="121" accessMode="RW">v</arg>
+		</funcArguments>
+		<funcReturnLines></funcReturnLines>
+	</Node>
+
+	<Node id="1:157" type="0" name="" startsAtLine = "1:160" endsAtLine = "1:160">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>if.end</BasicBlockID>
+		<readDataSize>64</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>2</instructionsCount>
+		<instructionLines count="1">1:160</instructionLines>
+		<readPhaseLines count="1">1:160</readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="0"></returnInstructions>
+		<successors>
+			<CU>1:158</CU>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+			<global type="ptr" defLine="1:125" accessMode="R">buf</global>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+	<Node id="1:158" type="0" name="" startsAtLine = "1:161" endsAtLine = "1:161">
+		<childrenNodes></childrenNodes>
+		<BasicBlockID>if.end</BasicBlockID>
+		<readDataSize>0</readDataSize>
+		<writeDataSize>0</writeDataSize>
+		<performsFileIO>0</performsFileIO>
+		<instructionsCount>1</instructionsCount>
+		<instructionLines count="1">1:161</instructionLines>
+		<readPhaseLines count="0"></readPhaseLines>
+		<writePhaseLines count="0"></writePhaseLines>
+		<returnInstructions count="1">1:161</returnInstructions>
+		<successors>
+		</successors>
+		<localVariables>
+		</localVariables>
+		<globalVariables>
+		</globalVariables>
+		<callsNode>
+		</callsNode>
+	</Node>
+
+</Nodes>

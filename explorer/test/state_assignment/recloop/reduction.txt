@@ -1,0 +1,1 @@
+ FileID : 1 Loop Line Number : 7 Reduction Line Number : 8 Variable Name : g_acc Operation Name : +

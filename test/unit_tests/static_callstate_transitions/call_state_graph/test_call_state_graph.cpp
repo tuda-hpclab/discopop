@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <string>
+#include <unistd.h>
 
 #include "../../../../profiler/rtlib/static_callstate_transitions/CallStateGraph.hpp"
 
@@ -52,4 +56,51 @@ TEST_F(CallStateGraphTest, testRegisterImplicitReturnTransitionWiresUpStates) {
   CallState *target = graph.get_or_register_node(2);
 
   EXPECT_EQ(source->get_implicit_return_transition_target(), target);
+}
+
+TEST_F(CallStateGraphTest, testFunctionEntryStatesAreUnknownByDefault) {
+  CallStateGraph graph;
+
+  EXPECT_EQ(graph.get_function_entry_state(42), nullptr);
+  EXPECT_EQ(graph.get_or_register_node(1)->get_function_entry_id(), 0);
+}
+
+TEST_F(CallStateGraphTest, testRegisterFunctionEntryState) {
+  CallStateGraph graph;
+
+  graph.register_function_entry_state(42, 7);
+  graph.register_state_function(8, 43);
+
+  ASSERT_NE(graph.get_function_entry_state(42), nullptr);
+  EXPECT_EQ(graph.get_function_entry_state(42)->get_id(), 7);
+  EXPECT_EQ(graph.get_or_register_node(7)->get_function_entry_id(), 42);
+  EXPECT_EQ(graph.get_or_register_node(8)->get_function_entry_id(), 43);
+  EXPECT_EQ(graph.get_function_entry_state(43), nullptr);
+}
+
+TEST_F(CallStateGraphTest, testReadsCallpathFunctionEntriesFile) {
+  char dir_template[] = "/tmp/discopop_ut_callstate_XXXXXX";
+  char *dir = mkdtemp(dir_template);
+  ASSERT_NE(dir, nullptr);
+  std::string path = std::string(dir) + "/callpath_function_entries.txt";
+  {
+    std::ofstream file(path);
+    file << "# Format: S <state_id> <function_entry_instruction_id> | E <function_entry_instruction_id> "
+            "<root_state_id>\n";
+    file << "S 5 100\n";
+    file << "E 100 5\n";
+    file << "S 9 200\n";
+    file << "broken line\n";
+  }
+  setenv("DOT_DISCOPOP_PROFILER", dir, 1);
+
+  CallStateGraph graph;
+
+  ASSERT_NE(graph.get_function_entry_state(100), nullptr);
+  EXPECT_EQ(graph.get_function_entry_state(100)->get_id(), 5);
+  EXPECT_EQ(graph.get_function_entry_state(200), nullptr);
+  EXPECT_EQ(graph.get_or_register_node(9)->get_function_entry_id(), 200);
+
+  std::remove(path.c_str());
+  rmdir(dir);
 }
