@@ -37,12 +37,15 @@ Please note that DiscoPoP appends CUs to an existing `Data.xml` file and thus if
 
 ## Data Dependencies
 
-DiscoPoP uses a signature to store data dependences. You can configure the settings of this signature by creating a dp.conf file in the root directory of your program. The contents of the config file usually contains the following parameters:
+DiscoPoP uses a signature to store data dependences. You can configure the settings of this signature, and of the profiler's worker threads, by creating a `dp.conf` file in the directory that contains the instrumented executable. Each line has the form `<PARAMETER>=<positive integer>`; the following parameters are supported:
 
 - `SIG_ELEM_BIT`: Size of each element in the signature in bits.
 - `SIG_NUM_ELEM`: Size of the signature. The bigger it is, the less false positives/negatives are reported.
 - `SIG_NUM_HASH`: Number of signatures. A value of two indicates that one signature is used for read accesses and one signature for write accesses.
 - `USE_PERFECT`: When it is set to one, DiscoPoP uses a perfect signature. The default value is one.
+- `NUM_WORKERS`: Number of worker threads that analyze the recorded memory accesses. Overrides the value set at build time via `-DDP_NUM_WORKERS`.
+- `FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER`: Number of recorded chunks of memory accesses (100000 accesses, about 4 MB each) that may wait for a worker thread, per worker. When the limit is reached, the profiled program waits for the workers. Default: 4.
+- `SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER`: Number of analyzed chunks (up to about 11 MB each) that may wait to be merged into the global results, per worker. The merging is done by a single thread; when the limit is reached, the workers wait for it. Larger values cost memory without speeding up the profiling. Default: 4.
 
 To find parallelization opportunities, we need to extract data dependencies inside the program. For that, we need to instrument the memory accesses, link the program with DiscoPoP run-time libraries, and finally execute the program with several representative inputs. The necessary steps are described [here](../Tutorials/Tutorials.md).
 After executing the instrumented program, you find a text file which ends with `_dep.txt` which contains the data dependences identified using the provided input.

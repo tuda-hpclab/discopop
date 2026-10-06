@@ -86,8 +86,13 @@ extern pthread_t *workers;                          // worker threads
 extern volatile bool finalizeParallelizationCalled; // signals to worker threads that no further data access will be
                                                     // registered in the first queue
 extern FirstAccessQueueChunk *mainThread_AccessInfoBuffer;
-#define FIRST_ACCESS_QUEUE_SIZES 100000
-#define SECOND_ACCESS_QUEUE_SIZES 1000
+// number of accesses recorded per chunk of the first access queue
+#define FIRST_ACCESS_QUEUE_CHUNK_SIZE 100000
+// default limits of the access queues, per worker thread; adjustable via dp.conf
+// (FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER, SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER). A queued chunk holds
+// FIRST_ACCESS_QUEUE_CHUNK_SIZE accesses (~4 MB), a second queue element up to ~11 MB.
+#define DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER 4
+#define DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER 4
 
 extern FirstAccessQueue firstAccessQueue;
 extern SecondAccessQueue secondAccessQueue;
@@ -97,6 +102,8 @@ extern FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer;
 extern AbstractShadow *singleThreadedExecutionSMem;
 
 extern int32_t NUM_WORKERS;
+extern int32_t FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER;
+extern int32_t SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER;
 
 extern thread_local depMap *myMap;
 

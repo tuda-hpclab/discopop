@@ -82,7 +82,7 @@ void __dp_decl(LID lid, ADDR addr, char *var) {
       usleep(1000);
     }
     firstAccessQueue.push(mainThread_AccessInfoBuffer);
-    mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_SIZES);
+    mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
   }
   AccessInfo &current = mainThread_AccessInfoBuffer->get_next_AccessInfo_buffer();
 #endif

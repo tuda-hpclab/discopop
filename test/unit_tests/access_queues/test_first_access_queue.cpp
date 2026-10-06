@@ -83,3 +83,22 @@ TEST_F(FirstAccessQueueTest, testEmpty) {
     delete FAQC_ptr_3;
 
 }
+
+// FAQ test: set_max_size changes the limit checked by can_accept_entries, a limit of 0 is clamped to 1
+TEST_F(FirstAccessQueueTest, testSetMaxSize) {
+    auto FAQ = FirstAccessQueue(100);
+    auto FAQC_ptr_1 = new FirstAccessQueueChunk(100);
+    auto FAQC_ptr_2 = new FirstAccessQueueChunk(100);
+
+    FAQ.set_max_size(0);
+    ASSERT_TRUE(FAQ.can_accept_entries());
+    FAQ.push(FAQC_ptr_1);
+    ASSERT_FALSE(FAQ.can_accept_entries());
+    FAQ.set_max_size(2);
+    ASSERT_TRUE(FAQ.can_accept_entries());
+    FAQ.push(FAQC_ptr_2);
+    ASSERT_FALSE(FAQ.can_accept_entries());
+
+    delete FAQC_ptr_1;
+    delete FAQC_ptr_2;
+}
