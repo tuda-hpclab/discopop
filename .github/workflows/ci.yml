@@ -144,6 +144,10 @@ jobs:
         run: |
             venv/bin/python3 -m black -l 120 --check library
 
+      - name: Check formatting of the profiler leak check
+        run: |
+            venv/bin/python3 -m black -l 120 --check test/leak_check
+
       - name: Check formatting of DiscoPoP Hotspot Detection
         run: |
             venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
@@ -205,18 +209,43 @@ jobs:
         run: |
           scripts/dev/run_profiler_sanitizers.sh "${{ matrix.sanitizers }}"
 
+  # The profiler's runtime library built with AddressSanitizer/LeakSanitizer: its unit tests and instrumented
+  # programs must not leak (see scripts/dev/check_profiler_leaks.sh). One platform is enough: the check is
+  # about the runtime library's code, not about the platform. Locally: scripts/dev/check_profiler_leaks.sh,
+  # or scripts/dev/run_ci_locally.sh -j profiler_leak_check
+  profiler_leak_check:
+    runs-on: self-hosted
+    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    container:
+      image: debian:trixie
+    name: "Profiler leak check (ASan/LSan)"
+    timeout-minutes: 45
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check the profiler for memory leaks
+        run: |
+          # the unit tests run under ASan/LSan in the sanitizers job already
+          DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
+
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test, sanitizers]
+    needs: [build_install_and_test, sanitizers, profiler_leak_check]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
       - name: Report
         run: |
-          if [[ "${{ needs.build_install_and_test.result }}" != "success" || "${{ needs.sanitizers.result }}" != "success" ]]; then
-            echo "Checks did not succeed: build_install_and_test: '${{ needs.build_install_and_test.result }}', sanitizers: '${{ needs.sanitizers.result }}'"
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" != "false" ]]; then
+            echo "Checks did not succeed, job results: ${{ join(needs.*.result, ', ') }}"
             exit 1
           fi
           echo "All checks successful!"

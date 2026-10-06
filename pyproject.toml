@@ -53,6 +53,7 @@ testpaths = [
     "mcp_server",
     "hotspot_detection",
     "test/project_manager",
+    "test/leak_check",
 ]
 # importlib: the default prepend mode resolves colocated test modules to their installed copies in
 # site-packages once several package roots are collected together, and aborts with an import file mismatch

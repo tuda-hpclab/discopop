@@ -1,12 +1,19 @@
 #include <gtest/gtest.h>
 
-#include "../../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctions.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
+#include "../../../profiler/rtlib/runtimeFunctions.hpp"
 
 using namespace __dp;
 
 class FirstAccessQueueTest : public ::testing::Test {};
+
+// FirstAccessQueue::get registers a SecondAccessQueueElement in the given queue, owned by the caller
+static void delete_elements(SecondAccessQueue &SAQ) {
+    while (auto element = SAQ.get()) {
+        delete element;
+    }
+}
 
 TEST_F(FirstAccessQueueTest, testConstructor) {
     auto FAQ = FirstAccessQueue(10);
@@ -53,6 +60,7 @@ TEST_F(FirstAccessQueueTest, testCanAcceptEntries) {
         delete saqe;
     }
 
+    delete_elements(SAQ);
     delete FAQC_ptr_1;
     delete FAQC_ptr_2;
     delete FAQC_ptr_3;
@@ -86,6 +94,7 @@ TEST_F(FirstAccessQueueTest, testEmpty) {
         delete saqe;
     }
 
+    delete_elements(SAQ);
     delete FAQC_ptr_1;
     delete FAQC_ptr_2;
     delete FAQC_ptr_3;
