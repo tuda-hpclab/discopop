@@ -340,22 +340,24 @@ void mergeDeps() {
 #endif
 
   for (auto &dep : *myMap) {
-    // if a lid occurs the first time, then add it in to the global hash table.
-    // Otherwise just take the associated set of dps.
+    // if a lid occurs the first time, the thread's set of dependencies becomes the global one.
+    // Otherwise it is merged into the global set and freed.
     globalPos = allDeps->find(dep.first);
     if (globalPos == allDeps->end()) {
-      tmp_depSet = new depSet();
-      (*allDeps)[dep.first] = tmp_depSet;
+      (*allDeps)[dep.first] = dep.second;
     } else {
       tmp_depSet = globalPos->second;
-    }
-
-    // merge the associated set with current lid into the global hash table
-    for (auto &d : *(dep.second)) {
-      tmp_depSet->insert(d);
+      for (auto &d : *(dep.second)) {
+        tmp_depSet->insert(d);
+      }
+      delete dep.second;
     }
   }
   allDepsLock.unlock();
+  // the sets are owned by allDeps now or freed. Clearing the map without freeing them used to leak
+  // every per-chunk set (one per distinct dependency sink and chunk), so the profiler's memory grew
+  // linearly with the run time
+  myMap->clear();
 }
 
 #if DP_CALLTREE_PROFILING

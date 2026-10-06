@@ -56,6 +56,7 @@ target_sources(
   static_callstate_transitions/call_state_graph/test_call_state_graph.cpp
   static_callstate_transitions/utils/test_call_state_transitions_utils.cpp
   hybrid_analysis/test_bb_deps.cpp
+  merge_deps/test_merge_deps.cpp
 
   )
 
