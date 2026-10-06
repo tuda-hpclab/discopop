@@ -97,13 +97,21 @@ void DiscoPoP::CFA(Function &F, LoopInfo &LI) {
       bool hasValidExit = false;
       for (SmallVectorImpl<BasicBlock *>::iterator EI = RealExitBlocks.begin(), END = RealExitBlocks.end(); EI != END;
            ++EI) {
-        hasValidExit = sanityCheck(*EI);
+        hasValidExit = getLoopExitLID(*EI, L) > 0;
         if (hasValidExit == true)
           break;
       }
 
       if (hasValidEntry && hasValidExit) {
         auto tmp_loop_id = get_or_register_loop_id(L);
+        // remember the loop's identity for loopstate_positions.txt (see buildStaticCalltree)
+        LoopIdentity identity;
+        auto pet_node = loopToPETNodeID.find(L);
+        identity.pet_node_id = pet_node != loopToPETNodeID.end() ? pet_node->second : "-";
+        DebugLoc start_loc = L->getStartLoc();
+        identity.start_location =
+            start_loc ? dputil::decodeLID(((LID)fileID << LIDSIZE) + start_loc.getLine()) : to_string(fileID) + ":0";
+        loop_id_to_identity[tmp_loop_id] = identity;
         // Instrument loop header block.
         instrumentLoopEntry(tmpBB, tmp_loop_id);
 
@@ -111,7 +119,7 @@ void DiscoPoP::CFA(Function &F, LoopInfo &LI) {
         // Instrument loop exit block(s).
         for (SmallVectorImpl<BasicBlock *>::iterator EI = RealExitBlocks.begin(), END = RealExitBlocks.end(); EI != END;
              ++EI) {
-          instrumentLoopExit(*EI, tmp_loop_id);
+          instrumentLoopExit(*EI, tmp_loop_id, L);
         }
       }
     }

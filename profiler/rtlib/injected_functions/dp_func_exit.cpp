@@ -94,11 +94,12 @@ void __dp_func_exit(LID lid, int32_t isExit) {
     cout << "Exiting fucntion LID " << std::dec << dputil::decodeLID(lid) << endl;
     cout << "Function stack level = " << std::dec << function_manager->get_current_stack_level() << endl;
   }
+  // restore the callpath state of the caller
+  leave_function_for_callstate();
+
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
   pthread_compatibility_mutex.unlock();
 #endif
-
-  update_callstate_from_func_exit(1); // 1 is the dummy instruction id for leaving a function
 }
 }
 

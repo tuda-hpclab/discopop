@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
+from discopop_explorer.side_effects.export import write_export as write_side_effect_export
 from discopop_explorer.utilities.ASTUtils import ASTPatternDetectionHelper
 from discopop_explorer.functions.PEGraph.queries.edges import out_edges
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
@@ -131,6 +132,11 @@ class PatternDetectorX(object):
                 visualizer,
                 ignore_dependency_states=ignore_dependency_states,
             )
+        # The export reads the TaskGraph but does not modify it. A stale export of an earlier run
+        # cannot survive: setup_explorer removes the whole explorer directory at the start, and
+        # write_side_effect_export removes it when it skips or fails the export.
+        with stage("Exporting side effect data"):
+            write_side_effect_export(project_path, task_graph, self.pet, self.ast_helper, file_mapping)
         if enable_task_graph_plot:
             task_graph.plot()
         #        if enable_context_graph_plot:

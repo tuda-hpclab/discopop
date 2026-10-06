@@ -17,12 +17,16 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 
 from mcp.types import TextContent
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+
+if TYPE_CHECKING:
+    from discopop_explorer.side_effects.analysis import SideEffectIndex
 
 logger = logging.getLogger("discopop-mcp")
 
@@ -410,6 +414,36 @@ def terminate_process_tree(proc: "subprocess.Popen[Any]", grace_seconds: float =
     _wait_for_tree(proc, pids, grace_seconds)
 
 
+@dataclass(frozen=True)
+class SideEffectDataProblem:
+    """Why the side effect data of a project cannot be queried, worded for the caller.
+
+    ``reason`` is one of "missing" (also after a pattern detection with
+    --ignore-dependency-states, which writes no export), "unreadable" (also: written in
+    another format version), "stale" and "ignore_dependency_states" (an export written
+    by an older explorer with --ignore-dependency-states).
+    """
+
+    reason: str
+    message: str
+    next_step: str
+
+
+def dynamic_dependencies_path(project_path: str) -> Path:
+    """The profiler's dependency file, as discopop_explorer reads it by default (--dep-file)."""
+    return Path(project_path) / ".discopop" / "profiler" / "dynamic_dependencies.txt"
+
+
+def _same_dependency_file(recorded: Any, current: Any) -> bool:
+    """Whether the dependency file the export recorded is the current one (both may be absent)."""
+    if recorded is None or current is None:
+        return recorded is None and current is None
+    try:
+        return float(recorded["mtime"]) == float(current["mtime"]) and int(recorded["size"]) == int(current["size"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 class ToolContext:
     def __init__(self, debug: bool = False) -> None:
         self.debug = debug
@@ -417,6 +451,9 @@ class ToolContext:
         self._detection_cache: dict[str, tuple[Any, float]] = {}
         # project_path → (file_id_to_path, FileMapping.txt mtime)
         self._file_mapping_cache: dict[str, tuple[dict[int, Path], float]] = {}
+        # project_path → ((export mtime_ns, size), ignore_dependency_states, dependency_file info, index).
+        # The index is None for an export that cannot be queried (ignore_dependency_states).
+        self._side_effect_cache: dict[str, tuple[tuple[int, int], bool, Any, Optional["SideEffectIndex"]]] = {}
         # Set by the server for the duration of one tool call whose client asked for
         # progress. Tool calls run one at a time, so a single slot is enough.
         self._progress_reporter: Optional[ProgressReporter] = None
@@ -658,8 +695,12 @@ class ToolContext:
         if project_path:
             self.log_to_file(project_path, "· ACTION", tool_name, message)
 
-    def error(self, message: str, project_path: str = "", tool_name: str = "") -> list[TextContent]:
+    def error(
+        self, message: str, project_path: str = "", tool_name: str = "", next_step: Optional[str] = None
+    ) -> list[TextContent]:
         result = {"status": "error", "message": message}
+        if next_step:
+            result["next_step"] = next_step
         if project_path and tool_name:
             self.log_to_file(project_path, "← RESULT", tool_name, f"status=error, message={message}")
         return [TextContent(type="text", text=json.dumps(result))]
@@ -734,6 +775,73 @@ class ToolContext:
         except Exception as e:
             logger.warning(f"Failed to load DetectionResult from {dump_path}: {e}")
             return None
+
+    def get_side_effect_index(
+        self, project_path: str
+    ) -> tuple[Optional["SideEffectIndex"], Optional[SideEffectDataProblem]]:
+        """The SideEffectIndex of the project's side effect export, or why there is none.
+
+        Cached per project and reloaded when the export file changes (mtime or size). The
+        staleness test against the profiler's dynamic_dependencies.txt runs on every call:
+        a new profiling run changes that file without touching the export.
+        """
+        from discopop_explorer.side_effects.analysis import SideEffectIndex
+        from discopop_explorer.side_effects.schema import (
+            ExportFormatError,
+            dependency_file_info,
+            export_path,
+            load_export,
+        )
+
+        path = export_path(project_path)
+        try:
+            stat = path.stat()
+        except OSError:
+            self._side_effect_cache.pop(project_path, None)
+            # also the case after a pattern detection with --ignore-dependency-states (e.g. from the
+            # GUI): the explorer then writes no export and removes an earlier one
+            return None, SideEffectDataProblem(
+                "missing",
+                "No side effect data found for this project: gather_data has not run yet, or the last "
+                "pattern detection ran with --ignore-dependency-states, which records none. Run gather_data.",
+                "Run gather_data; its pattern detection step records the side effect data.",
+            )
+        key = (stat.st_mtime_ns, stat.st_size)
+        cached = self._side_effect_cache.get(project_path)
+        if cached is None or cached[0] != key:
+            try:
+                export = load_export(path)
+            except ExportFormatError as e:
+                self._side_effect_cache.pop(project_path, None)
+                return None, SideEffectDataProblem(
+                    "unreadable",
+                    f"The side effect data cannot be used ({e}). Run gather_data again.",
+                    "Run gather_data again to rebuild it with the installed DiscoPoP version.",
+                )
+            ignore_states = bool(export.get("ignore_dependency_states", False))
+            index = None if ignore_states else SideEffectIndex(export)
+            cached = (key, ignore_states, export.get("dependency_file"), index)
+            self._side_effect_cache[project_path] = cached
+            logger.info(f"Loaded side effect data for {project_path} into cache")
+        _key, ignore_states, recorded_dependency_file, index = cached
+
+        current = dependency_file_info(dynamic_dependencies_path(project_path))
+        if not _same_dependency_file(recorded_dependency_file, current):
+            return None, SideEffectDataProblem(
+                "stale",
+                "The side effect data is stale: it was built from other profiling data than the current "
+                "dynamic_dependencies.txt. Run gather_data again.",
+                "Run gather_data again to rebuild the side effect data from the current profiling data.",
+            )
+        if ignore_states or index is None:
+            return None, SideEffectDataProblem(
+                "ignore_dependency_states",
+                "The last pattern detection ran with --ignore-dependency-states, which drops the "
+                "call path information that attributes accesses to function calls, so side effects "
+                "cannot be computed from it. Run gather_data again.",
+                "Run gather_data again; it runs the pattern detection with dependency states.",
+            )
+        return index, None
 
     @staticmethod
     def newest_source_mtime(project_path: str) -> Optional[float]:

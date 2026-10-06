@@ -67,6 +67,8 @@ bool DiscoPoP::runOnModule(Module &M, ModuleAnalysisManager &MAM) {
   assign_instruction_ids_to_dp_reduction_functions(M);
   // update argument instruction ids
   update_argument_instruction_ids(M);
+  // restore callpath states after exceptions (needs the function entry ids)
+  instrument_landing_pads(M);
   // prepare information for call state transitioning and instruction mapping during dynamic analysis.
   // -> build static calltree for state transition and instruction mapping preparation
   cout << "Building static calltree..\n";
@@ -114,11 +116,13 @@ bool DiscoPoP::runOnModule(Module &M, ModuleAnalysisManager &MAM) {
   //std::thread t3([this, state_transitions_ptr](){this->save_path_state_transitions(state_transitions_ptr);});
   std::thread t3([this, call_path_tree_ptr](){this->save_path_state_transitions(call_path_tree_ptr);});
   std::thread t4([this, static_calltree_ptr](){this->save_static_calltree_to_dot(static_calltree_ptr);});
+  std::thread t5([this, call_path_tree_ptr](){this->save_function_entries(call_path_tree_ptr);});
 
   t1.join();
   t2.join();
   t3.join();
   t4.join();
+  t5.join();
 
 
   // save current instructionID for continuation in the next Module

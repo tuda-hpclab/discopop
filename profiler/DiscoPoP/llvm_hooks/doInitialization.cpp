@@ -77,6 +77,8 @@ bool DiscoPoP::doInitialization(Module &M) {
     setenv("DP_PROJECT_ROOT_DIR", "/", 1);
   }
 
+  file_id_cache.clear();
+
   // InstructionID assignment
   {
     // required for consecutive and unique assignment of instructionIDs across multiple modules.
@@ -161,6 +163,7 @@ bool DiscoPoP::doInitialization(Module &M) {
 
     ReportBB = M.getOrInsertFunction("__dp_report_bb", Void, Int32);
     ReportBBPair = M.getOrInsertFunction("__dp_report_bb_pair", Void, Int32, Int32);
+    BBState = M.getOrInsertFunction("__dp_bb_state", Int32);
     VNF = new dputil::VariableNameFinder(M);
   }
   // DPInstrumentationOmission end

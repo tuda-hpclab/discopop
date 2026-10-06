@@ -31,7 +31,7 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_call(LID instructionID, int8_t isLibraryFunction) {
+void __dp_call(LID instructionID) {
   if (!dpInited || targetTerminated) {
     return;
   }
@@ -48,11 +48,9 @@ void __dp_call(LID instructionID, int8_t isLibraryFunction) {
 
   function_manager->log_call(instructionID);
 
-  // exclude library functions from callstate updates due to the missing instrumented function exit
-  // and the resulting inconsistent callstate after returning
-  if (!isLibraryFunction) {
-    update_callstate_from_call(instructionID);
-  }
+  // the callpath state transition happens when the callee enters an instrumented function, see
+  // enter_function_for_callstate. A callee without instrumentation does not change the state.
+  register_call_for_callstate(instructionID);
 }
 }
 

@@ -39,6 +39,18 @@ void generateStringDepMap();
 // actually executed.
 void process_registered_bb_deps();
 
+// the id of the current callpath state, or 0 if none is known yet. Used to
+// attribute the executions reported by __dp_report_bb / __dp_report_bb_pair.
+std::uint32_t current_callpath_state_id_for_bb_reports();
+
+// merges the dependencies of the given handed over dependency strings into
+// out, once per reported execution in reported whose basic block index they are
+// registered under. The sink of each dependency gets the reported sink state,
+// its source the reported source state (an INIT dependency has no source and
+// keeps "*"), in the "<instruction id>@<callpath state id>" notation of the
+// dynamically profiled dependencies.
+void merge_bb_deps(const std::vector<const char *> &dep_strings, const ReportedBBSet &reported, stringDepMap &out);
+
 void readRuntimeInfo();
 
 void initParallelization();

@@ -26,6 +26,7 @@ from typing import Any, List, Optional, Sequence, Set, Tuple, Type, TypeVar
 import networkx as nx
 import pytest
 
+from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.classes.TaskGraph.Branching.TGEndBranchParentNode import TGEndBranchParentNode
 from discopop_explorer.classes.TaskGraph.Branching.TGStartBranchParentNode import TGStartBranchParentNode
@@ -226,10 +227,15 @@ def test_construction_of_a_loop(build_pet_graph: Any, make_node: Any, tmp_path: 
 def test_loop_variables_and_their_cross_iteration_dependencies(
     build_pet_graph: Any, make_node: Any, tmp_path: Path
 ) -> None:
-    """A variable flowing between the loop header and the loop body is the loop variable. The
-    statically derived dependencies on it between two iterations are an artifact of the unrolling
-    and get removed, while those on other variables stay."""
+    """A variable flowing between the loop header and the loop body is the loop variable if the
+    loop advances it: it is an induction variable of the loop's LoopNode. The statically derived
+    dependencies on it between two iterations are an artifact of the unrolling and get removed,
+    while those on other variables stay."""
     pet = _build_program(build_pet_graph, make_node, LOOP)
+    # the LoopNode of the loop, which PEGraphX.calculateLoopMetadata found i to be the index of
+    loop_node = make_node("1:20", NodeType.LOOP, name="loop", start_line=2, end_line=3, loop_indices=["i"])
+    pet.g.add_node(loop_node.id, data=loop_node)
+    pet.g.add_edge(loop_node.id, "1:2", data=Dependency(EdgeType.CHILD))
     static_dependencies = "\n".join(
         [
             "1:3 NOM RAW 1:2|i(100)",  # body reads i written by the header

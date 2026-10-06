@@ -60,6 +60,7 @@ from mcp_server.tools import (
     get_execution_results,
     get_parallelization_patches,
     get_project_status,
+    get_side_effects,
     initialize_discopop_directory,
     manage_patches,
     run_auto_tuning,
@@ -153,8 +154,9 @@ _SERVER_INSTRUCTIONS = (
     "dependencies that actually occur at runtime and turns code that is safe to parallelize "
     "into OpenMP patches. "
     "Use it when the user wants to speed up or parallelize C/C++ code, asks whether code can "
-    "safely run in parallel, or needs to know which data a code region reads and writes, e.g. "
-    "to check that a refactoring preserves the data flow (get_data_dependencies). Its answers "
+    "safely run in parallel, or needs to know which data a code region or a function reads and "
+    "writes, e.g. to check that a refactoring preserves the data flow (get_data_dependencies, "
+    "get_side_effects). Its answers "
     "come from executions, so they capture aliasing that reading the code misses, and "
     "run_auto_tuning measures which suggestions actually pay off instead of guessing.\n"
     "Not suitable when the project cannot be built and run locally, for languages other than "
@@ -166,10 +168,10 @@ _SERVER_INSTRUCTIONS = (
     "Workflow: initialize_discopop_directory, set_compile_script and "
     "create_execution_configuration once per project; gather_data to profile and detect "
     "patterns, with hotspot_config_names (ideally two configurations with different input "
-    "sizes) so that tuning can use the hotspot-guided search; run_auto_tuning(apply=true) to measure the fastest combination of suggestions "
+    "sizes) for the hotspot-guided tuning; run_auto_tuning(apply=true) to measure the fastest combination of suggestions "
     "and apply it (without apply=true, apply its selection via manage_patches).\n"
     "Rules: access DiscoPoP data only through these tools and never read .discopop directories "
-    "directly; they hold large binary artefacts, while the tools return compact summaries. If "
+    "directly: they hold large binary artefacts; the tools return compact summaries. If "
     "data is missing, run the tool that produces it, usually gather_data. Never choose patches "
     "by reading them: run_auto_tuning measures that choice, and needs an un-patched project. "
     "Never apply patches by editing source files; use manage_patches. If the pipeline is in an "
@@ -181,6 +183,7 @@ _ALL_TOOLS = [
     get_configurations,
     get_execution_results,
     get_data_dependencies,
+    get_side_effects,
     initialize_discopop_directory,
     set_compile_script,
     create_execution_configuration,

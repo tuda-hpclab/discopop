@@ -93,6 +93,11 @@ class ClangASTGraph:
                 "kind": node.get("kind"),
                 "name": node.get("name"),
                 "type": self._extract_type(node.get("type")),
+                # the type with typedefs and aliases resolved ("double *" for "Real_p"); None if Clang
+                # gives none, i.e. if it equals "type"
+                "desugared_type": (
+                    node["type"].get("desugaredQualType") if isinstance(node.get("type"), dict) else None
+                ),
                 "loc": loc,
                 "range": range_info,
                 "inner": node.get("inner", []),
@@ -103,6 +108,18 @@ class ClangASTGraph:
                 # "referencedDecl", not in the node's own "name", so without lifting it here a
                 # DeclRefExpr carries no indication of which variable it reads or writes.
                 "referenced_name": (node.get("referencedDecl") or {}).get("name"),
+                # id of that declaration, to tell e.g. a global from a local of the same name
+                "referenced_id": (node.get("referencedDecl") or {}).get("id"),
+                # its kind, e.g. "ParmVarDecl" for a call through a function pointer parameter
+                "referenced_kind": (node.get("referencedDecl") or {}).get("kind"),
+                # id of the member a MemberExpr names, e.g. the method of a member call
+                "referenced_member_id": node.get("referencedMemberDecl"),
+                # linker name of FunctionDecl / VarDecl nodes, which the profiler's function names match
+                "mangled_name": node.get("mangledName"),
+                # "static", "extern", ... of FunctionDecl / VarDecl nodes; None if not given
+                "storage_class": node.get("storageClass"),
+                # "tls" / "dynamic" for thread_local variables
+                "tls": node.get("tls"),
             }
 
             self.graph.add_node(node_id, **attrs)

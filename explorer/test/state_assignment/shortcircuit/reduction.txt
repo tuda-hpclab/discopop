@@ -1,0 +1,2 @@
+ FileID : 1 Loop Line Number : 19 Reduction Line Number : 21 Variable Name : g_ok Operation Name : +
+ FileID : 1 Loop Line Number : 19 Reduction Line Number : 23 Variable Name : s Operation Name : +

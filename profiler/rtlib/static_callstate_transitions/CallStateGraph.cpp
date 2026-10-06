@@ -13,6 +13,7 @@
 #include "CallStateGraph.hpp"
 #include <chrono>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 CallStateGraph::CallStateGraph() {
@@ -73,9 +74,60 @@ CallStateGraph::CallStateGraph() {
     std::string target_callstate_id_str = line.substr(pos + 1);
     register_implicit_return_transition(std::stoi(source_callstate_id_str), std::stoi(target_callstate_id_str));
   }
+  std::string tmp_4(getenv("DOT_DISCOPOP_PROFILER"));
+  tmp_4 += "/callpath_function_entries.txt";
+  read_function_entries(tmp_4);
   auto end_time = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[CallStateGraph()]: " << ((double)duration.count() / 1000.0) << "s" << std::endl;
+}
+
+// Reads callpath_function_entries.txt (see DiscoPoP::save_function_entries), lines:
+//   S <state_id> <function_entry_instruction_id>   the state is the entry state of a function instance
+//   E <function_entry_instruction_id> <state_id>   the root entry state of the function
+// Without it, functions are entered only through call transitions of their own translation unit.
+void CallStateGraph::read_function_entries(const std::string &path) {
+  std::ifstream file(path);
+  if (!file) {
+    std::cerr << "DiscoPoP: could not open " << path << ". Reported call states will be incorrect!\n";
+    return;
+  }
+  std::string kind;
+  std::int32_t first;
+  std::int32_t second;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    std::istringstream fields(line);
+    if (!(fields >> kind >> first >> second)) {
+      continue;
+    }
+    if (kind == "S") {
+      register_state_function(first, second);
+    } else if (kind == "E") {
+      register_function_entry_state(first, second);
+    }
+  }
+}
+
+void CallStateGraph::register_state_function(std::int32_t call_state_id, std::int32_t function_entry_id) {
+  get_or_register_node(call_state_id)->set_function_entry_id(function_entry_id);
+}
+
+void CallStateGraph::register_function_entry_state(std::int32_t function_entry_id, std::int32_t call_state_id) {
+  CallState *state = get_or_register_node(call_state_id);
+  state->set_function_entry_id(function_entry_id);
+  function_entry_states[function_entry_id] = state;
+}
+
+CallState *CallStateGraph::get_function_entry_state(std::int32_t function_entry_id) {
+  auto pos = function_entry_states.find(function_entry_id);
+  if (pos == function_entry_states.end()) {
+    return nullptr;
+  }
+  return pos->second;
 }
 
 CallStateGraph::~CallStateGraph() {
