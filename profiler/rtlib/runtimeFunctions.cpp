@@ -354,9 +354,7 @@ void mergeDeps() {
     }
   }
   allDepsLock.unlock();
-  // the sets are owned by allDeps now or freed. Clearing the map without freeing them used to leak
-  // every per-chunk set (one per distinct dependency sink and chunk), so the profiler's memory grew
-  // linearly with the run time
+  // the sets are owned by allDeps now or freed (clearing the map without freeing them leaked every set)
   myMap->clear();
 }
 
@@ -506,9 +504,9 @@ void *processFirstAccessQueue(void *arg) {
       current->entry_boundary_first_addr_accesses.set_value(entry_condition_accesses);
       current->exit_boundary_SMem.set_value(SMem);
 
-      mergeDeps();
-      myMap->clear();
-
+      // the thread's dependencies stay in myMap across chunks, deduplicated, and are merged into
+      // allDeps once when the thread ends: merging (and freeing) them per chunk allocated and freed
+      // a set per dependency sink and chunk again and again
       delete current;
 
     } else {
@@ -522,6 +520,8 @@ void *processFirstAccessQueue(void *arg) {
       }
     }
   }
+
+  mergeDeps();
 
 #if DP_CALLTREE_PROFILING
   // merge local results into global set
