@@ -63,7 +63,7 @@ std::ofstream *out = nullptr;
 /******* BEGIN: parallelization section *******/
 std::mutex allDepsLock;
 pthread_t *workers = nullptr; // worker threads
-volatile bool finalizeParallelizationCalled =
+std::atomic<bool> finalizeParallelizationCalled =
     false; // signals to worker threads that no further data access will be registered in the first queue
 FirstAccessQueueChunk *mainThread_AccessInfoBuffer = nullptr;
 // the limits are scaled by NUM_WORKERS in initParallelization
