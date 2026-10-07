@@ -37,12 +37,14 @@ This document contains critical information about working with this codebase. Fo
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the mypy version CI uses; a different version can report different errors)
 - to execute type checking of python files use the following command as the basis: `venv/bin/python -m mypy --config-file=mypy.ini -p`
+- to type check everything CI checks (`files` in `mypy.ini`: `discopop_explorer`, `discopop_library`, `discopop_gui` and `mcp_server`), run `venv/bin/python -m mypy --config-file=mypy.ini` without further arguments
 
 ## Formatting
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
-- to execute formatting check, use `venv/bin/pyton -m black -l 120 --check .`
-- to execute automatic formatting, use `venv/bin/pyton -m black -l 120 .`
+- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server`
+- to execute the formatting check, use `venv/bin/python -m black -l 120 --check <paths>` with the paths above
+- to execute automatic formatting, use `venv/bin/python -m black -l 120 <paths>`, restricted to the paths you changed; never run black on `.`, as it would reformat many unrelated, unchecked files
 
 ## Testing
 ### Install python packages

@@ -13,10 +13,11 @@ from typing import Any, Dict, Callable, Optional
 from discopop_gui.Types.FrameT import FrameT
 from discopop_gui.Objects.Frames.Base import Base as BaseFrame
 
+
 class Base(ABC):
-    def __init__(self, visualize_on : Optional[tk.Frame] = None) -> None:
-        self._root : tk.Tk | tk.Frame
-        self._visualizing_on : bool = False
+    def __init__(self, visualize_on: Optional[tk.Frame] = None) -> None:
+        self._root: tk.Tk | tk.Frame
+        self._visualizing_on: bool = False
 
         if not visualize_on:
             self._root = tk.Tk()
@@ -26,10 +27,10 @@ class Base(ABC):
             self._root = visualize_on
             self._visualizing_on = True
 
-        self._frame_id_counter : int = 0
+        self._frame_id_counter: int = 0
         self._frames: Dict[int, BaseFrame] = {}
         self._frame_names: Dict[int, str] = {}
-        self._file_locations : Dict[int, str] = {}
+        self._file_locations: Dict[int, str] = {}
         self._current_frame_id: int | None = None
 
     def _on_close(self) -> None:
@@ -45,7 +46,7 @@ class Base(ABC):
             return self._frames[frame_id]
         except KeyError as error:
             raise KeyError(f"No Frame with ID '{frame_id}'.") from error
-        
+
     def show_frame(self, frame_id: int) -> None:
         frame = self.get_frame(frame_id)
         frame.tkraise()
@@ -78,7 +79,7 @@ class Base(ABC):
     def run(self) -> None:
         if self._visualizing_on:
             return
-        
+
         self._root.mainloop()
 
     def clear(self) -> None:

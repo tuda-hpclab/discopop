@@ -121,6 +121,14 @@ jobs:
         run: |
             venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
 
+      - name: Check formatting of DiscoPoP GUI
+        run: |
+            venv/bin/python3 -m black -l 120 --check GUI
+
+      - name: Check formatting of DiscoPoP MCP Server
+        run: |
+            venv/bin/python3 -m black -l 120 --check mcp_server
+
       # Python: the roots and import mode are configured in pyproject.toml ([tool.pytest.ini_options])
       - name: Unit test check
         run: |

@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 class RoundedSquareButton(tk.Canvas):
     def __init__(
-        self, parent : tk.Misc, command : Callable[[], None], size : int = 36, radius : int = 8, *args : Any, **kwargs : Any
+        self, parent: tk.Misc, command: Callable[[], None], size: int = 36, radius: int = 8, *args: Any, **kwargs: Any
     ) -> None:
         super().__init__(
             parent,

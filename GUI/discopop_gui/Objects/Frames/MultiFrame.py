@@ -15,6 +15,7 @@ from discopop_gui.ClassMaps.Frames import FramesMap
 from discopop_gui.Objects.Frames.Base import Base
 from discopop_gui.Objects.Frames.CanvasViewerWithTrees import CanvasViewerWithTrees
 
+
 class MultiFrame(Base):
     def __init__(self, parent: tk.Misc, *args: Any, **kwargs: Any) -> None:
         super().__init__(parent, *args, **kwargs)
@@ -28,21 +29,23 @@ class MultiFrame(Base):
 
     def create_frame(self, row: int, column: int, frame_builder: Callable[[tk.Misc], FrameT]) -> FrameT:
         frame = frame_builder(self)
-        frame.grid(row = row, column = column, sticky="nsew")
+        frame.grid(row=row, column=column, sticky="nsew")
         self._inner_frames.append(frame)
         return frame
 
     def serialize(self) -> Dict[str, Any]:
-        output : Dict[str, Any] = {"inner_frames" : []}
+        output: Dict[str, Any] = {"inner_frames": []}
 
         for frame in self._inner_frames:
 
-            output["inner_frames"].append({
-                "type" : FramesMap[frame.__class__.__name__].value,
-                "row" : frame.grid_info()["row"],
-                "column" : frame.grid_info()["column"],
-                "data" : frame.serialize()
-            })
+            output["inner_frames"].append(
+                {
+                    "type": FramesMap[frame.__class__.__name__].value,
+                    "row": frame.grid_info()["row"],
+                    "column": frame.grid_info()["column"],
+                    "data": frame.serialize(),
+                }
+            )
 
         return output
 
@@ -53,20 +56,14 @@ class MultiFrame(Base):
             match FrameType(frame_data["type"]):
                 case FrameType.CANVAS_VIEWER_WITH_TREES:
                     self.create_frame(
-                        int(frame_data["row"]),
-                        int(frame_data["column"]),
-                        lambda parent: CanvasViewerWithTrees(parent)
+                        int(frame_data["row"]), int(frame_data["column"]), lambda parent: CanvasViewerWithTrees(parent)
                     ).deserialize(frame_data["data"])
                 case FrameType.MULTI_FRAME:
                     self.create_frame(
-                        int(frame_data["row"]),
-                        int(frame_data["column"]),
-                        lambda parent: MultiFrame(parent)
+                        int(frame_data["row"]), int(frame_data["column"]), lambda parent: MultiFrame(parent)
                     ).deserialize(frame_data["data"])
 
                 case _:
                     self.create_frame(
-                        int(frame_data["row"]),
-                        int(frame_data["column"]),
-                        lambda parent: Base(parent)
+                        int(frame_data["row"]), int(frame_data["column"]), lambda parent: Base(parent)
                     ).deserialize(frame_data["data"])

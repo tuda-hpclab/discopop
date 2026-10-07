@@ -20,6 +20,7 @@ updates:
       - dependency-name: "data-science-types"
       - dependency-name: "mypy"
       - dependency-name: "pytest"
+      - dependency-name: "types-jsonschema"
     groups:
       dev-tools:
         patterns:

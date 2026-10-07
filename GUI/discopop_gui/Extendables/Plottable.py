@@ -56,7 +56,7 @@ class Plottable:
         for column in range(columns):
             frame.grid_columnconfigure(column, weight=1)
 
-        inner_frames : List[BaseFrame] = []
+        inner_frames: List[BaseFrame] = []
 
         for i in range(rows * columns):
             row = i // columns
@@ -102,14 +102,14 @@ class Plottable:
     def create_plottable(self, name: str) -> CanvasViewerWithTrees:
         if self._visualizer is None:
             raise VisualizerNotDefined()
-        
-        def frame_builder(parent : tk.Misc) -> CanvasViewerWithTrees:
+
+        def frame_builder(parent: tk.Misc) -> CanvasViewerWithTrees:
             return CanvasViewerWithTrees(parent)
 
         frame = self._visualizer.create_frame(name, frame_builder)
 
-        frame.grid_rowconfigure(0, weight = 1)
-        frame.grid_columnconfigure(0, weight = 1)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
 
         return frame
 
@@ -122,14 +122,14 @@ class Plottable:
             figure = Figure()
             axes = figure.add_subplot(111)
             axes.set_title(inner_plot_titles[index])
-            canvas = FigureCanvasTkAgg(figure, master = inner_frame)
+            canvas = FigureCanvasTkAgg(figure, master=inner_frame)
             canvas.draw()
             canvas.get_tk_widget().grid(row=0, sticky="nsew")
             toolbar = NavigationToolbar2Tk(canvas, pack_toolbar=False)
             toolbar.update()
-            toolbar.grid(row = 1)
-            inner_frame.grid_rowconfigure(0, weight = 1)
-            inner_frame.grid_columnconfigure(0, weight = 1)
+            toolbar.grid(row=1)
+            inner_frame.grid_rowconfigure(0, weight=1)
+            inner_frame.grid_columnconfigure(0, weight=1)
             axeses.append(axes)
 
         return axeses
