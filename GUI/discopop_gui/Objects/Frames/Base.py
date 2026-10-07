@@ -9,6 +9,7 @@
 import tkinter as tk
 from typing import Any, Dict
 
+
 class Base(tk.Frame):
     def __init__(self, parent: tk.Misc, *args: Any, **kwargs: Any) -> None:
         super().__init__(parent, *args, **kwargs)
@@ -16,5 +17,5 @@ class Base(tk.Frame):
     def serialize(self) -> Dict[str, Any]:
         return {}
 
-    def deserialize(self, _ : Dict[str, Any]) -> None:
+    def deserialize(self, _: Dict[str, Any]) -> None:
         pass

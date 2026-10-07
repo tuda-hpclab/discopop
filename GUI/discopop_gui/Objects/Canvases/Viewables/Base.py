@@ -22,19 +22,19 @@ class Base(tk.Canvas):
 
         self._viewer_mode = viewer_mode
 
-        self._original_coordinates : dict[int, tuple[float, ...]] = {}
-        self._transform_scale : float = 1
-        self._transform_x : float = 0.0
-        self._transform_y : float = 0.0
+        self._original_coordinates: dict[int, tuple[float, ...]] = {}
+        self._transform_scale: float = 1
+        self._transform_x: float = 0.0
+        self._transform_y: float = 0.0
 
-        self._drag_start_x : float | None = None
-        self._drag_start_y : float | None = None
-        self._last_drag_x : float | None = None
-        self._last_drag_y : float | None = None
-        self._drag_rectangle_id : int | None = None
+        self._drag_start_x: float | None = None
+        self._drag_start_y: float | None = None
+        self._last_drag_x: float | None = None
+        self._last_drag_y: float | None = None
+        self._drag_rectangle_id: int | None = None
 
         self._popup = Popup(self)
-        self._popup_hide_threshold : float = 50.0
+        self._popup_hide_threshold: float = 50.0
 
         self.bind("<ButtonPress-1>", self._left_press)
         self.bind("<B1-Motion>", self._left_drag)
@@ -58,9 +58,9 @@ class Base(tk.Canvas):
 
         if ((x1 - threshold) <= cx <= (x2 + threshold)) and ((y1 - threshold) <= cy <= (y2 + threshold)):
             return
-        
+
         self._popup.hide()
-        
+
     def _left_press(self, event: tk.Event[tk.Canvas]) -> None:
         self._start_drag(event, button=1)
 
@@ -292,7 +292,7 @@ class Base(tk.Canvas):
 
     def get_viewer_mode(self) -> ViewerMode:
         return self._viewer_mode
-    
+
     def coords_unscaled(self, item_id: int, *coords: float) -> None:
         self._original_coordinates[item_id] = tuple(coords)
         self._apply_transform_to_item(item_id)
@@ -330,8 +330,12 @@ class Base(tk.Canvas):
         self._store_original_coordinates(item_id)
         self._apply_transform_to_item(item_id)
         return item_id
-    
-    def clone_item_to_canvas(self, canvas: "Base", item_id: int,) -> int:
+
+    def clone_item_to_canvas(
+        self,
+        canvas: "Base",
+        item_id: int,
+    ) -> int:
         item_type = self.type(item_id)
 
         coords = self._original_coordinates.get(item_id, tuple(self.coords(item_id)))
@@ -366,9 +370,7 @@ class Base(tk.Canvas):
                 return canvas.create_text(*coords, **options)
 
             case _:
-                raise NotImplementedError(
-                    f"Canvas item type '{item_type}' is not supported."
-                )
+                raise NotImplementedError(f"Canvas item type '{item_type}' is not supported.")
 
     def delete(self, *args: Any) -> None:
         if "all" in args:

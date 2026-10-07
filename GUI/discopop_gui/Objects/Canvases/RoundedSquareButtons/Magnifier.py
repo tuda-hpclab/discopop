@@ -8,6 +8,7 @@
 
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
+
 class Magnifier(RoundedSquareButton):
     def draw(self) -> None:
         super().draw()

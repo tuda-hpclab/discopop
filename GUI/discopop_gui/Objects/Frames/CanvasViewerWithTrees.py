@@ -22,18 +22,19 @@ from discopop_gui.utils.TreeNode import TreeNode
 from discopop_gui.Enums.EdgeType import EdgeType
 from discopop_gui.Objects.Canvases.Viewables.WithTrees import WithTrees as ViewableCanvasWithTrees
 
+
 class CanvasViewerWithTrees(Base):
     def __init__(self, parent: tk.Misc, *args: Any, **kwargs: Any) -> None:
         super().__init__(parent, *args, **kwargs)
 
         self._selected_option: ViewerMode = ViewerMode.MAIN
-        self._canvases : Dict[str, ViewableCanvasWithTrees] = {}
-        self._canvas_selectors : Dict[str, tk.Button] = {}
-        self._active_canvas_id : str | None = None
-        self._canvas_id_counter : int = 0
-        self._nodes : Dict[int, TreeNode] = {}
-        self._highest_managed_dependencies : List[Tuple[TreeNode, TreeNode]] = []
-        self._saved_canvases : List[Any] = []
+        self._canvases: Dict[str, ViewableCanvasWithTrees] = {}
+        self._canvas_selectors: Dict[str, tk.Button] = {}
+        self._active_canvas_id: str | None = None
+        self._canvas_id_counter: int = 0
+        self._nodes: Dict[int, TreeNode] = {}
+        self._highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = []
+        self._saved_canvases: List[Any] = []
         self._saved_canvases_loaders_buttons: List[tk.Button] = []
         self._tab_visible = False
 
@@ -42,22 +43,24 @@ class CanvasViewerWithTrees(Base):
         self.grid_columnconfigure(0, weight=1)
 
         self._top_container = tk.Frame(self)
-        self._top_container.grid(row = 0, column = 0, sticky = "nsew")
+        self._top_container.grid(row=0, column=0, sticky="nsew")
 
         self._top_container.grid_rowconfigure(0, weight=1)
         self._top_container.grid_columnconfigure(0, weight=1)
 
         self._canvas_container = tk.Frame(self._top_container)
-        self._canvas_container.grid(row = 0, column = 0, sticky = "nsew")
-        self._canvas_container.grid_rowconfigure(0, weight = 1)
-        self._canvas_container.grid_columnconfigure(0, weight = 1)
+        self._canvas_container.grid(row=0, column=0, sticky="nsew")
+        self._canvas_container.grid_rowconfigure(0, weight=1)
+        self._canvas_container.grid_columnconfigure(0, weight=1)
 
         self._saved_canvases_loaders_container = tk.Frame(self._top_container)
-        self._saved_canvases_loaders_container.place(relx = 0.0, rely = 1.0, relwidth = 1.0, anchor = "sw")
+        self._saved_canvases_loaders_container.place(relx=0.0, rely=1.0, relwidth=1.0, anchor="sw")
         self._saved_canvases_loaders_container.grid_rowconfigure(0, weight=1)
         self._saved_canvases_loaders_container.grid_columnconfigure(0, weight=1)
 
-        self._saved_canvases_loaders_canvas = tk.Canvas(self._saved_canvases_loaders_container, highlightthickness = 0, height = 50)
+        self._saved_canvases_loaders_canvas = tk.Canvas(
+            self._saved_canvases_loaders_container, highlightthickness=0, height=50
+        )
 
         self._saved_canvases_loaders_scrollbar = tk.Scrollbar(
             self._saved_canvases_loaders_container,
@@ -81,11 +84,13 @@ class CanvasViewerWithTrees(Base):
 
         self._saved_canvases_loaders_window = self._saved_canvases_loaders_canvas.create_window(
             (0, 0),
-            window = self._saved_canvases_loaders_frame,
-            anchor = "nw",
+            window=self._saved_canvases_loaders_frame,
+            anchor="nw",
         )
 
-        self._saved_canvases_loaders_canvas.configure(xscrollcommand=self._saved_canvases_loaders_scrollbar.set,)
+        self._saved_canvases_loaders_canvas.configure(
+            xscrollcommand=self._saved_canvases_loaders_scrollbar.set,
+        )
 
         self._saved_canvases_loaders_frame.bind(
             "<Configure>",
@@ -101,18 +106,18 @@ class CanvasViewerWithTrees(Base):
 
         self._bottom_container = tk.Frame(self)
         self._bottom_container.grid(row=1, column=0, sticky="ew")
-        
+
         self._bottom_container.grid_rowconfigure(0, weight=1)
-        self._bottom_container.grid_columnconfigure(0, weight=1, uniform="bottom_split") 
+        self._bottom_container.grid_columnconfigure(0, weight=1, uniform="bottom_split")
         self._bottom_container.grid_columnconfigure(1, weight=1, uniform="bottom_split")
 
         self._toolbar = tk.Frame(self._bottom_container)
         self._toolbar.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-        
-        self._main = MouseButton(self._toolbar, command = self.select_main)
-        self._magnifier = MagnifierButton(self._toolbar, command = self.select_magnifier)
-        self._plus = PlusButton(self._toolbar, command = self._on_toggle_addable_canvases)
-        
+
+        self._main = MouseButton(self._toolbar, command=self.select_main)
+        self._magnifier = MagnifierButton(self._toolbar, command=self.select_magnifier)
+        self._plus = PlusButton(self._toolbar, command=self._on_toggle_addable_canvases)
+
         self._main.grid(row=0, column=0, padx=4, pady=4)
         self._magnifier.grid(row=0, column=1, padx=4, pady=4)
         self._plus.grid(row=0, column=2, padx=4, pady=4)
@@ -123,28 +128,30 @@ class CanvasViewerWithTrees(Base):
         self._switcher_container.grid_columnconfigure(0, weight=1)
 
         self._switcher_canvas = tk.Canvas(self._switcher_container, highlightthickness=0, height=50)
-        self._switcher_scrollbar = tk.Scrollbar(self._switcher_container, orient="horizontal", command=self._switcher_canvas.xview)
-        self._delete_canvas_button = CrossButton(self._switcher_container, command = self.delete_canvas)
+        self._switcher_scrollbar = tk.Scrollbar(
+            self._switcher_container, orient="horizontal", command=self._switcher_canvas.xview
+        )
+        self._delete_canvas_button = CrossButton(self._switcher_container, command=self.delete_canvas)
 
         self._switcher_canvas.grid(
-            row = 0,
-            column = 0,
-            sticky = "nsew",
+            row=0,
+            column=0,
+            sticky="nsew",
         )
 
         self._switcher_scrollbar.grid(
-            row = 1,
-            column = 0,
-            sticky = "nsew",
+            row=1,
+            column=0,
+            sticky="nsew",
         )
 
         self._delete_canvas_button.grid(
-            row = 0,
-            column = 1,
-            rowspan = 2,
-            padx = (4, 0),
-            pady = 2,
-            sticky = "nsew",
+            row=0,
+            column=1,
+            rowspan=2,
+            padx=(4, 0),
+            pady=2,
+            sticky="nsew",
         )
 
         self._switcher_frame = tk.Frame(self._switcher_canvas)
@@ -160,20 +167,20 @@ class CanvasViewerWithTrees(Base):
         self._update_switcher_visibility()
 
     def _switcher_frame_configure(self, _: tk.Event[tk.Widget]) -> None:
-        self._switcher_canvas.configure(scrollregion = self._switcher_canvas.bbox("all"))
+        self._switcher_canvas.configure(scrollregion=self._switcher_canvas.bbox("all"))
 
     def _switcher_canvas_configure(self, event: tk.Event[tk.Widget]) -> None:
-        self._switcher_canvas.itemconfigure(self._switcher_window, height = event.height)
+        self._switcher_canvas.itemconfigure(self._switcher_window, height=event.height)
 
     def _saved_canvases_loaders_frame_configure(self, _: tk.Event[tk.Widget]) -> None:
         self._saved_canvases_loaders_canvas.configure(
-            scrollregion = self._saved_canvases_loaders_canvas.bbox("all"),
+            scrollregion=self._saved_canvases_loaders_canvas.bbox("all"),
         )
 
     def _saved_canvases_loaders_configure(self, event: tk.Event[tk.Widget]) -> None:
         self._saved_canvases_loaders_canvas.itemconfigure(
             self._saved_canvases_loaders_window,
-            height = event.height,
+            height=event.height,
         )
 
     def _on_toggle_addable_canvases(self) -> None:
@@ -193,9 +200,9 @@ class CanvasViewerWithTrees(Base):
                 parent,
                 canvas_viewer,
                 canvas_viewer_mode,
-                nodes = nodes,
-                highest_managed_dependencies = highest_managed_dependencies,
-                bg = "white"
+                nodes=nodes,
+                highest_managed_dependencies=highest_managed_dependencies,
+                bg="white",
             )
         )
 
@@ -211,11 +218,11 @@ class CanvasViewerWithTrees(Base):
             self._switcher_container.grid_remove()
         else:
             self._switcher_container.grid(
-                row = 0,
-                column = 1,
-                sticky = "nsew",
-                padx = 2,
-                pady = 2,
+                row=0,
+                column=1,
+                sticky="nsew",
+                padx=2,
+                pady=2,
             )
 
     def _update_saved_canvases_loaders(self) -> None:
@@ -225,49 +232,48 @@ class CanvasViewerWithTrees(Base):
         self._saved_canvases_loaders_buttons.clear()
 
         for index in range(len(self._saved_canvases)):
+
             def callback() -> None:
                 self._on_saved_canvas_loader_clicked(index)
-                
+
             button = tk.Button(
                 self._saved_canvases_loaders_frame,
-                text = str(index),
-                command = callback,
+                text=str(index),
+                command=callback,
             )
 
-            button.grid(
-                row = 0,
-                column = index,
-                sticky = "ns",
-                padx = 5,
-                pady = 2
-            )
+            button.grid(row=0, column=index, sticky="ns", padx=5, pady=2)
 
             self._saved_canvases_loaders_buttons.append(button)
 
     def get_canvas(self, canvas_id: str | None = None) -> ViewableCanvasWithTrees:
         if not canvas_id and self._active_canvas_id:
             return self._canvases[self._active_canvas_id]
-        
+
         if not canvas_id:
             raise ValueError("No active canvas.")
-        
+
         try:
             return self._canvases[canvas_id]
         except KeyError as error:
             raise KeyError(f"No Canvas id '{canvas_id}'.") from error
 
-    def add_canvas(self, canvas_builder: Callable[[tk.Frame, "CanvasViewerWithTrees", ViewerMode, Dict[int, TreeNode], List[Tuple[TreeNode, TreeNode]]], ViewableCanvasWithTrees]) -> str:
+    def add_canvas(
+        self,
+        canvas_builder: Callable[
+            [tk.Frame, "CanvasViewerWithTrees", ViewerMode, Dict[int, TreeNode], List[Tuple[TreeNode, TreeNode]]],
+            ViewableCanvasWithTrees,
+        ],
+    ) -> str:
         self._canvas_id_counter += 1
         canvas_id = str(self._canvas_id_counter)
-        new_canvas = canvas_builder(self._canvas_container, self, self._selected_option, self._nodes, self._highest_managed_dependencies)
+        new_canvas = canvas_builder(
+            self._canvas_container, self, self._selected_option, self._nodes, self._highest_managed_dependencies
+        )
         self._canvases[canvas_id] = new_canvas
         new_canvas.grid(row=0, column=0, sticky="nsew")
 
-        selector_button = tk.Button(
-            self._switcher_frame, 
-            text = canvas_id, 
-            command = lambda : self.show_canvas(canvas_id)
-        )
+        selector_button = tk.Button(self._switcher_frame, text=canvas_id, command=lambda: self.show_canvas(canvas_id))
 
         self._canvas_selectors[canvas_id] = selector_button
         selector_button.grid(row=0, column=len(self._canvas_selectors) - 1, sticky="ns", padx=5, pady=2)
@@ -291,7 +297,7 @@ class CanvasViewerWithTrees(Base):
 
         self._canvases[canvas_id].destroy()
         del self._canvases[canvas_id]
-        
+
         self._canvas_selectors[canvas_id].destroy()
         del self._canvas_selectors[canvas_id]
 
@@ -338,9 +344,11 @@ class CanvasViewerWithTrees(Base):
 
     def serialize(self) -> Dict[str, Any]:
         return {
-            "nodes" : {node_id : node.serialize() for node_id, node in self._nodes.items()},
-            "highest_managed_dependencies" : [(node1.id, node2.id) for node1, node2 in self._highest_managed_dependencies],
-            "canvases" : [canvas.serialize() for canvas in self._canvases.values()]
+            "nodes": {node_id: node.serialize() for node_id, node in self._nodes.items()},
+            "highest_managed_dependencies": [
+                (node1.id, node2.id) for node1, node2 in self._highest_managed_dependencies
+            ],
+            "canvases": [canvas.serialize() for canvas in self._canvases.values()],
         }
 
     def deserialize(self, data: Dict[str, Any]) -> None:
@@ -369,9 +377,9 @@ class CanvasViewerWithTrees(Base):
                 parent,
                 canvas_viewer,
                 canvas_viewer_mode,
-                nodes = nodes,
-                highest_managed_dependencies = highest_managed_dependencies,
-                bg = "white"
+                nodes=nodes,
+                highest_managed_dependencies=highest_managed_dependencies,
+                bg="white",
             )
         )
 
@@ -382,30 +390,25 @@ class CanvasViewerWithTrees(Base):
         self.delete_all_canvases()
         self._nodes.clear()
         self._highest_managed_dependencies.clear()
-        nodes_to_ids : Dict[Any, int] = {}
+        nodes_to_ids: Dict[Any, int] = {}
 
         for node in graph.nodes:
             node_id = len(self._nodes)
             nodes_to_ids[node] = node_id
             self._nodes[node_id] = TreeNode(node_id)
 
-            self._nodes[node_id].metadata.update(
-                {
-                    "label": node.get_label(),
-                    "fill": "cyan"
-                }
-            )
+            self._nodes[node_id].metadata.update({"label": node.get_label(), "fill": "cyan"})
 
-        seen_edges : Set[Tuple[int, int]] = set()
-        dependency_edges : List[Tuple[int, int]] = []
-        
-        for source, destination, data in graph.edges(data = True):
+        seen_edges: Set[Tuple[int, int]] = set()
+        dependency_edges: List[Tuple[int, int]] = []
+
+        for source, destination, data in graph.edges(data=True):
             source_node_id = nodes_to_ids[source]
             destination_node_id = nodes_to_ids[destination]
 
             if (source_node_id, destination_node_id) in seen_edges:
                 continue
-            
+
             if data.get("edge_type") == EdgeType.DEPENDENCY:
                 dependency_edges.append((source_node_id, destination_node_id))
             elif data.get("edge_type") == EdgeType.MAIN:
@@ -431,8 +434,8 @@ class CanvasViewerWithTrees(Base):
                 destination_height += 1
                 current_node = current_node.higher_order_main_connection
 
-            current_source_node : TreeNode | None = self._nodes[source_node_id]
-            current_destination_node : TreeNode | None = self._nodes[destination_node_id]
+            current_source_node: TreeNode | None = self._nodes[source_node_id]
+            current_destination_node: TreeNode | None = self._nodes[destination_node_id]
 
             while current_source_node is not None and source_height > destination_height:
                 current_source_node = self._nodes[current_source_node.id].higher_order_main_connection
@@ -442,23 +445,31 @@ class CanvasViewerWithTrees(Base):
                 current_destination_node = self._nodes[current_destination_node.id].higher_order_main_connection
                 destination_height -= 1
 
-            while current_source_node is not None and current_destination_node is not None and current_source_node.id != current_destination_node.id:
+            while (
+                current_source_node is not None
+                and current_destination_node is not None
+                and current_source_node.id != current_destination_node.id
+            ):
                 current_source_node = self._nodes[current_source_node.id].higher_order_main_connection
                 current_destination_node = self._nodes[current_destination_node.id].higher_order_main_connection
 
             if current_source_node is not None and current_destination_node is not None:
-                self._nodes[current_source_node.id].managed_dependencies.append((self._nodes[source_node_id], self._nodes[destination_node_id]))
+                self._nodes[current_source_node.id].managed_dependencies.append(
+                    (self._nodes[source_node_id], self._nodes[destination_node_id])
+                )
             else:
-                self._highest_managed_dependencies.append((self._nodes[source_node_id], self._nodes[destination_node_id]))
+                self._highest_managed_dependencies.append(
+                    (self._nodes[source_node_id], self._nodes[destination_node_id])
+                )
 
         canvas_id = self.add_canvas(
             lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(
                 parent,
                 canvas_viewer,
                 canvas_viewer_mode,
-                nodes = nodes,
-                highest_managed_dependencies = highest_managed_dependencies,
-                bg = "white"
+                nodes=nodes,
+                highest_managed_dependencies=highest_managed_dependencies,
+                bg="white",
             )
         )
 

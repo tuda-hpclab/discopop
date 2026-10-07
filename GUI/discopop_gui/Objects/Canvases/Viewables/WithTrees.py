@@ -20,62 +20,67 @@ from discopop_gui.Objects.CanvasItems.TreeEdges.Dependency import Dependency as 
 if TYPE_CHECKING:
     from discopop_gui.Objects.Frames.CanvasViewerWithTrees import CanvasViewerWithTrees
 
+
 class WithTrees(Base):
     def __init__(
         self,
-        parent : tk.Frame,
-        canvas_viewer : "CanvasViewerWithTrees",
-        viewer_mode : ViewerMode,
-        nodes : Dict[int, TreeNode] = {},
-        highest_managed_dependencies : List[Tuple[TreeNode, TreeNode]] = [],
-        *args : Any,
-        **kwargs : Any,
+        parent: tk.Frame,
+        canvas_viewer: "CanvasViewerWithTrees",
+        viewer_mode: ViewerMode,
+        nodes: Dict[int, TreeNode] = {},
+        highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = [],
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         super().__init__(parent, viewer_mode, *args, **kwargs)
         self._canvas_viewer = canvas_viewer
-        self._nodes : Dict[int, TreeNode] = nodes
-        self._highest_managed_dependencies : List[Tuple[TreeNode, TreeNode]] = highest_managed_dependencies
-        self._visual_nodes : Dict[int, VisualTreeNode] = {}
-        self._highest_visual_node_ids : List[int] = []
-        self._highest_visual_nodes_x_offset_data : Dict[int, Tuple[int, int, int]] = {}
+        self._nodes: Dict[int, TreeNode] = nodes
+        self._highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = highest_managed_dependencies
+        self._visual_nodes: Dict[int, VisualTreeNode] = {}
+        self._highest_visual_node_ids: List[int] = []
+        self._highest_visual_nodes_x_offset_data: Dict[int, Tuple[int, int, int]] = {}
 
-    def check_visual_node(self, visual_node_id : int) -> bool:
+    def check_visual_node(self, visual_node_id: int) -> bool:
         return visual_node_id in self._visual_nodes
-    
-    def check_highest_visual_node(self, visual_node_id : int) -> bool:
+
+    def check_highest_visual_node(self, visual_node_id: int) -> bool:
         return visual_node_id in self._highest_visual_nodes_x_offset_data
 
-    def get_node(self, node_id : int) -> TreeNode:
+    def get_node(self, node_id: int) -> TreeNode:
         return self._nodes[node_id]
 
-    def get_visual_node(self, visual_node_id : int) -> VisualTreeNode:
+    def get_visual_node(self, visual_node_id: int) -> VisualTreeNode:
         return self._visual_nodes[visual_node_id]
 
     def get_highest_visual_node_ids(self) -> List[int]:
         return self._highest_visual_node_ids.copy()
 
-    def add_highest_visual_node_id(self, visual_node_id : int, at_index : int | None = None) -> None:
+    def add_highest_visual_node_id(self, visual_node_id: int, at_index: int | None = None) -> None:
         offset = 0
 
         if len(self._highest_visual_node_ids) > 0:
-            offset = self._highest_visual_nodes_x_offset_data[self._highest_visual_node_ids[-1]][0] + self._highest_visual_nodes_x_offset_data[self._highest_visual_node_ids[-1]][2] + 1
+            offset = (
+                self._highest_visual_nodes_x_offset_data[self._highest_visual_node_ids[-1]][0]
+                + self._highest_visual_nodes_x_offset_data[self._highest_visual_node_ids[-1]][2]
+                + 1
+            )
 
         self._highest_visual_nodes_x_offset_data[visual_node_id] = (offset, 0, 0)
-        
+
         if at_index is not None:
             self._highest_visual_node_ids.insert(at_index, visual_node_id)
 
-            for node_id in self._highest_visual_node_ids[at_index + 1:]:
+            for node_id in self._highest_visual_node_ids[at_index + 1 :]:
                 self._highest_visual_nodes_x_offset_data[node_id] = (
                     self._highest_visual_nodes_x_offset_data[node_id][0] + 1,
                     self._highest_visual_nodes_x_offset_data[node_id][1],
-                    self._highest_visual_nodes_x_offset_data[node_id][2]
+                    self._highest_visual_nodes_x_offset_data[node_id][2],
                 )
         else:
             at_index = len(self._highest_visual_node_ids)
             self._highest_visual_node_ids.append(visual_node_id)
 
-    def remove_highest_visual_node_id(self, visual_node_id : int) -> int:
+    def remove_highest_visual_node_id(self, visual_node_id: int) -> int:
         left_offset = self._highest_visual_nodes_x_offset_data[visual_node_id][1]
         right_offset = self._highest_visual_nodes_x_offset_data[visual_node_id][2]
         flip = False
@@ -84,9 +89,17 @@ class WithTrees(Base):
             if node_id == visual_node_id:
                 flip = True
             elif flip == False:
-                self._highest_visual_nodes_x_offset_data[node_id] = (self._highest_visual_nodes_x_offset_data[node_id][0] + left_offset, self._highest_visual_nodes_x_offset_data[node_id][1], self._highest_visual_nodes_x_offset_data[node_id][2])
+                self._highest_visual_nodes_x_offset_data[node_id] = (
+                    self._highest_visual_nodes_x_offset_data[node_id][0] + left_offset,
+                    self._highest_visual_nodes_x_offset_data[node_id][1],
+                    self._highest_visual_nodes_x_offset_data[node_id][2],
+                )
             else:
-                self._highest_visual_nodes_x_offset_data[node_id] = (self._highest_visual_nodes_x_offset_data[node_id][0] - right_offset - 1, self._highest_visual_nodes_x_offset_data[node_id][1], self._highest_visual_nodes_x_offset_data[node_id][2])
+                self._highest_visual_nodes_x_offset_data[node_id] = (
+                    self._highest_visual_nodes_x_offset_data[node_id][0] - right_offset - 1,
+                    self._highest_visual_nodes_x_offset_data[node_id][1],
+                    self._highest_visual_nodes_x_offset_data[node_id][2],
+                )
 
         value = self._highest_visual_node_ids.index(visual_node_id)
         self._highest_visual_node_ids.remove(visual_node_id)
@@ -95,12 +108,16 @@ class WithTrees(Base):
 
     def update_visual_node_offsets(self) -> None:
         for visual_node_id in self._highest_visual_node_ids:
-            self.get_visual_node(visual_node_id).set_offset_by_higher_order(self._highest_visual_nodes_x_offset_data[visual_node_id][0], 0)
-    
-    def request_x_space_by_highest_visual_node(self, visual_node_id : int, space_requested : Tuple[int, int] | None) -> None:
+            self.get_visual_node(visual_node_id).set_offset_by_higher_order(
+                self._highest_visual_nodes_x_offset_data[visual_node_id][0], 0
+            )
+
+    def request_x_space_by_highest_visual_node(
+        self, visual_node_id: int, space_requested: Tuple[int, int] | None
+    ) -> None:
         if visual_node_id not in self._highest_visual_node_ids:
             raise ValueError("Called by non-highest visual node.")
-        
+
         left_offset = 0
         right_offset = 0
 
@@ -115,14 +132,28 @@ class WithTrees(Base):
 
         for connection_id, _ in self._highest_visual_nodes_x_offset_data.items():
             if connection_id == visual_node_id:
-                self._highest_visual_nodes_x_offset_data[connection_id] = (self._highest_visual_nodes_x_offset_data[connection_id][0], space_requested[0], space_requested[1])    
+                self._highest_visual_nodes_x_offset_data[connection_id] = (
+                    self._highest_visual_nodes_x_offset_data[connection_id][0],
+                    space_requested[0],
+                    space_requested[1],
+                )
                 flip = True
             elif flip == False:
-                self._highest_visual_nodes_x_offset_data[connection_id] = (self._highest_visual_nodes_x_offset_data[connection_id][0] + left_offset, self._highest_visual_nodes_x_offset_data[connection_id][1], self._highest_visual_nodes_x_offset_data[connection_id][2])
+                self._highest_visual_nodes_x_offset_data[connection_id] = (
+                    self._highest_visual_nodes_x_offset_data[connection_id][0] + left_offset,
+                    self._highest_visual_nodes_x_offset_data[connection_id][1],
+                    self._highest_visual_nodes_x_offset_data[connection_id][2],
+                )
             else:
-                self._highest_visual_nodes_x_offset_data[connection_id] = (self._highest_visual_nodes_x_offset_data[connection_id][0] + right_offset, self._highest_visual_nodes_x_offset_data[connection_id][1], self._highest_visual_nodes_x_offset_data[connection_id][2])
+                self._highest_visual_nodes_x_offset_data[connection_id] = (
+                    self._highest_visual_nodes_x_offset_data[connection_id][0] + right_offset,
+                    self._highest_visual_nodes_x_offset_data[connection_id][1],
+                    self._highest_visual_nodes_x_offset_data[connection_id][2],
+                )
 
-    def create_visual_node(self, visual_node_id: int, state : str = "normal", x_offset : int = 0, y_offset : int = 0) -> bool:
+    def create_visual_node(
+        self, visual_node_id: int, state: str = "normal", x_offset: int = 0, y_offset: int = 0
+    ) -> bool:
         if visual_node_id in self._visual_nodes:
             return False
 
@@ -139,17 +170,10 @@ class WithTrees(Base):
             y + TREE_NODE_RADIUS,
             fill=fill_color,
             outline="black",
-            state = state
+            state=state,
         )
 
-        text_id = self.create_text(
-            x,
-            y,
-            text=label,
-            font=("Arial", 7),
-            anchor="center",
-            state = state
-        )
+        text_id = self.create_text(x, y, text=label, font=("Arial", 7), anchor="center", state=state)
 
         self._visual_nodes[visual_node_id] = VisualTreeNode(
             self,
@@ -159,57 +183,42 @@ class WithTrees(Base):
             oval_id,
             text_id,
             x_offset,
-            y_offset
+            y_offset,
         )
 
         return True
-    
-    def create_visual_main_edge(self, from_id : int, to_id : int, state : str = "hidden") -> VisualMainEdge[int]:
+
+    def create_visual_main_edge(self, from_id: int, to_id: int, state: str = "hidden") -> VisualMainEdge[int]:
         from_node = self.get_visual_node(from_id)
         to_node = self.get_visual_node(to_id)
-        (x1, y1) = from_node.get_location()
-        (x2, y2) = to_node.get_location()
+        x1, y1 = from_node.get_location()
+        x2, y2 = to_node.get_location()
 
-        edge_id : int = self.create_line(
-            x1,
-            y1,
-            x2,
-            y2,
-            fill = "black",
-            width = 1,
-            state = state,
-            tags = "tree_edge"
-        )
+        edge_id: int = self.create_line(x1, y1, x2, y2, fill="black", width=1, state=state, tags="tree_edge")
 
-        return VisualMainEdge[int](
-            edge_id,
-            from_id,
-            to_id
-        )
+        return VisualMainEdge[int](edge_id, from_id, to_id)
 
-    def create_visual_dependency_edge(self, from_id : int, to_id : int, state : str = "hidden") -> int:
+    def create_visual_dependency_edge(self, from_id: int, to_id: int, state: str = "hidden") -> int:
         from_node = self.get_visual_node(from_id)
         to_node = self.get_visual_node(to_id)
-        (x1, y1) = from_node.get_location()
-        (x2, y2) = to_node.get_location()
+        x1, y1 = from_node.get_location()
+        x2, y2 = to_node.get_location()
 
-        return self.create_line(
-            x1,
-            y1,
-            x2,
-            y2,
-            fill = "red",
-            width = 1,
-            dash = (4, 4),
-            state = state,
-            tags = "tree_edge"
-        )
+        return self.create_line(x1, y1, x2, y2, fill="red", width=1, dash=(4, 4), state=state, tags="tree_edge")
 
-    def add_clone_to_canvas_viewer(self, starting_tree_node_id : int) -> None:
+    def add_clone_to_canvas_viewer(self, starting_tree_node_id: int) -> None:
         starting_tree_node = self.get_visual_node(starting_tree_node_id)
 
-        def canvas_builder(parent : tk.Frame, canvas_viewer : "CanvasViewerWithTrees", canvas_viewer_mode : ViewerMode, nodes : Dict[int, TreeNode], highest_managed_dependencies : List[Tuple[TreeNode, TreeNode]]) -> "WithTrees":
-            return WithTrees(parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies, bg = self["bg"])
+        def canvas_builder(
+            parent: tk.Frame,
+            canvas_viewer: "CanvasViewerWithTrees",
+            canvas_viewer_mode: ViewerMode,
+            nodes: Dict[int, TreeNode],
+            highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]],
+        ) -> "WithTrees":
+            return WithTrees(
+                parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies, bg=self["bg"]
+            )
 
         cloned_canvas = self._canvas_viewer.get_canvas(self._canvas_viewer.add_canvas(canvas_builder))
         starting_tree_node.recursive_copy_to_canvas(cloned_canvas)
@@ -227,21 +236,26 @@ class WithTrees(Base):
         for node_id, node in self._nodes.items():
             if node.higher_order_main_connection is not None:
                 continue
-            
+
             self.create_visual_node(node_id)
             self.add_highest_visual_node_id(node_id)
             self.request_x_space_by_highest_visual_node(node_id, (0, 0))
 
         for source_node, destination_node in self._highest_managed_dependencies:
-            
+
             visual_edge = VisualDependencyEdge[int](source_node.id, destination_node.id, None)
             current_source_node = self._nodes[source_node.id]
             current_destination_node = self._nodes[destination_node.id]
 
-            while current_source_node.higher_order_main_connection is not None and visual_edge.climb_source_node_id(current_source_node.higher_order_main_connection.id):
+            while current_source_node.higher_order_main_connection is not None and visual_edge.climb_source_node_id(
+                current_source_node.higher_order_main_connection.id
+            ):
                 current_source_node = current_source_node.higher_order_main_connection
 
-            while current_destination_node.higher_order_main_connection is not None and visual_edge.climb_target_node_id(current_destination_node.higher_order_main_connection.id):
+            while (
+                current_destination_node.higher_order_main_connection is not None
+                and visual_edge.climb_target_node_id(current_destination_node.higher_order_main_connection.id)
+            ):
                 current_destination_node = current_destination_node.higher_order_main_connection
 
         self.update_visual_node_offsets()
@@ -249,18 +263,25 @@ class WithTrees(Base):
     def serialize(self) -> Dict[str, Any]:
         output = super().serialize()
 
-        output.update({
-            "visual_nodes" : {node_id : visual_node.serialize() for node_id, visual_node in self._visual_nodes.items()},
-            "highest_visual_node_ids" : self._highest_visual_node_ids.copy(),
-            "highest_visual_nodes_x_offset_data" : self._highest_visual_nodes_x_offset_data.copy()
-        })
+        output.update(
+            {
+                "visual_nodes": {
+                    node_id: visual_node.serialize() for node_id, visual_node in self._visual_nodes.items()
+                },
+                "highest_visual_node_ids": self._highest_visual_node_ids.copy(),
+                "highest_visual_nodes_x_offset_data": self._highest_visual_nodes_x_offset_data.copy(),
+            }
+        )
 
         return output
 
     def deserialize(self, data: Dict[str, Any]) -> None:
         super().deserialize(data)
         self._highest_visual_node_ids = [int(id) for id in data["highest_visual_node_ids"]]
-        self._highest_visual_nodes_x_offset_data = {int(node_id) : (int(offset_data[0]), int(offset_data[1]), int(offset_data[2])) for node_id, offset_data in data["highest_visual_nodes_x_offset_data"].items()}
+        self._highest_visual_nodes_x_offset_data = {
+            int(node_id): (int(offset_data[0]), int(offset_data[1]), int(offset_data[2]))
+            for node_id, offset_data in data["highest_visual_nodes_x_offset_data"].items()
+        }
 
         for node_id in data["visual_nodes"].keys():
             self.create_visual_node(int(node_id))
