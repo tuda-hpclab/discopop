@@ -15,7 +15,7 @@ backend-path = ["."]
 name = "discopop-hotspot-detection"
 dynamic = ["version"]
 description = "DiscoPoP Hotspot Detection: LLVM instrumentation pass for identifying performance hotspots"
-requires-python = ">=3.6"
+requires-python = ">=3.10"
 license = {file = "LICENSE"}
 
 authors = [
