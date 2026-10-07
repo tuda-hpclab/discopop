@@ -23,62 +23,69 @@ permissions:
   id-token: write
 
 jobs:
-# used for eventual multiple operating system testing
-  create_matrix:
-    runs-on: self-hosted
-    name: Create matrix
-    outputs:
-      matrix: ${{ steps.create_matrix.outputs.matrix }}
-    steps:
-      - name: Create build matrix
-        id: create_matrix
-        shell: bash
-        run: |
-          matrix='{"include":[
-            {"id":"debian:stable",
-             "base_image":"debian:stable",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
-            },
-            {"id":"ubuntu-24-04",
-             "base_image":"ubuntu:24.04",
-             "install_deps_cmd":" export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
-            }
-          ]}'
-
-          if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
-            matrix='{"include":[
-              {"id":"debian:stable",
-              "base_image":"debian:stable",
-              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
-              },
-              {"id":"ubuntu-24-04",
-              "base_image":"ubuntu:24.04",
-              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
-              }
-            ]}'
-          fi
-
-          {
-            echo "matrix<<END"
-            echo "$matrix"
-            echo "END"
-          } >> "$GITHUB_OUTPUT"
-
-
   build_install_and_test:
     runs-on: self-hosted
     container:
-      image: ${{ matrix.base_image }}
-    name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
-    needs: [create_matrix]
+      image: ${{ matrix.image }}
+    name: "${{ matrix.os }} / LLVM ${{ matrix.llvm }} / Python ${{ matrix.python }}"
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+      # Every entry runs the full suite on the self-hosted runner, so instead of the full cross product the
+      # matrix covers each supported version once:
+      #   - LLVM: every major version the profiler accepts (19-22, see profiler/CMakeLists.txt)
+      #   - Python: the minimum of requires-python (3.10) and the distribution Pythons (3.12, 3.13)
+      #   - OS: the current Ubuntu LTS and Debian stable, pinned to their release so a new release cannot break CI
+      # The oldest LLVM is paired with the oldest Python, and ubuntu 24.04 / LLVM 20 matches the publish workflows.
+      # llvm_source / python_source: "distro" installs from the image's own repositories, otherwise from
+      # apt.llvm.org (LLVM 21 is in neither distribution) or the deadsnakes PPA (Python 3.10 on ubuntu 24.04).
+      matrix:
+        include:
+          - os: "ubuntu 24.04"
+            image: "ubuntu:24.04"
+            llvm: 19
+            llvm_source: distro
+            python: "3.10"
+            python_source: deadsnakes
+          - os: "ubuntu 24.04"
+            image: "ubuntu:24.04"
+            llvm: 20
+            llvm_source: distro
+            python: "3.12"
+            python_source: distro
+          - os: "debian 13"
+            image: "debian:trixie"
+            llvm: 21
+            llvm_source: apt.llvm.org
+            python: "3.13"
+            python_source: distro
+          - os: "debian 13"
+            image: "debian:trixie"
+            llvm: 22
+            llvm_source: distro
+            python: "3.13"
+            python_source: distro
 
     steps:
       - name: Install Prerequisites
+        shell: bash
         run: |
-          ${{ matrix.install_deps_cmd}}
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev
+          if [ "${{ matrix.llvm_source }}" = "apt.llvm.org" ]; then
+            # llvm.sh needs add-apt-repository only on Ubuntu; Debian 13 does not package it any more
+            apt-get install -y wget lsb-release gnupg
+            if [ "$(. /etc/os-release && echo "$ID")" = "ubuntu" ]; then apt-get install -y software-properties-common; fi
+            wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+            bash /tmp/llvm.sh ${{ matrix.llvm }}
+          fi
+          if [ "${{ matrix.python_source }}" = "deadsnakes" ]; then
+            apt-get install -y software-properties-common
+            add-apt-repository -y ppa:deadsnakes/ppa
+            apt-get install -y python${{ matrix.python }} python${{ matrix.python }}-venv python${{ matrix.python }}-tk python${{ matrix.python }}-dev
+          fi
+          apt-get install -y llvm-${{ matrix.llvm }}-dev clang-${{ matrix.llvm }} libomp-${{ matrix.llvm }}-dev
 
       - name: Checkout Repository
         uses: actions/checkout@v3
@@ -92,7 +99,10 @@ jobs:
       - name: Setup venv and install DiscoPoP
         run: |
           rm -rf venv
-          python3 -m venv venv
+          if [ "${{ matrix.python_source }}" = "deadsnakes" ]; then python=python${{ matrix.python }}; else python=python3; fi
+          # fail if the distribution's Python no longer matches the version named in the job
+          $python -c "import sys; v = '%d.%d' % sys.version_info[:2]; assert v == '${{ matrix.python }}', 'expected Python ${{ matrix.python }}, got ' + v"
+          $python -m venv venv
           venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
       - name: Run MyPy Type Checking
