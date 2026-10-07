@@ -387,6 +387,14 @@ class FirstAccessQueueChunkBuffer {
 public:
   FirstAccessQueueChunkBuffer(std::size_t arg_size) : size(arg_size) {}
 
+  // free the chunks prepared but never handed out
+  ~FirstAccessQueueChunkBuffer() {
+    while (!internal_queue.empty()) {
+      delete internal_queue.front();
+      internal_queue.pop();
+    }
+  }
+
   inline void prepare_chunk_if_required(std::size_t chunk_size) {
     bool chunk_required = false;
     {

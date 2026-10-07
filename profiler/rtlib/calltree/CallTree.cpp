@@ -51,6 +51,8 @@ CallTree::~CallTree() {
 
   pthread_join(calltree_thread, NULL);
   pthread_join(calltree_thread_2, NULL);
+  // the chunk in use; the chunks still queued in ctnqcb are freed by its destructor
+  delete prepared_chunk;
   std::cout << "Joined calltree_threads" << std::endl;
 }
 
