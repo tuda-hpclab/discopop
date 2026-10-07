@@ -17,16 +17,25 @@ on:
     branches:
       - "**"
 
+# the jobs only read the repository
 permissions:
   contents: read
-  pages: write
-  id-token: write
+
+# a new push to a pull request supersedes the running checks of the previous push; the limited
+# self-hosted capacity is spent on the current state. pushes to master are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 # used for eventual multiple operating system testing
   create_matrix:
     runs-on: self-hosted
     name: Create matrix
+    # the jobs run on a self-hosted runner: never execute code from pull requests of forks there.
+    # a maintainer pushes such a branch to this repository to have it checked.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.create_matrix.outputs.matrix }}
     steps:
@@ -71,6 +80,7 @@ jobs:
       image: ${{ matrix.base_image }}
     name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
     needs: [create_matrix]
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
@@ -81,7 +91,7 @@ jobs:
           ${{ matrix.install_deps_cmd}}
 
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 #        with:
 #          submodules: recursive
 
@@ -136,8 +146,14 @@ jobs:
     runs-on: self-hosted
     name: Checks successful
     needs: [build_install_and_test]
-    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
+    if: ${{ always() }}
+    timeout-minutes: 5
     steps:
       - name: Report
         run: |
+          if [[ "${{ needs.build_install_and_test.result }}" != "success" ]]; then
+            echo "Checks did not succeed: build_install_and_test result is '${{ needs.build_install_and_test.result }}'"
+            exit 1
+          fi
           echo "All checks successful!"
