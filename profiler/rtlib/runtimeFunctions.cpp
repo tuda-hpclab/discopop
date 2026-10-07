@@ -532,6 +532,9 @@ void *processFirstAccessQueue(void *arg) {
   }
 
   mergeDeps();
+  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  delete myMap;
+  myMap = nullptr;
 
 #if DP_CALLTREE_PROFILING
   // merge local results into global set
@@ -615,7 +618,10 @@ void *processSecondAccessQueue(void *arg) {
 
     } else {
       if (finalizeParallelizationCalled) {
-        if (firstAccessQueue.empty()) {
+        // a first queue worker may have moved a chunk into the second queue since the get() above.
+        // FirstAccessQueue::get registers the element in the second queue while holding the first queue's lock, so once
+        // the first queue is empty, every element is visible in the second queue: check them in this order
+        if (firstAccessQueue.empty() && secondAccessQueue.empty()) {
           // no chunks left to process. Let thread finish.
           break;
         } else {
@@ -638,7 +644,11 @@ void *processSecondAccessQueue(void *arg) {
   // delete local_dependency_metadata_results;
 #endif
 
+  delete SMem;
   mergeDeps();
+  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  delete myMap;
+  myMap = nullptr;
 
   if (DP_DEBUG) {
 #ifdef __linux__
@@ -680,6 +690,8 @@ void finalizeParallelization() {
   // delete allocated memory
   delete[] workers;
   delete secondAccessQueue_worker_thread;
+  delete[] numAccesses;
+  numAccesses = nullptr;
 
   if (DP_DEBUG) {
     cout << "END: finalize parallelization... \n";

@@ -33,6 +33,8 @@ __pycache__/
 .Python
 build/
 build_tests/
+build_asan/
+build_tsan/
 develop-eggs/
 dist/
 downloads/

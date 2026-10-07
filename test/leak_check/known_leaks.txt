@@ -1,0 +1,31 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+# Known, bounded leaks of the profiler's runtime library in instrumented programs.
+#
+# Read by test/leak_check/evaluate_leaks.py (see its docstring for the matching rules), which runs in the
+# profiler leak check (scripts/dev/check_profiler_leaks.sh). "before" entries apply to the leaks LSan finds
+# right before __dp_finalize (memory lost while the target ran), "after" entries to the leaks right after it
+# (the same, plus what the runtime's teardown loses).
+#
+# This is used instead of an LSan suppressions file because LSan suppressions match a function name anywhere
+# in the allocation stack, without a limit: suppressing the selfPath leak below with "leak:__dp_func_entry"
+# would also hide a leak per function call. An entry here only covers allocation stacks that start with its
+# frames, and at most the given number of objects and bytes per run. A leak that grows from the short to the
+# long run of a growth workload fails the check even if it is listed (more objects, or more than 1 MB more).
+#
+# Format: <before|after> <Direct|Indirect> <max objects per run> <max bytes per run> <frame> [<- <frame>]...
+# (frames innermost first, runtime library frames and main only; "Class::*" matches all members of Class)
+#
+# Every entry is a real leak that should be fixed; remove the entry together with the fix.
+
+# __dp_func_entry, on the first call (from main) only: the runtime library's initialization reads the path of
+# the executable into `char *selfPath = new char[PATH_MAX]` and never frees it (it is only freed if readlink
+# fails). One object of PATH_MAX (4096) bytes per run, found again after the teardown.
+before Direct 1 4096 __dp_func_entry <- main
+after  Direct 1 4096 __dp_func_entry <- main

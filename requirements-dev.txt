@@ -14,3 +14,4 @@ black==26.10.0
 data-science-types==0.2.23
 mypy==2.4.0
 pytest==9.1.1
+types-jsonschema==4.26.0.20261006

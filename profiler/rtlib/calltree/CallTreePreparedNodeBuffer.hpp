@@ -59,6 +59,14 @@ class CallTreeNodeQueueChunkBuffer {
 public:
   CallTreeNodeQueueChunkBuffer(std::size_t arg_size) : size(arg_size) {}
 
+  // free the chunks prepared but never handed out
+  ~CallTreeNodeQueueChunkBuffer() {
+    while (!internal_queue.empty()) {
+      delete internal_queue.front();
+      internal_queue.pop();
+    }
+  }
+
   inline void prepare_chunk_if_required() {
     bool chunk_required = false;
     {

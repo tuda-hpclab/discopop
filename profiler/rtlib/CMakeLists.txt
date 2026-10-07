@@ -67,6 +67,14 @@ add_library(DiscoPoP_RT STATIC
 
 target_link_libraries(DiscoPoP_RT PRIVATE Boost::headers)
 
+# DP_SANITIZER_FLAGS is set by the top-level profiler CMakeLists (DP_SANITIZERS).
+# PUBLIC: targets linking DiscoPoP_RT (e.g. DiscoPoP_UT) get instrumented and
+# linked against the sanitizer runtime, too.
+if(DP_SANITIZER_FLAGS)
+        target_compile_options(DiscoPoP_RT PUBLIC ${DP_SANITIZER_FLAGS})
+        target_link_options(DiscoPoP_RT PUBLIC ${DP_SANITIZER_FLAGS})
+endif()
+
 # forward compiler flags
 if(DEFINED DP_PTHREAD_COMPATIBILITY_MODE)
         if(NOT ${DP_PTHREAD_COMPATIBILITY_MODE} EQUAL 0)

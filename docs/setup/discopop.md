@@ -17,7 +17,9 @@ nav_order: 1
 - Proposed method of installation for `developers` of DiscoPoP
 ## Prerequisites
 - LLVM/clang version 19, 20, 21, or 22
-- Python version 3.6 or greater
+- Python version 3.10 or greater
+- the versions tested in CI are listed in the matrix of `.github/workflows/ci.yml` (Ubuntu 24.04 and Debian 13, LLVM 19&ndash;22, Python 3.10, 3.12 and 3.13)
+- LLVM 21 is not packaged by Ubuntu 24.04 or Debian 13; install it from [apt.llvm.org](https://apt.llvm.org) if needed
 
 ## Setup
 ```

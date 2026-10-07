@@ -17,16 +17,28 @@ on:
     branches:
       - "**"
 
+# the jobs only read the repository
 permissions:
   contents: read
-  pages: write
-  id-token: write
+
+# a new push to a pull request supersedes the running checks of the previous push; the limited
+# self-hosted capacity is spent on the current state. pushes to master are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 # used for eventual multiple operating system testing
+# the entries cover each supported LLVM version (19-22) and the minimum Python (3.10) once, see CLAUDE.md.
+# LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.10 comes from the deadsnakes PPA.
+# "python" is the interpreter the venv is created with.
   create_matrix:
     runs-on: self-hosted
     name: Create matrix
+    # the jobs run on a self-hosted runner: never execute code from pull requests of forks there.
+    # a maintainer pushes such a branch to this repository to have it checked.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
     outputs:
       matrix: ${{ steps.create_matrix.outputs.matrix }}
     steps:
@@ -35,25 +47,49 @@ jobs:
         shell: bash
         run: |
           matrix='{"include":[
-            {"id":"debian:stable",
-             "base_image":"debian:stable",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
-            },
-            {"id":"ubuntu-24-04",
+            {"id":"ubuntu-24-04-llvm-19-python-3.10",
              "base_image":"ubuntu:24.04",
-             "install_deps_cmd":" export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+             "python":"python3.10",
+             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
+            },
+            {"id":"ubuntu-24-04-llvm-20",
+             "base_image":"ubuntu:24.04",
+             "python":"python3",
+             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
+            },
+            {"id":"debian-trixie-llvm-21",
+             "base_image":"debian:trixie",
+             "python":"python3",
+             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
+            },
+            {"id":"debian-trixie-llvm-22",
+             "base_image":"debian:trixie",
+             "python":"python3",
+             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
             }
           ]}'
 
           if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
             matrix='{"include":[
-              {"id":"debian:stable",
-              "base_image":"debian:stable",
-              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+              {"id":"ubuntu-24-04-llvm-19-python-3.10",
+               "base_image":"ubuntu:24.04",
+               "python":"python3.10",
+               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
               },
-              {"id":"ubuntu-24-04",
-              "base_image":"ubuntu:24.04",
-              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev"
+              {"id":"ubuntu-24-04-llvm-20",
+               "base_image":"ubuntu:24.04",
+               "python":"python3",
+               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
+              },
+              {"id":"debian-trixie-llvm-21",
+               "base_image":"debian:trixie",
+               "python":"python3",
+               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
+              },
+              {"id":"debian-trixie-llvm-22",
+               "base_image":"debian:trixie",
+               "python":"python3",
+               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
               }
             ]}'
           fi
@@ -71,6 +107,7 @@ jobs:
       image: ${{ matrix.base_image }}
     name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
     needs: [create_matrix]
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
@@ -78,10 +115,10 @@ jobs:
     steps:
       - name: Install Prerequisites
         run: |
-          ${{ matrix.install_deps_cmd}}
+          ${{ matrix.install_deps_cmd }}
 
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 #        with:
 #          submodules: recursive
 
@@ -92,7 +129,7 @@ jobs:
       - name: Setup venv and install DiscoPoP
         run: |
           rm -rf venv
-          python3 -m venv venv
+          ${{ matrix.python }} -m venv venv
           venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
       - name: Run MyPy Type Checking
@@ -107,9 +144,21 @@ jobs:
         run: |
             venv/bin/python3 -m black -l 120 --check library
 
+      - name: Check formatting of the profiler leak check
+        run: |
+            venv/bin/python3 -m black -l 120 --check test/leak_check
+
       - name: Check formatting of DiscoPoP Hotspot Detection
         run: |
             venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
+
+      - name: Check formatting of DiscoPoP GUI
+        run: |
+            venv/bin/python3 -m black -l 120 --check GUI
+
+      - name: Check formatting of DiscoPoP MCP Server
+        run: |
+            venv/bin/python3 -m black -l 120 --check mcp_server
 
       # Python: the roots and import mode are configured in pyproject.toml ([tool.pytest.ini_options])
       - name: Unit test check
@@ -131,13 +180,72 @@ jobs:
             python3 -m unittest -v -k "*.end_to_end.*"
 
 
+  # profiler runtime library + C++ unit tests built with sanitizers (DP_SANITIZERS); the LLVM pass is not sanitized
+  sanitizers:
+    runs-on: self-hosted
+    # never run code from pull requests of forks on the self-hosted runner (see build_install_and_test)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    container:
+      image: ubuntu:24.04
+      # TSan needs ASLR disabled on kernels with high mmap entropy (setarch -R), which Docker's default seccomp profile forbids
+      options: --security-opt seccomp=unconfined
+    name: "Sanitizers: ${{ matrix.sanitizers }}"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizers: ["address,undefined", "thread"]
+
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # builds DiscoPoP_UT with -DDP_SANITIZERS and runs it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
+      - name: Build and run DiscoPoP_UT
+        run: |
+          scripts/dev/run_profiler_sanitizers.sh "${{ matrix.sanitizers }}"
+
+  # The profiler's runtime library built with AddressSanitizer/LeakSanitizer: its unit tests and instrumented
+  # programs must not leak (see scripts/dev/check_profiler_leaks.sh). One platform is enough: the check is
+  # about the runtime library's code, not about the platform. Locally: scripts/dev/check_profiler_leaks.sh,
+  # or scripts/dev/run_ci_locally.sh -j profiler_leak_check
+  profiler_leak_check:
+    runs-on: self-hosted
+    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    container:
+      image: debian:trixie
+    name: "Profiler leak check (ASan/LSan)"
+    timeout-minutes: 45
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check the profiler for memory leaks
+        run: |
+          # the unit tests run under ASan/LSan in the sanitizers job already
+          DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
 
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test]
-    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [build_install_and_test, sanitizers, profiler_leak_check]
+    # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
+    if: ${{ always() }}
+    timeout-minutes: 5
     steps:
       - name: Report
         run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" != "false" ]]; then
+            echo "Checks did not succeed, job results: ${{ join(needs.*.result, ', ') }}"
+            exit 1
+          fi
           echo "All checks successful!"

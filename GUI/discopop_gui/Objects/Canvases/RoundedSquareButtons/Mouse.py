@@ -8,6 +8,7 @@
 
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
+
 class Mouse(RoundedSquareButton):
     def draw(self) -> None:
         super().draw()
@@ -17,18 +18,20 @@ class Mouse(RoundedSquareButton):
         color = "black"
 
         points = [
-            0.30 * self._size, 0.20 * self._size,
-            0.30 * self._size, 0.75 * self._size,
-            0.43 * self._size, 0.62 * self._size,
-            0.56 * self._size, 0.88 * self._size,
-            0.66 * self._size, 0.82 * self._size,
-            0.52 * self._size, 0.56 * self._size,
-            0.78 * self._size, 0.56 * self._size
+            0.30 * self._size,
+            0.20 * self._size,
+            0.30 * self._size,
+            0.75 * self._size,
+            0.43 * self._size,
+            0.62 * self._size,
+            0.56 * self._size,
+            0.88 * self._size,
+            0.66 * self._size,
+            0.82 * self._size,
+            0.52 * self._size,
+            0.56 * self._size,
+            0.78 * self._size,
+            0.56 * self._size,
         ]
 
-        self.create_polygon(
-            points,
-            outline = color,
-            fill = "",
-            width = max(1, int(self._size * 0.06))
-        )
+        self.create_polygon(points, outline=color, fill="", width=max(1, int(self._size * 0.06)))

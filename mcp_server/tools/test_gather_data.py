@@ -458,7 +458,8 @@ class TestGatherDataRestoresThePlainBuild(unittest.TestCase):
         arguments = {"project_path": self.project_path, "config_name": CONFIG_NAME, "force": True}
         arguments.update(extra)
         response = gather_data.handle(arguments, self.ctx)
-        return json.loads(response[0].text)
+        result: dict[str, Any] = json.loads(response[0].text)
+        return result
 
     def test_the_last_build_is_a_plain_one(self) -> None:
         result = self.__handle()

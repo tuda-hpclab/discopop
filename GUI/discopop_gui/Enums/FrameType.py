@@ -8,6 +8,7 @@
 
 from enum import Enum, auto
 
+
 class FrameType(Enum):
     BASE = auto()
     MULTI_FRAME = auto()

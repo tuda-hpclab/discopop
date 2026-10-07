@@ -37,12 +37,14 @@ This document contains critical information about working with this codebase. Fo
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the mypy version CI uses; a different version can report different errors)
 - to execute type checking of python files use the following command as the basis: `venv/bin/python -m mypy --config-file=mypy.ini -p`
+- to type check everything CI checks (`files` in `mypy.ini`: `discopop_explorer`, `discopop_library`, `discopop_gui` and `mcp_server`), run `venv/bin/python -m mypy --config-file=mypy.ini` without further arguments
 
 ## Formatting
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
-- to execute formatting check, use `venv/bin/pyton -m black -l 120 --check .`
-- to execute automatic formatting, use `venv/bin/pyton -m black -l 120 .`
+- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server`
+- to execute the formatting check, use `venv/bin/python -m black -l 120 --check <paths>` with the paths above
+- to execute automatic formatting, use `venv/bin/python -m black -l 120 <paths>`, restricted to the paths you changed; never run black on `.`, as it would reformat many unrelated, unchecked files
 
 ## Testing
 ### Install python packages
@@ -97,6 +99,13 @@ This document contains critical information about working with this codebase. Fo
 - to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT`
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
+#### Sanitizers (profiler)
+- the CMake option `DP_SANITIZERS` (value for `-fsanitize=`, e.g. `address,undefined` or `thread`) instruments the runtime library `DiscoPoP_RT` and everything linking it, i.e. `DiscoPoP_UT`; the LLVM pass plugin is not sanitized (it runs inside an uninstrumented clang)
+- to build and run `DiscoPoP_UT` with ASan+UBSan(+LSan) resp. TSan, from the repository root: `scripts/dev/run_profiler_sanitizers.sh address,undefined` resp. `scripts/dev/run_profiler_sanitizers.sh thread` (build dirs `build_asan` / `build_tsan`, gitignored; ~30 s each); the CI job `sanitizers` runs exactly this
+- the script sets the `*SAN_OPTIONS` (halt on error, suppression files); any finding fails the run
+- TSan needs ASLR disabled on kernels with high mmap entropy (`FATAL: ThreadSanitizer: unexpected memory mapping`); the script runs it via `setarch "$(uname -m)" -R`, which in Docker needs `--security-opt seccomp=unconfined`
+- accepted leaks / races go into `test/unit_tests/sanitizers/{lsan,tsan}.supp`, one comment per entry explaining why; prefer fixing the code or the test
+
 ### Execute example
 You can execute a full example by following the steps below. The example should not raise any errors. Warnings may arise during different parts of the process and can be tolerated.
 - setup venv
@@ -115,3 +124,9 @@ You can execute a full example by following the steps below. The example should 
 
 ### Excecute CI Pipeline locally
 To execute the CI pipeline locally, use the following command from the root folder: `scripts/dev/run_ci_locally.sh`.
+- a single matrix entry can be selected with act's `--matrix` filter on its `id`, e.g. `scripts/dev/run_ci_locally.sh --matrix id:ubuntu-24-04-llvm-20`
+
+### Supported versions and CI matrix
+- LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
+- the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
+- when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together

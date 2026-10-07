@@ -1,12 +1,19 @@
 #include <gtest/gtest.h>
 
-#include "../../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctions.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
+#include "../../../profiler/rtlib/runtimeFunctions.hpp"
 
 using namespace __dp;
 
 class FirstAccessQueueTest : public ::testing::Test {};
+
+// FirstAccessQueue::get registers a SecondAccessQueueElement in the given queue, owned by the caller
+static void delete_elements(SecondAccessQueue &SAQ) {
+    while (auto element = SAQ.get()) {
+        delete element;
+    }
+}
 
 TEST_F(FirstAccessQueueTest, testConstructor) {
     auto FAQ = FirstAccessQueue(10);
@@ -48,7 +55,12 @@ TEST_F(FirstAccessQueueTest, testCanAcceptEntries) {
     ASSERT_FALSE(FAQ.can_accept_entries());
     FAQ.get(&SAQ);
     ASSERT_TRUE(FAQ.can_accept_entries());
+    // FAQ.get registers a SecondAccessQueueElement per chunk; nobody consumes them here
+    while (auto saqe = SAQ.get()) {
+        delete saqe;
+    }
 
+    delete_elements(SAQ);
     delete FAQC_ptr_1;
     delete FAQC_ptr_2;
     delete FAQC_ptr_3;
@@ -77,7 +89,12 @@ TEST_F(FirstAccessQueueTest, testEmpty) {
     ASSERT_FALSE(FAQ.empty());
     FAQ.get(&SAQ);
     ASSERT_TRUE(FAQ.empty());
+    // FAQ.get registers a SecondAccessQueueElement per chunk; nobody consumes them here
+    while (auto saqe = SAQ.get()) {
+        delete saqe;
+    }
 
+    delete_elements(SAQ);
     delete FAQC_ptr_1;
     delete FAQC_ptr_2;
     delete FAQC_ptr_3;

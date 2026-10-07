@@ -6,5 +6,5 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-TREE_NODES_SPACING : float = 100
-TREE_NODE_RADIUS : float = 40
+TREE_NODES_SPACING: float = 100
+TREE_NODE_RADIUS: float = 40

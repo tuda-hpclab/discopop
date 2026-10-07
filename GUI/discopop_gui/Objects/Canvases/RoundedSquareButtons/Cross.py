@@ -11,14 +11,15 @@ from typing import Any, Callable
 
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
+
 class Cross(RoundedSquareButton):
     def __init__(
         self,
-        parent : tk.Misc,
-        command : Callable[[], None],
-        colour : str = "red",
-        *args : Any,
-        **kwargs : Any,
+        parent: tk.Misc,
+        command: Callable[[], None],
+        colour: str = "red",
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         self._colour = colour
         super().__init__(parent, command, *args, **kwargs)

@@ -8,6 +8,7 @@
 
 from enum import Enum, auto
 
+
 class ViewableCanvasTypes(Enum):
     BASE = auto()
     WITH_TREES = auto()

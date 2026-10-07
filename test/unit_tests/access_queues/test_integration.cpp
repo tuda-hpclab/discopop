@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
-#include "../../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctions.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
+#include "../../../profiler/rtlib/runtimeFunctions.hpp"
 
 using namespace __dp;
 
@@ -17,7 +17,21 @@ class AccessQueueIntegrationTest : public ::testing::Test {
         if(!(finalizeParallelizationCalled)){
             finalizeParallelization();
         }
+        // free what the runtime keeps until the program ends, since the next test initializes it again
+        // (the runtime's own teardown in __dp_finalize does not run in the unit tests)
+        // finalizeParallelization leaves a fresh chunk for late accesses; SetUp replaces it
+        delete __dp::mainThread_AccessInfoBuffer;
+        __dp::mainThread_AccessInfoBuffer = nullptr;
+        // allDeps owns its dependency sets
+        for (auto &entry : *__dp::allDeps) {
+            delete entry.second;
+        }
         delete __dp::allDeps;
+        __dp::allDeps = nullptr;
+        // chunks the worker threads prepared in advance
+        while (__dp::firstAccessQueueChunkBuffer.get_queue_size() > 0) {
+            delete __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
+        }
     }
 };
 

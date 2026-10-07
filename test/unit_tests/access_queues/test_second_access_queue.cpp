@@ -4,9 +4,9 @@
 #include <chrono>
 #include <thread>
 
-#include "../../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
-#include "../../../../profiler/rtlib/runtimeFunctions.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
+#include "../../../profiler/rtlib/runtimeFunctionsTypes.hpp"
+#include "../../../profiler/rtlib/runtimeFunctions.hpp"
 
 using namespace __dp;
 
@@ -53,6 +53,7 @@ TEST_F(SecondAccessQueueTest, testPushAndGet) {
     ASSERT_EQ(chunk_ptr, FAQC_ptr);
     ASSERT_TRUE(FAQ.empty());
     delete FAQC_ptr;
+    delete dummy;
 }
 
 // SAQ test: push blocks while the queue is at its limit and continues once the consumer takes an element
