@@ -532,6 +532,9 @@ void *processFirstAccessQueue(void *arg) {
   }
 
   mergeDeps();
+  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  delete myMap;
+  myMap = nullptr;
 
 #if DP_CALLTREE_PROFILING
   // merge local results into global set
@@ -638,7 +641,11 @@ void *processSecondAccessQueue(void *arg) {
   // delete local_dependency_metadata_results;
 #endif
 
+  delete SMem;
   mergeDeps();
+  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  delete myMap;
+  myMap = nullptr;
 
   if (DP_DEBUG) {
 #ifdef __linux__
@@ -680,6 +687,8 @@ void finalizeParallelization() {
   // delete allocated memory
   delete[] workers;
   delete secondAccessQueue_worker_thread;
+  delete[] numAccesses;
+  numAccesses = nullptr;
 
   if (DP_DEBUG) {
     cout << "END: finalize parallelization... \n";
