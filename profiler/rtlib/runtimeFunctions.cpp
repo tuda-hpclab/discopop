@@ -618,7 +618,10 @@ void *processSecondAccessQueue(void *arg) {
 
     } else {
       if (finalizeParallelizationCalled) {
-        if (firstAccessQueue.empty()) {
+        // a first queue worker may have moved a chunk into the second queue since the get() above.
+        // FirstAccessQueue::get registers the element in the second queue while holding the first queue's lock, so once
+        // the first queue is empty, every element is visible in the second queue: check them in this order
+        if (firstAccessQueue.empty() && secondAccessQueue.empty()) {
           // no chunks left to process. Let thread finish.
           break;
         } else {
