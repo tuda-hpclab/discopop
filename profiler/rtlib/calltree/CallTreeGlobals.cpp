@@ -18,6 +18,6 @@ std::atomic<unsigned int> *call_tree_node_count = nullptr; // nodes in use. deac
 std::atomic<unsigned int> *call_tree_total_living_node_count =
     nullptr; // nodes prepared. deactivated by default setting nullptr
 
-bool calltree_thread_stop = false; // stop signal
+std::atomic<bool> calltree_thread_stop = false; // stop signal
 
 } // namespace __dp

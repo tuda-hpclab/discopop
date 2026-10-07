@@ -21,6 +21,7 @@
 
 #include <pthread.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -82,9 +83,9 @@ extern depMap *allDeps;
 extern std::ofstream *out;
 
 extern std::mutex allDepsLock;
-extern pthread_t *workers;                          // worker threads
-extern volatile bool finalizeParallelizationCalled; // signals to worker threads that no further data access will be
-                                                    // registered in the first queue
+extern pthread_t *workers;                              // worker threads
+extern std::atomic<bool> finalizeParallelizationCalled; // signals to worker threads that no further data access will be
+                                                        // registered in the first queue
 extern FirstAccessQueueChunk *mainThread_AccessInfoBuffer;
 // number of accesses recorded per chunk of the first access queue
 #define FIRST_ACCESS_QUEUE_CHUNK_SIZE 100000

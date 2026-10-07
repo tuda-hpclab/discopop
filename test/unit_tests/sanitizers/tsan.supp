@@ -1,0 +1,7 @@
+# ThreadSanitizer suppressions for DiscoPoP_UT (used by scripts/dev/run_profiler_sanitizers.sh).
+# Format: one "<race|deadlock|mutex|thread|signal|called_from_lib>:<pattern>" per line, see
+# https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
+# Every entry needs a comment saying why the report is benign or cannot be fixed.
+# Prefer fixing the race (e.g. std::atomic for flags polled by worker threads) over adding an entry here.
+#
+# No entries: DiscoPoP_UT runs race free.

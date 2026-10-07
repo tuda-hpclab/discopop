@@ -17,6 +17,13 @@ class AccessQueueIntegrationTest : public ::testing::Test {
         if(!(finalizeParallelizationCalled)){
             finalizeParallelization();
         }
+        // finalizeParallelization leaves a fresh chunk for late accesses; SetUp replaces it
+        delete __dp::mainThread_AccessInfoBuffer;
+        __dp::mainThread_AccessInfoBuffer = nullptr;
+        // allDeps owns its dependency sets
+        for (auto &entry : *__dp::allDeps) {
+            delete entry.second;
+        }
         delete __dp::allDeps;
     }
 };

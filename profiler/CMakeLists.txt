@@ -141,6 +141,31 @@ separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 include_directories(${LLVM_INCLUDE_DIRS})
 
+# ── Sanitizers ───────────────────────────────────────────────────────────────
+# DP_SANITIZERS takes a value for -fsanitize=, e.g. "address,undefined" or
+# "thread". The flags are added PUBLIC to the runtime library DiscoPoP_RT, so
+# everything linking it (e.g. the unit tests DiscoPoP_UT) is instrumented and
+# linked against the sanitizer runtime as well.
+# The LLVM pass plugin LLVMDiscoPoP is NOT sanitized: it is dlopen'ed by an
+# uninstrumented clang/opt, and the ASan/TSan runtimes must be part of the
+# initial executable (they abort with "runtime does not come first" or miss
+# allocations made by the host otherwise). Sanitizing the pass would need a
+# sanitizer-built LLVM.
+set(DP_SANITIZERS "" CACHE STRING "Sanitizers for the profiler runtime library and its unit tests, e.g. address,undefined or thread")
+set(DP_SANITIZER_FLAGS "")
+if(NOT "${DP_SANITIZERS}" STREQUAL "")
+    if(DP_SANITIZERS MATCHES "thread" AND DP_SANITIZERS MATCHES "address|leak|memory")
+        message(FATAL_ERROR "DP_SANITIZERS=${DP_SANITIZERS}: thread cannot be combined with address, leak or memory")
+    endif()
+    list(APPEND DP_SANITIZER_FLAGS "-fsanitize=${DP_SANITIZERS}" "-fno-omit-frame-pointer" "-g")
+    if(DP_SANITIZERS MATCHES "undefined")
+        # make UBSan findings fail the run instead of only printing them
+        list(APPEND DP_SANITIZER_FLAGS "-fno-sanitize-recover=undefined")
+    endif()
+    message(STATUS "DiscoPoP configuration: DP_SANITIZERS=${DP_SANITIZERS} (runtime library and unit tests; the LLVM pass is not sanitized)")
+endif()
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 add_subdirectory(DiscoPoP)
 

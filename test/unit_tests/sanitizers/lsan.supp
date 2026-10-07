@@ -1,0 +1,10 @@
+# LeakSanitizer suppressions for DiscoPoP_UT (used by scripts/dev/run_profiler_sanitizers.sh).
+# Format: one "leak:<function, file or library pattern>" per line; it matches any frame of the allocation stack.
+# Every entry needs a comment saying why the leak is accepted instead of fixed.
+# Prefer fixing the leak (or the test that causes it) over adding an entry here.
+#
+# No entries: DiscoPoP_UT runs leak free.
+#
+# Known leaks of the profiler runtime that DiscoPoP_UT does not reach (no entry needed until a test does):
+# - __dp_finalize deletes the allDeps map but not the dependency sets it owns (one-off at program exit)
+# - the one-time selfPath allocation in __dp_func_entry

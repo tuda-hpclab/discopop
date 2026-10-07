@@ -81,6 +81,9 @@ TEST_F(MRTNodeTest, testAddChild0) {
       ASSERT_EQ(node.get_child(i), nullptr);
     }
   }
+
+  // MRTNode does not own its children, MemoryRegionTree frees them
+  node.delete_child(0);
 }
 
 TEST_F(MRTNodeTest, testAddChild1) {
@@ -109,6 +112,9 @@ TEST_F(MRTNodeTest, testAddChild1) {
       ASSERT_EQ(node.get_child(i), nullptr);
     }
   }
+
+  // MRTNode does not own its children, MemoryRegionTree frees them
+  node.delete_child(3);
 }
 
 TEST_F(MRTNodeTest, testSetMemoryRegionId) {
