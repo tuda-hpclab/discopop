@@ -135,7 +135,10 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(HandleLLVMOptions)
 include(AddLLVM)
 
-add_definitions(${LLVM_DEFINITIONS})
+# LLVM_DEFINITIONS is one space-separated string; passed as is, add_definitions() treats it as a single
+# definition, which breaks as soon as it contains a value (LLVM 22 adds -D_GLIBCXX_USE_CXX11_ABI=1)
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
+add_definitions(${LLVM_DEFINITIONS_LIST})
 include_directories(${LLVM_INCLUDE_DIRS})
 
 

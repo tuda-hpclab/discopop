@@ -39,6 +39,8 @@ For detailed information on the gathered and stored data as well as the tools th
 ```
 sudo apt install python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
 # Replace 19 with 20, 21, or 22 if you prefer a newer LLVM release.
+# Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages 19 and 22; other versions are available from https://apt.llvm.org.
+# Python 3.10 or newer is required.
 ```
 
 #### Via `pacman` package manager (Arch-based distributions)

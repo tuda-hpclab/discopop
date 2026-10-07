@@ -117,3 +117,9 @@ You can execute a full example by following the steps below. The example should 
 
 ### Excecute CI Pipeline locally
 To execute the CI pipeline locally, use the following command from the root folder: `scripts/dev/run_ci_locally.sh`.
+- a single matrix entry can be selected with act's `--matrix` filter, e.g. `scripts/dev/run_ci_locally.sh --matrix llvm:20`
+
+### Supported versions and CI matrix
+- LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
+- the matrix of `build_install_and_test` in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
+- when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
