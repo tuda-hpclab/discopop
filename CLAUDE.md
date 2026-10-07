@@ -97,6 +97,13 @@ This document contains critical information about working with this codebase. Fo
 - to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT`
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
+#### Sanitizers (profiler)
+- the CMake option `DP_SANITIZERS` (value for `-fsanitize=`, e.g. `address,undefined` or `thread`) instruments the runtime library `DiscoPoP_RT` and everything linking it, i.e. `DiscoPoP_UT`; the LLVM pass plugin is not sanitized (it runs inside an uninstrumented clang)
+- to build and run `DiscoPoP_UT` with ASan+UBSan(+LSan) resp. TSan, from the repository root: `scripts/dev/run_profiler_sanitizers.sh address,undefined` resp. `scripts/dev/run_profiler_sanitizers.sh thread` (build dirs `build_asan` / `build_tsan`, gitignored; ~30 s each); the CI job `sanitizers` runs exactly this
+- the script sets the `*SAN_OPTIONS` (halt on error, suppression files); any finding fails the run
+- TSan needs ASLR disabled on kernels with high mmap entropy (`FATAL: ThreadSanitizer: unexpected memory mapping`); the script runs it via `setarch "$(uname -m)" -R`, which in Docker needs `--security-opt seccomp=unconfined`
+- accepted leaks / races go into `test/unit_tests/sanitizers/{lsan,tsan}.supp`, one comment per entry explaining why; prefer fixing the code or the test
+
 ### Execute example
 You can execute a full example by following the steps below. The example should not raise any errors. Warnings may arise during different parts of the process and can be tolerated.
 - setup venv
