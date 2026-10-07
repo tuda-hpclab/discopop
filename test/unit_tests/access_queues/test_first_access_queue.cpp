@@ -48,6 +48,10 @@ TEST_F(FirstAccessQueueTest, testCanAcceptEntries) {
     ASSERT_FALSE(FAQ.can_accept_entries());
     FAQ.get(&SAQ);
     ASSERT_TRUE(FAQ.can_accept_entries());
+    // FAQ.get registers a SecondAccessQueueElement per chunk; nobody consumes them here
+    while (auto saqe = SAQ.get()) {
+        delete saqe;
+    }
 
     delete FAQC_ptr_1;
     delete FAQC_ptr_2;
@@ -77,6 +81,10 @@ TEST_F(FirstAccessQueueTest, testEmpty) {
     ASSERT_FALSE(FAQ.empty());
     FAQ.get(&SAQ);
     ASSERT_TRUE(FAQ.empty());
+    // FAQ.get registers a SecondAccessQueueElement per chunk; nobody consumes them here
+    while (auto saqe = SAQ.get()) {
+        delete saqe;
+    }
 
     delete FAQC_ptr_1;
     delete FAQC_ptr_2;
