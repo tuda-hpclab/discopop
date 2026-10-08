@@ -58,6 +58,7 @@ jobs:
       images: ${{ steps.create_matrix.outputs.images }}
       build_environments: ${{ steps.create_matrix.outputs.build_environments }}
       tools_image: ${{ steps.create_matrix.outputs.tools_image }}
+      primary_image: ${{ steps.create_matrix.outputs.primary_image }}
       leak_check_image: ${{ steps.create_matrix.outputs.leak_check_image }}
     steps:
       - name: Create build matrix
@@ -82,7 +83,7 @@ jobs:
           e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && apt install -y llvm-20-dev clang-20 libomp-20-dev")"
           e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev")"
           e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && apt install -y llvm-22-dev clang-22 libomp-22-dev")"
-          # the sanitized unit tests, the coverage and the benchmarks; llvm-19 provides llvm-cov and llvm-profdata
+          # the sanitized unit tests and the coverage (no venv needed); llvm-19 provides llvm-cov and llvm-profdata
           e_tools="$(entry ubuntu-24-04-llvm-19-tools ubuntu:24.04 python3 "$apt_common && apt install -y llvm-19 llvm-19-dev clang-19 libomp-19-dev")"
           # the leak check links against the sanitizer runtime of clang
           e_leak="$(entry debian-trixie-llvm-19-leak-check debian:trixie python3 "export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev")"
@@ -94,12 +95,12 @@ jobs:
             matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
             images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
             # the environments that need the venv with DiscoPoP (see prepare_build)
-            build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
+            build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]"
             scope="full"
           else
             matrix="{\"include\":[$e_llvm21]}"
             images="[$e_llvm21,$e_tools,$e_leak]"
-            build_environments="[$e_llvm21,$e_tools]"
+            build_environments="[$e_llvm21]"
             scope="reduced"
           fi
           echo "Configuration: $scope"
@@ -116,6 +117,9 @@ jobs:
             echo "$build_environments"
             echo "END"
             echo "tools_image=$(image_of "$e_tools")"
+            # the environment of the jobs outside the matrix that need the venv (static checks, benchmarks): the matrix entry
+            # both configurations contain, so its venv is prepared anyway
+            echo "primary_image=$(image_of "$e_llvm21")"
             echo "leak_check_image=$(image_of "$e_leak")"
           } >> "$GITHUB_OUTPUT"
 
@@ -209,7 +213,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ${{ needs.create_matrix.outputs.tools_image }}
+      image: ${{ needs.create_matrix.outputs.primary_image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
@@ -228,7 +232,7 @@ jobs:
       - name: Setup venv
         uses: ./.github/actions/prepared-venv
         with:
-          environment: ${{ needs.create_matrix.outputs.tools_image }}
+          environment: ${{ needs.create_matrix.outputs.primary_image }}
 
       - name: Check formatting of DiscoPoP Explorer
         run: |
@@ -550,7 +554,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ${{ needs.create_matrix.outputs.tools_image }}
+      image: ${{ needs.create_matrix.outputs.primary_image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
@@ -565,7 +569,7 @@ jobs:
       - name: Setup venv with DiscoPoP
         uses: ./.github/actions/prepared-venv
         with:
-          environment: ${{ needs.create_matrix.outputs.tools_image }}
+          environment: ${{ needs.create_matrix.outputs.primary_image }}
 
       - name: Compare builds with and without the DiscoPoP pass
         run: |
@@ -581,15 +585,17 @@ jobs:
   # What the injected callbacks cost (benchmark/injected_functions): per call, with and without their
   # bodies, and per program, attributed to the single callbacks (--callback-breakdown, builds the
   # runtime library variants). The times depend on the runner too much to gate on, and the breakdown
-  # is expensive: only on pushes to master/new_explorer and manual runs, not part of checks_successful.
+  # is expensive: only where code is merged (see below) and on manual runs, not part of checks_successful.
   callback_benchmark:
     runs-on: self-hosted
-    if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/new_explorer')) || github.event_name == 'workflow_dispatch' }}
+    # not on every push to a feature branch (it takes long), but where code is merged: pull requests into master or
+    # new_explorer (never from forks, see create_matrix), pushes to them, and manual runs
+    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/new_explorer')) || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       packages: read
     container:
-      image: ${{ needs.create_matrix.outputs.tools_image }}
+      image: ${{ needs.create_matrix.outputs.primary_image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
@@ -604,7 +610,7 @@ jobs:
       - name: Setup venv with DiscoPoP
         uses: ./.github/actions/prepared-venv
         with:
-          environment: ${{ needs.create_matrix.outputs.tools_image }}
+          environment: ${{ needs.create_matrix.outputs.primary_image }}
 
       # configures and builds build_tests itself
       - name: Measure the injected callbacks with and without their bodies

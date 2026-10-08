@@ -142,7 +142,8 @@ To execute the CI pipeline locally, use the following command from the root fold
 - locally, the images stay in the local docker store and the cache actions are skipped (the containers have no node), so everything is built
 
 ### Prepared CI environments
-- the jobs do not install their prerequisites themselves: `create_matrix` defines one environment (base image + apt install command) per matrix entry plus two for the sanitizer/coverage/benchmark jobs and the leak check, and `prepare_images` builds each as an image and pushes it to `ghcr.io/<owner>/discopop-ci`, unless its tag exists; the tag is a hash of the base image, the install command and `IMAGE_REVISION` (bump it in `create_matrix` to rebuild all images, e.g. for newer packages)
+- the jobs do not install their prerequisites themselves: `create_matrix` defines one environment (base image + apt install command) per matrix entry plus two without a venv, for the sanitizer/coverage jobs and the leak check, and `prepare_images` builds each as an image and pushes it to `ghcr.io/<owner>/discopop-ci`, unless its tag exists; the tag is a hash of the base image, the install command and `IMAGE_REVISION` (bump it in `create_matrix` to rebuild all images, e.g. for newer packages)
+- `static_checks` and the benchmark jobs run in the environment of the LLVM 21 matrix entry, which both configurations contain: a reduced run prepares a single venv
 - the built code is not part of the images: `prepare_build` builds a venv with all DiscoPoP packages (installed without `-e`; editable installs are a developer convenience) per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of the package sources and `requirements-dev.txt`; the profiler wheel is cached separately, keyed by `profiler/` only, so a change of the Python sources does not rebuild the profiler. The other jobs restore the venv and build it only on a miss
 - changing an install command means changing it in `create_matrix` only
 
@@ -173,7 +174,7 @@ To execute the CI pipeline locally, use the following command from the root fold
 - it fails when a binary does not build or run, when the runtime does not come up, or when the two runs no longer agree on the set of benchmarks; the times are reported, never enforced
 - the binaries need `DOT_DISCOPOP` to point at a directory containing a `profiler/` subdirectory when run by hand -- the runtime opens its result files before `main`; the driver supplies one
 - see `benchmark/injected_functions/README.md` for what is and is not covered, and for how to add a callback
-- the CI job `callback_benchmark` runs it together with the `--callback-breakdown` of the pass overhead benchmark, only on pushes to master/new_explorer and on manual runs (`workflow_dispatch`); it is not part of `checks_successful`
+- the CI job `callback_benchmark` runs it together with the `--callback-breakdown` of the pass overhead benchmark, only on pull requests into and pushes to master/new_explorer and on manual runs (`workflow_dispatch`); it is not part of `checks_successful`
 
 ### Pass overhead benchmark
 - `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
