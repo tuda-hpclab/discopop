@@ -34,6 +34,12 @@ jobs:
 # the entries cover each supported LLVM version (19-22) and the minimum Python (3.10) once, see CLAUDE.md.
 # LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.10 comes from the deadsnakes PPA.
 # "python" is the interpreter the venv is created with.
+#
+# PREREQUISITE IMAGES: installing the prerequisites (apt) in every job took longer than some of the jobs. Instead,
+# prepare_images builds one image per environment (base image + install_deps_cmd), once, and pushes it to the
+# GitHub container registry; the other jobs run in these images and only check out the repository. The tag of an image
+# is derived from its base image and install command, so changing either one builds a new image, and a push that
+# changes neither one reuses the existing image. Bump IMAGE_REVISION to rebuild all images, e.g. to update the packages.
   create_matrix:
     runs-on: self-hosted
     name: Create matrix
@@ -43,82 +49,153 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.create_matrix.outputs.matrix }}
+      images: ${{ steps.create_matrix.outputs.images }}
+      build_environments: ${{ steps.create_matrix.outputs.build_environments }}
+      tools_image: ${{ steps.create_matrix.outputs.tools_image }}
+      leak_check_image: ${{ steps.create_matrix.outputs.leak_check_image }}
     steps:
       - name: Create build matrix
         id: create_matrix
         shell: bash
         run: |
-          matrix='{"include":[
-            {"id":"ubuntu-24-04-llvm-19-python-3.10",
-             "base_image":"ubuntu:24.04",
-             "python":"python3.10",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
-            },
-            {"id":"ubuntu-24-04-llvm-20",
-             "base_image":"ubuntu:24.04",
-             "python":"python3",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
-            },
-            {"id":"debian-trixie-llvm-21",
-             "base_image":"debian:trixie",
-             "python":"python3",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
-            },
-            {"id":"debian-trixie-llvm-22",
-             "base_image":"debian:trixie",
-             "python":"python3",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
-            }
-          ]}'
+          IMAGE_REVISION=1
+          repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/discopop-ci"
 
-          if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
-            matrix='{"include":[
-              {"id":"ubuntu-24-04-llvm-19-python-3.10",
-               "base_image":"ubuntu:24.04",
-               "python":"python3.10",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
-              },
-              {"id":"ubuntu-24-04-llvm-20",
-               "base_image":"ubuntu:24.04",
-               "python":"python3",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
-              },
-              {"id":"debian-trixie-llvm-21",
-               "base_image":"debian:trixie",
-               "python":"python3",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
-              },
-              {"id":"debian-trixie-llvm-22",
-               "base_image":"debian:trixie",
-               "python":"python3",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
-              }
-            ]}'
-          fi
+          # entry <id> <base image> <python> <install command>: one environment, as a JSON object
+          entry() {
+            local tag
+            tag="$1-$(printf '%s\n%s\n%s\n' "$IMAGE_REVISION" "$2" "$4" | sha256sum | cut -c1-12)"
+            printf '{"id":"%s","base_image":"%s","python":"%s","install_deps_cmd":"%s","image":"%s"}' \
+              "$1" "$2" "$3" "$4" "$repository:$tag"
+          }
+          image_of() { sed -E 's/.*"image":"([^"]*)".*/\1/' <<< "$1"; }
+
+          apt_common="export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev"
+
+          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.10 ubuntu:24.04 python3.10 "$apt_common && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev")"
+          e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && apt install -y llvm-20-dev clang-20 libomp-20-dev")"
+          e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev")"
+          e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && apt install -y llvm-22-dev clang-22 libomp-22-dev")"
+          # the sanitized unit tests, the coverage and the benchmarks; llvm-19 provides llvm-cov and llvm-profdata
+          e_tools="$(entry ubuntu-24-04-llvm-19-tools ubuntu:24.04 python3 "$apt_common && apt install -y llvm-19 llvm-19-dev clang-19 libomp-19-dev")"
+          # the leak check links against the sanitizer runtime of clang
+          e_leak="$(entry debian-trixie-llvm-19-leak-check debian:trixie python3 "export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev")"
+
+          matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
+          images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
+          # the environments that need the built profiler (see prepare_build)
+          build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
 
           {
             echo "matrix<<END"
             echo "$matrix"
             echo "END"
+            echo "images<<END"
+            echo "$images"
+            echo "END"
+            echo "build_environments<<END"
+            echo "$build_environments"
+            echo "END"
+            echo "tools_image=$(image_of "$e_tools")"
+            echo "leak_check_image=$(image_of "$e_leak")"
           } >> "$GITHUB_OUTPUT"
 
+  # builds the prerequisite images that do not exist in the registry yet (see create_matrix)
+  prepare_images:
+    runs-on: self-hosted
+    name: "Prepare image: ${{ matrix.id }}"
+    needs: [create_matrix]
+    timeout-minutes: 60
+    # the only job that writes to the registry; the others only read
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.create_matrix.outputs.images) }}
+    steps:
+      - name: Build and push the image, unless it exists
+        shell: bash
+        env:
+          IMAGE: ${{ matrix.image }}
+          BASE_IMAGE: ${{ matrix.base_image }}
+          INSTALL_CMD: ${{ matrix.install_deps_cmd }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # local runs with act (scripts/dev/run_ci_locally.sh): no registry, the image stays in the local docker
+          if [ -z "${ACT:-}" ]; then
+            echo "$TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+              echo "$IMAGE exists"
+              exit 0
+            fi
+          elif docker image inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "$IMAGE exists"
+            exit 0
+          fi
+          docker build --pull --network=host -t "$IMAGE" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "BASE_IMAGE=$BASE_IMAGE" --build-arg "INSTALL_CMD=$INSTALL_CMD" - <<'EOF'
+          ARG BASE_IMAGE=ubuntu:24.04
+          FROM ${BASE_IMAGE}
+          ARG INSTALL_CMD
+          RUN bash -c "$INSTALL_CMD" && rm -rf /var/lib/apt/lists/*
+          EOF
+          if [ -z "${ACT:-}" ]; then
+            docker push "$IMAGE"
+          fi
+
+
+  # BUILT CODE: builds the venv with the installed profiler once per environment and saves it to the actions cache
+  # (see .github/actions/prepared-venv); the jobs below restore it instead of building the profiler themselves.
+  # The key depends on profiler/ and requirements-dev.txt, so a change elsewhere reuses the cache of earlier runs.
+  prepare_build:
+    runs-on: self-hosted
+    name: "Prepare build: ${{ matrix.id }}"
+    needs: [create_matrix, prepare_images]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.create_matrix.outputs.build_environments) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build the venv with the profiler, unless it is cached
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+          save: "true"
 
   build_install_and_test:
     runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: ${{ matrix.base_image }}
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
-    needs: [create_matrix]
+    needs: [create_matrix, prepare_images, prepare_build]
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
 
     steps:
-      - name: Install Prerequisites
-        run: |
-          ${{ matrix.install_deps_cmd }}
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 #        with:
@@ -128,11 +205,16 @@ jobs:
         run: |
           ./scripts/dev/check-license.sh $(find . -type f)
 
-      - name: Setup venv and install DiscoPoP
+      # the venv with the profiler comes from the prepare_build job; the rest is installed in editable mode
+      - name: Setup venv with the profiler
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+
+      - name: Install DiscoPoP
         run: |
-          rm -rf venv
-          ${{ matrix.python }} -m venv venv
-          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          venv/bin/pip install -e . ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
       - name: Run MyPy Type Checking
         run: |
@@ -202,11 +284,18 @@ jobs:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see build_install_and_test)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: ubuntu:24.04
+      image: ${{ needs.create_matrix.outputs.tools_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
       # TSan needs ASLR disabled on kernels with high mmap entropy (setarch -R), which Docker's default seccomp profile forbids
       options: --security-opt seccomp=unconfined
     name: "Runtime unit tests with sanitizers (${{ matrix.label }})"
+    needs: [create_matrix, prepare_images]
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -218,10 +307,6 @@ jobs:
             label: "TSan: data races"
 
     steps:
-      - name: Install Prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -242,15 +327,18 @@ jobs:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: debian:trixie
+      image: ${{ needs.create_matrix.outputs.leak_check_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Leak check of instrumented programs (ASan/LSan)"
+    needs: [create_matrix, prepare_images]
     timeout-minutes: 45
     steps:
-      - name: Install Prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -266,15 +354,18 @@ jobs:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: ubuntu:24.04
+      image: ${{ needs.create_matrix.outputs.tools_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Coverage: runtime library unit tests"
+    needs: [create_matrix, prepare_images]
     timeout-minutes: 45
     steps:
-      - name: Install Prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19 llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -297,24 +388,26 @@ jobs:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: ubuntu:24.04
+      image: ${{ needs.create_matrix.outputs.tools_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: overhead of the DiscoPoP LLVM pass"
+    needs: [create_matrix, prepare_images, prepare_build]
     timeout-minutes: 60
     steps:
-      - name: Install Prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       # only the profiler is needed, installed without -e: otherwise LLVMDiscoPoP.so is not in the venv
-      - name: Setup venv and install the DiscoPoP profiler
-        run: |
-          rm -rf venv
-          python3 -m venv venv
-          venv/bin/pip install -r requirements-dev.txt ./profiler
+      - name: Setup venv with the DiscoPoP profiler
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ needs.create_matrix.outputs.tools_image }}
 
       - name: Compare builds with and without the DiscoPoP pass
         run: |
@@ -334,24 +427,26 @@ jobs:
   callback_benchmark:
     runs-on: self-hosted
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      packages: read
     container:
-      image: ubuntu:24.04
+      image: ${{ needs.create_matrix.outputs.tools_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: cost of the injected callbacks"
+    needs: [create_matrix, prepare_images, prepare_build]
     timeout-minutes: 120
     steps:
-      - name: Install Prerequisites
-        run: |
-          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19 llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       # installed without -e: the breakdown drives clang with the pass plugin from the venv
-      - name: Setup venv and install the DiscoPoP profiler
-        run: |
-          rm -rf venv
-          python3 -m venv venv
-          venv/bin/pip install -r requirements-dev.txt ./profiler
+      - name: Setup venv with the DiscoPoP profiler
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ needs.create_matrix.outputs.tools_image }}
 
       # configures and builds build_tests itself
       - name: Measure the injected callbacks with and without their bodies

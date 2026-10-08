@@ -139,6 +139,12 @@ You can execute a full example by following the steps below. The example should 
 ### Excecute CI Pipeline locally
 To execute the CI pipeline locally, use the following command from the root folder: `scripts/dev/run_ci_locally.sh`.
 - a single matrix entry can be selected with act's `--matrix` filter on its `id`, e.g. `scripts/dev/run_ci_locally.sh --matrix id:ubuntu-24-04-llvm-20`
+- locally, the images stay in the local docker store and the cache actions are skipped (the containers have no node), so everything is built
+
+### Prepared CI environments
+- the jobs do not install their prerequisites themselves: `create_matrix` defines one environment (base image + apt install command) per matrix entry plus two for the sanitizer/coverage/benchmark jobs and the leak check, and `prepare_images` builds each as an image and pushes it to `ghcr.io/<owner>/discopop-ci`, unless its tag exists; the tag is a hash of the base image, the install command and `IMAGE_REVISION` (bump it in `create_matrix` to rebuild all images, e.g. for newer packages)
+- the built profiler is not part of the images: `prepare_build` builds a venv with the profiler per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of `profiler/` and `requirements-dev.txt`; the jobs `build_install_and_test`, `pass_overhead_benchmark` and `callback_benchmark` restore it and build it only on a miss
+- changing an install command means changing it in `create_matrix` only
 
 ### Supported versions and CI matrix
 - LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)

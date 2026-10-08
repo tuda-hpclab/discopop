@@ -1,0 +1,59 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "Venv with the installed DiscoPoP profiler"
+description: >
+  Provides ./venv with the development requirements and the DiscoPoP profiler (LLVM pass, runtime library),
+  installed without -e. Building the profiler is the expensive part of setting up a job. The venv is therefore
+  restored from the actions cache, keyed by the environment (system image) and the files the build depends on,
+  and only built on a miss. The job "prepare_build" builds and saves it once per environment; the jobs that need
+  it only restore it. The cache is evicted by GitHub when unused, nothing is stored permanently.
+  Needs the repository to be checked out, and runs at the same workspace path as the job that saved the cache
+  (the venv contains absolute paths).
+
+inputs:
+  environment:
+    description: "Identifies the system the venv is built for, e.g. the image of the container (part of the cache key)"
+    required: true
+  python:
+    description: "Interpreter the venv is created with"
+    required: false
+    default: "python3"
+  save:
+    description: "Save the venv to the cache after building it ('true' only in the job that prepares it)"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    # local runs with act (scripts/dev/run_ci_locally.sh) have no node in the containers for the cache actions and no
+    # cache service: there the venv is always built
+    - name: Restore the venv with the profiler from the cache
+      id: restore
+      if: ${{ !env.ACT }}
+      uses: actions/cache/restore@v4
+      with:
+        path: venv
+        key: venv-profiler-${{ inputs.environment }}-${{ hashFiles('profiler/**', 'requirements-dev.txt') }}
+
+    # profiler/ and requirements-dev.txt are everything the profiler build depends on (profiler/share holds the shared sources)
+    - name: Build the venv with the profiler (not in the cache)
+      if: ${{ steps.restore.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        rm -rf venv
+        ${{ inputs.python }} -m venv venv
+        venv/bin/pip install -r requirements-dev.txt ./profiler
+
+    - name: Save the venv with the profiler to the cache
+      if: ${{ !env.ACT && steps.restore.outputs.cache-hit != 'true' && inputs.save == 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: venv
+        key: ${{ steps.restore.outputs.cache-primary-key }}
