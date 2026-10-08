@@ -12,6 +12,7 @@
 
 #include "utils.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
+#include "../Immortal.hpp"
 
 #include <fstream>
 #include <string>
@@ -40,7 +41,13 @@ struct alignas(64) CallstateHotData {
   std::vector<CallstateFrame> frames;
   bool frozen = false;
 };
-CallstateHotData callstate_hot;
+// Immortal (see Immortal.hpp): the runtime starts from .init_array, before this translation unit's
+// own dynamic initializers, and the destructors of the target's global objects still enter and leave
+// functions after a plain global would have been destroyed. Constructed by reset_callstate_tracking,
+// which also makes the calling thread the owner; every other use is behind the owner check.
+ImmortalStorage<CallstateHotData> callstate_hot_storage;
+CallstateHotData &callstate_hot = callstate_hot_storage.value;
+bool callstate_hot_constructed = false;
 
 // the target of the transition triggered by instructionID, following a fall-through transition
 CallState *get_transition_target_with_fallthrough(CallState *state, int32_t instructionID) {
@@ -69,6 +76,10 @@ void update_callstate(int32_t instructionID) {
 
 void reset_callstate_tracking(CallState *initial_state) {
   current_callpath_state = initial_state;
+  if (!callstate_hot_constructed) {
+    callstate_hot_storage.construct();
+    callstate_hot_constructed = true;
+  }
   callstate_hot.frames.clear();
   callstate_hot.frozen = false;
   pending_call_instruction = 0;
@@ -151,8 +162,8 @@ void resume_function_for_callstate(int32_t function_entry_id) {
   }
 }
 
-bool callstate_transitions_frozen() { return callstate_hot.frozen; }
+bool callstate_transitions_frozen() { return callstate_hot_constructed && callstate_hot.frozen; }
 
-std::size_t callstate_frame_count() { return callstate_hot.frames.size(); }
+std::size_t callstate_frame_count() { return callstate_hot_constructed ? callstate_hot.frames.size() : 0; }
 
 } // namespace __dp
