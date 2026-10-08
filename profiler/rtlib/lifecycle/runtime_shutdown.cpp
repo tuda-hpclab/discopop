@@ -139,17 +139,12 @@ void release_runtime() {
   bbList = nullptr;
   // End HA
 
-  delete function_manager;
-  function_manager = nullptr;
-  delete loop_manager;
-  loop_manager = nullptr;
   delete call_state_graph;
   call_state_graph = nullptr;
   // The last reader of the memory manager is the allocation output in write_results(); the
   // accesses that ask it for a region id are all behind us, and the worker threads that could
   // still have been processing them were joined by finalizeParallelization().
-  delete memory_manager;
-  memory_manager = nullptr;
+  destroy_manager_globals();
 
   delete out;
   out = nullptr;

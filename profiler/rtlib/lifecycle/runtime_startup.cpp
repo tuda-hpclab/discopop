@@ -57,9 +57,7 @@ void __dp_init() {
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::INIT);
 #endif
-  function_manager = new FunctionManager();
-  loop_manager = new LoopManager();
-  memory_manager = new MemoryManager();
+  construct_manager_globals();
   //
 #if DP_CALLTREE_PROFILING
 //    call_tree = new CallTree();

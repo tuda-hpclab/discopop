@@ -27,7 +27,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_output() {
-  if (loop_manager == nullptr || loop_manager->is_done()) {
+  if (!manager_globals_constructed() || loop_manager->is_done()) {
     return;
   }
 

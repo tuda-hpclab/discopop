@@ -57,7 +57,7 @@ CallState *get_transition_target_with_fallthrough(CallState *state, int32_t inst
   CallState *transition_target = state->get_transition_target(instructionID);
   if (transition_target) {
     // check if a fall-through transition (i.e. instructionID '0') exists
-    CallState *fallthrough_transition_target = transition_target->get_transition_target(0);
+    CallState *fallthrough_transition_target = transition_target->get_fallthrough_transition_target();
     if (fallthrough_transition_target) {
       // TODO: this fallthrough could be implemented statically by redirecting the edges accordingly
       transition_target = fallthrough_transition_target;

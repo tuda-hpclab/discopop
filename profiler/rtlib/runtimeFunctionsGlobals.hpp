@@ -13,6 +13,7 @@
 #pragma once
 
 #include "../share/include/timer.hpp"
+#include "Immortal.hpp"
 #include "calltree/CallTree.hpp"
 #include "calltree/DependencyMetadata.hpp"
 #include "memory/AbstractShadow.hpp"
@@ -51,9 +52,21 @@ extern Timers *timers;
 
 extern std::mutex pthread_compatibility_mutex;
 
-extern FunctionManager *function_manager;
-extern LoopManager *loop_manager;
-extern MemoryManager *memory_manager;
+// The three managers the callbacks reach through. The storage is the global, rather than a
+// pointer to a heap object: reaching one then costs no load of a pointer first, and __dp_read
+// and __dp_write ask the function manager to reset the call tracker on every single access.
+//
+// Their lifetime is unchanged -- construct_manager_globals() runs where __dp_init used to new
+// them, destroy_manager_globals() where __dp_finalize used to delete them. Outside that window
+// they do not exist, which manager_globals_constructed() answers for the one caller that used
+// to compare the pointer against null.
+extern ImmortalStorage<FunctionManager> function_manager;
+extern ImmortalStorage<LoopManager> loop_manager;
+extern ImmortalStorage<MemoryManager> memory_manager;
+
+void construct_manager_globals();
+void destroy_manager_globals();
+bool manager_globals_constructed() noexcept;
 
 #if DP_CALLTREE_PROFILING
 extern CallTree call_tree;
