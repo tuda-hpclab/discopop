@@ -16,6 +16,8 @@ on:
   pull_request:
     branches:
       - "**"
+  # manual runs, e.g. to get the callback benchmark (callback_benchmark) for a branch
+  workflow_dispatch:
 
 # the jobs only read the repository
 permissions:
@@ -160,14 +162,25 @@ jobs:
         run: |
             venv/bin/python3 -m black -l 120 --check mcp_server
 
+      - name: Check formatting of the benchmark drivers and the instrumentation tests
+        run: |
+            venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead benchmark/injected_functions test/instrumentation
+
       # Python: the roots and import mode are configured in pyproject.toml ([tool.pytest.ini_options])
       - name: Unit test check
         run: |
           . venv/bin/activate
           python3 -m pytest
           cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
-          cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"
+          cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
           build_tests/test/unit_tests/DiscoPoP_UT
+          build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
+
+      # the IR the pass produces: which callbacks are inserted where (test/instrumentation)
+      - name: Instrumentation tests
+        run: |
+            . venv/bin/activate
+            python3 -m unittest -v -k "*test.instrumentation.*"
 
       - name: Profiler gold standard tests
         run: |
@@ -234,10 +247,132 @@ jobs:
           # the unit tests run under ASan/LSan in the sanitizers job already
           DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
 
+  # Line coverage of the runtime library by DiscoPoP_UT (clang source based coverage, see
+  # scripts/dev/run_rtlib_coverage.sh). Not part of checks_successful yet: the floor of 90% lines is
+  # reported, not enforced, until it has proven stable on the runner.
+  rtlib_coverage:
+    runs-on: self-hosted
+    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    container:
+      image: ubuntu:24.04
+    name: "Coverage: runtime library unit tests"
+    timeout-minutes: 45
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19 llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Measure the coverage of the runtime library
+        run: |
+          scripts/dev/run_rtlib_coverage.sh --markdown-out rtlib_coverage_summary.md --min-line-coverage 90
+
+      - name: Add the report to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f rtlib_coverage_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat rtlib_coverage_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Builds a set of small programs with and without the DiscoPoP pass and runs both
+  # (benchmark/pass_overhead). Fails if a program does not build or run, or if the instrumented
+  # binary does not reproduce the output of the uninstrumented one; the timings are reported, not
+  # enforced.
+  pass_overhead_benchmark:
+    runs-on: self-hosted
+    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    container:
+      image: ubuntu:24.04
+    name: "Benchmark: overhead of the DiscoPoP LLVM pass"
+    timeout-minutes: 60
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # only the profiler is needed, installed without -e: otherwise LLVMDiscoPoP.so is not in the venv
+      - name: Setup venv and install the DiscoPoP profiler
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -r requirements-dev.txt ./profiler
+
+      - name: Compare builds with and without the DiscoPoP pass
+        run: |
+          venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --json-out pass_overhead_results.json --markdown-out pass_overhead_summary.md
+
+      - name: Add the comparison to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f pass_overhead_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat pass_overhead_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # What the injected callbacks cost (benchmark/injected_functions): per call, with and without their
+  # bodies, and per program, attributed to the single callbacks (--callback-breakdown, builds the
+  # runtime library variants). The times depend on the runner too much to gate on, and the breakdown
+  # is expensive: only on pushes to master/new_explorer and manual runs, not part of checks_successful.
+  callback_benchmark:
+    runs-on: self-hosted
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    container:
+      image: ubuntu:24.04
+    name: "Benchmark: cost of the injected callbacks"
+    timeout-minutes: 120
+    steps:
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv build-essential make cmake git llvm-19 llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # installed without -e: the breakdown drives clang with the pass plugin from the venv
+      - name: Setup venv and install the DiscoPoP profiler
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -r requirements-dev.txt ./profiler
+
+      # configures and builds build_tests itself
+      - name: Measure the injected callbacks with and without their bodies
+        run: |
+          venv/bin/python3 benchmark/injected_functions/run_callback_benchmark.py --json-out callback_benchmark_results.json --markdown-out callback_benchmark_summary.md
+
+      - name: Add the comparison to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f callback_benchmark_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat callback_benchmark_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build the runtime library variants
+        run: |
+          cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants -j "$(nproc)"
+
+      # one repetition per configuration: the question is which callbacks dominate, not by how many percent
+      - name: Attribute the whole program overhead to the callbacks
+        run: |
+          venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --callback-breakdown --repetitions 1 --json-out callback_breakdown_results.json --markdown-out callback_breakdown_summary.md
+
+      - name: Add the breakdown to the job summary
+        if: ${{ always() }}
+        run: |
+          if [ -f callback_breakdown_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat callback_breakdown_summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test, sanitizers, profiler_leak_check]
+    needs: [build_install_and_test, sanitizers, profiler_leak_check, pass_overhead_benchmark]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5

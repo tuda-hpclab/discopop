@@ -37,12 +37,12 @@ This document contains critical information about working with this codebase. Fo
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the mypy version CI uses; a different version can report different errors)
 - to execute type checking of python files use the following command as the basis: `venv/bin/python -m mypy --config-file=mypy.ini -p`
-- to type check everything CI checks (`files` in `mypy.ini`: `discopop_explorer`, `discopop_library`, `discopop_gui` and `mcp_server`), run `venv/bin/python -m mypy --config-file=mypy.ini` without further arguments
+- to type check everything CI checks (`files` in `mypy.ini`: `discopop_explorer`, `discopop_library`, `discopop_gui`, `mcp_server`, `test/leak_check`, `test/instrumentation` and the benchmark drivers in `benchmark/pass_overhead` and `benchmark/injected_functions`), run `venv/bin/python -m mypy --config-file=mypy.ini` without further arguments
 
 ## Formatting
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
-- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server`
+- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server test/leak_check benchmark/pass_overhead benchmark/injected_functions test/instrumentation`
 - to execute the formatting check, use `venv/bin/python -m black -l 120 --check <paths>` with the paths above
 - to execute automatic formatting, use `venv/bin/python -m black -l 120 <paths>`, restricted to the paths you changed; never run black on `.`, as it would reformat many unrelated, unchecked files
 
@@ -74,7 +74,8 @@ This document contains critical information about working with this codebase. Fo
 
 ### Further unittest suites
 - `test/instrumentation` asserts on the callbacks the LLVM pass inserts; it drives `discopop_cxx`, so the venv has to be *activated* (`. venv/bin/activate`), not just addressed via `venv/bin/python`: `python3 -m unittest -v -k "*test.instrumentation.*"`
-- `test/wip_end_to_end` is work in progress and only runs with `DP_RUN_WIP_TESTS=1`
+- the CI matrix job `build_install_and_test` runs the instrumentation tests on every matrix entry
+- `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1`; CI does not run it
 
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
@@ -100,7 +101,7 @@ This document contains critical information about working with this codebase. Fo
 ### C++
 #### Profiler
 - there are two GoogleTest binaries, both only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`: `DiscoPoP_UT` (runtime library, `test/unit_tests`) and `DiscoPoP_Pass_UT` (LLVM pass, `test/pass_unit_tests`)
-- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`
+- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`; the CI matrix job `build_install_and_test` runs both on every matrix entry
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
 #### Sanitizers (profiler)
@@ -109,6 +110,11 @@ This document contains critical information about working with this codebase. Fo
 - the script sets the `*SAN_OPTIONS` (halt on error, suppression files); any finding fails the run
 - TSan needs ASLR disabled on kernels with high mmap entropy (`FATAL: ThreadSanitizer: unexpected memory mapping`); the script runs it via `setarch "$(uname -m)" -R`, which in Docker needs `--security-opt seccomp=unconfined`
 - accepted leaks / races go into `test/unit_tests/sanitizers/{lsan,tsan}.supp`, one comment per entry explaining why; prefer fixing the code or the test
+
+#### Coverage (runtime library)
+- `scripts/dev/run_rtlib_coverage.sh` builds `DiscoPoP_UT` with clang source based coverage (build dir `build_coverage`), runs it and reports line / function / branch coverage of `profiler/rtlib` (llvm-cov and llvm-profdata of clang's major version are required, e.g. the `llvm-19` package)
+- `--min-line-coverage <n>` fails below n percent lines, `--markdown-out <file>` / `--html-out <dir>` write reports; test failures do not stop the report
+- the CI job `rtlib_coverage` runs it with a floor of 90% lines; it is not part of `checks_successful` yet
 
 ### Execute example
 You can execute a full example by following the steps below. The example should not raise any errors. Warnings may arise during different parts of the process and can be tolerated.
@@ -153,6 +159,7 @@ To execute the CI pipeline locally, use the following command from the root fold
 - it fails when a binary does not build or run, when the runtime does not come up, or when the two runs no longer agree on the set of benchmarks; the times are reported, never enforced
 - the binaries need `DOT_DISCOPOP` to point at a directory containing a `profiler/` subdirectory when run by hand -- the runtime opens its result files before `main`; the driver supplies one
 - see `benchmark/injected_functions/README.md` for what is and is not covered, and for how to add a callback
+- the CI job `callback_benchmark` runs it together with the `--callback-breakdown` of the pass overhead benchmark, only on pushes to master/new_explorer and on manual runs (`workflow_dispatch`); it is not part of `checks_successful`
 
 ### Pass overhead benchmark
 - `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
@@ -160,6 +167,7 @@ To execute the CI pipeline locally, use the following command from the root fold
 - to run it: `venv/bin/python benchmark/pass_overhead/run_pass_benchmark.py`
 - `--filter <substring>` and `--repetitions <n>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
 - it fails when a program does not build or run, or when the instrumented binary stops reproducing the baseline output; timings only fail the run if `--max-compile-factor` / `--max-run-factor` are given
+- the CI job `pass_overhead_benchmark` runs it (without timing limits) and is part of `checks_successful`: a program that no longer builds, runs or reproduces its output fails the pipeline
 - adding a program means dropping a `.cpp` file with a `// BENCHMARK: <description>` comment into `benchmark/pass_overhead/programs`; see `benchmark/pass_overhead/README.md`
 - `--callback-breakdown` additionally builds every program against each runtime variant above, which attributes the whole-program overhead to the individual callbacks; it needs the variants built and links *every* instrumented configuration from `--variants-dir` so they all come from one build
 - the breakdown rows do not add up to the total: a body running on its own never saturates the access queue, so the main thread never waits for the workers the way it does in a real profiling run. Read it as a ranking, not as a decomposition
