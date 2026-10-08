@@ -31,6 +31,8 @@ concurrency:
 
 jobs:
 # used for eventual multiple operating system testing
+# the full matrix (see create_matrix' script) runs when merging into master or new_explorer; other pushes only test
+# debian trixie with LLVM 21.
 # the entries cover each supported LLVM version (19-22) and the minimum Python (3.10) once, see CLAUDE.md.
 # LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.10 comes from the deadsnakes PPA.
 # "python" is the interpreter the venv is created with.
@@ -81,10 +83,19 @@ jobs:
           # the leak check links against the sanitizer runtime of clang
           e_leak="$(entry debian-trixie-llvm-19-leak-check debian:trixie python3 "export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev")"
 
-          matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
-          images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
-          # the environments that need the built profiler (see prepare_build)
-          build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
+          # the full matrix only where code is merged into master or new_explorer (pushes and pull requests
+          # targeting them); every other push is checked on one platform to keep development runs short
+          if [[ ( "$GITHUB_EVENT_NAME" = "push" && ( "$GITHUB_REF" = "refs/heads/master" || "$GITHUB_REF" = "refs/heads/new_explorer" ) ) \
+             || ( "$GITHUB_EVENT_NAME" = "pull_request" && ( "$GITHUB_BASE_REF" = "master" || "$GITHUB_BASE_REF" = "new_explorer" ) ) ]]; then
+            matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
+            images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
+            # the environments that need the built profiler (see prepare_build)
+            build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
+          else
+            matrix="{\"include\":[$e_llvm21]}"
+            images="[$e_llvm21,$e_tools,$e_leak]"
+            build_environments="[$e_llvm21,$e_tools]"
+          fi
 
           {
             echo "matrix<<END"
