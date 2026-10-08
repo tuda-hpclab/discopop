@@ -8,6 +8,7 @@ using namespace __dp;
 
 class AccessQueueIntegrationTest : public ::testing::Test {
     void SetUp() override{
+        __dp::construct_immortal_globals();
         __dp::allDeps = new __dp::depMap();
         __dp::mainThread_AccessInfoBuffer = __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
         __dp::initParallelization();
@@ -32,6 +33,7 @@ class AccessQueueIntegrationTest : public ::testing::Test {
         while (__dp::firstAccessQueueChunkBuffer.get_queue_size() > 0) {
             delete __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
         }
+        __dp::destroy_immortal_globals();
     }
 };
 
