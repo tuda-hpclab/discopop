@@ -321,8 +321,7 @@ jobs:
   # is expensive: only on pushes to master/new_explorer and manual runs, not part of checks_successful.
   callback_benchmark:
     runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     container:
       image: ubuntu:24.04
     name: "Benchmark: cost of the injected callbacks"
