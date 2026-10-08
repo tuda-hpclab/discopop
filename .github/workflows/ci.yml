@@ -197,7 +197,68 @@ jobs:
           python: ${{ matrix.python }}
           save: "true"
 
-  build_install_and_test:
+  # The tests of the matrix entries are split by kind into the jobs below, so a failure names what failed and the
+  # kinds run in parallel. Each matrix job restores the prepared venv and installs the DiscoPoP packages itself.
+  #
+  # STATIC CHECKS: independent of the platform (black targets the supported Python versions, see pyproject.toml), so
+  # they run once instead of per matrix entry.
+  static_checks:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.create_matrix.outputs.tools_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Static checks: license tags, formatting (black)"
+    needs: [create_matrix, prepare_images, prepare_build]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check all files for the DiscoPoP license tag
+        run: |
+          ./scripts/dev/check-license.sh $(find . -type f)
+
+      # black only (requirements-dev.txt); the profiler in this venv is not needed
+      - name: Setup venv
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ needs.create_matrix.outputs.tools_image }}
+
+      - name: Check formatting of DiscoPoP Explorer
+        run: |
+          venv/bin/python3 -m black -l 120 --check explorer
+
+      - name: Check formatting of DiscoPoP Library
+        run: |
+          venv/bin/python3 -m black -l 120 --check library
+
+      - name: Check formatting of the leak check programs and evaluation
+        run: |
+          venv/bin/python3 -m black -l 120 --check test/leak_check
+
+      - name: Check formatting of DiscoPoP Hotspot Detection
+        run: |
+          venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
+
+      - name: Check formatting of DiscoPoP GUI
+        run: |
+          venv/bin/python3 -m black -l 120 --check GUI
+
+      - name: Check formatting of DiscoPoP MCP Server
+        run: |
+          venv/bin/python3 -m black -l 120 --check mcp_server
+
+      - name: Check formatting of the benchmark drivers and the instrumentation tests
+        run: |
+          venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead benchmark/injected_functions test/instrumentation
+
+  # TYPE CHECK per matrix entry: mypy checks against the Python version of the interpreter it runs with
+  type_check:
     runs-on: self-hosted
     permissions:
       contents: read
@@ -207,92 +268,170 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
+    name: "Type check: mypy (${{ matrix.id }})"
     needs: [create_matrix, prepare_images, prepare_build]
-    timeout-minutes: 180
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-#        with:
-#          submodules: recursive
-
-      - name: Check all files for DiscoPoP License tag
-        run: |
-          ./scripts/dev/check-license.sh $(find . -type f)
 
       # the venv with the profiler comes from the prepare_build job; the rest is installed in editable mode
-      - name: Setup venv with the profiler
+      - name: Setup venv and install DiscoPoP
         uses: ./.github/actions/prepared-venv
         with:
           environment: ${{ matrix.image }}
           python: ${{ matrix.python }}
+          install_discopop: "true"
 
-      - name: Install DiscoPoP
+      - name: Run mypy
         run: |
-          venv/bin/pip install -e . ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          venv/bin/python3 -m mypy --config-file=mypy.ini
 
-      - name: Run MyPy Type Checking
-        run: |
-            venv/bin/python3 -m mypy --config-file=mypy.ini
+  # PYTHON UNIT TESTS: the roots and import mode are configured in pyproject.toml ([tool.pytest.ini_options])
+  python_unit_tests:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Python unit tests (${{ matrix.id }})"
+    needs: [create_matrix, prepare_images, prepare_build]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Check formatting of DiscoPoP Explorer
-        run: |
-            venv/bin/python3 -m black -l 120 --check explorer
+      # the venv with the profiler comes from the prepare_build job; the rest is installed in editable mode
+      - name: Setup venv and install DiscoPoP
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+          install_discopop: "true"
 
-      - name: Check formatting of DiscoPoP Library
-        run: |
-            venv/bin/python3 -m black -l 120 --check library
-
-      - name: Check formatting of the leak check programs and evaluation
-        run: |
-            venv/bin/python3 -m black -l 120 --check test/leak_check
-
-      - name: Check formatting of DiscoPoP Hotspot Detection
-        run: |
-            venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
-
-      - name: Check formatting of DiscoPoP GUI
-        run: |
-            venv/bin/python3 -m black -l 120 --check GUI
-
-      - name: Check formatting of DiscoPoP MCP Server
-        run: |
-            venv/bin/python3 -m black -l 120 --check mcp_server
-
-      - name: Check formatting of the benchmark drivers and the instrumentation tests
-        run: |
-            venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead benchmark/injected_functions test/instrumentation
-
-      # Python: the roots and import mode are configured in pyproject.toml ([tool.pytest.ini_options])
-      - name: Unit test check
+      - name: Run the Python unit tests
         run: |
           . venv/bin/activate
           python3 -m pytest
+
+  # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
+  # built from the root CMakeLists.txt, they need no venv
+  profiler_unit_tests:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Profiler unit tests: runtime library and LLVM pass (${{ matrix.id }})"
+    needs: [create_matrix, prepare_images]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build the unit tests
+        run: |
           cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
           cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"
+
+      - name: Run the runtime library unit tests (DiscoPoP_UT)
+        run: |
           build_tests/test/unit_tests/DiscoPoP_UT
+
+      - name: Run the LLVM pass unit tests (DiscoPoP_Pass_UT)
+        run: |
           build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT
 
-      # the IR the pass produces: which callbacks are inserted where (test/instrumentation)
+  # PROFILER TESTS of programs compiled with discopop_cxx: which callbacks the pass inserts where (test/instrumentation),
+  # and the data dependencies the profiling run finds (test/profiler, gold standard)
+  profiler_tests:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Profiler tests: instrumentation, dependency detection (${{ matrix.id }})"
+    needs: [create_matrix, prepare_images, prepare_build]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # the venv with the profiler comes from the prepare_build job; the rest is installed in editable mode
+      - name: Setup venv and install DiscoPoP
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+          install_discopop: "true"
+
       - name: Instrumentation tests
         run: |
-            . venv/bin/activate
-            python3 -m unittest -v -k "*test.instrumentation.*"
+          . venv/bin/activate
+          python3 -m unittest -v -k "*test.instrumentation.*"
 
       - name: Profiler gold standard tests
         run: |
-            . venv/bin/activate
-            python3 -m unittest -v -k "*test.profiler.*"
+          . venv/bin/activate
+          python3 -m unittest -v -k "*test.profiler.*"
 
-      - name: Python end-to-end-tests
+  # END-TO-END TESTS: the whole pipeline (profiling, pattern detection, patches, MCP server) on small programs
+  end_to_end_tests:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "End-to-end tests (${{ matrix.id }})"
+    needs: [create_matrix, prepare_images, prepare_build]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # the venv with the profiler comes from the prepare_build job; the rest is installed in editable mode
+      - name: Setup venv and install DiscoPoP
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+          install_discopop: "true"
+
+      - name: Python end-to-end tests
         run: |
-            . venv/bin/activate
-            python3 -m unittest -v -k "*.end_to_end.*"
-
+          . venv/bin/activate
+          python3 -m unittest -v -k "*.end_to_end.*"
 
   # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
   # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's
@@ -301,7 +440,7 @@ jobs:
   # Locally: scripts/dev/run_profiler_sanitizers.sh <address,undefined|thread>
   runtime_unit_tests_sanitized:
     runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see build_install_and_test)
+    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
       contents: read
@@ -314,7 +453,8 @@ jobs:
       # TSan needs ASLR disabled on kernels with high mmap entropy (setarch -R), which Docker's default seccomp profile forbids
       options: --security-opt seccomp=unconfined
     name: "Runtime unit tests with sanitizers (${{ matrix.label }})"
-    needs: [create_matrix, prepare_images]
+    # the more detailed checks only run once the basic checks and tests have passed
+    needs: [create_matrix, prepare_images, static_checks, type_check, python_unit_tests, profiler_unit_tests, profiler_tests, end_to_end_tests]
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -355,7 +495,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Leak check of instrumented programs (ASan/LSan)"
-    needs: [create_matrix, prepare_images]
+    # the more detailed checks only run once the basic checks and tests have passed
+    needs: [create_matrix, prepare_images, static_checks, type_check, python_unit_tests, profiler_unit_tests, profiler_tests, end_to_end_tests]
     timeout-minutes: 45
     steps:
       - name: Checkout Repository
@@ -382,7 +523,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Coverage: runtime library unit tests"
-    needs: [create_matrix, prepare_images]
+    # the more detailed checks only run once the basic checks and tests have passed
+    needs: [create_matrix, prepare_images, static_checks, type_check, python_unit_tests, profiler_unit_tests, profiler_tests, end_to_end_tests]
     timeout-minutes: 45
     steps:
       - name: Checkout Repository
@@ -498,9 +640,9 @@ jobs:
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    # build_install_and_test stands for all of its matrix entries, i.e. the configurations create_matrix selected for
+    # a matrix job stands for all of its entries, i.e. the configurations create_matrix selected for
     # this run: debian trixie with LLVM 21 in the reduced, every entry in the full configuration
-    needs: [create_matrix, build_install_and_test, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
+    needs: [create_matrix, static_checks, type_check, python_unit_tests, profiler_unit_tests, profiler_tests, end_to_end_tests, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5

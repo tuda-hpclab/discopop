@@ -28,6 +28,10 @@ inputs:
     description: "Save the venv to the cache after building it ('true' only in the job that prepares it)"
     required: false
     default: "false"
+  install_discopop:
+    description: "Also install the other DiscoPoP packages in editable mode ('true' for the test jobs; never cached)"
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -57,3 +61,9 @@ runs:
       with:
         path: venv
         key: ${{ steps.restore.outputs.cache-primary-key }}
+
+    - name: Install the other DiscoPoP packages (editable)
+      if: ${{ inputs.install_discopop == 'true' }}
+      shell: bash
+      run: |
+        venv/bin/pip install -e . ./explorer ./library ./hotspot_detection ./GUI ./mcp_server

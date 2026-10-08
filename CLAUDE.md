@@ -74,7 +74,7 @@ This document contains critical information about working with this codebase. Fo
 
 ### Further unittest suites
 - `test/instrumentation` asserts on the callbacks the LLVM pass inserts; it drives `discopop_cxx`, so the venv has to be *activated* (`. venv/bin/activate`), not just addressed via `venv/bin/python`: `python3 -m unittest -v -k "*test.instrumentation.*"`
-- the CI matrix job `build_install_and_test` runs the instrumentation tests on every matrix entry
+- the CI matrix job `profiler_tests` runs the instrumentation tests on every matrix entry
 - `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1`; CI does not run it
 
 ### Python unit tests (discopop_explorer)
@@ -101,7 +101,7 @@ This document contains critical information about working with this codebase. Fo
 ### C++
 #### Profiler
 - there are two GoogleTest binaries, both only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`: `DiscoPoP_UT` (runtime library, `test/unit_tests`) and `DiscoPoP_Pass_UT` (LLVM pass, `test/pass_unit_tests`)
-- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`; the CI matrix job `build_install_and_test` runs both on every matrix entry
+- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`; the CI matrix job `profiler_unit_tests` runs both on every matrix entry
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
 #### Sanitizers (profiler)
@@ -143,12 +143,14 @@ To execute the CI pipeline locally, use the following command from the root fold
 
 ### Prepared CI environments
 - the jobs do not install their prerequisites themselves: `create_matrix` defines one environment (base image + apt install command) per matrix entry plus two for the sanitizer/coverage/benchmark jobs and the leak check, and `prepare_images` builds each as an image and pushes it to `ghcr.io/<owner>/discopop-ci`, unless its tag exists; the tag is a hash of the base image, the install command and `IMAGE_REVISION` (bump it in `create_matrix` to rebuild all images, e.g. for newer packages)
-- the built profiler is not part of the images: `prepare_build` builds a venv with the profiler per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of `profiler/` and `requirements-dev.txt`; the jobs `build_install_and_test`, `pass_overhead_benchmark` and `callback_benchmark` restore it and build it only on a miss
+- the built profiler is not part of the images: `prepare_build` builds a venv with the profiler per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of `profiler/` and `requirements-dev.txt`; the matrix jobs `type_check`, `python_unit_tests`, `profiler_tests` and `end_to_end_tests`, the job `static_checks` and the benchmark jobs restore it and build it only on a miss
 - changing an install command means changing it in `create_matrix` only
 
 ### Supported versions and CI matrix
 - LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
 - the CI runs on every push and on pull requests into master/new_explorer; the full matrix only runs when merging into master or new_explorer (pushes to them, and pull requests targeting them); every other push and manual run is "reduced": the matrix only tests debian 13 / LLVM 21, and only the environments that run needs are prepared. The jobs outside the matrix run in both cases
+- the tests of a matrix entry are split by kind into the jobs `type_check` (mypy), `python_unit_tests` (pytest), `profiler_unit_tests` (`DiscoPoP_UT`, `DiscoPoP_Pass_UT`), `profiler_tests` (`test.instrumentation`, `test.profiler`) and `end_to_end_tests`; `static_checks` (license tags, black) does not depend on the platform and runs once
+- `runtime_unit_tests_sanitized`, `instrumented_programs_leak_check` and `rtlib_coverage` only start once all of these basic jobs have succeeded
 - `checks_successful` covers the matrix entries of the run, i.e. LLVM 21 in a reduced, all entries in a full run; its log names the configuration
 - the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
 - when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
