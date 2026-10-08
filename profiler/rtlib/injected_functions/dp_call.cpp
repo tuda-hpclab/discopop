@@ -30,10 +30,14 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_call(LID instructionID) {
+void __dp_call(LID lid, int32_t instructionID) {
   DP_CALLBACK_SCOPE(CALL);
 
-  function_manager->log_call(instructionID);
+  // The location of the call site and its instruction id, which the function manager pairs with
+  // the entry of the function that is about to run and reports as
+  // "<call site> BGN func <entry> <instruction id>". It used to be handed the instruction id only,
+  // which decodeLID then read as a location and printed as "0:<id>".
+  function_manager->log_call(lid, instructionID);
 
   // the callpath state transition happens when the callee enters an instrumented function, see
   // enter_function_for_callstate. A callee without instrumentation does not change the state.

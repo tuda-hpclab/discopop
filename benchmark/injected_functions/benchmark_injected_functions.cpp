@@ -204,7 +204,7 @@ void benchmark_call(benchmark::State &state) {
   reset_call_state();
   Cursor cursor;
   for (auto _ : state) {
-    __dp::__dp_call(cursor.line());
+    __dp::__dp_call(cursor.line(), 0);
     cursor.advance();
   }
 }

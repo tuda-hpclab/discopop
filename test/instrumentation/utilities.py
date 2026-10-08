@@ -39,13 +39,14 @@ LOCATION_CALLBACKS = frozenset(
         "__dp_alloca",
         "__dp_new",
         "__dp_delete",
+        "__dp_call",
     }
 )
 
 #: Callbacks whose first argument is an instruction id instead. The pass writes the mapping from
 #: those ids to source locations to .discopop/profiler/instructionID_to_lineID_mapping.txt, which
 #: is where the later phases resolve them, and so do these tests.
-INSTRUCTION_ID_CALLBACKS = frozenset({"__dp_read", "__dp_write", "__dp_call"})
+INSTRUCTION_ID_CALLBACKS = frozenset({"__dp_read", "__dp_write"})
 
 
 def decode_lid(lid: int) -> Tuple[int, int]:

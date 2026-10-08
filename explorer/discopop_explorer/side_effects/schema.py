@@ -150,9 +150,9 @@ class Record(TypedDict):
 class ExecutedCall(TypedDict):
     # PET function node id of the calling function, None if unknown
     caller: Optional[str]
-    # call instruction id of the BGN func record; None for main's START record. When the runtime
-    # logged no call (callbacks from library code) it prints the last processed instruction instead,
-    # which then matches no InlinedFunctionContext
+    # call instruction id of the BGN func record (its fifth column; the first one in older runtimes);
+    # None for main's START record. When the runtime logged no call (callbacks from library code) it
+    # prints the last processed instruction instead, which then matches no InlinedFunctionContext
     call_instruction_id: Optional[int]
     # PET function node id of the callee
     callee: str

@@ -284,11 +284,11 @@ def test_executed_calls_from_bgn_func_and_start(tmp_path: Path) -> None:
         "\n".join(
             [
                 "START 1:50",
-                "0:3 BGN func 1:50",  # into main after a global constructor: ignored, main comes from START
+                "1:30 BGN func 1:50 3",  # into main after a global constructor: ignored, main comes from START
                 "1:52 BGN loop 4 1 1 1",
-                "0:7 BGN func 1:10",  # call instruction 7 in main calls 1:5
+                "1:55 BGN func 1:10 7",  # call instruction 7 on line 55 of main calls 1:5
                 "1:11 BGN func 1:20",  # no call instruction logged: callback, caller by line
-                "0:7 BGN func 1:10",  # duplicate
+                "1:55 BGN func 1:10 7",  # duplicate
                 "1:12 END func",
             ]
         )
@@ -302,6 +302,22 @@ def test_executed_calls_from_bgn_func_and_start(tmp_path: Path) -> None:
         {"caller": None, "call_instruction_id": None, "callee": "1:1"},
         {"caller": "1:1", "call_instruction_id": 7, "callee": "1:5"},
         {"caller": "1:5", "call_instruction_id": None, "callee": "1:9"},
+    ]
+
+
+def test_executed_calls_of_older_runtimes(tmp_path: Path) -> None:
+    """runtimes before the call site was logged as a location wrote the call's instruction id as 0:<id>"""
+    functions = [_Span("1:1", 50, 60, name="main"), _Span("1:5", 10, 12)]
+    file_ids = {f: 1 for f in functions}
+    dep_file = tmp_path / "dynamic_dependencies.txt"
+    dep_file.write_text("START 1:50\n0:7 BGN func 1:10\n")
+    (tmp_path / "instructionID_to_lineID_mapping.txt").write_text("7 1:55:3\n")
+
+    calls = _read_executed_calls(str(dep_file), functions, _LineToFunction(functions, file_ids))  # type: ignore[arg-type]
+
+    assert calls == [
+        {"caller": None, "call_instruction_id": None, "callee": "1:1"},
+        {"caller": "1:1", "call_instruction_id": 7, "callee": "1:5"},
     ]
 
 

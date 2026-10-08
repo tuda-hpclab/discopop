@@ -145,10 +145,11 @@ class TestFunctionCall(InstrumentationTestCase):
     def test_the_call_site_reports_its_instruction_id(self) -> None:
         self.assertInstrumentsLine("__dp_call", "call")
         call = [c for c in self.program.calls("__dp_call") if self.program.source_line(c) is not None][0]
-        # the callpath states transition on the instruction id of the call site; the runtime tells
-        # calls into uninstrumented code apart by whether a __dp_func_entry follows, so there is no
-        # library flag any more
-        instruction_id = call.arg_int(0)
+        # the call site as a location first (see LOCATION_CALLBACKS), then the instruction id on
+        # which the callpath states transition; the runtime tells calls into uninstrumented code
+        # apart by whether a __dp_func_entry follows, so there is no library flag
+        self.assertEqual(2, len(call.args), f"{call.text} does not pass the location and the instruction id")
+        instruction_id = call.arg_int(1)
         self.assertIsNotNone(instruction_id, f"{call.text} does not pass a constant instruction id")
         assert instruction_id is not None
         self.assertGreater(instruction_id, 0, "instruction id 0 is reserved for fall-through transitions")

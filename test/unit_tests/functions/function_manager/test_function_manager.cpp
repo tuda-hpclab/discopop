@@ -189,3 +189,39 @@ TEST_F(FunctionManagerTest, testAManagerCanBeReadThroughAConstReference) {
   reference.output_functions(out);
   EXPECT_NE(out.str().find(dputil::decodeLID(5) + " BGN func " + dputil::decodeLID(100)), std::string::npos);
 }
+
+// __dp_call logs the location of the call site and the instruction id of the call. The location
+// names the call site, the instruction id follows the entered function as a fifth column, and a
+// function entered without a logged call has none.
+TEST_F(FunctionManagerTest, testTheCallInstructionIdFollowsTheEntry) {
+  auto fm = __dp::FunctionManager{};
+
+  fm.log_call(5, 34);
+  fm.register_function_start(100);
+  fm.reset_call(7);
+  fm.register_function_start(200);
+
+  std::ostringstream out;
+  fm.output_functions(out);
+  const auto output = out.str();
+
+  EXPECT_NE(output.find(dputil::decodeLID(5) + " BGN func " + dputil::decodeLID(100) + " 34\n"), std::string::npos);
+  EXPECT_NE(output.find(dputil::decodeLID(7) + " BGN func " + dputil::decodeLID(200) + "\n"), std::string::npos);
+}
+
+// one call site, two calls on it: they are told apart by their instruction ids
+TEST_F(FunctionManagerTest, testTwoCallsOnOneLineAreKeptApart) {
+  auto fm = __dp::FunctionManager{};
+
+  fm.log_call(5, 34);
+  fm.register_function_start(100);
+  fm.log_call(5, 35);
+  fm.register_function_start(200);
+
+  std::ostringstream out;
+  fm.output_functions(out);
+  const auto output = out.str();
+
+  EXPECT_NE(output.find(dputil::decodeLID(5) + " BGN func " + dputil::decodeLID(100) + " 34\n"), std::string::npos);
+  EXPECT_NE(output.find(dputil::decodeLID(5) + " BGN func " + dputil::decodeLID(200) + " 35\n"), std::string::npos);
+}

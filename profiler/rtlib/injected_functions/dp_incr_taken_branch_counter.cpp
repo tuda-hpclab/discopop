@@ -22,7 +22,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_incr_taken_branch_counter(char *source_and_target, int cmp_res, int active_on) {
-  DP_CALLBACK_GUARD(INCR_TAKEN_BRANCH_COUNTER);
+  DP_CALLBACK_SCOPE(INCR_TAKEN_BRANCH_COUNTER);
 
   if (cmp_res == active_on) {
     if (cuec.count(source_and_target) == 0) {

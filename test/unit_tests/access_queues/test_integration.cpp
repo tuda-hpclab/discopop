@@ -214,7 +214,9 @@ TEST_F(AccessQueueIntegrationTest, RPW) {
     write(42, 1337);
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1337, 1, 0, 0, 0);
+    // The write is the first one to this address, which makes it an INIT -- and it still comes
+    // after a read of the same address, which makes it a WAR as well.
+    check_lid_deps(1337, 1, 0, 1, 0);
 }
 
 TEST_F(AccessQueueIntegrationTest, WPR) {
@@ -252,7 +254,7 @@ TEST_F(AccessQueueIntegrationTest, RPWP) {
     push();
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1337, 1, 0, 0, 0);
+    check_lid_deps(1337, 1, 0, 1, 0);
 }
 
 TEST_F(AccessQueueIntegrationTest, WPRP) {
@@ -303,7 +305,8 @@ TEST_F(AccessQueueIntegrationTest, PRW) {
     write(42, 1337);
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1337, 1, 0, 0, 0);
+    // Read and write in one chunk, so the WAR is found against the chunk local shadow.
+    check_lid_deps(1337, 1, 0, 1, 0);
 }
 
 TEST_F(AccessQueueIntegrationTest, PWR) {
@@ -371,7 +374,8 @@ TEST_F(AccessQueueIntegrationTest, RPPPPW) {
     write(42, 1338);
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1338, 1, 0,0,0);
+    // Four chunk boundaries between the read and the write, and the WAR survives all of them.
+    check_lid_deps(1338, 1, 0,1,0);
 }
 
 TEST_F(AccessQueueIntegrationTest, WPPPPR) {

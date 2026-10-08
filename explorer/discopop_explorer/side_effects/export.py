@@ -395,9 +395,12 @@ def _read_executed_calls(
 ) -> List[ExecutedCall]:
     """Executed call edges from the ``BGN func`` and ``START`` records of dynamic_dependencies.txt.
 
-    ``<call instr as 0:N> BGN func <callee start LID>``; when the runtime logged no call
-    (callbacks from library code) it prints the last processed instruction instead, which then
-    matches no InlinedFunctionContext. ``main`` is taken from ``START <main start LID>`` only: a
+    ``<call site LID> BGN func <callee start LID> <call instruction id>``; when the runtime logged
+    no call (callbacks from library code) it prints the last processed instruction as ``0:N``,
+    without a fifth column, instead; that instruction id then matches no InlinedFunctionContext.
+    Runtimes before the call site was logged as a location wrote every call that way,
+    ``<call instr as 0:N> BGN func <callee start LID>``. ``main`` is taken from
+    ``START <main start LID>`` only: a
     ``BGN func`` into main (after instrumented global constructors) would make it look partial.
     Functions sharing a start line cannot be told apart; such an edge is recorded for each of them.
     """
@@ -435,14 +438,19 @@ def _read_executed_calls(
             if len(split) == 2 and split[0] == "START":
                 for callee in callees_at(split[1]):
                     add(None, None, callee)
-            elif len(split) == 4 and split[1] == "BGN" and split[2] == "func":
+            elif len(split) in (4, 5) and split[1] == "BGN" and split[2] == "func":
                 first = split[0]
                 instruction: Optional[int] = None
                 caller_line: Optional[str] = first
-                if first.startswith("0:") and first[2:].isdigit():
+                if len(split) == 5 and split[4].isdigit():
+                    # the call site as a location, and the call's instruction id
+                    instruction = int(split[4])
+                elif first.startswith("0:") and first[2:].isdigit():
+                    # an instruction id in place of the call site: the call (older runtimes) or the
+                    # instruction last processed before a callback
                     instruction = int(first[2:])
                     caller_line = instruction_lines.get(first[2:])
-                # else: a line id, written by older runtimes
+                # else: a line id without an instruction id
                 caller = line_to_function.lookup(caller_line)
                 for callee in callees_at(split[3]):
                     if callee not in main_ids:

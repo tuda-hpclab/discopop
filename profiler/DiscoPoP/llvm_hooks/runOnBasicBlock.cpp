@@ -253,9 +253,11 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
       if (lid > 0) // calls on non-user code are not instrumented
       {
         IRBuilder<> IRBCall(&*BI);
-        // the callpath state follows the call only if it enters an instrumented function, see
-        // enter_function_for_callstate in the runtime library
-        IRBCall.CreateCall(DpCallOrInvoke, {ConstantInt::get(Int32, llvm_ir_instruction_id)});
+        // the call site as a location, which the runtime reports for BGN func, and the instruction
+        // id, on which it switches the callpath state. The state follows the call only if it enters
+        // an instrumented function, see enter_function_for_callstate in the runtime library
+        IRBCall.CreateCall(DpCallOrInvoke,
+                           {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, llvm_ir_instruction_id)});
         if (DP_DEBUG) {
           if (isa<CallInst>(BI)) {
             if (!(fn.str() == ""))
