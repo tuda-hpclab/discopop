@@ -10,7 +10,12 @@ include_directories(
         ../share/include
 )
 
-add_llvm_library(LLVMDiscoPoP MODULE
+# The pass sources are compiled once into an OBJECT library, which is consumed both by the
+# LLVMDiscoPoP plugin below and by the DiscoPoP_Pass_UT unit test binary (test/pass_unit_tests).
+# A MODULE library cannot be linked against, so the tests would otherwise have to compile the
+# same sources a second time -- and would silently drift apart from the compile definitions set
+# further down in this file.
+add_library(DiscoPoP_PassObjects OBJECT
         DiscoPoP.cpp
         ../share/lib/DPUtils.cpp
 
@@ -77,26 +82,48 @@ add_llvm_library(LLVMDiscoPoP MODULE
         hybrid_analysis/InstructionDG.cpp
         )
 
-target_link_libraries(LLVMDiscoPoP PRIVATE OpenMP::OpenMP_CXX)
+# the plugin is built as a shared object, so the objects have to be position independent
+set_target_properties(DiscoPoP_PassObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# absolute paths, so that consumers outside of this directory (the unit tests) inherit them
+target_include_directories(DiscoPoP_PassObjects PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../share/include
+        )
+
+target_link_libraries(DiscoPoP_PassObjects PUBLIC OpenMP::OpenMP_CXX)
 
 # forward compiler flags
+# PUBLIC on the object library, so the unit tests compile against the same configuration
 if(DEFINED DP_HYBRID_PROFILING)
-        target_compile_definitions(LLVMDiscoPoP PUBLIC DP_HYBRID_PROFILING=${DP_HYBRID_PROFILING})
+        target_compile_definitions(DiscoPoP_PassObjects PUBLIC DP_HYBRID_PROFILING=${DP_HYBRID_PROFILING})
         if(${DP_HYBRID_PROFILING} EQUAL 0)
                 message(STATUS "WARNING: DiscoPoP configuration: DP_HYBRID_PROFILING disabled. Reduces profiling speed.")
         endif()
 else()
-        target_compile_definitions(LLVMDiscoPoP PUBLIC DP_HYBRID_PROFILING=1)
+        target_compile_definitions(DiscoPoP_PassObjects PUBLIC DP_HYBRID_PROFILING=1)
 endif()
 
 if(DEFINED DP_BRANCH_TRACKING)
-        target_compile_definitions(LLVMDiscoPoP PUBLIC DP_BRANCH_TRACKING=${DP_BRANCH_TRACKING})
+        target_compile_definitions(DiscoPoP_PassObjects PUBLIC DP_BRANCH_TRACKING=${DP_BRANCH_TRACKING})
         if(NOT ${DP_BRANCH_TRACKING} EQUAL 0)
                 message(STATUS "WARNING: DiscoPoP configuration: DP_BRANCH_TRACKING enabled. Reduces profiling speed.")
         endif()
 else()
-        target_compile_definitions(LLVMDiscoPoP PUBLIC DP_BRANCH_TRACKING=0)
+        target_compile_definitions(DiscoPoP_PassObjects PUBLIC DP_BRANCH_TRACKING=0)
 endif()
 # end of compiler flags
+
+# PARTIAL_SOURCES_INTENDED: LLVM otherwise insists that the target in this directory lists every
+# .cpp file next to it. Here the sources belong to DiscoPoP_PassObjects and reach the plugin as
+# compiled objects.
+add_llvm_library(LLVMDiscoPoP MODULE
+        PARTIAL_SOURCES_INTENDED
+        $<TARGET_OBJECTS:DiscoPoP_PassObjects>
+        )
+
+# NOTE: the objects arrive via $<TARGET_OBJECTS:...> above. Linking the object library here as
+# well would add every object a second time and break the link with duplicate symbols.
+target_link_libraries(LLVMDiscoPoP PRIVATE OpenMP::OpenMP_CXX)
 
 install(TARGETS LLVMDiscoPoP LIBRARY DESTINATION discopop-profiler.libs)

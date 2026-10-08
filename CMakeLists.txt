@@ -78,6 +78,7 @@ if( NOT DEFINED DP_BUILD_UNITTESTS)
 endif()
 if(${DP_BUILD_UNITTESTS} STREQUAL "1")
     add_subdirectory(test/unit_tests)
+    add_subdirectory(test/pass_unit_tests)
     add_subdirectory(benchmark)
 endif()
 

@@ -15,6 +15,8 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
+#include "../Immortal.hpp"
+
 #include "../../share/include/debug_print.hpp"
 #include "../../share/include/timer.hpp"
 
@@ -36,12 +38,29 @@ namespace __dp {
 // strings are therefore only parsed once the program terminates, see
 // process_registered_bb_deps.
 //
-// Wrapped in a function so the vector is constructed on first use: the
-// registering constructors run in an order this translation unit cannot
-// influence.
+// Constructed on first use, because the registering constructors run in an order
+// this translation unit cannot influence -- and before the runtime is initialized,
+// so construct_immortal_globals() is too late for this one. A function-local static
+// would do that part, but it would also be destroyed before __dp_finalize gets to
+// read it, which is why the storage is managed by hand here as well.
+namespace {
+ImmortalStorage<std::vector<const char *>> registered_bb_dep_strings_storage;
+bool registered_bb_dep_strings_constructed = false;
+} // namespace
+
 static std::vector<const char *> &registered_bb_dep_strings() {
-  static std::vector<const char *> strings;
-  return strings;
+  if (!registered_bb_dep_strings_constructed) {
+    registered_bb_dep_strings_storage.construct();
+    registered_bb_dep_strings_constructed = true;
+  }
+  return registered_bb_dep_strings_storage.value;
+}
+
+void release_registered_bb_deps() {
+  if (registered_bb_dep_strings_constructed) {
+    registered_bb_dep_strings_storage.destroy();
+    registered_bb_dep_strings_constructed = false;
+  }
 }
 
 std::uint32_t current_callpath_state_id_for_bb_reports() {

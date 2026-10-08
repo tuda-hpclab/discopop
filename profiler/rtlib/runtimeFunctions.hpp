@@ -51,6 +51,10 @@ std::uint32_t current_callpath_state_id_for_bb_reports();
 // dynamically profiled dependencies.
 void merge_bb_deps(const std::vector<const char *> &dep_strings, const ReportedBBSet &reported, stringDepMap &out);
 
+// Releases the strings registered by __dp_add_bb_deps. Called from
+// destroy_immortal_globals(), once process_registered_bb_deps() has consumed them.
+void release_registered_bb_deps();
+
 void readRuntimeInfo();
 
 void initParallelization();

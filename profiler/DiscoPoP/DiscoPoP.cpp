@@ -37,7 +37,6 @@ void DiscoPoP::setupCallbacks() {
    * arg types
    * NULL
    */
-  DpInit = ThisModule->getOrInsertFunction("__dp_init", Void, Int32, Int32, Int32);
 
   DpFinalize = ThisModule->getOrInsertFunction("__dp_finalize", Void, Int32);
 

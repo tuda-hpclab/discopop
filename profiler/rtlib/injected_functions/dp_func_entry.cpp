@@ -20,6 +20,8 @@
 
 #include "../static_callstate_transitions/utils.hpp"
 
+#include "dp_init.hpp"
+
 #ifdef __linux__
 #include <linux/limits.h>
 #endif
@@ -54,94 +56,10 @@ void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID) {
 #endif
 
   if (!dpInited) {
-    // This part should be executed only once.
-    readRuntimeInfo();
-    timers = new Timers();
-    statistics_profiling_start_time = std::chrono::high_resolution_clock::now();
-#ifdef DP_INTERNAL_TIMER
-    const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
-#endif
-    function_manager = new FunctionManager();
-    loop_manager = new LoopManager();
-    memory_manager = new MemoryManager();
-    //
-#if DP_CALLTREE_PROFILING
-//    call_tree = new CallTree();
-// metadata_queue = new MetaDataQueue(6); // TODO: add Worker argument
-//    dependency_metadata_results_mtx = new std::mutex();
-//    dependency_metadata_results = new std::unordered_set<DependencyMetadata>();
-#endif
-
-    mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
-
-    out = new ofstream();
-
-    // hybrid analysis
-    allDeps = new depMap();
-    outPutDeps = new stringDepMap();
-    bbList = new ReportedBBRecorder();
-    // End HA
-
-    memory_manager->allocate_dummy_region();
-
-#ifdef __linux__
-    // try to get an output file name w.r.t. the target application
-    // if it is not available, fall back to "Output.txt"
-    char *selfPath = new char[PATH_MAX];
-    if (selfPath != nullptr) {
-      if (readlink("/proc/self/exe", selfPath, PATH_MAX - 1) == -1) {
-        delete[] selfPath;
-        selfPath = nullptr;
-        out->open("Output.txt", ios::out);
-      }
-      // out->open(string(selfPath) + "_dep.txt", ios::out);  # results in the
-      // old <prog>_dep.txt
-      //  prepare environment variables
-      char const *tmp = getenv("DOT_DISCOPOP");
-      if (tmp == NULL) {
-        // DOT_DISCOPOP needs to be initialized
-        setenv("DOT_DISCOPOP", ".discopop", 1);
-      }
-      std::string tmp_str(getenv("DOT_DISCOPOP"));
-      setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-      std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-      tmp2 += "/dynamic_dependencies.txt";
-
-      out->open(tmp2.data(), ios::out);
-
-      // Static callPath tracing
-      call_state_graph = new CallStateGraph();
-      initialize_current_callpath_state();
-    }
-#else
-    // Non-Linux: replicate the env-var + output-file + call-state setup from
-    // the Linux path above, but without /proc/self/exe (POSIX only).
-    {
-      char const *tmp = getenv("DOT_DISCOPOP");
-      if (tmp == NULL) {
-        setenv("DOT_DISCOPOP", ".discopop", 1);
-      }
-      std::string tmp_str(getenv("DOT_DISCOPOP"));
-      setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-      std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-      tmp2 += "/dynamic_dependencies.txt";
-      out->open(tmp2.data(), ios::out);
-
-      call_state_graph = new CallStateGraph();
-      initialize_current_callpath_state();
-    }
-#endif
-    assert(out->is_open() && "Cannot open a file to output dependences.\n");
-
-    if (DP_DEBUG) {
-      cout << "DP initialized at LID " << std::dec << dputil::decodeLID(lid) << endl;
-    }
-    dpInited = true;
-    if (NUM_WORKERS > 0) {
-      initParallelization();
-    } else {
-      initSingleThreadedExecution();
-    }
+    // Safety net. The runtime is normally brought up from .init_array, long before the
+    // first callback, see dp_init.cpp -- this covers a build in which that constructor
+    // did not make it into the link.
+    __dp_init();
   } else if (targetTerminated) {
     if (DP_DEBUG) {
       cout << "Entering function LID " << std::dec << dputil::decodeLID(lid);

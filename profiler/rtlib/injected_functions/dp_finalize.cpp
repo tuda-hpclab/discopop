@@ -219,6 +219,10 @@ void __dp_finalize(LID lid) {
   dpInited = false;
   targetTerminated = true; // mark the target program has returned from main()
 
+  // last use of the manually managed globals is behind us, and every callback returns early
+  // from here on, so they can go
+  destroy_immortal_globals();
+
 #ifdef DP_DEBUG
   std::cout << "Program terminated." << std::endl;
 #endif

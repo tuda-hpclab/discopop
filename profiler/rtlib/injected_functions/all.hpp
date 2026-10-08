@@ -22,6 +22,7 @@
 #include "dp_func_exit.hpp"
 #include "dp_landing_pad.hpp"
 #include "dp_incr_taken_branch_counter.hpp"
+#include "dp_init.hpp"
 #include "dp_loop_entry.hpp"
 #include "dp_loop_exit.hpp"
 #include "dp_loop_incr.hpp"

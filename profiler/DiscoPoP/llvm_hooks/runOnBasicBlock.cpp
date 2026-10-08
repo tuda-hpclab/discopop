@@ -48,6 +48,18 @@ A real case would be:
   i32 0              ;; Runtime Language
 }
 */
+// Recognizes every form of deallocation that a delete expression or a call to free can produce.
+//
+// The Itanium ABI mangles the global "operator delete" as _Zdl and "operator delete[]" as _Zda,
+// followed by the encoded parameters, of which the first is always the pointer (Pv). Which overload
+// clang picks depends on the language standard and on the type: a plain "delete p" became the sized
+// _ZdlPvm in C++14, "delete[] p" is _ZdaPv, and over-aligned types add St11align_val_t. Matching the
+// prefix therefore covers the whole family, including variants a future clang may add, instead of
+// only the single spelling _ZdlPv.
+static bool isDeallocationFunction(StringRef fn) {
+  return fn == "free" || fn.starts_with("_ZdlPv") || fn.starts_with("_ZdaPv");
+}
+
 // TODO: atomic variables
 void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
   for (BasicBlock::iterator BI = BB.begin(), E = BB.end(); BI != E; ++BI) {
@@ -188,10 +200,15 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
           IRBRet.CreateCall(DpFuncExit, {ConstantInt::get(Int32, getLID(&*BI, fileID)), ConstantInt::get(Int32, 0)});
           continue;
         }
-        if ((fn.str() == "exit") || F->doesNotReturn()) // using exit() to terminate program
+        if ((fn.str() == "exit") || F->doesNotReturn()) // terminates without returning to main
         {
-          // only insert DpFinalize right before the main program exits
-          insertDpFinalize(&*BI);
+          // exit() and quick_exit() run the handlers registered at program start, so the runtime is
+          // shut down through .fini_array like on the ordinary path. The others -- abort(), _exit(),
+          // a failed assertion -- bypass those, and the results collected so far would be lost
+          // without shutting the runtime down here.
+          if ((fn.str() != "exit") && (fn.str() != "quick_exit")) {
+            insertDpFinalize(&*BI);
+          }
           continue;
         }
         if ((fn.str() == "_Znam") || (fn.str() == "_Znwm") || (fn.str() == "malloc")) {
@@ -216,6 +233,7 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
           } else if (isa<InvokeInst>(BI)) {
             instrumentCalloc(cast<InvokeInst>(BI));
           }
+          continue;
         }
 
         if (fn.str() == "posix_memalign") {
@@ -226,7 +244,7 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
           }
           continue;
         }
-        if ((fn.str() == "_ZdlPv") || (fn.str() == "free")) {
+        if (isDeallocationFunction(fn)) {
           instrumentDeleteOrFree(cast<CallBase>(BI));
           continue;
         }
@@ -262,13 +280,11 @@ void DiscoPoP::runOnBasicBlock(BasicBlock &BB) {
       assert(parent != NULL);
       StringRef fn = parent->getName();
 
-      if (fn.str() == "main") // returning from main
-      {
-        insertDpFinalize(&*BI);
-      } else {
-        IRBuilder<> IRBRet(&*BI);
-        IRBRet.CreateCall(DpFuncExit, {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, 0)});
-      }
+      // main is not special here any more: the runtime is shut down from .fini_array, after the
+      // destructors of the target's global objects have run, so main reports its exit like every
+      // other function.
+      IRBuilder<> IRBRet(&*BI);
+      IRBRet.CreateCall(DpFuncExit, {ConstantInt::get(Int32, lid), ConstantInt::get(Int32, 0)});
 
       if (DP_DEBUG) {
         errs() << fn << " returning on " << lid << "\n";

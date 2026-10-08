@@ -67,7 +67,14 @@ extern ReportedBBRecorder *bbList;
 extern stringDepMap *outPutDeps;
 // end hybrid analysis
 
-extern std::unordered_map<char *, long> cuec;
+// The globals declared as references below outlive the static destructors of the target
+// program: __dp_finalize still uses them after those have run. They are constructed by
+// construct_immortal_globals() and destroyed at the end of __dp_finalize; before the runtime
+// has been initialized, the referenced objects do not exist yet. See Immortal.hpp.
+void construct_immortal_globals();
+void destroy_immortal_globals();
+
+extern std::unordered_map<char *, long> &cuec;
 
 extern bool dpInited;         // library initialization flag
 extern bool targetTerminated; // whether the target program has returned from main()
@@ -95,10 +102,10 @@ extern FirstAccessQueueChunk *mainThread_AccessInfoBuffer;
 #define DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER 4
 #define DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER 4
 
-extern FirstAccessQueue firstAccessQueue;
-extern SecondAccessQueue secondAccessQueue;
+extern FirstAccessQueue &firstAccessQueue;
+extern SecondAccessQueue &secondAccessQueue;
 extern pthread_t *secondAccessQueue_worker_thread;
-extern FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer;
+extern FirstAccessQueueChunkBuffer &firstAccessQueueChunkBuffer;
 
 extern AbstractShadow *singleThreadedExecutionSMem;
 

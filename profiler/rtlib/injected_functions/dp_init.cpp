@@ -1,0 +1,169 @@
+/*
+ * This file is part of the DiscoPoP software
+ * (http://www.discopop.tu-darmstadt.de)
+ *
+ * Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+ *
+ * This software may be modified and distributed under the terms of
+ * the 3-Clause BSD License. See the LICENSE file in the package base
+ * directory for details.
+ *
+ */
+
+#include "dp_init.hpp"
+
+#include "../DPTypes.hpp"
+
+#include "../runtimeFunctions.hpp"
+#include "../runtimeFunctionsGlobals.hpp"
+
+#include "dp_finalize.hpp"
+
+#include "../../share/include/debug_print.hpp"
+#include "../../share/include/timer.hpp"
+
+#include "../static_callstate_transitions/utils.hpp"
+
+#ifdef __linux__
+#include <linux/limits.h>
+#endif
+
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+using namespace std;
+
+namespace __dp {
+
+/******* Instrumentation function *******/
+extern "C" {
+
+void __dp_init() {
+  if (dpInited) {
+    return;
+  }
+
+  // This part should be executed only once.
+  // The globals the runtime manages itself have to exist before anything reads them.
+  construct_immortal_globals();
+  readRuntimeInfo();
+  timers = new Timers();
+  statistics_profiling_start_time = std::chrono::high_resolution_clock::now();
+#ifdef DP_INTERNAL_TIMER
+  const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
+#endif
+  function_manager = new FunctionManager();
+  loop_manager = new LoopManager();
+  memory_manager = new MemoryManager();
+  //
+#if DP_CALLTREE_PROFILING
+//    call_tree = new CallTree();
+// metadata_queue = new MetaDataQueue(6); // TODO: add Worker argument
+//    dependency_metadata_results_mtx = new std::mutex();
+//    dependency_metadata_results = new std::unordered_set<DependencyMetadata>();
+#endif
+
+  mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
+
+  out = new ofstream();
+
+  // hybrid analysis
+  allDeps = new depMap();
+  outPutDeps = new stringDepMap();
+  bbList = new ReportedBBRecorder();
+  // End HA
+
+  memory_manager->allocate_dummy_region();
+
+#ifdef __linux__
+  // try to get an output file name w.r.t. the target application
+  // if it is not available, fall back to "Output.txt"
+  char *selfPath = new char[PATH_MAX];
+  if (selfPath != nullptr) {
+    if (readlink("/proc/self/exe", selfPath, PATH_MAX - 1) == -1) {
+      delete[] selfPath;
+      selfPath = nullptr;
+      out->open("Output.txt", ios::out);
+    }
+    // out->open(string(selfPath) + "_dep.txt", ios::out);  # results in the
+    // old <prog>_dep.txt
+    //  prepare environment variables
+    char const *tmp = getenv("DOT_DISCOPOP");
+    if (tmp == NULL) {
+      // DOT_DISCOPOP needs to be initialized
+      setenv("DOT_DISCOPOP", ".discopop", 1);
+    }
+    std::string tmp_str(getenv("DOT_DISCOPOP"));
+    setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
+    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
+    tmp2 += "/dynamic_dependencies.txt";
+
+    out->open(tmp2.data(), ios::out);
+
+    // Static callPath tracing
+    call_state_graph = new CallStateGraph();
+    initialize_current_callpath_state();
+  }
+#else
+  // Non-Linux: replicate the env-var + output-file + call-state setup from
+  // the Linux path above, but without /proc/self/exe (POSIX only).
+  {
+    char const *tmp = getenv("DOT_DISCOPOP");
+    if (tmp == NULL) {
+      setenv("DOT_DISCOPOP", ".discopop", 1);
+    }
+    std::string tmp_str(getenv("DOT_DISCOPOP"));
+    setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
+    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
+    tmp2 += "/dynamic_dependencies.txt";
+    out->open(tmp2.data(), ios::out);
+
+    call_state_graph = new CallStateGraph();
+    initialize_current_callpath_state();
+  }
+#endif
+  assert(out->is_open() && "Cannot open a file to output dependences.\n");
+
+  if (DP_DEBUG) {
+    cout << "DP initialized." << endl;
+  }
+  dpInited = true;
+  if (NUM_WORKERS > 0) {
+    initParallelization();
+  } else {
+    initSingleThreadedExecution();
+  }
+}
+}
+
+namespace {
+
+// The runtime has to be up before the first instrumented callback, and it has to write its results
+// after the last one. Both ends are reached through the ELF initialization and finalization arrays
+// rather than from main, because the target's global constructors and destructors are instrumented
+// as well and run outside of it.
+//
+// .init_array is processed in ascending priority order and clang gives the target's own static
+// initializers the default priority 65535, so 101 puts the runtime ahead of all of them. The
+// matching .fini_array entry is processed after every handler registered with __cxa_atexit, which
+// is where the destructors of those objects live -- so __dp_finalize sees the accesses they make.
+// Priorities below 101 are reserved for the implementation.
+__attribute__((constructor(101))) void dp_runtime_startup() { __dp_init(); }
+
+__attribute__((destructor(101))) void dp_runtime_shutdown() {
+  if (!dpInited) {
+    // Either nothing was profiled, or __dp_finalize already ran because the target left through a
+    // function that does not return to main.
+    return;
+  }
+  // LID 0 decodes to "*": the end of the program no longer has a source location to report, now
+  // that this is not a call sitting at the return of main.
+  __dp_finalize(0);
+}
+
+} // namespace
+
+} // namespace __dp

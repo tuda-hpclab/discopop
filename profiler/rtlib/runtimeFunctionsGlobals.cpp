@@ -12,6 +12,9 @@
 
 #include "runtimeFunctionsGlobals.hpp"
 
+#include "Immortal.hpp"
+#include "runtimeFunctions.hpp"
+
 bool USE_PERFECT = true;
 
 // Shadow memory parameters
@@ -22,6 +25,17 @@ std::int32_t SIG_NUM_HASH = 2;
 std::uint64_t *numAccesses = nullptr;
 
 namespace __dp {
+
+namespace {
+// The backing storage of the globals whose lifetime the runtime manages itself, see
+// Immortal.hpp for why they must not be destroyed along with the target's own globals.
+ImmortalStorage<std::unordered_map<char *, long>> cuec_storage;
+ImmortalStorage<FirstAccessQueue> firstAccessQueue_storage;
+ImmortalStorage<SecondAccessQueue> secondAccessQueue_storage;
+ImmortalStorage<FirstAccessQueueChunkBuffer> firstAccessQueueChunkBuffer_storage;
+
+bool immortal_globals_constructed = false;
+} // namespace
 
 bool DP_DEBUG = false; // debug flag
 
@@ -45,7 +59,7 @@ ReportedBBRecorder *bbList = nullptr;
 stringDepMap *outPutDeps = nullptr;
 // end hybrid analysis
 
-std::unordered_map<char *, long> cuec;
+std::unordered_map<char *, long> &cuec = cuec_storage.value;
 
 bool dpInited = false;         // library initialization flag
 bool targetTerminated = false; // whether the target program has returned from main()
@@ -66,11 +80,10 @@ pthread_t *workers = nullptr; // worker threads
 std::atomic<bool> finalizeParallelizationCalled =
     false; // signals to worker threads that no further data access will be registered in the first queue
 FirstAccessQueueChunk *mainThread_AccessInfoBuffer = nullptr;
-// the limits are scaled by NUM_WORKERS in initParallelization
-FirstAccessQueue firstAccessQueue(DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER);
-SecondAccessQueue secondAccessQueue(DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER);
+FirstAccessQueue &firstAccessQueue = firstAccessQueue_storage.value;
+SecondAccessQueue &secondAccessQueue = secondAccessQueue_storage.value;
 pthread_t *secondAccessQueue_worker_thread = nullptr;
-FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer(10);
+FirstAccessQueueChunkBuffer &firstAccessQueueChunkBuffer = firstAccessQueueChunkBuffer_storage.value;
 
 #define XSTR(x) STR(x)
 #define STR(x) #x
@@ -93,6 +106,34 @@ CallStateGraph *call_state_graph;
 
 // statistics
 std::chrono::high_resolution_clock::time_point statistics_profiling_start_time;
+
+// Constructs the globals above. Called from the runtime initialization in __dp_func_entry,
+// before anything reads them, and idempotent so that a second entry point can call it too.
+void construct_immortal_globals() {
+  if (immortal_globals_constructed) {
+    return;
+  }
+  cuec_storage.construct();
+  // the limits are scaled by NUM_WORKERS in initParallelization
+  firstAccessQueue_storage.construct(DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER);
+  secondAccessQueue_storage.construct(DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER);
+  firstAccessQueueChunkBuffer_storage.construct(10);
+  immortal_globals_constructed = true;
+}
+
+// Destroys them again, at the end of __dp_finalize. Every callback returns early once
+// targetTerminated is set, so nothing reaches these objects afterwards.
+void destroy_immortal_globals() {
+  release_registered_bb_deps();
+  if (!immortal_globals_constructed) {
+    return;
+  }
+  firstAccessQueueChunkBuffer_storage.destroy();
+  secondAccessQueue_storage.destroy();
+  firstAccessQueue_storage.destroy();
+  cuec_storage.destroy();
+  immortal_globals_constructed = false;
+}
 
 /******* END: parallelization section *******/
 

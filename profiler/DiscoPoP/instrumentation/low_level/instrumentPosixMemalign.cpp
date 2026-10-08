@@ -41,11 +41,15 @@ void DiscoPoP::instrumentPosixMemalign(CallBase *toInstrument) {
   vector<Value *> args;
   args.push_back(ConstantInt::get(Int32, lid));
 
-#if LLVM_VERSION_MAJOR >= 22
-  Value *startAddr = PtrToIntInst::CreatePointerCast(toInstrument->getArgOperand(0), Int64, "", nextInst->getIterator());
-#else
-  Value *startAddr = PtrToIntInst::CreatePointerCast(toInstrument->getArgOperand(0), Int64, "", nextInst);
-#endif
+  // posix_memalign returns the block through its first argument, a void** out parameter. That
+  // argument is the address of the caller's pointer variable, not of the allocation, so the
+  // address of the block has to be loaded from it -- which is only possible after the call.
+  LoadInst *allocated = IRB.CreateLoad(CharPtr, toInstrument->getArgOperand(0));
+  // The load belongs to the instrumentation, not to the program. runOnBasicBlock walks the block
+  // it inserts into and would reach the load again; without a debug location it has no LID, which
+  // is what makes instrumentLoad leave it alone instead of reporting a read the program never made.
+  allocated->setDebugLoc(DebugLoc());
+  Value *startAddr = IRB.CreatePtrToInt(allocated, Int64);
   Value *endAddr = startAddr;
   Value *numBytes = toInstrument->getArgOperand(2);
 
