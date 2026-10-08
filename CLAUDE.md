@@ -143,7 +143,7 @@ To execute the CI pipeline locally, use the following command from the root fold
 
 ### Prepared CI environments
 - the jobs do not install their prerequisites themselves: `create_matrix` defines one environment (base image + apt install command) per matrix entry plus two for the sanitizer/coverage/benchmark jobs and the leak check, and `prepare_images` builds each as an image and pushes it to `ghcr.io/<owner>/discopop-ci`, unless its tag exists; the tag is a hash of the base image, the install command and `IMAGE_REVISION` (bump it in `create_matrix` to rebuild all images, e.g. for newer packages)
-- the built profiler is not part of the images: `prepare_build` builds a venv with the profiler per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of `profiler/` and `requirements-dev.txt`; the matrix jobs `type_check`, `python_unit_tests`, `profiler_tests` and `end_to_end_tests`, the job `static_checks` and the benchmark jobs restore it and build it only on a miss
+- the built code is not part of the images: `prepare_build` builds a venv with all DiscoPoP packages (installed without `-e`; editable installs are a developer convenience) per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of the package sources and `requirements-dev.txt`; the profiler wheel is cached separately, keyed by `profiler/` only, so a change of the Python sources does not rebuild the profiler. The other jobs restore the venv and build it only on a miss
 - changing an install command means changing it in `create_matrix` only
 
 ### Supported versions and CI matrix
