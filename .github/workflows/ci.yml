@@ -119,17 +119,18 @@ jobs:
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
 
       - name: Install Prerequisites
         run: |
           ${{ matrix.install_deps_cmd }}
 
-      - name: Cache virtual environment
-        uses: actions/cache@v3
-        id: cache-venv
-        with:
-          path: venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+      - name: Setup venv and install DiscoPoP
+        run: |
+          rm -rf venv
+          ${{ matrix.python }} -m venv venv
+          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
       - name: Checkout Repository
         uses: actions/checkout@v4
