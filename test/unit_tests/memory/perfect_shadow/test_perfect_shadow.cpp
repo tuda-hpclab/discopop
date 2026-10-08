@@ -81,7 +81,7 @@ TEST_F(PerfectShadowTest, testGet) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -91,7 +91,7 @@ TEST_F(PerfectShadowTest, testGet) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -118,7 +118,7 @@ TEST_F(PerfectShadowTest, testInsert) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 1);
@@ -136,7 +136,7 @@ TEST_F(PerfectShadowTest, testInsert) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -158,7 +158,7 @@ TEST_F(PerfectShadowTest, testInsert) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -168,7 +168,7 @@ TEST_F(PerfectShadowTest, testInsert) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 4);
@@ -199,7 +199,7 @@ TEST_F(PerfectShadowTest, testUpdate) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -209,7 +209,7 @@ TEST_F(PerfectShadowTest, testUpdate) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 12);
@@ -223,7 +223,7 @@ TEST_F(PerfectShadowTest, testUpdate) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -233,7 +233,7 @@ TEST_F(PerfectShadowTest, testUpdate) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 27);
@@ -264,7 +264,7 @@ TEST_F(PerfectShadowTest, testRemove) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -274,7 +274,7 @@ TEST_F(PerfectShadowTest, testRemove) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 12);
@@ -291,7 +291,7 @@ TEST_F(PerfectShadowTest, testRemove) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -301,7 +301,7 @@ TEST_F(PerfectShadowTest, testRemove) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -310,9 +310,6 @@ TEST_F(PerfectShadowTest, testRemove) {
 
 TEST_F(PerfectShadowTest, testAddressesInRange) {
   auto shadow = __dp::PerfectShadow{};
-
-  const auto *reads = shadow.getSigRead();
-  const auto *writes = shadow.getSigWrite();
 
   const auto addresses_read = std::vector<std::int64_t>{0, 4, 5, 12, 16, 20, 24, 28, 1000, 1004, 1008};
   const auto addresses_write = std::vector<std::int64_t>{4, 6, 8, 12, 16, 20, 48, 56, 1001, 1002, 1003, 1005};
@@ -404,7 +401,7 @@ TEST_F(PerfectShadow2Test, testGet) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -414,7 +411,7 @@ TEST_F(PerfectShadow2Test, testGet) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -441,7 +438,7 @@ TEST_F(PerfectShadow2Test, testInsert) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 1);
@@ -459,7 +456,7 @@ TEST_F(PerfectShadow2Test, testInsert) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -481,7 +478,7 @@ TEST_F(PerfectShadow2Test, testInsert) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -491,7 +488,7 @@ TEST_F(PerfectShadow2Test, testInsert) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 4);
@@ -522,7 +519,7 @@ TEST_F(PerfectShadow2Test, testUpdate) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -532,7 +529,7 @@ TEST_F(PerfectShadow2Test, testUpdate) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 12);
@@ -546,7 +543,7 @@ TEST_F(PerfectShadow2Test, testUpdate) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 14);
@@ -556,7 +553,7 @@ TEST_F(PerfectShadow2Test, testUpdate) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 27);
@@ -587,7 +584,7 @@ TEST_F(PerfectShadow2Test, testRemove) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -597,7 +594,7 @@ TEST_F(PerfectShadow2Test, testRemove) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 12);
@@ -614,7 +611,7 @@ TEST_F(PerfectShadow2Test, testRemove) {
     const auto iterator = reads->find(address);
     ASSERT_NE(iterator, reads->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -624,7 +621,7 @@ TEST_F(PerfectShadow2Test, testRemove) {
     const auto iterator = writes->find(address);
     ASSERT_NE(iterator, writes->end());
 
-    const auto addr = iterator->first;
+    ASSERT_EQ(iterator->first, address);
     const auto val = iterator->second;
 
     ASSERT_EQ(val, 0);
@@ -633,9 +630,6 @@ TEST_F(PerfectShadow2Test, testRemove) {
 
 TEST_F(PerfectShadow2Test, testAddressesInRange) {
   auto shadow = __dp::PerfectShadow2{};
-
-  const auto *reads = shadow.getSigRead();
-  const auto *writes = shadow.getSigWrite();
 
   const auto addresses_read = std::vector<std::int64_t>{0, 4, 5, 12, 16, 20, 24, 28, 1000, 1004, 1008};
   const auto addresses_write = std::vector<std::int64_t>{4, 6, 8, 12, 16, 20, 48, 56, 1001, 1002, 1003, 1005};

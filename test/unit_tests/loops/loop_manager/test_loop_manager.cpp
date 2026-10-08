@@ -197,7 +197,6 @@ TEST_F(LoopManagerTest, testIsSingleExit) {
   auto lm = __dp::LoopManager();
 
   const auto &table = lm.get_stack();
-  const auto &loops = lm.get_loops();
 
   lm.create_new_loop(1, 2, 3);
   lm.create_new_loop(4, 5, 6);
@@ -242,7 +241,6 @@ TEST_F(LoopManagerTest, testCorrectFuncLevel) {
   auto lm = __dp::LoopManager();
 
   const auto &table = lm.get_stack();
-  const auto &loops = lm.get_loops();
 
   lm.create_new_loop(1, 2, 3);
   lm.create_new_loop(4, 5, 6);
