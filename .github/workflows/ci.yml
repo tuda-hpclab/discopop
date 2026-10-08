@@ -8,14 +8,17 @@
 
 name: "DiscoPoP CI"
 
+# which configurations run is decided in create_matrix: the full matrix when merging into master or new_explorer
+# (pushes to them, pull requests targeting them), debian trixie with LLVM 21 for every other push.
+# pull requests into other branches need no run of their own: the push to their branch is tested already.
 on:
   push:
     branches:
-      - master
-      - new_explorer  # This is a temporary addition and should be removed before merging into master!
+      - "**"
   pull_request:
     branches:
-      - "**"
+      - master
+      - new_explorer  # This is a temporary addition and should be removed before merging into master!
   # manual runs, e.g. to get the callback benchmark (callback_benchmark) for a branch
   workflow_dispatch:
 
@@ -23,16 +26,16 @@ on:
 permissions:
   contents: read
 
-# a new push to a pull request supersedes the running checks of the previous push; the limited
-# self-hosted capacity is spent on the current state. pushes to master are never cancelled.
+# a new push to a pull request or a branch supersedes the running checks of the previous push; the limited
+# self-hosted capacity is spent on the current state. pushes to master and new_explorer are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.ref != 'refs/heads/master' && github.ref != 'refs/heads/new_explorer') }}
 
 jobs:
 # used for eventual multiple operating system testing
-# the full matrix (see create_matrix' script) runs when merging into master or new_explorer; other pushes only test
-# debian trixie with LLVM 21.
+# the full matrix runs when merging into master or new_explorer; other pushes only test debian trixie with LLVM 21
+# ("reduced"). The jobs outside the matrix run in both cases.
 # the entries cover each supported LLVM version (19-22) and the minimum Python (3.10) once, see CLAUDE.md.
 # LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.10 comes from the deadsnakes PPA.
 # "python" is the interpreter the venv is created with.
@@ -50,6 +53,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     timeout-minutes: 5
     outputs:
+      scope: ${{ steps.create_matrix.outputs.scope }}
       matrix: ${{ steps.create_matrix.outputs.matrix }}
       images: ${{ steps.create_matrix.outputs.images }}
       build_environments: ${{ steps.create_matrix.outputs.build_environments }}
@@ -91,13 +95,17 @@ jobs:
             images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
             # the environments that need the built profiler (see prepare_build)
             build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
+            scope="full"
           else
             matrix="{\"include\":[$e_llvm21]}"
             images="[$e_llvm21,$e_tools,$e_leak]"
             build_environments="[$e_llvm21,$e_tools]"
+            scope="reduced"
           fi
+          echo "Configuration: $scope"
 
           {
+            echo "scope=$scope"
             echo "matrix<<END"
             echo "$matrix"
             echo "END"
@@ -437,7 +445,7 @@ jobs:
   # is expensive: only on pushes to master/new_explorer and manual runs, not part of checks_successful.
   callback_benchmark:
     runs-on: self-hosted
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/new_explorer')) || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       packages: read
@@ -490,7 +498,9 @@ jobs:
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
+    # build_install_and_test stands for all of its matrix entries, i.e. the configurations create_matrix selected for
+    # this run: debian trixie with LLVM 21 in the reduced, every entry in the full configuration
+    needs: [create_matrix, build_install_and_test, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5
@@ -501,4 +511,4 @@ jobs:
             echo "Checks did not succeed, job results: ${{ join(needs.*.result, ', ') }}"
             exit 1
           fi
-          echo "All checks successful!"
+          echo "All checks successful (${{ needs.create_matrix.outputs.scope }} configuration: ${{ join(fromJson(needs.create_matrix.outputs.matrix || '{"include":[]}').include.*.id, ', ') }})"

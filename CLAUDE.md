@@ -148,7 +148,8 @@ To execute the CI pipeline locally, use the following command from the root fold
 
 ### Supported versions and CI matrix
 - LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
-- the full matrix only runs when merging into master or new_explorer (pushes to them, and pull requests targeting them); every other push and manual run only tests debian 13 / LLVM 21, and only prepares the environments that run needs
+- the CI runs on every push and on pull requests into master/new_explorer; the full matrix only runs when merging into master or new_explorer (pushes to them, and pull requests targeting them); every other push and manual run is "reduced": the matrix only tests debian 13 / LLVM 21, and only the environments that run needs are prepared. The jobs outside the matrix run in both cases
+- `checks_successful` covers the matrix entries of the run, i.e. LLVM 21 in a reduced, all entries in a full run; its log names the configuration
 - the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
 - when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
 
