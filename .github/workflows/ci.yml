@@ -146,7 +146,7 @@ jobs:
         run: |
             venv/bin/python3 -m black -l 120 --check library
 
-      - name: Check formatting of the profiler leak check
+      - name: Check formatting of the leak check programs and evaluation
         run: |
             venv/bin/python3 -m black -l 120 --check test/leak_check
 
@@ -193,8 +193,12 @@ jobs:
             python3 -m unittest -v -k "*.end_to_end.*"
 
 
-  # profiler runtime library + C++ unit tests built with sanitizers (DP_SANITIZERS); the LLVM pass is not sanitized
-  sanitizers:
+  # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
+  # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's
+  # code, but only in what the unit tests exercise: no LLVM pass and no instrumented program are involved.
+  # The other memory check, "Leak check of instrumented programs", runs real instrumented programs instead.
+  # Locally: scripts/dev/run_profiler_sanitizers.sh <address,undefined|thread>
+  runtime_unit_tests_sanitized:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see build_install_and_test)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -202,12 +206,16 @@ jobs:
       image: ubuntu:24.04
       # TSan needs ASLR disabled on kernels with high mmap entropy (setarch -R), which Docker's default seccomp profile forbids
       options: --security-opt seccomp=unconfined
-    name: "Sanitizers: ${{ matrix.sanitizers }}"
+    name: "Runtime unit tests with sanitizers (${{ matrix.label }})"
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        sanitizers: ["address,undefined", "thread"]
+        include:
+          - sanitizers: "address,undefined"
+            label: "ASan+UBSan: memory errors, undefined behavior"
+          - sanitizers: "thread"
+            label: "TSan: data races"
 
     steps:
       - name: Install Prerequisites
@@ -218,21 +226,25 @@ jobs:
         uses: actions/checkout@v4
 
       # builds DiscoPoP_UT with -DDP_SANITIZERS and runs it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
-      - name: Build and run DiscoPoP_UT
+      - name: Build the runtime unit tests with ${{ matrix.sanitizers }} and run them
         run: |
           scripts/dev/run_profiler_sanitizers.sh "${{ matrix.sanitizers }}"
 
-  # The profiler's runtime library built with AddressSanitizer/LeakSanitizer: its unit tests and instrumented
-  # programs must not leak (see scripts/dev/check_profiler_leaks.sh). One platform is enough: the check is
-  # about the runtime library's code, not about the platform. Locally: scripts/dev/check_profiler_leaks.sh,
-  # or scripts/dev/run_ci_locally.sh -j profiler_leak_check
-  profiler_leak_check:
+  # LEAK CHECK OF INSTRUMENTED PROGRAMS: small programs (test/leak_check/programs) are compiled with the DiscoPoP
+  # pass, linked against a runtime built with AddressSanitizer/LeakSanitizer and run. The runtime library must
+  # not leak, and must not keep growing memory over the run time (see scripts/dev/check_profiler_leaks.sh and
+  # test/leak_check/evaluate_leaks.py). It only looks for leaks, but in the whole pipeline and in more detail than
+  # LSan's check at exit: before and after the runtime's shutdown, against a list of known bounded leaks, and
+  # short against long runs. The sanitized unit tests are a separate job ("Runtime unit tests with sanitizers").
+  # One platform is enough: the check is about the runtime library's code, not about the platform.
+  # Locally: scripts/dev/check_profiler_leaks.sh, or scripts/dev/run_ci_locally.sh -j instrumented_programs_leak_check
+  instrumented_programs_leak_check:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     container:
       image: debian:trixie
-    name: "Profiler leak check (ASan/LSan)"
+    name: "Leak check of instrumented programs (ASan/LSan)"
     timeout-minutes: 45
     steps:
       - name: Install Prerequisites
@@ -242,9 +254,9 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Check the profiler for memory leaks
+      - name: Build, run and evaluate the leak check programs
         run: |
-          # the unit tests run under ASan/LSan in the sanitizers job already
+          # the unit tests run under ASan/LSan in the "Runtime unit tests with sanitizers" job already
           DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
 
   # Line coverage of the runtime library by DiscoPoP_UT (clang source based coverage, see
@@ -372,7 +384,7 @@ jobs:
   checks_successful:
     runs-on: self-hosted
     name: Checks successful
-    needs: [build_install_and_test, sanitizers, profiler_leak_check, pass_overhead_benchmark]
+    needs: [build_install_and_test, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5

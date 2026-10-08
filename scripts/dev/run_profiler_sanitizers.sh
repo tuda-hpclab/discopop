@@ -9,7 +9,7 @@
 # directory for details.
 
 # Builds the profiler's C++ unit tests (DiscoPoP_UT) with sanitizers and runs them.
-# Used by the CI job "sanitizers"; run it from anywhere in the repository.
+# Used by the CI job "Runtime unit tests with sanitizers" (runtime_unit_tests_sanitized); run it from anywhere in the repository.
 #
 # usage: scripts/dev/run_profiler_sanitizers.sh <sanitizers> [build dir]
 #   <sanitizers>  value for -fsanitize= (DP_SANITIZERS), e.g. "address,undefined" or "thread"

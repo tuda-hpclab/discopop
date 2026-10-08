@@ -106,10 +106,14 @@ This document contains critical information about working with this codebase. Fo
 
 #### Sanitizers (profiler)
 - the CMake option `DP_SANITIZERS` (value for `-fsanitize=`, e.g. `address,undefined` or `thread`) instruments the runtime library `DiscoPoP_RT` and everything linking it, i.e. `DiscoPoP_UT`; the LLVM pass plugin is not sanitized (it runs inside an uninstrumented clang)
-- to build and run `DiscoPoP_UT` with ASan+UBSan(+LSan) resp. TSan, from the repository root: `scripts/dev/run_profiler_sanitizers.sh address,undefined` resp. `scripts/dev/run_profiler_sanitizers.sh thread` (build dirs `build_asan` / `build_tsan`, gitignored; ~30 s each); the CI job `sanitizers` runs exactly this
+- to build and run `DiscoPoP_UT` with ASan+UBSan(+LSan) resp. TSan, from the repository root: `scripts/dev/run_profiler_sanitizers.sh address,undefined` resp. `scripts/dev/run_profiler_sanitizers.sh thread` (build dirs `build_asan` / `build_tsan`, gitignored; ~30 s each); the CI job "Runtime unit tests with sanitizers" (`runtime_unit_tests_sanitized`) runs exactly this; it covers only what the unit tests exercise (no LLVM pass, no instrumented programs)
 - the script sets the `*SAN_OPTIONS` (halt on error, suppression files); any finding fails the run
 - TSan needs ASLR disabled on kernels with high mmap entropy (`FATAL: ThreadSanitizer: unexpected memory mapping`); the script runs it via `setarch "$(uname -m)" -R`, which in Docker needs `--security-opt seccomp=unconfined`
 - accepted leaks / races go into `test/unit_tests/sanitizers/{lsan,tsan}.supp`, one comment per entry explaining why; prefer fixing the code or the test
+
+#### Leak check of instrumented programs (profiler)
+- `scripts/dev/check_profiler_leaks.sh` compiles the programs in `test/leak_check/programs` with the DiscoPoP pass, links them against an ASan/LSan runtime and evaluates the leaks of the runtime library (`test/leak_check/evaluate_leaks.py`): before and after the runtime's shutdown, against `test/leak_check/known_leaks.txt`, and short against long runs (growth); it only looks for leaks
+- the CI job "Leak check of instrumented programs (ASan/LSan)" (`instrumented_programs_leak_check`) runs it with `--skip-unit-tests`, since the sanitized unit tests are a separate job (see above)
 
 #### Coverage (runtime library)
 - `scripts/dev/run_rtlib_coverage.sh` builds `DiscoPoP_UT` with clang source based coverage (build dir `build_coverage`), runs it and reports line / function / branch coverage of `profiler/rtlib` (llvm-cov and llvm-profdata of clang's major version are required, e.g. the `llvm-19` package)

@@ -8,7 +8,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-## Profiler leak check (CI job "Profiler leak check (ASan/LSan)", see .github/workflows/ci.yml).
+## Leak check of instrumented programs (CI job "Leak check of instrumented programs (ASan/LSan)", see .github/workflows/ci.yml).
 ##
 ## Builds the profiler with its runtime library under AddressSanitizer/LeakSanitizer (DP_SANITIZERS=address)
 ## and checks
@@ -55,7 +55,7 @@ GROWTH_PROGRAMS=(
 # bounded per worker (branch profiler_queue_limits).
 HEAP_GROWTH_LIMIT_MB=32
 
-# Every unit test suite is checked for leaks, with the suppressions the sanitizers CI job uses for the unit
+# Every unit test suite is checked for leaks, with the suppressions the "Runtime unit tests with sanitizers" CI job uses for the unit
 # tests as well (test/unit_tests/sanitizers/lsan.supp). In CI, the leak check skips the unit tests for that reason.
 UNIT_TEST_SUPPRESSIONS="${REPO_ROOT}/test/unit_tests/sanitizers/lsan.supp"
 
