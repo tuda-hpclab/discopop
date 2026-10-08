@@ -23,6 +23,51 @@
 
 namespace __dp {
 
+// The callbacks the LLVM pass injects, one enumerator each.
+//
+// Separate from TimerRegion although the names overlap: TimerRegion drives the DP_INTERNAL_TIMER
+// report and covers the runtime's own regions as well, while two of the callbacks below have no
+// entry in it at all. Tying the benchmark builds to it would mean changing that report to change
+// what can be measured.
+enum class CallbackId {
+  ALLOCA,
+  CALL,
+  DECL,
+  DELETE,
+  FUNC_ENTRY,
+  FUNC_EXIT,
+  INCR_TAKEN_BRANCH_COUNTER,
+  LANDING_PAD,
+  LOOP_ENTRY,
+  LOOP_EXIT,
+  LOOP_INCR,
+  NEW,
+  READ,
+  REPORT_BB,
+  REPORT_BB_PAIR,
+  WRITE,
+};
+
+// Whether one callback carries out its own work, or returns as soon as it has been entered.
+//
+// A benchmark build -- and nothing else -- narrows this down. DP_BENCHMARK_EMPTY_CALLBACKS turns
+// every body off, which leaves what an instrumented program pays for the added calls alone.
+// DP_BENCHMARK_ONLY_CALLBACK=<enumerator> turns exactly one back on, which attributes the rest of
+// the cost to the one callback it names. See benchmark/injected_functions and
+// benchmark/pass_overhead.
+//
+// Deliberately a constant rather than a flag: the body has to be gone from the generated code,
+// not skipped over at runtime, or the measurement would include the branch that skips it.
+constexpr bool callback_body_enabled([[maybe_unused]] CallbackId callback) noexcept {
+#if defined(DP_BENCHMARK_ONLY_CALLBACK)
+  return callback == CallbackId::DP_BENCHMARK_ONLY_CALLBACK;
+#elif defined(DP_BENCHMARK_EMPTY_CALLBACKS)
+  return false;
+#else
+  return true;
+#endif
+}
+
 // A region of the runtime that is announced in the verbose build and measured in the timing
 // build, and that is neither a callback nor takes a lock. Used for the individual output steps
 // of __dp_finalize, which run with the lock already held.
@@ -66,8 +111,8 @@ private:
 // a comparison, which is what the hand written guard compiled to as well.
 template <std::size_t N> class CallbackScope {
 public:
-  CallbackScope([[maybe_unused]] TimerRegion region, [[maybe_unused]] const char (&name)[N])
-      : active(profiling_active()) {
+  CallbackScope([[maybe_unused]] TimerRegion region, CallbackId callback, [[maybe_unused]] const char (&name)[N])
+      : active(callback_body_enabled(callback) && profiling_active()) {
     if (!active) {
       // Deliberately before everything else: a callback that is about to return without doing
       // anything must not take the lock, announce itself or produce a timing sample.
@@ -127,16 +172,27 @@ private:
 
 } // namespace __dp
 
-// The preamble of an instrumented callback. `region` is the TimerRegion enumerator without its
-// scope; the name the verbose build reports comes from __func__, so it cannot drift away from the
-// function it belongs to. Declares `dp_scope`, which callbacks that release the lock in the
-// middle of their work address by that name.
-#define DP_CALLBACK_SCOPE(region)                                                                                      \
-  auto dp_scope = ::__dp::CallbackScope(TimerRegion::region, __func__);                                                \
+// The preamble of an instrumented callback. `callback` is the bare enumerator, which has to name
+// both a TimerRegion and a CallbackId -- so a callback cannot end up timed as one region and
+// switched by another. The name the verbose build reports comes from __func__ and therefore cannot
+// drift away from the function it belongs to either. Declares `dp_scope`, which callbacks that
+// release the lock in the middle of their work address by that name.
+#define DP_CALLBACK_SCOPE(callback)                                                                                    \
+  auto dp_scope = ::__dp::CallbackScope(TimerRegion::callback, ::__dp::CallbackId::callback, __func__);                \
   if (!dp_scope) {                                                                                                     \
     return;                                                                                                            \
   }                                                                                                                    \
   static_cast<void>(dp_scope)
+
+// The preamble of an instrumented callback that neither takes the lock nor is traced or timed,
+// and therefore has no CallbackScope to ask -- and, having no TimerRegion either, names only a
+// CallbackId. It answers the same two questions: is the runtime running, and does this build
+// execute this callback's body.
+#define DP_CALLBACK_GUARD(callback)                                                                                    \
+  if (!::__dp::callback_body_enabled(::__dp::CallbackId::callback) || !::__dp::profiling_active()) {                   \
+    return;                                                                                                            \
+  }                                                                                                                    \
+  static_cast<void>(0)
 
 // A traced and timed section that is not a callback: no state check, no lock. See TimedSection.
 #define DP_TIMED_SECTION(region, name)                                                                                 \

@@ -33,7 +33,7 @@ import sys
 import sysconfig
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -46,12 +46,71 @@ SUPPORTED_CLANG_VERSIONS: Tuple[int, ...] = (22, 21, 20, 19)
 
 DESCRIPTION_MARKER = re.compile(r"^//\s*BENCHMARK:\s*(?P<description>.+?)\s*$", re.MULTILINE)
 
-BASELINE = "baseline"
-INSTRUMENTED = "instrumented"
+# The runtime libraries a program can be linked against. The shipped one runs every callback body;
+# the others are the benchmark builds from profiler/rtlib/CMakeLists.txt, which switch the bodies
+# off and then switch exactly one back on. Their names carry the CallbackId enumerator from
+# callback_scope.hpp, so there is no table to keep in step.
+FULL_LIBRARY = "DiscoPoP_RT"
+CALLS_ONLY_LIBRARY = "DiscoPoP_RT_EmptyCallbacks"
+
+# the callbacks the breakdown switches on one at a time, ordered the way benchmark/injected_functions
+# reports them so that the two benchmarks can be read side by side
+BREAKDOWN_CALLBACKS: Tuple[str, ...] = (
+    "READ",
+    "WRITE",
+    "DECL",
+    "ALLOCA",
+    "NEW",
+    "DELETE",
+    "CALL",
+    "FUNC_ENTRY",
+    "FUNC_EXIT",
+    "LOOP_ENTRY",
+    "LOOP_EXIT",
+    "LOOP_INCR",
+    "REPORT_BB",
+    "REPORT_BB_PAIR",
+    "INCR_TAKEN_BRANCH_COUNTER",
+)
 
 
 class BenchmarkError(RuntimeError):
     """Raised when the benchmark cannot be carried out, e.g. because a program fails to build."""
+
+
+@dataclass(frozen=True)
+class Configuration:
+    """One way of building a program: without the pass, or with it plus one runtime library."""
+
+    name: str
+    library: Optional[str] = None
+
+    @property
+    def instrumented(self) -> bool:
+        return self.library is not None
+
+    @property
+    def directory_name(self) -> str:
+        """A name usable as a directory, so that configurations do not share a build directory."""
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", self.name)
+
+
+BASELINE = Configuration("baseline")
+INSTRUMENTED = Configuration("instrumented", FULL_LIBRARY)
+CALLS_ONLY = Configuration("calls only", CALLS_ONLY_LIBRARY)
+
+
+def callback_name(enumerator: str) -> str:
+    """The callback a CallbackId enumerator belongs to, e.g. ``READ`` -> ``__dp_read``."""
+    return "__dp_" + enumerator.lower()
+
+
+def breakdown_configurations() -> List[Configuration]:
+    """Every configuration the callback breakdown adds, in the order it reports them."""
+    return [CALLS_ONLY] + [
+        Configuration(f"only {callback_name(enumerator)}", f"DiscoPoP_RT_Only_{enumerator}")
+        for enumerator in BREAKDOWN_CALLBACKS
+    ]
 
 
 @dataclass
@@ -98,6 +157,15 @@ class Comparison:
     program: Program
     baseline: Measurement
     instrumented: Measurement
+    # the callback breakdown, keyed by configuration name -- empty unless it was asked for
+    breakdown: Dict[str, Measurement] = field(default_factory=dict)
+
+    def run_factor_of(self, configuration: Configuration) -> float:
+        """The run time factor of one breakdown configuration against the baseline."""
+        measurement = self.breakdown.get(configuration.name)
+        if measurement is None:
+            return math.nan
+        return _factor(measurement.run_median, self.baseline.run_median)
 
     @property
     def compile_factor(self) -> float:
@@ -198,6 +266,21 @@ def find_rtlib_dir(explicit: Optional[Path], plugin: Path) -> Path:
     )
 
 
+def find_variants_dir(directory: Path, breakdown: Sequence[Configuration]) -> Path:
+    """Check that the directory holds every runtime library the breakdown needs, and return it."""
+    required = [FULL_LIBRARY, *(configuration.library for configuration in breakdown)]
+    missing = [name for name in required if name is not None and not (directory / f"lib{name}.a").is_file()]
+    if missing:
+        raise BenchmarkError(
+            f"{directory} is missing {len(missing)} of the runtime libraries the callback breakdown "
+            f"needs, starting with lib{missing[0]}.a. Build them with\n"
+            f"  cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1\n"
+            f"  cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants\n"
+            f"or point --variants-dir at the directory that has them."
+        )
+    return directory.resolve()
+
+
 def find_cxx(explicit: Optional[Path]) -> Path:
     """Locate a clang++ supported by the profiler."""
     if explicit is not None:
@@ -234,14 +317,15 @@ def build_toolchain(cxx: Optional[Path], plugin: Optional[Path], rtlib_dir: Opti
 # ---------------------------------------------------------------------------------------------
 
 
-def compile_command(toolchain: Toolchain, program: Program, configuration: str, binary: Path) -> List[str]:
+def compile_command(toolchain: Toolchain, program: Program, configuration: Configuration, binary: Path) -> List[str]:
     """The compile command for one configuration.
 
-    Both configurations use the same compiler and the same flags. The instrumented one adds the
-    pass plugin and the runtime library, exactly as CXX_wrapper.sh does.
+    Every configuration uses the same compiler and the same flags. An instrumented one adds the
+    pass plugin and a runtime library, exactly as CXX_wrapper.sh does -- which library is what
+    distinguishes the configurations from each other.
     """
     command = [str(toolchain.cxx), str(program.source), *COMMON_COMPILE_FLAGS]
-    if configuration == INSTRUMENTED:
+    if configuration.library is not None:
         command += [
             "-Xclang",
             "-load",
@@ -261,7 +345,7 @@ def compile_command(toolchain: Toolchain, program: Program, configuration: str, 
             "-Xlinker",
             "__dp_init",
             "-Xlinker",
-            "-lDiscoPoP_RT",
+            f"-l{configuration.library}",
         ]
         if platform.system() != "Darwin":
             # pthread is part of libSystem on macOS
@@ -288,12 +372,12 @@ def _timed_run(command: Sequence[str], cwd: Path, env: Dict[str, str], what: str
 def measure(
     toolchain: Toolchain,
     program: Program,
-    configuration: str,
+    configuration: Configuration,
     work_dir: Path,
     repetitions: int,
 ) -> Measurement:
     """Compile and run one program in one configuration, ``repetitions`` times after a warm up."""
-    run_dir = work_dir / program.name / configuration
+    run_dir = work_dir / program.name / configuration.directory_name
     run_dir.mkdir(parents=True, exist_ok=True)
     binary = run_dir / f"{program.name}.exe"
 
@@ -310,21 +394,22 @@ def measure(
     for repetition in range(repetitions + 1):
         # the id counters the pass maintains are cumulative, so every compilation starts fresh
         shutil.rmtree(dot_discopop, ignore_errors=True)
-        duration, _ = _timed_run(command, run_dir, env, f"compiling {program.name} ({configuration})")
+        duration, _ = _timed_run(command, run_dir, env, f"compiling {program.name} ({configuration.name})")
         if repetition > 0:  # the first iteration is a warm up and is discarded
             measurement.compile_seconds.append(duration)
 
     for repetition in range(repetitions + 1):
-        duration, stdout = _timed_run([str(binary)], run_dir, env, f"running {program.name} ({configuration})")
+        duration, stdout = _timed_run([str(binary)], run_dir, env, f"running {program.name} ({configuration.name})")
         if repetition > 0:
             measurement.run_seconds.append(duration)
             measurement.stdout = stdout
 
-    if configuration == INSTRUMENTED:
+    if configuration.instrumented:
         # An instrumented binary that never brings the runtime up still calls every callback, so
         # it looks plausible and merely reports a much smaller overhead -- which is what a missing
         # -u __dp_init did until it was noticed by comparing two branches. The dependency file is
-        # the cheapest proof that profiling actually happened.
+        # the cheapest proof that the runtime came up: __dp_init opens it, so it is there even in
+        # the configurations whose callbacks record nothing into it.
         dependencies = dot_discopop / "profiler" / "dynamic_dependencies.txt"
         if not dependencies.is_file():
             raise BenchmarkError(
@@ -342,6 +427,7 @@ def run_benchmark(
     programs: Sequence[Program],
     work_dir: Path,
     repetitions: int,
+    breakdown: Sequence[Configuration] = (),
 ) -> List[Comparison]:
     comparisons: List[Comparison] = []
     for program in programs:
@@ -349,8 +435,14 @@ def run_benchmark(
         baseline = measure(toolchain, program, BASELINE, work_dir, repetitions)
         instrumented = measure(toolchain, program, INSTRUMENTED, work_dir, repetitions)
         comparison = Comparison(program=program, baseline=baseline, instrumented=instrumented)
+        print(f" compile x{comparison.compile_factor:.2f}, runtime x{comparison.run_factor:.2f}", end="", flush=True)
+
+        for configuration in breakdown:
+            comparison.breakdown[configuration.name] = measure(toolchain, program, configuration, work_dir, repetitions)
+            print(".", end="", flush=True)
+
         comparisons.append(comparison)
-        print(f" compile x{comparison.compile_factor:.2f}, runtime x{comparison.run_factor:.2f}")
+        print()
     return comparisons
 
 
@@ -392,6 +484,44 @@ def format_table(comparisons: Sequence[Comparison]) -> str:
     return "\n".join(lines)
 
 
+def _breakdown_rows(
+    comparisons: Sequence[Comparison], breakdown: Sequence[Configuration]
+) -> List[Tuple[str, List[float], float]]:
+    """One row per configuration: its name, its run factor per program, and their geometric mean.
+
+    The shipped runtime is appended as the last row, so that the callbacks can be read against the
+    number they add up to.
+    """
+    rows: List[Tuple[str, List[float], float]] = []
+    for configuration in [*breakdown, INSTRUMENTED]:
+        if configuration is INSTRUMENTED:
+            factors = [comparison.run_factor for comparison in comparisons]
+            label = "all bodies (shipped runtime)"
+        else:
+            factors = [comparison.run_factor_of(configuration) for comparison in comparisons]
+            label = configuration.name
+        rows.append((label, factors, _geometric_mean(factors)))
+    return rows
+
+
+def format_breakdown_table(comparisons: Sequence[Comparison], breakdown: Sequence[Configuration]) -> str:
+    """The run time factor of every configuration, one row each, programs across the columns."""
+    rows = _breakdown_rows(comparisons, breakdown)
+    label_width = max(len("configuration"), *(len(label) for label, _, _ in rows))
+    columns = [comparison.program.name for comparison in comparisons]
+    column_widths = [max(9, len(name)) for name in columns]
+
+    header = f"{'configuration':<{label_width}}  " + "  ".join(
+        f"{name:>{width}}" for name, width in zip(columns, column_widths)
+    )
+    header += f"  {'geomean':>9}"
+    lines = [header, "-" * len(header)]
+    for label, factors, mean in rows:
+        cells = "  ".join(f"{_format_factor(factor):>{width}}" for factor, width in zip(factors, column_widths))
+        lines.append(f"{label:<{label_width}}  {cells}  {_format_factor(mean):>9}")
+    return "\n".join(lines)
+
+
 def format_markdown(comparisons: Sequence[Comparison], toolchain: Toolchain, repetitions: int) -> str:
     """The same comparison as a markdown table, for the CI job summary."""
     lines = [
@@ -429,7 +559,42 @@ def format_markdown(comparisons: Sequence[Comparison], toolchain: Toolchain, rep
     return "\n".join(lines)
 
 
-def build_report(comparisons: Sequence[Comparison], toolchain: Toolchain, repetitions: int) -> Dict[str, object]:
+def format_breakdown_markdown(comparisons: Sequence[Comparison], breakdown: Sequence[Configuration]) -> str:
+    """The callback breakdown as a markdown table, for the CI job summary."""
+    if not breakdown:
+        return ""
+    rows = _breakdown_rows(comparisons, breakdown)
+    columns = [comparison.program.name for comparison in comparisons]
+
+    lines = [
+        "### Where the run time overhead comes from",
+        "",
+        "Run time against the uninstrumented baseline. `calls only` links the runtime whose callbacks",
+        "return as soon as they are entered, so it is what the added calls cost by themselves; each",
+        "`only __dp_*` row switches exactly that one body back on, on top of those calls.",
+        "",
+        "| configuration | " + " | ".join(columns) + " | geomean |",
+        "| --- |" + " ---: |" * (len(columns) + 1),
+    ]
+    for label, factors, mean in rows:
+        cells = " | ".join(_format_factor(factor) for factor in factors)
+        lines.append(f"| {label} | {cells} | **{_format_factor(mean)}** |")
+    lines.append("")
+    lines.append(
+        "_The rows do not add up to the last one: the callbacks share the runtime's caches and "
+        "queues, and a body that runs alone finds them in a state that it would not find them in "
+        "with the others running too._"
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_report(
+    comparisons: Sequence[Comparison],
+    toolchain: Toolchain,
+    repetitions: int,
+    breakdown: Sequence[Configuration] = (),
+) -> Dict[str, object]:
     """The machine readable form of the comparison."""
     return {
         "metadata": {
@@ -467,6 +632,14 @@ def build_report(comparisons: Sequence[Comparison], toolchain: Toolchain, repeti
                     "run": comparison.run_factor,
                     "binary_size": comparison.binary_size_factor,
                 },
+                "callback_breakdown": {
+                    name: {
+                        "run_seconds_median": measurement.run_median,
+                        "run_factor": _factor(measurement.run_median, comparison.baseline.run_median),
+                        "binary_size_bytes": measurement.binary_size_bytes,
+                    }
+                    for name, measurement in comparison.breakdown.items()
+                },
             }
             for comparison in comparisons
         ],
@@ -474,6 +647,9 @@ def build_report(comparisons: Sequence[Comparison], toolchain: Toolchain, repeti
             "geometric_mean_compile_factor": _geometric_mean([c.compile_factor for c in comparisons]),
             "geometric_mean_run_factor": _geometric_mean([c.run_factor for c in comparisons]),
             "geometric_mean_binary_size_factor": _geometric_mean([c.binary_size_factor for c in comparisons]),
+            "callback_breakdown_geometric_mean_run_factor": {
+                label: mean for label, _, mean in _breakdown_rows(comparisons, breakdown)
+            },
         },
     }
 
@@ -505,6 +681,21 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--rtlib-dir", type=Path, default=None, help="directory containing libDiscoPoP_RT.a (default: auto detected)"
+    )
+    parser.add_argument(
+        "--callback-breakdown",
+        action="store_true",
+        help="additionally build every program against the runtime whose callbacks have no body, and "
+        "once per callback with only that body switched on. Needs the benchmark runtime variants: "
+        "cmake --build <build-dir> --target DiscoPoP_RT_BenchmarkVariants",
+    )
+    parser.add_argument(
+        "--variants-dir",
+        type=Path,
+        default=Path(__file__).resolve().parents[2] / "build_tests" / "profiler" / "rtlib",
+        help="directory holding the benchmark runtime variants, used for every instrumented "
+        "configuration once --callback-breakdown is given, so that all of them come from one build "
+        "(default: %(default)s)",
     )
     parser.add_argument(
         "--work-dir",
@@ -552,8 +743,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("--repetitions must be at least 1", file=sys.stderr)
         return 2
 
+    breakdown: List[Configuration] = breakdown_configurations() if arguments.callback_breakdown else []
+
     try:
         toolchain = build_toolchain(arguments.cxx, arguments.plugin, arguments.rtlib_dir)
+        if breakdown:
+            # Every instrumented configuration is taken from the variants directory, not only the
+            # ones the breakdown adds: comparing a runtime from the installed package against
+            # variants from a build directory would put a second difference into every row.
+            toolchain = replace(toolchain, rtlib_dir=find_variants_dir(arguments.variants_dir, breakdown))
         programs = discover_programs(arguments.programs_dir, arguments.filter)
     except BenchmarkError as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -565,6 +763,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"runtime:    {toolchain.rtlib_dir / 'libDiscoPoP_RT.a'}")
     print(f"flags:      {' '.join(COMMON_COMPILE_FLAGS)}")
     print(f"programs:   {len(programs)}, {arguments.repetitions} measured repetitions each")
+    if breakdown:
+        print(f"breakdown:  {len(breakdown)} further configurations per program")
     print()
 
     temporary_dir: Optional[tempfile.TemporaryDirectory[str]] = None
@@ -576,7 +776,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         work_dir = Path(temporary_dir.name)
 
     try:
-        comparisons = run_benchmark(toolchain, programs, work_dir, arguments.repetitions)
+        comparisons = run_benchmark(toolchain, programs, work_dir, arguments.repetitions, breakdown)
     except BenchmarkError as error:
         print(f"\nERROR: {error}", file=sys.stderr)
         return 1
@@ -584,11 +784,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if temporary_dir is not None:
             temporary_dir.cleanup()
 
-    report = build_report(comparisons, toolchain, arguments.repetitions)
+    report = build_report(comparisons, toolchain, arguments.repetitions, breakdown)
 
     print()
     print(format_table(comparisons))
     print()
+    if breakdown:
+        print(format_breakdown_table(comparisons, breakdown))
+        print()
     print(
         "Wall clock times depend on the machine they were taken on -- compare them across runs "
         "of the same machine, not against absolute numbers."
@@ -601,7 +804,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"wrote {arguments.json_out}")
     if arguments.markdown_out is not None:
         arguments.markdown_out.parent.mkdir(parents=True, exist_ok=True)
-        arguments.markdown_out.write_text(format_markdown(comparisons, toolchain, arguments.repetitions))
+        summary = format_markdown(comparisons, toolchain, arguments.repetitions)
+        summary += format_breakdown_markdown(comparisons, breakdown)
+        arguments.markdown_out.write_text(summary)
         print(f"wrote {arguments.markdown_out}")
 
     failures = [

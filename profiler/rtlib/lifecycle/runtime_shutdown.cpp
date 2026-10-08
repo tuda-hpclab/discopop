@@ -33,6 +33,16 @@ using namespace std;
 namespace __dp {
 
 void unwind_function_stack(LID lid) {
+  // The loop below assumes a function stack that both halves of the bracket maintained:
+  // __dp_func_entry raises the level, __dp_func_exit lowers it, and the loop drives the second
+  // until the first has been undone. A benchmark build that leaves either body out (see
+  // callback_body_enabled()) breaks that in one of two ways -- without the exit the level never
+  // reaches -1 and this spins forever, without the entry it is already far below -1. Neither has a
+  // stack worth unwinding, and the two invariants below describe one that was being maintained.
+  if (!callback_body_enabled(CallbackId::FUNC_ENTRY) || !callback_body_enabled(CallbackId::FUNC_EXIT)) {
+    return;
+  }
+
   while (function_manager->get_current_stack_level() >= 0) {
     __dp_func_exit(lid, 1);
   }

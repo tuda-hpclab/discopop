@@ -51,7 +51,8 @@ void __dp_report_bb_pair(int32_t semaphore, uint32_t bbIndex) {
 // that 0 keeps meaning "not executed" (also before the profiler is initialized,
 // as no dependency is reported then either).
 uint32_t __dp_bb_state() {
-  if (!profiling_active() || current_callpath_state == nullptr) {
+  // the semaphore half of the pair reports, so it belongs to REPORT_BB_PAIR in a benchmark build
+  if (!callback_body_enabled(CallbackId::REPORT_BB_PAIR) || !profiling_active() || current_callpath_state == nullptr) {
     return 0;
   }
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
