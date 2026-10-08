@@ -13,8 +13,8 @@ description: >
   keyed by the environment (system image) and the files the installation depends on, and only built on a miss. The
   job "prepare_build" builds and saves it once per environment; the jobs that need it only restore it.
   Building the profiler (LLVM pass, runtime library) is the expensive part, and its sources change less often than
-  the Python packages: its wheel is cached separately, keyed by profiler/ only, so a change of the Python sources
-  reinstalls the packages but reuses the built profiler.
+  the Python packages: its wheel is cached separately (action profiler-wheel), keyed by profiler/ only, so a change of
+  the Python sources reinstalls the packages but reuses the built profiler.
   The caches are evicted by GitHub when unused, nothing is stored permanently. Needs the repository to be checked
   out, and runs at the same workspace path as the job that saved the cache (the venv contains absolute paths).
 
@@ -45,29 +45,13 @@ runs:
         path: venv
         key: venv-${{ inputs.environment }}-${{ hashFiles('requirements-dev.txt', 'pyproject.toml', 'VERSION', 'README.md', 'LICENSE', 'profiler/**', 'explorer/**', 'library/**', 'hotspot_detection/**', 'GUI/**', 'mcp_server/**') }}
 
-    # profiler/ is everything the profiler build depends on (profiler/share holds the shared sources)
-    - name: Restore the profiler wheel from the cache
-      id: restore_wheel
-      if: ${{ !env.ACT && steps.restore_venv.outputs.cache-hit != 'true' }}
-      uses: actions/cache/restore@v4
+    - name: Provide the profiler wheel
+      if: ${{ steps.restore_venv.outputs.cache-hit != 'true' }}
+      uses: ./.github/actions/profiler-wheel
       with:
-        path: ci_profiler_wheel
-        key: profiler-wheel-${{ inputs.environment }}-${{ hashFiles('profiler/**') }}
-
-    - name: Build the profiler wheel (not in the cache)
-      if: ${{ steps.restore_venv.outputs.cache-hit != 'true' && steps.restore_wheel.outputs.cache-hit != 'true' }}
-      shell: bash
-      run: |
-        rm -rf ci_profiler_wheel venv
-        ${{ inputs.python }} -m venv venv
-        venv/bin/pip wheel --no-deps -w ci_profiler_wheel ./profiler
-
-    - name: Save the profiler wheel to the cache
-      if: ${{ !env.ACT && steps.restore_venv.outputs.cache-hit != 'true' && steps.restore_wheel.outputs.cache-hit != 'true' && inputs.save == 'true' }}
-      uses: actions/cache/save@v4
-      with:
-        path: ci_profiler_wheel
-        key: ${{ steps.restore_wheel.outputs.cache-primary-key }}
+        environment: ${{ inputs.environment }}
+        python: ${{ inputs.python }}
+        save: ${{ inputs.save }}
 
     - name: Build the venv and install DiscoPoP (not in the cache)
       if: ${{ steps.restore_venv.outputs.cache-hit != 'true' }}

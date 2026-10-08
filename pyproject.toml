@@ -54,12 +54,13 @@ testpaths = [
     "hotspot_detection",
     "test/project_manager",
     "test/leak_check",
+    "benchmark/compare",
 ]
 # importlib: the default prepend mode resolves colocated test modules to their installed copies in
 # site-packages once several package roots are collected together, and aborts with an import file mismatch
 addopts = "--import-mode=importlib"
 # import the packages under test from the source tree, also where they are not installed in editable mode
-pythonpath = [".", "explorer", "library", "hotspot_detection"]
+pythonpath = [".", "explorer", "library", "hotspot_detection", "benchmark/compare"]
 
 [tool.setuptools.dynamic]
 version = {file = "VERSION"}

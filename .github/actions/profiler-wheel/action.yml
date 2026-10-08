@@ -1,0 +1,65 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "Wheel of the DiscoPoP profiler"
+description: >
+  Provides a wheel of the DiscoPoP profiler (LLVM pass, runtime library) built from the sources in `source`, in
+  `wheel_dir`. Building the profiler is expensive and its sources change less often than the rest, so the wheel
+  is restored from the actions cache, keyed by the environment (system image) and the sources in `source`/profiler,
+  and only built on a miss. Used for the venv of the version under test (prepared-venv) and for the version the
+  benchmarks compare with. The cache is evicted by GitHub when unused, nothing is stored permanently.
+
+inputs:
+  environment:
+    description: "Identifies the system the wheel is built for, e.g. the image of the container (part of the cache key)"
+    required: true
+  source:
+    description: "Checkout whose profiler/ is built, relative to the workspace"
+    required: false
+    default: "."
+  wheel_dir:
+    description: "Directory the wheel is put in, relative to the workspace"
+    required: false
+    default: "ci_profiler_wheel"
+  python:
+    description: "Interpreter the wheel is built with"
+    required: false
+    default: "python3"
+  save:
+    description: "Save the wheel to the cache after building it"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    # local runs with act (scripts/dev/run_ci_locally.sh) have no node in the containers for the cache actions and no
+    # cache service: there the wheel is always built
+    # profiler/ is everything the profiler build depends on (profiler/share holds the shared sources)
+    - name: Restore the profiler wheel from the cache
+      id: restore
+      if: ${{ !env.ACT }}
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.wheel_dir }}
+        key: profiler-wheel-${{ inputs.environment }}-${{ hashFiles(inputs.source == '.' && 'profiler/**' || format('{0}/profiler/**', inputs.source)) }}
+
+    - name: Build the profiler wheel (not in the cache)
+      if: ${{ steps.restore.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        rm -rf "${{ inputs.wheel_dir }}" "$RUNNER_TEMP/profiler_wheel_builder"
+        ${{ inputs.python }} -m venv "$RUNNER_TEMP/profiler_wheel_builder"
+        "$RUNNER_TEMP/profiler_wheel_builder/bin/pip" wheel --no-deps -w "${{ inputs.wheel_dir }}" "${{ inputs.source }}/profiler"
+
+    - name: Save the profiler wheel to the cache
+      if: ${{ !env.ACT && steps.restore.outputs.cache-hit != 'true' && inputs.save == 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ inputs.wheel_dir }}
+        key: ${{ steps.restore.outputs.cache-primary-key }}

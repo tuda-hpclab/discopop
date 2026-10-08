@@ -35,7 +35,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -82,6 +82,8 @@ class Measurement:
     nanoseconds: float
     deviation: float
     iterations: int
+    # the time of every repetition, for comparing two versions with a significance test
+    samples: List[float] = field(default_factory=list)
 
 
 @dataclass
@@ -107,8 +109,8 @@ class Comparison:
         return self.name in PAIRED_BENCHMARKS
 
 
-def build_binaries(build_directory: Path, jobs: int) -> None:
-    """Configure and build both benchmark binaries."""
+def build_binaries(build_directory: Path, jobs: int, source_directory: Path = REPOSITORY_ROOT) -> None:
+    """Configure and build both benchmark binaries from the sources in ``source_directory``."""
 
     cmake = shutil.which("cmake")
     if cmake is None:
@@ -117,7 +119,7 @@ def build_binaries(build_directory: Path, jobs: int) -> None:
     configure = [
         cmake,
         "-S",
-        str(REPOSITORY_ROOT),
+        str(source_directory),
         "-B",
         str(build_directory),
         "-DCMAKE_BUILD_TYPE=Release",
@@ -218,7 +220,7 @@ def read_measurements(binary_name: str, output_file: Path, repetitions: int) -> 
     for name, values in samples.items():
         median = medians.get(name, statistics.median(values))
         deviation = deviations.get(name, 0.0)
-        measurements[name] = Measurement(name, median, deviation, iterations.get(name, 0))
+        measurements[name] = Measurement(name, median, deviation, iterations.get(name, 0), list(values))
 
     if not measurements:
         raise BenchmarkError(f"{binary_name} reported no benchmarks (repetitions={repetitions})")
@@ -309,6 +311,8 @@ def build_json_report(comparisons: Sequence[Comparison], repetitions: int, minim
                 "call_only_stddev_ns": comparison.call_only.deviation,
                 "full_ns": comparison.full.nanoseconds,
                 "full_stddev_ns": comparison.full.deviation,
+                "call_only_samples_ns": comparison.call_only.samples,
+                "full_samples_ns": comparison.full.samples,
                 "body_ns": comparison.body_nanoseconds,
                 "body_share": comparison.body_share,
             }
@@ -326,6 +330,14 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="build directory holding the benchmark binaries (default: <repo>/build_tests)",
     )
     parser.add_argument("--no-build", action="store_true", help="use the binaries that are already built")
+    parser.add_argument("--build-only", action="store_true", help="configure and build the binaries, run nothing")
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        default=REPOSITORY_ROOT,
+        help="repository whose runtime library is built and measured, e.g. a checkout of another version to "
+        "compare with (default: the repository this script belongs to)",
+    )
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4, help="parallel build jobs")
     parser.add_argument("--repetitions", type=int, default=5, help="repetitions per benchmark (default: 5)")
     parser.add_argument(
@@ -354,8 +366,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     try:
         if not arguments.no_build:
-            build_binaries(arguments.build_dir, arguments.jobs)
+            build_binaries(arguments.build_dir, arguments.jobs, arguments.source_dir.resolve())
         call_only_binary, full_binary = locate_binaries(arguments.build_dir)
+        if arguments.build_only:
+            return 0
 
         with tempfile.TemporaryDirectory(prefix="discopop_callback_benchmark_") as scratch:
             scratch_path = Path(scratch)

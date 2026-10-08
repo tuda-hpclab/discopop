@@ -21,6 +21,11 @@ on:
       - new_explorer  # This is a temporary addition and should be removed before merging into master!
   # manual runs, e.g. to get the callback benchmark (callback_benchmark) for a branch
   workflow_dispatch:
+    inputs:
+      callback_breakdown:
+        description: "Add the callback breakdown to the callback benchmark (takes long)"
+        type: boolean
+        default: false
 
 # the jobs only read the repository
 permissions:
@@ -60,6 +65,10 @@ jobs:
       tools_image: ${{ steps.create_matrix.outputs.tools_image }}
       primary_image: ${{ steps.create_matrix.outputs.primary_image }}
       leak_check_image: ${{ steps.create_matrix.outputs.leak_check_image }}
+      head_label: ${{ steps.versions.outputs.head_label }}
+      base_sha: ${{ steps.versions.outputs.base_sha }}
+      base_label: ${{ steps.versions.outputs.base_label }}
+      base_note: ${{ steps.versions.outputs.base_note }}
     steps:
       - name: Create build matrix
         id: create_matrix
@@ -121,6 +130,41 @@ jobs:
             # both configurations contain, so its venv is prepared anyway
             echo "primary_image=$(image_of "$e_llvm21")"
             echo "leak_check_image=$(image_of "$e_leak")"
+          } >> "$GITHUB_OUTPUT"
+
+      # the versions the benchmarks compare (benchmark_report): a pull request against the tip of its target branch,
+      # a push against the state before it; a manual run and the first push of a branch have nothing to compare with
+      - name: Determine the versions to compare
+        id: versions
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            head_label="PR #$PR_NUMBER (${HEAD_SHA:0:8})"
+          else
+            head_label="$GITHUB_REF_NAME (${HEAD_SHA:0:8})"
+          fi
+          base_sha="" base_label="" base_note=""
+          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+            base_sha="$BASE_SHA"
+            if [ -n "$PR_NUMBER" ]; then
+              base_label="$GITHUB_BASE_REF (${BASE_SHA:0:8})"
+            else
+              base_label="before the push (${BASE_SHA:0:8})"
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            base_note="a manual run has no version to compare with"
+          else
+            base_note="the first push of a branch has no version to compare with"
+          fi
+          {
+            echo "head_label=$head_label"
+            echo "base_sha=$base_sha"
+            echo "base_label=$base_label"
+            echo "base_note=$base_note"
           } >> "$GITHUB_OUTPUT"
 
   # builds the prerequisite images that do not exist in the registry yet (see create_matrix)
@@ -260,7 +304,7 @@ jobs:
 
       - name: Check formatting of the benchmark drivers and the instrumentation tests
         run: |
-          venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead benchmark/injected_functions test/instrumentation
+          venv/bin/python3 -m black -l 120 --check benchmark/pass_overhead benchmark/injected_functions benchmark/compare test/instrumentation
 
   # TYPE CHECK per matrix entry: mypy checks against the Python version of the interpreter it runs with
   type_check:
@@ -542,14 +586,22 @@ jobs:
             cat rtlib_coverage_summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  # BENCHMARKS: both compare the version under test with the one before it (see create_matrix, "versions") on the
+  # same runner, interleaved round by round, so that a change of the runner's speed affects both alike. They run last
+  # and one after the other, so that no other job of the run competes for the machine while they measure.
+  # benchmark_report turns their results into the pull request comment, the job summary and the artifact
+  # "benchmark-report" (HTML with charts). Regressions are flagged there, but never fail the CI.
+  # Locally: benchmark/compare/run_ab_benchmarks.py and benchmark/compare/compare_benchmarks.py
+
   # Builds a set of small programs with and without the DiscoPoP pass and runs both
-  # (benchmark/pass_overhead). Fails if a program does not build or run, or if the instrumented
-  # binary does not reproduce the output of the uninstrumented one; the timings are reported, not
+  # (benchmark/pass_overhead). Fails if a program of the version under test does not build or run, or if its
+  # instrumented binary does not reproduce the output of the uninstrumented one; the timings are reported, not
   # enforced.
   pass_overhead_benchmark:
     runs-on: self-hosted
+    # after the detailed checks (whose success implies the basic ones'); the coverage only has to be finished.
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.runtime_unit_tests_sanitized.result == 'success' && needs.instrumented_programs_leak_check.result == 'success' }}
     permissions:
       contents: read
       packages: read
@@ -559,8 +611,8 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: overhead of the DiscoPoP LLVM pass"
-    needs: [create_matrix, prepare_images, prepare_build]
-    timeout-minutes: 60
+    needs: [create_matrix, prepare_images, prepare_build, runtime_unit_tests_sanitized, instrumented_programs_leak_check, rtlib_coverage]
+    timeout-minutes: 90
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -571,37 +623,61 @@ jobs:
         with:
           environment: ${{ needs.create_matrix.outputs.primary_image }}
 
-      - name: Compare builds with and without the DiscoPoP pass
-        run: |
-          venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --json-out pass_overhead_results.json --markdown-out pass_overhead_summary.md
+      # failing to prepare it only removes it from the comparison; the report says so
+      - name: Prepare the version to compare with
+        if: ${{ needs.create_matrix.outputs.base_sha != '' }}
+        continue-on-error: true
+        uses: ./.github/actions/base-version
+        with:
+          sha: ${{ needs.create_matrix.outputs.base_sha }}
+          environment: ${{ needs.create_matrix.outputs.primary_image }}
 
-      - name: Add the comparison to the job summary
-        if: ${{ always() }}
+      - name: Compare builds with and without the DiscoPoP pass, both versions interleaved
+        env:
+          HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
+          BASE_LABEL: ${{ needs.create_matrix.outputs.base_label }}
+          BASE_NOTE: ${{ needs.create_matrix.outputs.base_note }}
+          BASE_SHA: ${{ needs.create_matrix.outputs.base_sha }}
         run: |
-          if [ -f pass_overhead_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            cat pass_overhead_summary.md >> "$GITHUB_STEP_SUMMARY"
+          base_options=()
+          if [ -n "$BASE_SHA" ]; then
+            base_options=(--base-python venv_base/bin/python)
           fi
+          venv/bin/python3 benchmark/compare/run_ab_benchmarks.py --results-dir benchmark_results \
+            --head-label "$HEAD_LABEL" --base-label "$BASE_LABEL" --base-note "$BASE_NOTE" "${base_options[@]}" \
+            pass-overhead --rounds 2 --repetitions 3
 
-  # What the injected callbacks cost (benchmark/injected_functions): per call, with and without their
-  # bodies, and per program, attributed to the single callbacks (--callback-breakdown, builds the
-  # runtime library variants). The times depend on the runner too much to gate on, and the breakdown
-  # is expensive: only where code is merged (see below) and on manual runs, not part of checks_successful.
+      - name: Upload the results
+        if: ${{ !cancelled() && !env.ACT }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-pass-overhead
+          path: benchmark_results/
+          if-no-files-found: ignore
+          overwrite: true
+
+  # What the injected callbacks cost (benchmark/injected_functions): per call, with and without their bodies.
+  # On request (pull request label "benchmark-breakdown", or the input of a manual run) also per program,
+  # attributed to the single callbacks (--callback-breakdown, builds the runtime library variants), which takes long.
+  # The times depend on the runner too much to gate on: not part of checks_successful.
   callback_benchmark:
     runs-on: self-hosted
     # not on every push to a feature branch (it takes long), but where code is merged: pull requests into master or
     # new_explorer (never from forks, see create_matrix), pushes to them, and manual runs
-    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/new_explorer')) || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && needs.pass_overhead_benchmark.result == 'success' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/new_explorer')) || github.event_name == 'workflow_dispatch') }}
     permissions:
       contents: read
       packages: read
+      # reads the labels of the pull request
+      pull-requests: read
     container:
       image: ${{ needs.create_matrix.outputs.primary_image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: cost of the injected callbacks"
-    needs: [create_matrix, prepare_images, prepare_build]
-    timeout-minutes: 120
+    needs: [create_matrix, prepare_images, prepare_build, pass_overhead_benchmark]
+    timeout-minutes: 180
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -612,33 +688,138 @@ jobs:
         with:
           environment: ${{ needs.create_matrix.outputs.primary_image }}
 
-      # configures and builds build_tests itself
-      - name: Measure the injected callbacks with and without their bodies
-        run: |
-          venv/bin/python3 benchmark/injected_functions/run_callback_benchmark.py --json-out callback_benchmark_results.json --markdown-out callback_benchmark_summary.md
+      # the labels are read when the job runs, not taken from the event: adding the label to a pull request re-runs
+      # this job of its latest run (benchmark_breakdown.yml), whose event still has the labels it started with
+      - name: Check whether the callback breakdown is requested
+        id: breakdown
+        if: ${{ !env.ACT }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let requested = false;
+            if (context.eventName === 'workflow_dispatch') {
+              requested = String(context.payload.inputs?.callback_breakdown) === 'true';
+            } else if (context.eventName === 'pull_request') {
+              const { data } = await github.rest.pulls.get({ ...context.repo, pull_number: context.payload.pull_request.number });
+              requested = data.labels.some((label) => label.name === 'benchmark-breakdown');
+            }
+            core.info(`callback breakdown requested: ${requested}`);
+            core.setOutput('requested', String(requested));
 
-      - name: Add the comparison to the job summary
-        if: ${{ always() }}
+      - name: Prepare the version to compare with
+        if: ${{ needs.create_matrix.outputs.base_sha != '' }}
+        continue-on-error: true
+        uses: ./.github/actions/base-version
+        with:
+          sha: ${{ needs.create_matrix.outputs.base_sha }}
+          environment: ${{ needs.create_matrix.outputs.primary_image }}
+
+      # configures and builds both versions of the benchmark itself (build_tests, build_base)
+      - name: Measure the injected callbacks with and without their bodies, both versions interleaved
+        env:
+          HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
+          BASE_LABEL: ${{ needs.create_matrix.outputs.base_label }}
+          BASE_NOTE: ${{ needs.create_matrix.outputs.base_note }}
+          BASE_SHA: ${{ needs.create_matrix.outputs.base_sha }}
+          BREAKDOWN: ${{ steps.breakdown.outputs.requested }}
         run: |
-          if [ -f callback_benchmark_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            cat callback_benchmark_summary.md >> "$GITHUB_STEP_SUMMARY"
+          base_options=()
+          if [ -n "$BASE_SHA" ]; then
+            base_options=(--base-python venv_base/bin/python)
           fi
-
-      - name: Build the runtime library variants
-        run: |
-          cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants -j "$(nproc)"
-
-      # one repetition per configuration: the question is which callbacks dominate, not by how many percent
-      - name: Attribute the whole program overhead to the callbacks
-        run: |
-          venv/bin/python3 benchmark/pass_overhead/run_pass_benchmark.py --callback-breakdown --repetitions 1 --json-out callback_breakdown_results.json --markdown-out callback_breakdown_summary.md
-
-      - name: Add the breakdown to the job summary
-        if: ${{ always() }}
-        run: |
-          if [ -f callback_breakdown_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            cat callback_breakdown_summary.md >> "$GITHUB_STEP_SUMMARY"
+          callback_options=(--rounds 3 --repetitions 5)
+          if [ -d base ]; then
+            callback_options+=(--base-source-dir base)
           fi
+          if [ "$BREAKDOWN" != "true" ]; then
+            callback_options+=(--no-breakdown)
+          fi
+          venv/bin/python3 benchmark/compare/run_ab_benchmarks.py --results-dir benchmark_results \
+            --head-label "$HEAD_LABEL" --base-label "$BASE_LABEL" --base-note "$BASE_NOTE" "${base_options[@]}" \
+            callbacks "${callback_options[@]}"
+
+      - name: Upload the results
+        if: ${{ !cancelled() && !env.ACT }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-callbacks
+          path: benchmark_results/
+          if-no-files-found: ignore
+          overwrite: true
+
+  # The comparison of the benchmark results: a comment on the pull request (updated by every run instead of adding
+  # another one), the job summary, and the artifact "benchmark-report" with the HTML report and the raw data.
+  benchmark_report:
+    runs-on: self-hosted
+    # not in local runs with act (scripts/dev/run_ci_locally.sh sets github.event.act): no artifact service there
+    if: ${{ !cancelled() && !github.event.act && (needs.pass_overhead_benchmark.result == 'success' || needs.pass_overhead_benchmark.result == 'failure') }}
+    permissions:
+      contents: read
+      packages: read
+      # the comment with the report
+      pull-requests: write
+    container:
+      image: ${{ needs.create_matrix.outputs.primary_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Benchmark: comparison report"
+    needs: [create_matrix, pass_overhead_benchmark, callback_benchmark]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download the benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark-results-*
+          path: benchmark_results
+          merge-multiple: true
+
+      # the comparison only needs the standard library, no venv
+      - name: Compare the versions
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 benchmark/compare/compare_benchmarks.py --results-dir benchmark_results --run-url "$RUN_URL" \
+            --html-out benchmark_report/benchmark_report.html --json-out benchmark_report/benchmark_comparison.json \
+            --markdown-out benchmark_report/benchmark_report.md > /dev/null
+
+      - name: Upload the report
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: benchmark_report/
+          overwrite: true
+
+      # once more, now that the link to the uploaded report is known
+      - name: Link the report and add it to the job summary
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          python3 benchmark/compare/compare_benchmarks.py --results-dir benchmark_results --run-url "$RUN_URL" \
+            --report-url "$REPORT_URL" --markdown-out benchmark_comment.md > /dev/null
+          cat benchmark_comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the pull request
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('benchmark_comment.md', 'utf8');
+            const marker = '<!-- discopop-benchmark-report -->';
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number });
+            const previous = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number, body });
+            }
 
   checks_successful:
     runs-on: self-hosted

@@ -42,7 +42,7 @@ This document contains critical information about working with this codebase. Fo
 ## Formatting
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
-- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server test/leak_check benchmark/pass_overhead benchmark/injected_functions test/instrumentation`
+- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server test/leak_check benchmark/pass_overhead benchmark/injected_functions benchmark/compare test/instrumentation`
 - to execute the formatting check, use `venv/bin/python -m black -l 120 --check <paths>` with the paths above
 - to execute automatic formatting, use `venv/bin/python -m black -l 120 <paths>`, restricted to the paths you changed; never run black on `.`, as it would reformat many unrelated, unchecked files
 
@@ -174,7 +174,7 @@ To execute the CI pipeline locally, use the following command from the root fold
 - it fails when a binary does not build or run, when the runtime does not come up, or when the two runs no longer agree on the set of benchmarks; the times are reported, never enforced
 - the binaries need `DOT_DISCOPOP` to point at a directory containing a `profiler/` subdirectory when run by hand -- the runtime opens its result files before `main`; the driver supplies one
 - see `benchmark/injected_functions/README.md` for what is and is not covered, and for how to add a callback
-- the CI job `callback_benchmark` runs it together with the `--callback-breakdown` of the pass overhead benchmark, only on pull requests into and pushes to master/new_explorer and on manual runs (`workflow_dispatch`); it is not part of `checks_successful`
+- the CI job `callback_benchmark` runs it on pull requests into and pushes to master/new_explorer and on manual runs (`workflow_dispatch`), compared with the previous version (see "Benchmark comparison in CI"); the `--callback-breakdown` of the pass overhead benchmark only on request; it is not part of `checks_successful`
 
 ### Pass overhead benchmark
 - `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
@@ -186,3 +186,11 @@ To execute the CI pipeline locally, use the following command from the root fold
 - adding a program means dropping a `.cpp` file with a `// BENCHMARK: <description>` comment into `benchmark/pass_overhead/programs`; see `benchmark/pass_overhead/README.md`
 - `--callback-breakdown` additionally builds every program against each runtime variant above, which attributes the whole-program overhead to the individual callbacks; it needs the variants built and links *every* instrumented configuration from `--variants-dir` so they all come from one build
 - the breakdown rows do not add up to the total: a body running on its own never saturates the access queue, so the main thread never waits for the workers the way it does in a real profiling run. Read it as a ranking, not as a decomposition
+
+### Benchmark comparison in CI
+- `pass_overhead_benchmark` and `callback_benchmark` measure the version under test and the version before it (a pull request: the tip of its target branch; a push: the state before the push; determined in `create_matrix`) on the same runner, interleaved round by round; they run last and one after the other, so no other job competes for the machine
+- the version before is prepared by the composite action `.github/actions/base-version`: a checkout in `base/` and its profiler in `venv_base` (the wheel is cached like the one of the version under test, `.github/actions/profiler-wheel`); the drivers of the version under test are used for both, so only the profiler (and the sources of the callback benchmark) come from the older version. A version that cannot be prepared or measured is left out, and the report says why
+- `benchmark_report` turns the results into a comment on the pull request (updated by every run), the job summary and the artifact `benchmark-report` (self-contained HTML with charts, plus the comparison as JSON)
+- a change is flagged (⚠️ regression / ✅ improvement) when it exceeds 10% and, where measured repeatedly, is significant (two-sided Mann-Whitney U test, p < 0.05); callback changes below 0.25 ns are never flagged. Flags never fail the CI; a regression is for the reviewer to judge
+- the callback breakdown takes long and only runs on request: the pull request label `benchmark-breakdown` (`.github/workflows/benchmark_breakdown.yml` re-runs `callback_benchmark` of the latest CI run, which reads the labels when it runs; every further run includes it while the label is set) or the input `callback_breakdown` of a manual run
+- the code lives in `benchmark/compare`: `run_ab_benchmarks.py` measures both versions, `compare_benchmarks.py` writes the reports, the package `benchmark_compare` holds statistics, loading and formatting (standard library only, unit tests colocated as `test_*.py`, part of the bare `pytest` run); see `benchmark/compare/README.md`
