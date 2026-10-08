@@ -45,7 +45,7 @@ extern std::uint64_t *numAccesses;
 
 namespace __dp {
 
-extern bool DP_DEBUG; // debug flag
+// DP_DEBUG is declared in DPTypes.hpp, see the note there.
 
 extern Timers *timers;
 
@@ -76,13 +76,23 @@ void destroy_immortal_globals();
 
 extern std::unordered_map<char *, long> &cuec;
 
-extern bool dpInited;         // library initialization flag
-extern bool targetTerminated; // whether the target program has returned from main()
-// In C++, destructors of global objects can run after main().
-// However, when the target program returns from main(), dp
-// also frees all the resources. If there are destructors run
-// after main(), __dp_func_entry() will be called again, but
-// resources are freed, leading to segmentation fault.
+// What the runtime is currently doing. There are exactly three states and they are reached in
+// order: __dp_init moves to Running, __dp_finalize moves to Terminated.
+//
+// Terminated is not the same as "not initialized". The target's global destructors run after
+// __dp_finalize has written the results and released the runtime's resources, and they are
+// instrumented like everything else, so their callbacks still arrive -- they have to return
+// without touching anything, not start the runtime up again.
+enum class RuntimeState {
+  NotInitialized,
+  Running,
+  Terminated,
+};
+
+extern RuntimeState runtime_state;
+
+// The question every instrumented callback asks: may it do its work?
+inline bool profiling_active() noexcept { return runtime_state == RuntimeState::Running; }
 
 // Runtime merging structures
 extern depMap *allDeps;

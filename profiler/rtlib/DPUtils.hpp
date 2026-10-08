@@ -71,16 +71,21 @@ inline int32_t getFileID(string fileMapping, string fullPathName) {
     vector<string> *substrings = NULL;
     while (getline(fileMap, line)) {
       substrings = split(line, '\t');
+      bool found = false;
       if (substrings->size() == 2) {
         string indexString = (*substrings)[0];
         string fileName = (*substrings)[1];
         if (fileName.compare(fullPathName) == 0) {
           index = (int32_t)atoi(indexString.c_str());
-          break;
+          found = true;
         }
       }
+      // split() hands out ownership, so the line has to be released on the way out as well
       substrings->clear();
       delete substrings;
+      if (found) {
+        break;
+      }
     }
     fileMap.close();
   }

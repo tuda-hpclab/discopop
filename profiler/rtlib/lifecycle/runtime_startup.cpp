@@ -10,26 +10,25 @@
  *
  */
 
-#include "dp_init.hpp"
+#include "runtime_startup.hpp"
 
 #include "../DPTypes.hpp"
 
+#include "../output_paths.hpp"
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "dp_finalize.hpp"
+#include "../injected_functions/dp_finalize.hpp"
 
 #include "../../share/include/debug_print.hpp"
 #include "../../share/include/timer.hpp"
 
 #include "../static_callstate_transitions/utils.hpp"
 
-#ifdef __linux__
-#include <linux/limits.h>
-#endif
-
+#include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -38,11 +37,14 @@ using namespace std;
 
 namespace __dp {
 
-/******* Instrumentation function *******/
+/******* Runtime startup *******/
 extern "C" {
 
 void __dp_init() {
-  if (dpInited) {
+  // Anything but NotInitialized: either the runtime is already up, or it has already written its
+  // results and released everything. The latter used to pass this check, because the flag it read
+  // was cleared again in __dp_finalize.
+  if (runtime_state != RuntimeState::NotInitialized) {
     return;
   }
 
@@ -53,7 +55,7 @@ void __dp_init() {
   timers = new Timers();
   statistics_profiling_start_time = std::chrono::high_resolution_clock::now();
 #ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
+  const auto timer = Timer(timers, TimerRegion::INIT);
 #endif
   function_manager = new FunctionManager();
   loop_manager = new LoopManager();
@@ -78,59 +80,26 @@ void __dp_init() {
 
   memory_manager->allocate_dummy_region();
 
-#ifdef __linux__
-  // try to get an output file name w.r.t. the target application
-  // if it is not available, fall back to "Output.txt"
-  char *selfPath = new char[PATH_MAX];
-  if (selfPath != nullptr) {
-    if (readlink("/proc/self/exe", selfPath, PATH_MAX - 1) == -1) {
-      delete[] selfPath;
-      selfPath = nullptr;
-      out->open("Output.txt", ios::out);
-    }
-    // out->open(string(selfPath) + "_dep.txt", ios::out);  # results in the
-    // old <prog>_dep.txt
-    //  prepare environment variables
-    char const *tmp = getenv("DOT_DISCOPOP");
-    if (tmp == NULL) {
-      // DOT_DISCOPOP needs to be initialized
-      setenv("DOT_DISCOPOP", ".discopop", 1);
-    }
-    std::string tmp_str(getenv("DOT_DISCOPOP"));
-    setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-    tmp2 += "/dynamic_dependencies.txt";
-
-    out->open(tmp2.data(), ios::out);
-
-    // Static callPath tracing
-    call_state_graph = new CallStateGraph();
-    initialize_current_callpath_state();
+  // This is the first thing to run in an instrumented program, so it is also where the output
+  // directory is pinned down. Everything in the runtime that writes a result file reaches it
+  // through profiler_output_path() afterwards, see output_paths.hpp.
+  if (getenv("DOT_DISCOPOP") == nullptr) {
+    setenv("DOT_DISCOPOP", ".discopop", 1);
   }
-#else
-  // Non-Linux: replicate the env-var + output-file + call-state setup from
-  // the Linux path above, but without /proc/self/exe (POSIX only).
-  {
-    char const *tmp = getenv("DOT_DISCOPOP");
-    if (tmp == NULL) {
-      setenv("DOT_DISCOPOP", ".discopop", 1);
-    }
-    std::string tmp_str(getenv("DOT_DISCOPOP"));
-    setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-    std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-    tmp2 += "/dynamic_dependencies.txt";
-    out->open(tmp2.data(), ios::out);
+  const std::string profiler_directory = std::string(getenv("DOT_DISCOPOP")) + "/profiler";
+  setenv("DOT_DISCOPOP_PROFILER", profiler_directory.c_str(), 1);
 
-    call_state_graph = new CallStateGraph();
-    initialize_current_callpath_state();
-  }
-#endif
+  out->open(profiler_output_path("dynamic_dependencies.txt").c_str(), ios::out);
   assert(out->is_open() && "Cannot open a file to output dependences.\n");
+
+  // Static callPath tracing
+  call_state_graph = new CallStateGraph();
+  initialize_current_callpath_state();
 
   if (DP_DEBUG) {
     cout << "DP initialized." << endl;
   }
-  dpInited = true;
+  runtime_state = RuntimeState::Running;
   if (NUM_WORKERS > 0) {
     initParallelization();
   } else {
@@ -151,10 +120,16 @@ namespace {
 // matching .fini_array entry is processed after every handler registered with __cxa_atexit, which
 // is where the destructors of those objects live -- so __dp_finalize sees the accesses they make.
 // Priorities below 101 are reserved for the implementation.
+//
+// Since no instrumented code calls __dp_init any more, nothing references this translation unit,
+// and the linker would drop it from the static runtime archive together with the two entries
+// below -- without any diagnostic; the profiled program would simply never start the runtime.
+// The link wrappers in profiler/scripts therefore request __dp_init with -u, which is why that
+// symbol and these two entries have to stay in the same file.
 __attribute__((constructor(101))) void dp_runtime_startup() { __dp_init(); }
 
 __attribute__((destructor(101))) void dp_runtime_shutdown() {
-  if (!dpInited) {
+  if (!profiling_active()) {
     // Either nothing was profiled, or __dp_finalize already ran because the target left through a
     // function that does not return to main.
     return;

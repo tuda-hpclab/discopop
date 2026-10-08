@@ -25,7 +25,7 @@ public:
   MetaDataQueueElement(depType arg_type, LID arg_sink, LID arg_source, const char *arg_var, std::int64_t arg_AAvar,
                        shared_ptr<CallTreeNode> arg_sink_ctn, shared_ptr<CallTreeNode> arg_source_ctn);
   bool operator==(const MetaDataQueueElement &other) const;
-  string toString();
+  string toString() const;
   depType type;
   LID sink;
   LID source;

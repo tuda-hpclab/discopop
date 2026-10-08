@@ -48,7 +48,7 @@ public:
 
   void register_function_end(const LID current_lid) { endFuncs.insert(current_lid); }
 
-  std::int32_t get_current_stack_level() { return FuncStackLevel; }
+  std::int32_t get_current_stack_level() const { return FuncStackLevel; }
 
   void register_function_start(const LID current_lid) {
     // Process ordinary function call/invoke.
@@ -57,10 +57,10 @@ public:
       lastCallOrInvoke = lastProcessedLine;
     ++FuncStackLevel;
 
-#ifdef DP_DEBUG
-    std::cout << "Entering function LID " << std::dec << dputil::decodeLID(lid) << std::endl;
-    std::cout << "Function stack level = " << std::dec << FuncStackLevel << std::endl;
-#endif
+    if (DP_DEBUG) {
+      std::cout << "Entering function LID " << std::dec << dputil::decodeLID(current_lid) << std::endl;
+      std::cout << "Function stack level = " << std::dec << FuncStackLevel << std::endl;
+    }
 
     BGNFuncList::iterator func = beginFuncs.find(lastCallOrInvoke);
     if (func == beginFuncs.end()) {
@@ -72,7 +72,7 @@ public:
     }
   }
 
-  void output_functions(std::ostream &stream) {
+  void output_functions(std::ostream &stream) const {
     for (const auto &func_begin : beginFuncs) {
       for (auto fb : func_begin.second) {
         stream << dputil::decodeLID(func_begin.first) << " BGN func ";

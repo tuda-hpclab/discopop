@@ -29,6 +29,13 @@ typedef std::int64_t LID;
 typedef std::int64_t ADDR;
 typedef std::int64_t sigElement;
 
+namespace __dp {
+// The runtime debug flag, defined in runtimeFunctionsGlobals.cpp. Declared in this header and
+// not only in runtimeFunctionsGlobals.hpp, because the managers below rtlib report through it
+// as well and cannot include that header: it includes them.
+extern bool DP_DEBUG;
+} // namespace __dp
+
 // TODO(Lukas): Is this valid?
 #define USE_EMHASH
 

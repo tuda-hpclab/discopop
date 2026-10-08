@@ -22,7 +22,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_incr(const int loop_id, int32_t instruction_id) {
-  if (!dpInited || targetTerminated) {
+  if (!profiling_active()) {
     return;
   }
 

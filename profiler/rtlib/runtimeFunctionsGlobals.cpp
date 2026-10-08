@@ -13,6 +13,7 @@
 #include "runtimeFunctionsGlobals.hpp"
 
 #include "Immortal.hpp"
+#include "hybrid_analysis/bb_deps.hpp"
 #include "runtimeFunctions.hpp"
 
 bool USE_PERFECT = true;
@@ -61,13 +62,7 @@ stringDepMap *outPutDeps = nullptr;
 
 std::unordered_map<char *, long> &cuec = cuec_storage.value;
 
-bool dpInited = false;         // library initialization flag
-bool targetTerminated = false; // whether the target program has returned from main()
-// In C++, destructors of global objects can run after main().
-// However, when the target program returns from main(), dp
-// also frees all the resources. If there are destructors run
-// after main(), __dp_func_entry() will be called again, but
-// resources are freed, leading to segmentation fault.
+RuntimeState runtime_state = RuntimeState::NotInitialized;
 
 // Runtime merging structures
 depMap *allDeps = nullptr;
@@ -107,8 +102,8 @@ CallStateGraph *call_state_graph;
 // statistics
 std::chrono::high_resolution_clock::time_point statistics_profiling_start_time;
 
-// Constructs the globals above. Called from the runtime initialization in __dp_func_entry,
-// before anything reads them, and idempotent so that a second entry point can call it too.
+// Constructs the globals above. Called from __dp_init, before anything reads them, and
+// idempotent so that a second entry point can call it too.
 void construct_immortal_globals() {
   if (immortal_globals_constructed) {
     return;
@@ -121,8 +116,8 @@ void construct_immortal_globals() {
   immortal_globals_constructed = true;
 }
 
-// Destroys them again, at the end of __dp_finalize. Every callback returns early once
-// targetTerminated is set, so nothing reaches these objects afterwards.
+// Destroys them again, at the end of __dp_finalize. Every callback returns early once the
+// runtime state is Terminated, so nothing reaches these objects afterwards.
 void destroy_immortal_globals() {
   release_registered_bb_deps();
   if (!immortal_globals_constructed) {

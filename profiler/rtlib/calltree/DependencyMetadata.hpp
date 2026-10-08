@@ -27,18 +27,20 @@ public:
                      hashset<unsigned int> arg_source_ancestors);
   DependencyMetadata() {}
   bool operator==(const DependencyMetadata &other) const;
-  depType type;
-  LID sink;
-  LID source;
-  const char *var;
-  std::int64_t AAvar;
+  // a default constructed DependencyMetadata is written out like any other, so the members it
+  // does not get from a queue element need a value that toString() can print
+  depType type = RAW;
+  LID sink = 0;
+  LID source = 0;
+  const char *var = "";
+  std::int64_t AAvar = 0;
   hashset<unsigned int> intra_call_dependencies;
   hashset<unsigned int> intra_iteration_dependencies;
   hashset<unsigned int> inter_call_dependencies;
   hashset<unsigned int> inter_iteration_dependencies;
   hashset<unsigned int> sink_ancestors;
   hashset<unsigned int> source_ancestors;
-  string toString();
+  string toString() const;
 };
 
 } // namespace __dp

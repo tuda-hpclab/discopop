@@ -21,8 +21,8 @@ dependencies it reports against a gold standard.
   own path through the pass — an allocation that may throw (`invoke`) and a call that never returns.
 - `test_omission.py` — the basic block machinery that stands in for the instrumentation the pass
   leaves out (`__dp_report_bb`, `__dp_report_bb_pair`, `__dp_add_bb_deps`).
-- `test_loop_counters.py` — the iteration counters (`__dp_loop_incr`, `__dp_loop_output`) and their
-  agreement with `loop_meta.txt`.
+- `test_loop_counters.py` — the iteration counters (`__dp_loop_incr`) and their agreement with
+  `loop_meta.txt`.
 - `utilities.py` — compiling and parsing, plus the shared assertions.
 
 ## Running them
@@ -81,15 +81,17 @@ Every callback the pass can insert, and where it is checked:
 | `__dp_new`, `__dp_delete` | `TestHeapAllocation` (`malloc`/`new`/`new[]` and their releases), `TestReallocation` (`calloc`, `realloc`, `posix_memalign`), `TestExceptionalControlFlow` (the `invoke` path) |
 | `__dp_call` | `TestFunctionCall` |
 | `__dp_loop_entry`, `__dp_loop_exit` | `TestLoopOverArray`, `TestNestedLoops` |
-| `__dp_loop_incr`, `__dp_loop_output` | `test_loop_counters.py` |
+| `__dp_loop_incr` | `test_loop_counters.py` |
 | `__dp_report_bb`, `__dp_report_bb_pair`, `__dp_add_bb_deps` | `test_omission.py` |
 | `__dp_finalize` | `TestAbnormalTermination` — the only case in which the pass still inserts one. Its *absence* on the ordinary path is asserted in `TestLoopOverArray` and `TestFunctionCall`. |
 | `__dp_init` | never inserted; `TestLoopOverArray` asserts that it stays that way |
 
 Two callbacks have no test, for reasons that are not worth working around:
 
-- `__dp_incr_taken_branch_counter` and `__dp_taken_branch_counter_output` are emitted only when the
-  pass is built with `DP_BRANCH_TRACKING`, which defaults to `0` (`profiler/DiscoPoP/CMakeLists.txt`).
-  Covering them would mean building a second pass, which costs more than these tests are worth.
+- `__dp_incr_taken_branch_counter` is emitted only when the pass is built with
+  `DP_BRANCH_TRACKING`, which defaults to `0` (`profiler/DiscoPoP/CMakeLists.txt`). Covering it
+  would mean building a second pass, which costs more than these tests are worth.
+- `__dp_loop_output` and `__dp_taken_branch_counter_output` are never inserted: `__dp_finalize`
+  calls them. `test_loop_counters.py` asserts that the pass leaves them alone.
 - `__dp_decl` is dead: its `FunctionCallee` is commented out in `DiscoPoP.hpp` and no code path
   creates a call to it, although `rtlib/injected_functions/dp_decl.cpp` is still built.

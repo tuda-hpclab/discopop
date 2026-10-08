@@ -76,15 +76,8 @@ void addDep(depType type, LID curr, LID depOn, const char *var, std::int64_t AAv
   // Remove metadata to preserve result correctness and add metadata to `Dep`
   // object
 
-  // register dependency
-  depMap::iterator posInDeps = myMap->find(curr);
-  if (posInDeps == myMap->end()) {
-    depSet *tmp_depSet = new depSet();
-    tmp_depSet->insert(Dep(type, depOn, var, AAvar));
-    myMap->insert(std::pair<LID, depSet *>(curr, tmp_depSet));
-  } else {
-    posInDeps->second->insert(Dep(type, depOn, var, AAvar));
-  }
+  // register dependency. operator[] creates the set when the lid is seen for the first time.
+  (*myMap)[curr].insert(Dep(type, depOn, var, AAvar));
 
 #if DP_CALLTREE_PROFILING
   // register dependency for call_tree based metadata calculation
@@ -159,7 +152,7 @@ void generateStringDepMap() {
       string unpacked_lid = to_string(dline_first_instID) + "@" +
                             to_string(dline_first_callpathStateID); // use instructionID instead of lineID
       unordered_set<string> lineDeps;
-      for (auto &d : *(dline.second)) {
+      for (auto &d : dline.second) {
         string dep = "";
         switch (d.type) {
         case RAW:
@@ -195,7 +188,6 @@ void generateStringDepMap() {
       } else {
         (*outPutDeps)[unpacked_lid].insert(lineDeps.begin(), lineDeps.end());
       }
-      delete dline.second;
     }
   }
 }
@@ -302,12 +294,13 @@ void initParallelization() {
 
   // create worker threads to process the firstAccessQueue
   for (int64_t i = 0; i < NUM_WORKERS; ++i) {
-    pthread_create(&workers[i], &attr, processFirstAccessQueue, (void *)i);
+    pthread_create(&workers[i], &attr, processFirstAccessQueue, reinterpret_cast<void *>(i));
   }
 
   // create worker thread to process the secondAccessQueue
   secondAccessQueue_worker_thread = new pthread_t();
-  pthread_create(secondAccessQueue_worker_thread, &attr, processSecondAccessQueue, (void *)NUM_WORKERS);
+  pthread_create(secondAccessQueue_worker_thread, &attr, processSecondAccessQueue,
+                 reinterpret_cast<void *>(static_cast<std::intptr_t>(NUM_WORKERS)));
 
   pthread_attr_destroy(&attr);
 }
@@ -341,30 +334,20 @@ string getMemoryRegionIdFromAddr(string fallback, ADDR addr) {
 }
 
 void mergeDeps() {
-  depSet *tmp_depSet = nullptr; // pointer to the current processing set of dps
-  depMap::iterator globalPos;   // position of the current processing lid in allDeps
-
   allDepsLock.lock();
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::MERGE_DEPS);
 #endif
 
   for (auto &dep : *myMap) {
-    // if a lid occurs the first time, the thread's set of dependencies becomes the global one.
-    // Otherwise it is merged into the global set and freed.
-    globalPos = allDeps->find(dep.first);
-    if (globalPos == allDeps->end()) {
-      (*allDeps)[dep.first] = dep.second;
-    } else {
-      tmp_depSet = globalPos->second;
-      for (auto &d : *(dep.second)) {
-        tmp_depSet->insert(d);
-      }
-      delete dep.second;
+    // if a lid occurs the first time, operator[] adds its set to the global hash table;
+    // otherwise the set that is already there is extended.
+    depSet &global_deps = (*allDeps)[dep.first];
+    for (auto &d : dep.second) {
+      global_deps.insert(d);
     }
   }
   allDepsLock.unlock();
-  // the sets are owned by allDeps now or freed (clearing the map without freeing them leaked every set)
   myMap->clear();
 }
 
@@ -461,7 +444,7 @@ void *processFirstAccessQueue(void *arg) {
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
 #endif
 
-  int64_t id = (int64_t)arg;
+  const std::intptr_t id = reinterpret_cast<std::intptr_t>(arg);
   myMap = new depMap();
 
   FirstAccessQueueChunk *current = nullptr;
@@ -532,7 +515,7 @@ void *processFirstAccessQueue(void *arg) {
   }
 
   mergeDeps();
-  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete myMap;
   myMap = nullptr;
 
@@ -563,7 +546,7 @@ void *processSecondAccessQueue(void *arg) {
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
 #endif
 
-  int64_t id = (int64_t)arg;
+  const std::intptr_t id = reinterpret_cast<std::intptr_t>(arg);
   myMap = new depMap();
 
   SecondAccessQueueElement *current = nullptr;
@@ -646,7 +629,7 @@ void *processSecondAccessQueue(void *arg) {
 
   delete SMem;
   mergeDeps();
-  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete myMap;
   myMap = nullptr;
 
@@ -708,7 +691,10 @@ void finalizeSingleThreadedExecution() {
   }
 
   delete singleThreadedExecutionSMem;
+  singleThreadedExecutionSMem = nullptr;
   mergeDeps();
+  delete myMap;
+  myMap = nullptr;
 
   if (DP_DEBUG) {
     std::cout << "END: finalize Single Threaded Execution... \n";

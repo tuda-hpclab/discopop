@@ -26,34 +26,12 @@ void addDep(depType type, LID curr, LID depOn, const char *var, std::int64_t AAv
             shared_ptr<CallTreeNode> arg_write_ctn, shared_ptr<CallTreeNode> arg_read_ctn,
             bool calculate_dependency_metadata);
 #else
-void addDep(depType type, LID curr, LID depOn, char *var, std::int64_t AAvar);
+void addDep(depType type, LID curr, LID depOn, const char *var, std::int64_t AAvar, ADDR addr);
 #endif
 
 void outputDeps();
 
 void generateStringDepMap();
-
-// merges the dependencies handed over by __dp_add_bb_deps into the collected
-// dependencies. Runs at termination, since it is only then known which of the
-// conditionally taken basic blocks the registered dependencies belong to were
-// actually executed.
-void process_registered_bb_deps();
-
-// the id of the current callpath state, or 0 if none is known yet. Used to
-// attribute the executions reported by __dp_report_bb / __dp_report_bb_pair.
-std::uint32_t current_callpath_state_id_for_bb_reports();
-
-// merges the dependencies of the given handed over dependency strings into
-// out, once per reported execution in reported whose basic block index they are
-// registered under. The sink of each dependency gets the reported sink state,
-// its source the reported source state (an INIT dependency has no source and
-// keeps "*"), in the "<instruction id>@<callpath state id>" notation of the
-// dynamically profiled dependencies.
-void merge_bb_deps(const std::vector<const char *> &dep_strings, const ReportedBBSet &reported, stringDepMap &out);
-
-// Releases the strings registered by __dp_add_bb_deps. Called from
-// destroy_immortal_globals(), once process_registered_bb_deps() has consumed them.
-void release_registered_bb_deps();
 
 void readRuntimeInfo();
 
@@ -72,8 +50,8 @@ void *processSecondAccessQueue(void *arg);
 #if DP_CALLTREE_PROFILING
 void analyzeSingleAccess(
     __dp::AbstractShadow *SMem, __dp::AccessInfo &access,
-    std::unordered_map<ADDR, std::shared_ptr<CallTreeNode>> *thread_private_write_addr_to_call_tree_node_map,
-    std::unordered_map<ADDR, std::shared_ptr<CallTreeNode>> *thread_private_read_addr_to_call_tree_node_map);
+    std::unordered_map<ADDR, std::shared_ptr<CallTreeNode>> &thread_private_write_addr_to_call_tree_node_map,
+    std::unordered_map<ADDR, std::shared_ptr<CallTreeNode>> &thread_private_read_addr_to_call_tree_node_map);
 #else
 void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access);
 #endif

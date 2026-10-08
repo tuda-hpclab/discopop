@@ -42,3 +42,38 @@ TEST_F(LoopCounterTest, testIncreaseLoopCounter) {
   EXPECT_EQ(loop_counters2[8], 0);
   EXPECT_EQ(loop_counters2[9], 1);
 }
+
+TEST_F(LoopCounterTest, testSparseLoopIds) {
+  auto lc = __dp::LoopCounter{};
+
+  lc.incr_loop_counter(1000);
+
+  const auto &counters = lc.get_loop_counters();
+  EXPECT_EQ(counters.size(), 1001);
+  EXPECT_EQ(counters[1000], 1);
+  EXPECT_EQ(counters[0], 0);
+  EXPECT_EQ(counters[999], 0);
+}
+
+TEST_F(LoopCounterTest, testDoesNotShrinkForASmallerId) {
+  auto lc = __dp::LoopCounter{};
+
+  lc.incr_loop_counter(5);
+  EXPECT_EQ(lc.get_loop_counters().size(), 6);
+
+  lc.incr_loop_counter(1);
+  EXPECT_EQ(lc.get_loop_counters().size(), 6);
+  EXPECT_EQ(lc.get_loop_counters()[1], 1);
+  EXPECT_EQ(lc.get_loop_counters()[5], 1);
+}
+
+TEST_F(LoopCounterTest, testRepeatedIncrements) {
+  auto lc = __dp::LoopCounter{};
+
+  for (auto i = 0; i < 1000; ++i) {
+    lc.incr_loop_counter(3);
+  }
+
+  EXPECT_EQ(lc.get_loop_counters().size(), 4);
+  EXPECT_EQ(lc.get_loop_counters()[3], 1000);
+}

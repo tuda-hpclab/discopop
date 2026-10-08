@@ -1,10 +1,36 @@
 #include <gtest/gtest.h>
 
 #include "../../../../profiler/rtlib/loop/LoopManager.hpp"
+#include "../../../../profiler/rtlib/loop/Makros.hpp"
+
+#include <algorithm>
+#include <sstream>
+#include <string>
+#include <vector>
 
 // Tests for old version (i.e., capturing functionality)
 
 class LoopManagerTest : public ::testing::Test {};
+
+namespace {
+
+// output() walks an unordered_map, so the order of the records is not part of its contract.
+std::vector<std::string> sorted_output_lines(__dp::LoopManager &lm) {
+  std::ostringstream stream;
+  lm.output(stream);
+
+  std::vector<std::string> lines;
+  std::istringstream reader{stream.str()};
+  std::string line;
+  while (std::getline(reader, line)) {
+    lines.push_back(line);
+  }
+
+  std::sort(lines.begin(), lines.end());
+  return lines;
+}
+
+} // namespace
 
 TEST_F(LoopManagerTest, testInitialization) {
   auto lm = __dp::LoopManager();
@@ -253,4 +279,173 @@ TEST_F(LoopManagerTest, testCorrectFuncLevel) {
   ASSERT_EQ(loop_9.funcLevel, 7);
   ASSERT_EQ(loop_12.funcLevel, 104);
   ASSERT_EQ(loop_15.funcLevel, 103);
+}
+
+TEST_F(LoopManagerTest, testOutputWithoutLoops) {
+  auto lm = __dp::LoopManager();
+
+  ASSERT_TRUE(sorted_output_lines(lm).empty());
+}
+
+TEST_F(LoopManagerTest, testOutputSingleEntry) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.exit_loop(12);
+
+  // <begin> BGN loop <total> <entered> <average> <maximum>
+  const std::vector<std::string> expected{"0:12 END loop", "0:3 BGN loop 3 1 3 3"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testOutputSeveralEntries) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.exit_loop(10);
+
+  // the same loop is entered a second time and runs longer
+  lm.create_new_loop(1, 2, 3);
+  for (auto i = 0; i < 5; ++i) {
+    lm.iterate_loop(1);
+  }
+  lm.exit_loop(10);
+
+  // 7 iterations across 2 entries, so 3 on average (integer division), at most 5 in one entry
+  const std::vector<std::string> expected{"0:10 END loop", "0:3 BGN loop 7 2 3 5"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testOutputSeveralLoops) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  lm.create_new_loop(1, 5, 6);
+  lm.iterate_loop(1);
+  lm.exit_loop(9);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+  lm.exit_loop(12);
+
+  // the inner loop runs once, the outer one twice: only the innermost entry is iterated
+  const std::vector<std::string> expected{"0:12 END loop", "0:3 BGN loop 2 1 2 2", "0:6 BGN loop 1 1 1 1",
+                                          "0:9 END loop"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testOutputLoopThatWasNeverLeft) {
+  auto lm = __dp::LoopManager();
+
+  // entered, iterated, never exited -- nEntered stays 0, which the average must not be divided by
+  lm.create_new_loop(1, 2, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+
+  // the end line is unknown, which decodeLID reports as '*'
+  const std::vector<std::string> expected{"* END loop", "0:3 BGN loop 0 0 0 0"};
+  ASSERT_EQ(sorted_output_lines(lm), expected);
+}
+
+TEST_F(LoopManagerTest, testGetCurrentLoopId) {
+  auto lm = __dp::LoopManager();
+
+  lm.create_new_loop(1, 2, 3);
+  ASSERT_EQ(lm.get_current_loop_id(), 2);
+
+  lm.create_new_loop(1, 5, 6);
+  ASSERT_EQ(lm.get_current_loop_id(), 5);
+
+  lm.exit_loop(9);
+  ASSERT_EQ(lm.get_current_loop_id(), 2);
+}
+
+TEST_F(LoopManagerTest, testGetCurrentLoopIdWithoutLoop) {
+  auto lm = __dp::LoopManager();
+
+  ASSERT_TRUE(lm.empty());
+  ASSERT_EQ(lm.get_current_loop_id(), -1);
+
+  // and again after the only loop has been left
+  lm.create_new_loop(1, 2, 3);
+  lm.exit_loop(9);
+
+  ASSERT_TRUE(lm.empty());
+  ASSERT_EQ(lm.get_current_loop_id(), -1);
+}
+
+TEST_F(LoopManagerTest, testIsDone) {
+  auto lm = __dp::LoopManager();
+
+  ASSERT_FALSE(lm.is_done());
+
+  lm.set_done();
+  ASSERT_TRUE(lm.is_done());
+
+  // the latch only ever closes
+  lm.set_done();
+  ASSERT_TRUE(lm.is_done());
+}
+
+TEST_F(LoopManagerTest, testLoopCounters) {
+  auto lm = __dp::LoopManager();
+
+  ASSERT_TRUE(lm.get_loop_counters().empty());
+
+  lm.incr_loop_counter(0);
+  lm.incr_loop_counter(2);
+  lm.incr_loop_counter(0);
+
+  const std::vector<unsigned int> expected{2, 0, 1};
+  ASSERT_EQ(lm.get_loop_counters(), expected);
+}
+
+TEST_F(LoopManagerTest, testUpdateLidUsesTheLoopStack) {
+  auto lm = __dp::LoopManager();
+
+  // without a loop, update_lid marks the metadata as "no loop active"
+  ASSERT_EQ(unpackLIDMetadata_getLoopID(lm.update_lid(0x1234)), 0xFF);
+
+  lm.create_new_loop(1, 42, 3);
+  lm.iterate_loop(1);
+  lm.iterate_loop(1);
+
+  const LID lid = lm.update_lid(0x1234);
+
+  ASSERT_EQ(lid, lm.get_stack().update_lid(0x1234));
+  ASSERT_EQ(unpackLIDMetadata_getLoopID(lid), 42);
+  ASSERT_EQ(unpackLIDMetadata_getLoopIteration_0(lid), 2);
+  ASSERT_EQ(lid & 0xFFFFFFFF, 0x1234);
+}
+
+TEST_F(LoopManagerTest, testCleanFunctionExitStopsAtAForeignLevel) {
+  auto lm = __dp::LoopManager();
+
+  const auto &table = lm.get_stack();
+
+  // a loop of one function, a loop of the function it calls, and another loop of the first one
+  lm.create_new_loop(1, 2, 3);
+  lm.create_new_loop(2, 5, 6);
+  lm.create_new_loop(1, 8, 9);
+
+  // only the entries on top that belong to the level are unwound, so the level 1 entry below the
+  // level 2 one stays behind
+  lm.clean_function_exit(1, 20);
+  ASSERT_EQ(table.size(), 2);
+  ASSERT_EQ(table.top().loopID, 5);
+
+  // and asking again does not reach it either
+  lm.clean_function_exit(1, 21);
+  ASSERT_EQ(table.size(), 2);
+
+  lm.clean_function_exit(2, 22);
+  ASSERT_EQ(table.size(), 1);
+  ASSERT_EQ(table.top().loopID, 2);
+
+  lm.clean_function_exit(1, 23);
+  ASSERT_TRUE(lm.empty());
 }

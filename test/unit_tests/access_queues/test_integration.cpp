@@ -23,10 +23,6 @@ class AccessQueueIntegrationTest : public ::testing::Test {
         // finalizeParallelization leaves a fresh chunk for late accesses; SetUp replaces it
         delete __dp::mainThread_AccessInfoBuffer;
         __dp::mainThread_AccessInfoBuffer = nullptr;
-        // allDeps owns its dependency sets
-        for (auto &entry : *__dp::allDeps) {
-            delete entry.second;
-        }
         delete __dp::allDeps;
         __dp::allDeps = nullptr;
         // chunks the worker threads prepared in advance
@@ -41,7 +37,7 @@ void printAllDeps(){
     std::cout << "allDeps:" << std::endl;
     for(auto pair : *allDeps){
         std::cout << "LID: " << pair.first << std::endl;
-        for(auto dep: *(pair.second)){
+        for(auto dep: pair.second){
             std::cout << "--> ";
             switch(dep.type){
                 case(RAW):
@@ -118,9 +114,9 @@ void check_lid_deps(LID lid, int expected_INIT, int expected_RAW, int expected_W
 
     ASSERT_TRUE(lid_contained);
     int expected_size = expected_INIT + expected_RAW + expected_WAR + expected_WAW;
-    ASSERT_EQ(((*allDeps)[lid])->size(), expected_size);
+    ASSERT_EQ((*allDeps)[lid].size(), expected_size);
     int count_INIT = 0, count_RAW = 0, count_WAR = 0, count_WAW = 0;
-    for(Dep elem: *((*allDeps)[lid])){
+    for(Dep elem: (*allDeps)[lid]){
         switch(elem.type){
             case(INIT):
                 count_INIT++;

@@ -19,6 +19,33 @@ class CallTreeTest : public ::testing::Test {
   }
 };
 
+// call_tree_node_count counts the nodes of the tree itself. call_tree_total_living_node_count
+// counts every CallTreeNode that exists, the prepared ones the tree has not taken into use yet
+// included, so it is the one that shows whether anything is left behind.
+class CallTreeLivingNodeCountTest : public ::testing::Test {
+protected:
+  void SetUp() override { __dp::call_tree_total_living_node_count = &living_nodes; }
+  void TearDown() override { __dp::call_tree_total_living_node_count = nullptr; }
+
+  std::atomic<unsigned int> living_nodes{0};
+};
+
+TEST_F(CallTreeLivingNodeCountTest, testATreeLeavesNoNodeBehind) {
+  {
+    auto ct = __dp::CallTree();
+    ct.enter_function(42);
+    ct.enter_loop(43);
+    ct.enter_iteration(1);
+    ct.exit_function();
+
+    // a whole prepared chunk belongs to the tree, plus whatever the manager threads have put into
+    // the pool, so the count is far above the number of nodes that are actually in the tree
+    ASSERT_GE(living_nodes.load(), static_cast<unsigned int>(CTNQC_CHUNK_SIZE));
+  }
+
+  ASSERT_EQ(living_nodes.load(), 0u);
+}
+
 TEST_F(CallTreeTest, testConstructor) {
   auto ct = __dp::CallTree();
 
@@ -167,4 +194,56 @@ TEST_F(CallTreeTest, testImmediateFuncExit) {
   ct.exit_function();
   // check for segfaults
   ASSERT_TRUE(true);
+}
+
+TEST_F(CallTreeLivingNodeCountTest, testTheNodeCountStaysZeroWhileTheCounterIsOff) {
+  // call_tree_node_count is a null pointer unless someone switches it on, and nothing in the
+  // runtime does
+  ASSERT_EQ(__dp::call_tree_node_count, nullptr);
+
+  auto ct = __dp::CallTree();
+  ct.enter_function(42);
+  ct.enter_loop(43);
+  ct.enter_iteration(1);
+
+  // so the tree reports no nodes at all, however many it is holding
+  ASSERT_EQ(ct.get_node_count(), 0u);
+  ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Iteration);
+}
+
+TEST_F(CallTreeLivingNodeCountTest, testTheGarbageOfManyCallsIsHandedToTheManagerThreads) {
+  {
+    auto ct = __dp::CallTree();
+
+    // every exit hands the node that was current to the garbage chunk. Once the chunk is full it
+    // goes to the manager threads, which is the path CT_GARBAGE_COLLECTION_CHUNK_SIZE guards.
+    for (unsigned int i = 0; i < static_cast<unsigned int>(CT_GARBAGE_COLLECTION_CHUNK_SIZE) + 100; ++i) {
+      ct.enter_function(i);
+      ct.exit_function();
+    }
+
+    ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Root);
+  }
+
+  // nothing survives the tree, neither the offloaded chunks nor the one that was still filling up
+  ASSERT_EQ(living_nodes.load(), 0u);
+}
+
+TEST_F(CallTreeTest, testImmediateLoopExit) {
+  auto ct = __dp::CallTree();
+  ct.exit_loop();
+
+  // there was no loop to leave, so the walk runs off the root and the tree is left without a
+  // current node
+  ASSERT_EQ(ct.get_current_node_ptr(), nullptr);
+
+  // the guards in the exits keep that from turning into a dereference of a null pointer
+  ct.exit_loop();
+  ct.exit_function();
+  ASSERT_EQ(ct.get_current_node_ptr(), nullptr);
+
+  // and entering a function starts a new chain, parentless
+  ct.enter_function(42);
+  ASSERT_EQ(ct.get_current_node_ptr()->get_node_type(), __dp::CallTreeNodeType::Function);
+  ASSERT_EQ(ct.get_current_node_ptr()->get_parent_ptr(), nullptr);
 }

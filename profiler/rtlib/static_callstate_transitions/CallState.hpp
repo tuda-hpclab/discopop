@@ -28,9 +28,9 @@ public:
   CallState(int32_t id_arg) : id(id_arg) {}
   void register_transition(int32_t trigger_instruction, CallState *target_state);
   void register_implicit_return_transition(CallState *target_state);
-  int32_t get_id();
-  CallState *get_transition_target(int32_t trigger_instruction);
-  CallState *get_implicit_return_transition_target();
+  int32_t get_id() const;
+  CallState *get_transition_target(int32_t trigger_instruction) const;
+  CallState *get_implicit_return_transition_target() const;
   void set_function_entry_id(int32_t function_entry_id_arg) { function_entry_id = function_entry_id_arg; }
   int32_t get_function_entry_id() const { return function_entry_id; }
 };

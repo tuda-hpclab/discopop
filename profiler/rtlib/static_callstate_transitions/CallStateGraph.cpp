@@ -11,16 +11,40 @@
  */
 
 #include "CallStateGraph.hpp"
+
+#include "../output_paths.hpp"
+
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
+namespace {
+
+// The parser drops whatever it cannot make sense of -- a line short of a field is skipped below. A
+// field that is not a number is the same kind of damage, and both input files are written with
+// ios_base::app, so a truncated or left over line is exactly what it looks like. It must not throw:
+// this constructor runs from __dp_init, where an escaping exception takes the instrumented program
+// down before it has started.
+bool parse_id(const std::string &text, std::int32_t &result) {
+  try {
+    std::size_t consumed = 0;
+    result = std::stoi(text, &consumed);
+    return consumed > 0;
+  } catch (const std::logic_error &) {
+    return false;
+  }
+}
+
+} // namespace
+
 CallStateGraph::CallStateGraph() {
-  auto start_time = std::chrono::high_resolution_clock::now();
+#ifdef DP_RTLIB_VERBOSE
+  const auto start_time = std::chrono::high_resolution_clock::now();
+#endif
   // open input file
-  std::string tmp_2(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp_2 += "/callpath_state_transitions.txt";
+  const std::string tmp_2 = __dp::profiler_output_path("callpath_state_transitions.txt");
   // create graph by parsing the file line by line
   std::ifstream file(tmp_2);
   if (!file) {
@@ -50,14 +74,20 @@ CallStateGraph::CallStateGraph() {
     // get target id
     std::string target_callstate_id_str = line;
     // register transition in CallStateGraph
-    register_transition(std::stoi(source_callstate_id_str), std::stoi(trigger_instruction_id_str),
-                        std::stoi(target_callstate_id_str));
+    std::int32_t source_callstate_id = 0;
+    std::int32_t trigger_instruction_id = 0;
+    std::int32_t target_callstate_id = 0;
+    if (!parse_id(source_callstate_id_str, source_callstate_id) ||
+        !parse_id(trigger_instruction_id_str, trigger_instruction_id) ||
+        !parse_id(target_callstate_id_str, target_callstate_id)) {
+      continue;
+    }
+    register_transition(source_callstate_id, trigger_instruction_id, target_callstate_id);
   }
   // Transitions triggered by the dummy "return" instruction id are stored separately and without
   // that id (see DiscoPoP::save_path_state_transitions). Without them no function return updates
   // the call state, so a missing file must not pass silently.
-  std::string tmp_3(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp_3 += "/callpath_state_return_targets.txt";
+  const std::string tmp_3 = __dp::profiler_output_path("callpath_state_return_targets.txt");
   std::ifstream return_targets_file(tmp_3);
   if (!return_targets_file) {
     std::cerr << "DiscoPoP: could not open " << tmp_3 << ". Reported call states will be incorrect!\n";
@@ -72,14 +102,23 @@ CallStateGraph::CallStateGraph() {
     }
     std::string source_callstate_id_str = line.substr(0, pos);
     std::string target_callstate_id_str = line.substr(pos + 1);
-    register_implicit_return_transition(std::stoi(source_callstate_id_str), std::stoi(target_callstate_id_str));
+    std::int32_t source_callstate_id = 0;
+    std::int32_t target_callstate_id = 0;
+    if (!parse_id(source_callstate_id_str, source_callstate_id) ||
+        !parse_id(target_callstate_id_str, target_callstate_id)) {
+      continue;
+    }
+    register_implicit_return_transition(source_callstate_id, target_callstate_id);
   }
-  std::string tmp_4(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp_4 += "/callpath_function_entries.txt";
-  read_function_entries(tmp_4);
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  read_function_entries(__dp::profiler_output_path("callpath_function_entries.txt"));
+#ifdef DP_RTLIB_VERBOSE
+  // The instrumented program writes its own output to this stream, so a measurement of the runtime's
+  // own startup does not belong there unconditionally. It stays behind the switch the rest of the
+  // runtime keeps its diagnostics behind.
+  const auto end_time = std::chrono::high_resolution_clock::now();
+  const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[CallStateGraph()]: " << ((double)duration.count() / 1000.0) << "s" << std::endl;
+#endif
 }
 
 // Reads callpath_function_entries.txt (see DiscoPoP::save_function_entries), lines:
@@ -131,14 +170,18 @@ CallState *CallStateGraph::get_function_entry_state(std::int32_t function_entry_
 }
 
 CallStateGraph::~CallStateGraph() {
-  auto start_time = std::chrono::high_resolution_clock::now();
+#ifdef DP_RTLIB_VERBOSE
+  const auto start_time = std::chrono::high_resolution_clock::now();
+#endif
   // delete nodes
   for (auto pair : node_map) {
     delete pair.second;
   }
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+#ifdef DP_RTLIB_VERBOSE
+  const auto end_time = std::chrono::high_resolution_clock::now();
+  const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[~CallStateGraph()]: " << ((double)duration.count() / 1000.0) << "s" << std::endl;
+#endif
 }
 
 CallState *CallStateGraph::get_or_register_node(std::int32_t call_state_id) {

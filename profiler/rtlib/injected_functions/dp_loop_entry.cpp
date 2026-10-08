@@ -14,8 +14,7 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include "../static_callstate_transitions/utils.hpp"
 
@@ -33,28 +32,7 @@ namespace __dp {
 extern "C" {
 
 void __dp_loop_entry(LID lid, int32_t loopID, int32_t instruction_id) {
-  if (!dpInited || targetTerminated) {
-    return;
-  }
-
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_loop_entry");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::LOOP_ENTRY);
-#endif
-
-  if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "__dp_loop_entry() is not executed since target program has "
-              "returned from main()."
-           << endl;
-    }
-    return;
-  }
+  DP_CALLBACK_SCOPE(LOOP_ENTRY);
 
   const auto function_stack_level = function_manager->get_current_stack_level();
   const auto is_new_loop = loop_manager->is_new_loop(loopID);
@@ -63,7 +41,10 @@ void __dp_loop_entry(LID lid, int32_t loopID, int32_t instruction_id) {
     loop_manager->create_new_loop(function_stack_level, loopID, lid);
 
 #if DP_STACK_ACCESS_DETECTION
+    // the loop scope spans the whole loop, the iteration scope one pass through the body. Both are
+    // opened here, and every further entry below replaces only the iteration one.
     memory_manager->enterScope("loop", lid);
+    memory_manager->enterScope("loop_iteration", lid);
 #endif
 
 #ifdef DP_CALLTREE_PROFILING

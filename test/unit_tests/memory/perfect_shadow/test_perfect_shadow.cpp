@@ -1,6 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "../../../../profiler/rtlib/memory/PerfectShadow.hpp"
@@ -19,6 +24,21 @@ TEST_F(PerfectShadowTest, testConstructor) {
   const auto *writes = shadow.getSigWrite();
   ASSERT_NE(writes, nullptr);
   ASSERT_TRUE(writes->empty());
+}
+
+// The runtime picks between PerfectShadow and ShadowMemory at startup and hands both the same
+// three shadow memory parameters. A perfect shadow records every address, so it ignores them --
+// but it has to accept them, or the two are no longer interchangeable.
+TEST_F(PerfectShadowTest, testConstructorWithTheShadowMemoryParameters) {
+  auto shadow = __dp::PerfectShadow{56, 270000, 2};
+
+  ASSERT_NE(shadow.getSigRead(), nullptr);
+  ASSERT_TRUE(shadow.getSigRead()->empty());
+  ASSERT_NE(shadow.getSigWrite(), nullptr);
+  ASSERT_TRUE(shadow.getSigWrite()->empty());
+
+  shadow.updateInWrite(1000, 7);
+  EXPECT_EQ(shadow.testInWrite(1000), 7);
 }
 
 TEST_F(PerfectShadowTest, testGet) {
@@ -649,4 +669,132 @@ TEST_F(PerfectShadow2Test, testAddressesInRange) {
   ASSERT_EQ(addresses_in_range_3.size(), 2);
   ASSERT_TRUE(addresses_in_range_3.find(8) != addresses_in_range_3.end());
   ASSERT_TRUE(addresses_in_range_3.find(12) != addresses_in_range_3.end());
+}
+
+namespace {
+
+// print() writes to std::cout, so the tests below redirect it and put the old buffer back.
+class CoutCapture {
+public:
+  CoutCapture() : previous(std::cout.rdbuf(buffer.rdbuf())) {}
+  ~CoutCapture() { std::cout.rdbuf(previous); }
+
+  CoutCapture(const CoutCapture &) = delete;
+  CoutCapture &operator=(const CoutCapture &) = delete;
+
+  std::string str() const { return buffer.str(); }
+
+private:
+  std::ostringstream buffer;
+  std::streambuf *previous;
+};
+
+using kv_pairs = std::vector<std::pair<std::int64_t, sigElement>>;
+
+kv_pairs sorted(kv_pairs pairs) {
+  std::sort(pairs.begin(), pairs.end());
+  return pairs;
+}
+
+} // namespace
+
+TEST_F(PerfectShadowTest, testKeyValuePairs) {
+  auto shadow = __dp::PerfectShadow{};
+
+  ASSERT_TRUE(shadow.getReadKVPairs().empty());
+  ASSERT_TRUE(shadow.getWriteKVPairs().empty());
+
+  shadow.insertToRead(4, 100);
+  shadow.insertToRead(8, 200);
+  shadow.insertToWrite(4, 300);
+
+  ASSERT_EQ(sorted(shadow.getReadKVPairs()), (kv_pairs{{4, 100}, {8, 200}}));
+  ASSERT_EQ(sorted(shadow.getWriteKVPairs()), (kv_pairs{{4, 300}}));
+
+  // remove zeroes the value instead of dropping the key, so the pair stays in the listing
+  shadow.removeFromRead(8);
+  ASSERT_EQ(sorted(shadow.getReadKVPairs()), (kv_pairs{{4, 100}, {8, 0}}));
+}
+
+TEST_F(PerfectShadowTest, testMoveConstructor) {
+  auto shadow = __dp::PerfectShadow{};
+  shadow.insertToRead(4, 100);
+  shadow.insertToWrite(8, 200);
+
+  const auto *reads_before = shadow.getSigRead();
+  const auto *writes_before = shadow.getSigWrite();
+
+  auto moved = __dp::PerfectShadow{std::move(shadow)};
+
+  // the maps are handed over, not copied
+  ASSERT_EQ(moved.getSigRead(), reads_before);
+  ASSERT_EQ(moved.getSigWrite(), writes_before);
+  ASSERT_EQ(moved.testInRead(4), 100);
+  ASSERT_EQ(moved.testInWrite(8), 200);
+
+  // and the moved-from shadow keeps none of them, which is what makes its destructor safe
+  ASSERT_EQ(shadow.getSigRead(), nullptr);
+  ASSERT_EQ(shadow.getSigWrite(), nullptr);
+}
+
+TEST_F(PerfectShadowTest, testMoveAssignment) {
+  auto source = __dp::PerfectShadow{};
+  source.insertToRead(4, 100);
+
+  auto target = __dp::PerfectShadow{};
+  target.insertToRead(9, 999);
+
+  const auto *source_reads = source.getSigRead();
+  const auto *target_reads = target.getSigRead();
+
+  target = std::move(source);
+
+  ASSERT_EQ(target.getSigRead(), source_reads);
+  ASSERT_EQ(target.testInRead(4), 100);
+
+  // assignment swaps rather than releases, so the maps the target held live on in the source and
+  // are freed when it goes out of scope
+  ASSERT_EQ(source.getSigRead(), target_reads);
+}
+
+TEST_F(PerfectShadowTest, testPrint) {
+  auto shadow = __dp::PerfectShadow{};
+  shadow.insertToRead(4, 100);
+
+  const CoutCapture capture{};
+  shadow.print();
+
+  ASSERT_EQ(capture.str(), "Hello from PerfectShadow\n");
+}
+
+TEST_F(PerfectShadow2Test, testKeyValuePairs) {
+  auto shadow = __dp::PerfectShadow2{};
+
+  ASSERT_TRUE(shadow.getReadKVPairs().empty());
+  ASSERT_TRUE(shadow.getWriteKVPairs().empty());
+
+  shadow.insertToRead(4, 100);
+  shadow.insertToRead(8, 200);
+  shadow.insertToWrite(4, 300);
+
+  ASSERT_EQ(sorted(shadow.getReadKVPairs()), (kv_pairs{{4, 100}, {8, 200}}));
+  ASSERT_EQ(sorted(shadow.getWriteKVPairs()), (kv_pairs{{4, 300}}));
+
+  shadow.removeFromRead(8);
+  ASSERT_EQ(sorted(shadow.getReadKVPairs()), (kv_pairs{{4, 100}, {8, 0}}));
+}
+
+TEST_F(PerfectShadow2Test, testPrint) {
+  auto shadow = __dp::PerfectShadow2{};
+  shadow.insertToRead(4, 100);
+  shadow.insertToWrite(4, 200);
+
+  const CoutCapture capture{};
+  shadow.print();
+
+  const auto output = capture.str();
+  ASSERT_NE(output.find("ADDR"), std::string::npos);
+
+  // the table lists one line per read, and takes the write of the same address from the write cache
+  ASSERT_NE(output.find("| 4\t| 100\t| 200\t|"), std::string::npos) << output;
 }

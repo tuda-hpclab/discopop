@@ -251,6 +251,15 @@ def compile_command(toolchain: Toolchain, program: Program, configuration: str, 
             f"-fpass-plugin={toolchain.plugin}",
             "-Xlinker",
             f"-L{toolchain.rtlib_dir}",
+            # libDiscoPoP_RT.a is a static archive and nothing in instrumented code references
+            # __dp_init -- the runtime starts from the .init_array entry next to it. Without this
+            # the linker leaves that object out, the runtime never comes up, and every callback
+            # returns at its guard: the benchmark then measures the cost of calling the callbacks
+            # rather than the cost of profiling. CXX_wrapper.sh passes the same flag.
+            "-Xlinker",
+            "-u",
+            "-Xlinker",
+            "__dp_init",
             "-Xlinker",
             "-lDiscoPoP_RT",
         ]
@@ -310,6 +319,19 @@ def measure(
         if repetition > 0:
             measurement.run_seconds.append(duration)
             measurement.stdout = stdout
+
+    if configuration == INSTRUMENTED:
+        # An instrumented binary that never brings the runtime up still calls every callback, so
+        # it looks plausible and merely reports a much smaller overhead -- which is what a missing
+        # -u __dp_init did until it was noticed by comparing two branches. The dependency file is
+        # the cheapest proof that profiling actually happened.
+        dependencies = dot_discopop / "profiler" / "dynamic_dependencies.txt"
+        if not dependencies.is_file():
+            raise BenchmarkError(
+                f"{program.name}: the instrumented run produced no {dependencies.name}, so the "
+                f"runtime did not profile anything and the measured overhead is meaningless. "
+                f"Check that the runtime library is linked the way the wrappers link it."
+            )
 
     measurement.binary_size_bytes = binary.stat().st_size
     return measurement

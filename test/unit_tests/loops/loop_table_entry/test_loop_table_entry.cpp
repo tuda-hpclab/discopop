@@ -64,3 +64,20 @@ TEST_F(LoopTableEntryTest, testEquality) {
   ASSERT_NE(lte5, lte1);
   ASSERT_NE(lte6, lte1);
 }
+
+TEST_F(LoopTableEntryTest, testIncrementCount) {
+  auto lte = __dp::LoopTableEntry{1, 2, 3, 4};
+
+  ASSERT_EQ(lte.get_count(), 3);
+
+  lte.increment_count();
+  ASSERT_EQ(lte.get_count(), 4);
+
+  lte.increment_count();
+  lte.increment_count();
+  ASSERT_EQ(lte.get_count(), 6);
+
+  // the count takes part in the comparison although it is not reachable as a member
+  ASSERT_NE(lte, __dp::LoopTableEntry(1, 2, 3, 4));
+  ASSERT_EQ(lte, __dp::LoopTableEntry(1, 2, 6, 4));
+}

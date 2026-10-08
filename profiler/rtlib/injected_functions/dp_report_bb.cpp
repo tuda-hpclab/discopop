@@ -15,8 +15,8 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
+#include "../hybrid_analysis/bb_deps.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -36,19 +36,10 @@ extern "C" {
 // basic block (or no source instruction at all, INIT). Both ends of these
 // dependencies therefore carry the current callpath state.
 void __dp_report_bb(uint32_t bbIndex) {
-  if (!dpInited || targetTerminated) {
-    return;
-  }
+  DP_CALLBACK_SCOPE(REPORT_BB);
 
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
 #ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_report_bb");
   std::cout << "bbIndex: " << std::to_string(bbIndex) << '\n';
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::REPORT_BB);
 #endif
 
   const uint32_t state = current_callpath_state_id_for_bb_reports();

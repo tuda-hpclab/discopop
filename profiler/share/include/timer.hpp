@@ -34,6 +34,8 @@ enum class TimerRegion : unsigned int {
   FINALIZE,
   FUNC_ENTRY,
   FUNC_EXIT,
+  INIT,
+  LANDING_PAD,
   LOOP_ENTRY,
   LOOP_EXIT,
   NEW,
@@ -166,6 +168,7 @@ public:
     print(stream, " Function entry                                  : ", TimerRegion::FUNC_ENTRY);
     print(stream, " Function exit                                   : ", TimerRegion::FUNC_EXIT);
     stream << '\n';
+    print(stream, " Landing pad                                     : ", TimerRegion::LANDING_PAD);
     print(stream, " Loop entry                                      : ", TimerRegion::LOOP_ENTRY);
     print(stream, " Loop exit                                       : ", TimerRegion::LOOP_EXIT);
     stream << '\n';
@@ -181,6 +184,7 @@ public:
     print(stream, " Write to memory                                 : ", TimerRegion::WRITE);
     stream << '\n';
     print(stream, " Decl                                            : ", TimerRegion::DECL);
+    print(stream, " Init                                            : ", TimerRegion::INIT);
     print(stream, " Finalize                                        : ", TimerRegion::FINALIZE);
     stream << '\n';
 

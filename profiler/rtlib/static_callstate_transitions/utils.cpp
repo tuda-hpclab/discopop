@@ -11,10 +11,13 @@
  */
 
 #include "utils.hpp"
-#include "../runtimeFunctionsGlobals.hpp"
 #include "../Immortal.hpp"
+#include "../output_paths.hpp"
+#include "../runtimeFunctionsGlobals.hpp"
 
 #include <fstream>
+#include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -88,14 +91,34 @@ void reset_callstate_tracking(CallState *initial_state) {
 
 void initialize_current_callpath_state() {
   // open input file
-  std::string tmp(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp += "/initial_stateID.txt";
   // create graph by parsing the file line by line
-  std::ifstream file(tmp);
+  const std::string path = profiler_output_path("initial_stateID.txt");
+  std::ifstream file(path);
   std::string line;
+  // The pass writes this file only once it has found a call path labelled "main" (see
+  // DiscoPoP::save_initial_path), so it can be missing or empty -- and then the id below used to be
+  // read without ever having been written, which sends a garbage state into the graph. State 0 is
+  // the defined fallback: it has no transitions, so the reported call state simply stays put.
   int32_t current_callpath_state_id = 0;
+  bool initial_state_found = false;
   while (std::getline(file, line)) {
-    current_callpath_state_id = stoi(line);
+    // a line that is not a number is skipped rather than thrown over: this runs from __dp_init,
+    // where an escaping exception takes the instrumented program down
+    try {
+      std::size_t consumed = 0;
+      const int32_t parsed = std::stoi(line, &consumed);
+      if (consumed == 0) {
+        continue;
+      }
+      current_callpath_state_id = parsed;
+      initial_state_found = true;
+    } catch (const std::logic_error &) {
+      continue;
+    }
+  }
+  if (!initial_state_found) {
+    std::cerr << "DiscoPoP: could not read an initial call state from " << path
+              << ". Reported call states will be incorrect!\n";
   }
   reset_callstate_tracking(call_state_graph->get_or_register_node(current_callpath_state_id));
 }

@@ -234,10 +234,10 @@ public:
       return;
     }
 
-    // This actually searches the whole tree again, but it's fine for now
-    const auto clean_root = free(start, memory_region_id, root);
-
-    // We never delete the root node
+    // This actually searches the whole tree again, but it's fine for now.
+    // free() reports whether the node it was given became empty; that answer is discarded here,
+    // because we never delete the root node.
+    static_cast<void>(free(start, memory_region_id, root));
   }
 
 private:

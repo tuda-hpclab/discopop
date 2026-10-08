@@ -20,14 +20,14 @@ void CallState::register_implicit_return_transition(CallState *target_state) {
   implicit_return_transition_target = target_state;
 }
 
-int32_t CallState::get_id() { return id; }
+int32_t CallState::get_id() const { return id; }
 
-CallState *CallState::get_transition_target(int32_t trigger_instruction) {
-  auto pos = transitions.find(trigger_instruction);
+CallState *CallState::get_transition_target(int32_t trigger_instruction) const {
+  const auto pos = transitions.find(trigger_instruction);
   if (pos == transitions.end()) {
     return nullptr;
   }
   return pos->second;
 }
 
-CallState *CallState::get_implicit_return_transition_target() { return implicit_return_transition_target; }
+CallState *CallState::get_implicit_return_transition_target() const { return implicit_return_transition_target; }

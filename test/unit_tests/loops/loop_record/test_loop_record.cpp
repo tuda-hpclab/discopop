@@ -61,3 +61,18 @@ TEST_F(LoopRecordTest, testEquality) {
   ASSERT_NE(lr4, lr1);
   ASSERT_NE(lr5, lr1);
 }
+
+TEST_F(LoopRecordTest, testMaxIterationCountTakesPartInTheComparison) {
+  // the constructor does not take it; LoopManager raises it when a loop is left
+  auto lr1 = __dp::LoopRecord{1, 2, 3};
+  auto lr2 = __dp::LoopRecord{1, 2, 3};
+
+  ASSERT_EQ(lr1, lr2);
+
+  lr2.maxIterationCount = 7;
+  ASSERT_NE(lr1, lr2);
+  ASSERT_NE(lr2, lr1);
+
+  lr1.maxIterationCount = 7;
+  ASSERT_EQ(lr1, lr2);
+}

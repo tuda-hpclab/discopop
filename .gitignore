@@ -181,3 +181,6 @@ _deps
 # results of the pass overhead benchmark (benchmark/pass_overhead)
 pass_overhead_results.json
 pass_overhead_summary.md
+
+# coverage build of the runtime library
+build_coverage/

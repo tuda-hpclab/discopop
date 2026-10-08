@@ -39,10 +39,13 @@ target_sources(
   memory/mrtnode/test_mrtnode.cpp
   memory/perfect_shadow/test_perfect_shadow.cpp
   memory/scope/test_scope.cpp
+  memory/shadow_memory/test_shadow_memory.cpp
   memory/signature/test_signature.cpp
   calltree/call_tree/test_call_tree.cpp
   calltree/call_tree_node/test_call_tree_node.cpp
+  calltree/prepared_node_buffer/test_prepared_node_buffer.cpp
   calltree/metadata_queue/test_metadata_queue.cpp
+  calltree/metadata_queue_element/test_metadata_queue_element.cpp
   calltree/dependency_metadata/test_dependency_metadata.cpp
   calltree/utils/test_calltree_utils.cpp
   access_queues/test_first_access_queue_chunk.cpp
@@ -52,6 +55,16 @@ target_sources(
   access_queues/test_first_access_queue.cpp
   access_queues/test_integration.cpp
   functions/function_manager/test_function_manager.cpp
+  hybrid_analysis/bb_deps/test_bb_deps.cpp
+  utils/dputil/test_dputil.cpp
+  output_paths/test_output_paths.cpp
+  immortal/test_immortal_storage.cpp
+  types/dependencies/test_dependency_types.cpp
+  callback_scope/test_callback_scope.cpp
+  runtime_functions/test_runtime_functions.cpp
+  runtime_functions/test_single_threaded_execution.cpp
+  runtime_functions/test_read_runtime_info.cpp
+  lifecycle/test_runtime_shutdown.cpp
   static_callstate_transitions/call_state/test_call_state.cpp
   static_callstate_transitions/call_state_graph/test_call_state_graph.cpp
   static_callstate_transitions/utils/test_call_state_transitions_utils.cpp

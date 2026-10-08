@@ -12,6 +12,7 @@
 
 #include "../DPTypes.hpp"
 
+#include "../output_paths.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
 #include <fstream>
@@ -24,14 +25,19 @@ namespace __dp {
 extern "C" {
 
 void __dp_taken_branch_counter_output() {
+  // __dp_incr_taken_branch_counter is only called when the pass was built with
+  // DP_BRANCH_TRACKING. Without it there is nothing to report, and writing an empty
+  // cu_taken_branch_counter_output.txt would claim that every branch went untaken.
+  if (cuec.empty()) {
+    return;
+  }
+
   std::cout << "Outputting instrumentation results (taken branches)... ";
 
   std::ofstream ofile;
 
   // output information about the loops
-  std::string tmp(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp += "/cu_taken_branch_counter_output.txt";
-  ofile.open(tmp.data());
+  ofile.open(profiler_output_path("cu_taken_branch_counter_output.txt"));
 
   for (auto pair : cuec) {
     ofile << pair.first << ";" << pair.second << "\n";

@@ -50,6 +50,13 @@ public:
   void enter_new_function() { stackAddrs.emplace(0, 0); }
 
   void update_stack_addresses(const ADDR start, const ADDR end) {
+    // only enter_new_function() ever pushes a range to widen, so a stack allocation that arrives
+    // before any function was entered finds nothing here. is_stack_access() below guards the same
+    // stack the same way.
+    if (stackAddrs.empty()) {
+      return;
+    }
+
     auto &top = stackAddrs.top();
     if (top.first == 0) {
       top.first = start;
@@ -65,6 +72,12 @@ public:
   }
 
   std::pair<ADDR, ADDR> pop_last_stack_address() {
+    // the counterpart on the way out: a function left without a matching entry has no range, and
+    // two zeroes are what an untouched range holds anyway
+    if (stackAddrs.empty()) {
+      return {0, 0};
+    }
+
     const auto val = stackAddrs.top();
     stackAddrs.pop();
     return val;

@@ -35,7 +35,7 @@ bool DependencyMetadata::operator==(const DependencyMetadata &other) const {
          (sink_ancestors == other.sink_ancestors) && (source_ancestors == other.source_ancestors);
 }
 
-string DependencyMetadata::toString() {
+string DependencyMetadata::toString() const {
   string result = "";
   switch (type) {
   case RAW:

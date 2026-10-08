@@ -25,13 +25,15 @@ public:
   CallTreeNode();
   CallTreeNode(shared_ptr<CallTreeNode> parent_ptr, CallTreeNode *parent_ptr_raw, CallTreeNodeType type,
                unsigned int loop_or_function_id, unsigned int iteration_id);
+  CallTreeNode(const CallTreeNode &other);
+  CallTreeNode &operator=(const CallTreeNode &other) = default;
   ~CallTreeNode();
   bool operator==(const CallTreeNode &other) const;
-  shared_ptr<CallTreeNode> get_parent_ptr();
-  CallTreeNode *get_parent_ptr_raw(); // must not be used by threads other than the main!
-  CallTreeNodeType get_node_type();
-  unsigned int get_loop_or_function_id();
-  unsigned int get_iteration_id(); // only relevant for iteration type nodes, else always 0
+  shared_ptr<CallTreeNode> get_parent_ptr() const;
+  CallTreeNode *get_parent_ptr_raw() const; // must not be used by threads other than the main!
+  CallTreeNodeType get_node_type() const;
+  unsigned int get_loop_or_function_id() const;
+  unsigned int get_iteration_id() const; // only relevant for iteration type nodes, else always 0
   void set(shared_ptr<CallTreeNode> &&arg_parent_ptr, CallTreeNode *arg_parent_ptr_raw, CallTreeNodeType arg_type,
            unsigned int arg_loop_or_function_id, unsigned int arg_iteration_id);
 
@@ -42,7 +44,6 @@ private:
   shared_ptr<CallTreeNode> parent_ptr;
   CallTreeNode *parent_ptr_raw; // must not be used by threads other than the main for dereferencing. Using for equality
                                 // checks is fine!
-  atomic<unsigned int> *node_count_ptr;
 };
 
 } // namespace __dp
