@@ -113,6 +113,20 @@ jobs:
       matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
 
     steps:
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+
+      - name: Cache virtual environment
+        uses: actions/cache@v3
+        id: cache-venv
+        with:
+          path: venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+
       - name: Install Prerequisites
         run: |
           ${{ matrix.install_deps_cmd }}
@@ -128,9 +142,13 @@ jobs:
 
       - name: Setup venv and install DiscoPoP
         run: |
-          rm -rf venv
-          ${{ matrix.python }} -m venv venv
-          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          if [ -d "venv" ]; then
+            echo "Using cached venv"
+          else
+            rm -rf venv
+            ${{ matrix.python }} -m venv venv
+            venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          fi
 
       - name: Run MyPy Type Checking
         run: |
@@ -197,6 +215,13 @@ jobs:
         sanitizers: ["address,undefined", "thread"]
 
     steps:
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip-sanitizer
+        with:
+          path: ~/.cache/pip
+          key: pip-sanitizer-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+
       - name: Install Prerequisites
         run: |
           export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
@@ -222,6 +247,13 @@ jobs:
     name: "Profiler leak check (ASan/LSan)"
     timeout-minutes: 45
     steps:
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip-leak
+        with:
+          path: ~/.cache/pip
+          key: pip-leak-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+
       - name: Install Prerequisites
         run: |
           export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev
