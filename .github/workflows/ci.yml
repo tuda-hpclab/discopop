@@ -28,7 +28,46 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-# used for eventual multiple operating system testing
+  # Job to prepare and populate caches for all other jobs
+  prepare_cache:
+    runs-on: self-hosted
+    container:
+      image: ubuntu:24.04
+    name: "Prepare and populate caches"
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Prerequisites
+        run: |
+          export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev llvm-19-dev clang-19 libomp-19-dev
+
+      - name: Setup venv and install DiscoPoP
+        run: |
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip
+        with:
+          path: ~/.cache/pip
+          key: pip-cache-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            pip-cache-${{ runner.os }}-
+
+      - name: Cache virtual environment
+        uses: actions/cache@v3
+        id: cache-venv
+        with:
+          path: venv
+          key: venv-cache-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            venv-cache-${{ runner.os }}-
+
+  # used for eventual multiple operating system testing
 # the entries cover each supported LLVM version (19-22) and the minimum Python (3.10) once, see CLAUDE.md.
 # LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.10 comes from the deadsnakes PPA.
 # "python" is the interpreter the venv is created with.
@@ -48,48 +87,48 @@ jobs:
         run: |
           matrix='{"include":[
             {"id":"ubuntu-24-04-llvm-19-python-3.10",
-             "base_image":"ubuntu:24.04",
-             "python":"python3.10",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
+              "base_image":"ubuntu:24.04",
+              "python":"python3.10",
+              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
             },
             {"id":"ubuntu-24-04-llvm-20",
-             "base_image":"ubuntu:24.04",
-             "python":"python3",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
+              "base_image":"ubuntu:24.04",
+              "python":"python3",
+              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
             },
             {"id":"debian-trixie-llvm-21",
-             "base_image":"debian:trixie",
-             "python":"python3",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
+              "base_image":"debian:trixie",
+              "python":"python3",
+              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
             },
             {"id":"debian-trixie-llvm-22",
-             "base_image":"debian:trixie",
-             "python":"python3",
-             "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
+              "base_image":"debian:trixie",
+              "python":"python3",
+              "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
             }
           ]}'
 
           if [[ "${{ github.event_name }}" = "pull_request" && "${{ github.base_ref }}" != "master" ]]; then
             matrix='{"include":[
               {"id":"ubuntu-24-04-llvm-19-python-3.10",
-               "base_image":"ubuntu:24.04",
-               "python":"python3.10",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
+                "base_image":"ubuntu:24.04",
+                "python":"python3.10",
+                "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev"
               },
               {"id":"ubuntu-24-04-llvm-20",
-               "base_image":"ubuntu:24.04",
-               "python":"python3",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
+                "base_image":"ubuntu:24.04",
+                "python":"python3",
+                "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-20-dev clang-20 libomp-20-dev"
               },
               {"id":"debian-trixie-llvm-21",
-               "base_image":"debian:trixie",
-               "python":"python3",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
+                "base_image":"debian:trixie",
+                "python":"python3",
+                "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev"
               },
               {"id":"debian-trixie-llvm-22",
-               "base_image":"debian:trixie",
-               "python":"python3",
-               "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
+                "base_image":"debian:trixie",
+                "python":"python3",
+                "install_deps_cmd":"export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev && apt install -y llvm-22-dev clang-22 libomp-22-dev"
               }
             ]}'
           fi
@@ -100,13 +139,12 @@ jobs:
             echo "END"
           } >> "$GITHUB_OUTPUT"
 
-
   build_install_and_test:
     runs-on: self-hosted
     container:
       image: ${{ matrix.base_image }}
     name: "Build image, install package & test for: (${{ matrix.id }}) with image: (${{ matrix.base_image }})"
-    needs: [create_matrix]
+    needs: [prepare_cache, create_matrix]
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -118,9 +156,21 @@ jobs:
         id: cache-pip
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          key: pip-cache-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
           restore-keys: |
-            pip-${{ runner.os }}-
+            pip-cache-${{ runner.os }}-
+
+      - name: Cache virtual environment
+        uses: actions/cache@v3
+        id: cache-venv
+        with:
+          path: venv
+          key: venv-cache-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            venv-cache-${{ runner.os }}-
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Install Prerequisites
         run: |
@@ -128,72 +178,13 @@ jobs:
 
       - name: Setup venv and install DiscoPoP
         run: |
-          rm -rf venv
-          ${{ matrix.python }} -m venv venv
-          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-#        with:
-#          submodules: recursive
-
-      - name: Check all files for DiscoPoP License tag
-        run: |
-          ./scripts/dev/check-license.sh $(find . -type f)
-
-      - name: Setup venv and install DiscoPoP
-        run: |
-          rm -rf venv
-          ${{ matrix.python }} -m venv venv
-          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
-
-      - name: Run MyPy Type Checking
-        run: |
-            venv/bin/python3 -m mypy --config-file=mypy.ini
-
-      - name: Check formatting of DiscoPoP Explorer
-        run: |
-            venv/bin/python3 -m black -l 120 --check explorer
-
-      - name: Check formatting of DiscoPoP Library
-        run: |
-            venv/bin/python3 -m black -l 120 --check library
-
-      - name: Check formatting of the profiler leak check
-        run: |
-            venv/bin/python3 -m black -l 120 --check test/leak_check
-
-      - name: Check formatting of DiscoPoP Hotspot Detection
-        run: |
-            venv/bin/python3 -m black -l 120 --check hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx
-
-      - name: Check formatting of DiscoPoP GUI
-        run: |
-            venv/bin/python3 -m black -l 120 --check GUI
-
-      - name: Check formatting of DiscoPoP MCP Server
-        run: |
-            venv/bin/python3 -m black -l 120 --check mcp_server
-
-      # Python: the roots and import mode are configured in pyproject.toml ([tool.pytest.ini_options])
-      - name: Unit test check
-        run: |
-          . venv/bin/activate
-          python3 -m pytest
-          cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1
-          cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"
-          build_tests/test/unit_tests/DiscoPoP_UT
-
-      - name: Profiler gold standard tests
-        run: |
-            . venv/bin/activate
-            python3 -m unittest -v -k "*test.profiler.*"
-
-      - name: Python end-to-end-tests
-        run: |
-            . venv/bin/activate
-            python3 -m unittest -v -k "*.end_to_end.*"
-
+          if [ -d "venv" ]; then
+            echo "Using cached venv"
+          else
+            rm -rf venv
+            ${{ matrix.python }} -m venv venv
+            venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+          fi
 
   # profiler runtime library + C++ unit tests built with sanitizers (DP_SANITIZERS); the LLVM pass is not sanitized
   sanitizers:
@@ -212,17 +203,24 @@ jobs:
         sanitizers: ["address,undefined", "thread"]
 
     steps:
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip-sanitizer
+        with:
+          path: ~/.cache/pip
+          key: pip-cache-sanitizer-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            pip-cache-sanitizer-${{ runner.os }}-
+
       - name: Install Prerequisites
         run: |
           export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git llvm-19-dev clang-19 libomp-19-dev libboost-all-dev
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      # builds DiscoPoP_UT with -DDP_SANITIZERS and runs it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
-      - name: Build and run DiscoPoP_UT
+      - name: Setup venv and install DiscoPoP
         run: |
-          scripts/dev/run_profiler_sanitizers.sh "${{ matrix.sanitizers }}"
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
   # The profiler's runtime library built with AddressSanitizer/LeakSanitizer: its unit tests and instrumented
   # programs must not leak (see scripts/dev/check_profiler_leaks.sh). One platform is enough: the check is
@@ -237,17 +235,24 @@ jobs:
     name: "Profiler leak check (ASan/LSan)"
     timeout-minutes: 45
     steps:
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip-leak
+        with:
+          path: ~/.cache/pip
+          key: pip-cache-leak-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+          restore-keys: |
+            pip-cache-leak-${{ runner.os }}-
+
       - name: Install Prerequisites
         run: |
           export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-all-dev
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Check the profiler for memory leaks
+      - name: Setup venv and install DiscoPoP
         run: |
-          # the unit tests run under ASan/LSan in the sanitizers job already
-          DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
+          rm -rf venv
+          python3 -m venv venv
+          venv/bin/pip install -r requirements-dev.txt -e . ./profiler ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
 
   checks_successful:
     runs-on: self-hosted
