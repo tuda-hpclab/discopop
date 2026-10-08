@@ -177,3 +177,7 @@ _deps
 
 **/.discopop
 **/prog
+
+# results of the pass overhead benchmark (benchmark/pass_overhead)
+pass_overhead_results.json
+pass_overhead_summary.md

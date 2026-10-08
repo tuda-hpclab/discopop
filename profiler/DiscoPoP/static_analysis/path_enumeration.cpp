@@ -12,7 +12,11 @@
 
 #include "../DiscoPoP.hpp"
 #include <thread>
-#include <omp.h>
+
+// The .dot files written below are debugging aids: nothing in the toolchain reads them back,
+// and for deep call graphs they are by far the largest artifacts the pass produces (tens of MB
+// per translation unit). They are therefore only written on request.
+static bool write_callpath_dot_files() { return getenv("DP_WRITE_CALLPATH_DOT") != nullptr; }
 
 typedef int32_t CALLPATH_STATE_ID;
 typedef int32_t INSTRUCTION_ID;
@@ -351,7 +355,6 @@ void DiscoPoP::save_enumerated_paths(StaticCallPathTree* call_path_tree_ptr){
   stateID_to_callpath_file->open(tmp01.data(), std::ios_base::app);
   // write file
   std::string global_buffer = "";
-  #pragma omp parallel for reduction(+:global_buffer)
   for(auto path: call_path_tree_ptr->all_nodes){
 /*
     Note: 12.02.2026: removing the states leads to holes in the data dependency information.
@@ -401,7 +404,6 @@ void DiscoPoP::save_path_state_transitions(StaticCallPathTree* call_path_tree_pt
 
   std::string global_buffer = "";
   std::string return_targets_buffer = "# Format: <source_state_id> <target_state_id>\n";
-  #pragma omp parallel for reduction(+:global_buffer)
   for(auto path: call_path_tree_ptr->all_nodes){
     for(auto transition_pair: path->state_transitions){
       if(transition_pair.first == 1){
@@ -435,33 +437,35 @@ void DiscoPoP::save_path_state_transitions(StaticCallPathTree* call_path_tree_pt
     callpath_state_return_targets_file->close();
   }
 
-  // prepare saving the callpathState transitions as DOT file
-  callpath_state_transitions_file = new std::ofstream();
-  std::string tmp02(getenv("DOT_DISCOPOP_PROFILER"));
-  tmp02 += "/callpath_state_transitions.dot";
-  callpath_state_transitions_file->open(tmp02.data(), std::ios_base::app);
-  // write file
-  *callpath_state_transitions_file << "diGraph G {\n";
+  if (write_callpath_dot_files()) {
+    // prepare saving the callpathState transitions as DOT file
+    callpath_state_transitions_file = new std::ofstream();
+    std::string tmp02(getenv("DOT_DISCOPOP_PROFILER"));
+    tmp02 += "/callpath_state_transitions.dot";
+    callpath_state_transitions_file->open(tmp02.data(), std::ios_base::app);
+    // write file
+    *callpath_state_transitions_file << "diGraph G {\n";
 
-  global_buffer = "";  // reuse old global buffer
-  #pragma omp parallel for reduction(+:global_buffer)
-  for(auto path : call_path_tree_ptr->all_nodes){
-    for(auto transition_pair: path->state_transitions){
-      if(transition_pair.first == 1){
-        continue;
+    global_buffer = "";  // reuse old global buffer
+    for(auto path : call_path_tree_ptr->all_nodes){
+      for(auto transition_pair: path->state_transitions){
+        if(transition_pair.first == 1){
+          continue;
+        }
+        std::string transition_buffer = "  " + std::to_string(path->path_id) + " -> " + std::to_string(transition_pair.second) + " [label = " + std::to_string(transition_pair.first) + "];\n";
+        global_buffer += transition_buffer;
       }
-      std::string transition_buffer = "  " + std::to_string(path->path_id) + " -> " + std::to_string(transition_pair.second) + " [label = " + std::to_string(transition_pair.first) + "];\n";
-      global_buffer += transition_buffer;
+    }
+    *callpath_state_transitions_file << global_buffer;
+
+    *callpath_state_transitions_file << "}\n";
+    // close file handle
+    if (callpath_state_transitions_file != NULL && callpath_state_transitions_file->is_open()) {
+      callpath_state_transitions_file->flush();
+      callpath_state_transitions_file->close();
     }
   }
-  *callpath_state_transitions_file << global_buffer;
 
-  *callpath_state_transitions_file << "}\n";
-  // close file handle
-  if (callpath_state_transitions_file != NULL && callpath_state_transitions_file->is_open()) {
-    callpath_state_transitions_file->flush();
-    callpath_state_transitions_file->close();
-  }
   cout << "Done saving path state transitions..\n";
 }
 
@@ -495,6 +499,9 @@ void DiscoPoP::save_function_entries(StaticCallPathTree* call_path_tree_ptr){
 }
 
 void DiscoPoP::save_static_calltree_to_dot(StaticCalltree *calltree){
+  if (!write_callpath_dot_files()) {
+    return;
+  }
   cout << "saving path state transitions to dot..\n";
   std::ofstream *calltree_dot_file;
   // prepare saving the calltree as DOT file

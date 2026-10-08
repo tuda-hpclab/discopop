@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "../../rtlib/memory/Scope.hpp"
+#include "../../profiler/rtlib/memory/Scope.hpp"
 
 // General functions
 

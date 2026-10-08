@@ -72,6 +72,10 @@ This document contains critical information about working with this codebase. Fo
 - `mcp_server` and `hotspot_detection` have pytest-based unit tests colocated with the source as `test_*.py` files
 - to run them, from the repository root: `venv/bin/python -m pytest mcp_server` and `venv/bin/python -m pytest hotspot_detection`
 
+### Further unittest suites
+- `test/instrumentation` asserts on the callbacks the LLVM pass inserts; it drives `discopop_cxx`, so the venv has to be *activated* (`. venv/bin/activate`), not just addressed via `venv/bin/python`: `python3 -m unittest -v -k "*test.instrumentation.*"`
+- `test/wip_end_to_end` is work in progress and only runs with `DP_RUN_WIP_TESTS=1`
+
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt pytest-cov`
@@ -95,8 +99,8 @@ This document contains critical information about working with this codebase. Fo
 
 ### C++
 #### Profiler
-- the profiler's C++ unit tests (GoogleTest, in `test/unit_tests`) are only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`
-- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT`
+- there are two GoogleTest binaries, both only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`: `DiscoPoP_UT` (runtime library, `test/unit_tests`) and `DiscoPoP_Pass_UT` (LLVM pass, `test/pass_unit_tests`)
+- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
 #### Sanitizers (profiler)
@@ -130,3 +134,16 @@ To execute the CI pipeline locally, use the following command from the root fold
 - LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
 - the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
 - when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
+
+## Benchmarks
+### Runtime library micro-benchmarks
+- Google Benchmark micro-benchmarks for the runtime library data structures live in `benchmark/`
+- they are built through the root `CMakeLists.txt`: `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_BM -j "$(nproc)"`, then run `build_tests/benchmark/DiscoPoP_BM`
+
+### Pass overhead benchmark
+- `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
+- it needs the profiler installed without `-e`: `venv/bin/pip install -r requirements-dev.txt ./profiler`
+- to run it: `venv/bin/python benchmark/pass_overhead/run_pass_benchmark.py`
+- `--filter <substring>` and `--repetitions <n>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
+- it fails when a program does not build or run, or when the instrumented binary stops reproducing the baseline output; timings only fail the run if `--max-compile-factor` / `--max-run-factor` are given
+- adding a program means dropping a `.cpp` file with a `// BENCHMARK: <description>` comment into `benchmark/pass_overhead/programs`; see `benchmark/pass_overhead/README.md`

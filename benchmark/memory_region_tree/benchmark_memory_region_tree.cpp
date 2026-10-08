@@ -17,7 +17,7 @@
 #include <random>
 #include <vector>
 
-#include "../../rtlib/memory/MemoryRegionTree.hpp"
+#include "../../profiler/rtlib/memory/MemoryRegionTree.hpp"
 
 // General functions
 
