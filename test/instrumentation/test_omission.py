@@ -104,8 +104,18 @@ class TestOmittedScalarDependencies(InstrumentationTestCase):
             any(text.startswith("store i32 0, ptr %__dp_bb") for text in body),
             "the __dp_bb semaphore is never initialised to 0",
         )
+        # set to the callpath state of the source block's execution (state id + 1, never 0), as
+        # returned by __dp_bb_state, so that __dp_report_bb_pair can attribute the source
+        state_values = {
+            text.split(" = ", 1)[0] for text in body if text.split(" = ", 1)[-1].startswith("call i32 @__dp_bb_state(")
+        }
         self.assertTrue(
-            any(text.startswith("store i32 1, ptr %__dp_bb") for text in body),
+            any(
+                text.startswith("store i32 %")
+                and text.split()[2].rstrip(",") in state_values
+                and "ptr %__dp_bb" in text
+                for text in body
+            ),
             "the __dp_bb semaphore is never set, so no block pair can ever be reported in order",
         )
 

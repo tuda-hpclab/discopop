@@ -142,11 +142,16 @@ class TestFunctionCall(InstrumentationTestCase):
         self.assertCallbackCount("__dp_func_exit", 1, function="main")
         self.assertCallbackCount("__dp_finalize", 0)
 
-    def test_the_call_site_is_instrumented_as_project_code(self) -> None:
+    def test_the_call_site_reports_its_instruction_id(self) -> None:
         self.assertInstrumentsLine("__dp_call", "call")
         call = [c for c in self.program.calls("__dp_call") if self.program.source_line(c) is not None][0]
-        # the second argument flags calls into code the pass did not instrument
-        self.assertEqual(0, call.arg_int(1), "the call to helper is reported as a library call")
+        # the callpath states transition on the instruction id of the call site; the runtime tells
+        # calls into uninstrumented code apart by whether a __dp_func_entry follows, so there is no
+        # library flag any more
+        instruction_id = call.arg_int(0)
+        self.assertIsNotNone(instruction_id, f"{call.text} does not pass a constant instruction id")
+        assert instruction_id is not None
+        self.assertGreater(instruction_id, 0, "instruction id 0 is reserved for fall-through transitions")
 
 
 class TestNestedLoops(InstrumentationTestCase):
