@@ -113,9 +113,23 @@ jobs:
       matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
 
     steps:
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        id: cache-pip
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
+
       - name: Install Prerequisites
         run: |
           ${{ matrix.install_deps_cmd }}
+
+      - name: Cache virtual environment
+        uses: actions/cache@v3
+        id: cache-venv
+        with:
+          path: venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/requirements-dev.txt') }}
 
       - name: Checkout Repository
         uses: actions/checkout@v4
