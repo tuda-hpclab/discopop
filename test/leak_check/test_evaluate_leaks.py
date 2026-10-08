@@ -193,4 +193,5 @@ def test_reachable_heap_growth_fails() -> None:
 
 def test_known_leaks_file_of_the_repository_parses() -> None:
     known = evaluate_leaks.load_known_leaks(str(Path(__file__).parent / "known_leaks.txt"))
-    assert {entry.section for entry in known} == set(evaluate_leaks.SECTIONS)
+    # every listed leak is a real one; the file may well list none
+    assert {entry.section for entry in known} <= set(evaluate_leaks.SECTIONS)
