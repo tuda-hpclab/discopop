@@ -1,0 +1,3 @@
+# the loop at line 18 is a do-all; no reduction may be found
+[do_all]
+lines = ["1:18"]

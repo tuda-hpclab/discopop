@@ -63,11 +63,11 @@ where `<CMAKE_FLAGS>` can consist of any combination of the following flags and 
 To test the installation, it is possible to execute the provided set of unit tests.
 ```
 cd <dp_source_dir>
-venv/bin/python -m unittest -v
+venv/bin/python -m pytest
 ```
 
 The tests below `test/wip_end_to_end` are work in progress and are skipped by default.
 To include them, set `DP_RUN_WIP_TESTS=1`:
 ```
-DP_RUN_WIP_TESTS=1 venv/bin/python -m unittest -v
+DP_RUN_WIP_TESTS=1 venv/bin/python -m pytest test/wip_end_to_end
 ```

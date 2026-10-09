@@ -1,0 +1,12 @@
+[do_all]
+lines = ["1:59"]
+
+[reduction]
+lines = ["1:42"]
+
+[reduction.clauses]
+reduction = ["+:d"]
+shared = ["r1", "r2", "dr"]
+
+[reduction.allowed_clauses]
+first_private = ["nd"]

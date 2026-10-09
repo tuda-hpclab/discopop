@@ -482,7 +482,7 @@ jobs:
       - name: Python end-to-end tests
         run: |
           . venv/bin/activate
-          python3 -m unittest -v -k "*.end_to_end.*"
+          python3 -m pytest -v test/end_to_end
 
   # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
   # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's

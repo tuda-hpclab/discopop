@@ -52,8 +52,11 @@ This document contains critical information about working with this codebase. Fo
 - **Important:** The profiler module must be installed without the `-e` (editable) flag. Use `pip install ./profiler`, not `pip install -e ./profiler`. Editable mode breaks the relative paths required by `CXX_wrapper.sh` to locate compiled artifacts like `LLVMDiscoPoP.so`.
 ### Python end-to-end tests
 - bare `venv/bin/python -m pytest` runs them too (`test/end_to_end` is in `testpaths`, the `test.py` files are collected via `python_files`); `test/end_to_end/conftest.py` puts the interpreter's `bin` directory on `PATH` and skips them when `discopop_cc`, `discopop_cxx`, `discopop_explorer` or `make` is missing
-- run only them via `venv/bin/python -m pytest test/end_to_end`, or via unittest as below
-- to execute the python end-to-end tests, use 'venv/bin/python -m unittest -v -k "*.end_to_end.*"'
+- to execute only the python end-to-end tests, use `venv/bin/python -m pytest -v test/end_to_end`; the CI job `end_to_end_tests` runs exactly this
+- the standard detection tests are data, not code: every directory below `test/end_to_end/cases` with an `expected.toml` is one test of `test/end_to_end/test_cases.py` (id = path below `cases`); it holds the program in `src/` (Makefile building `prog` with `$CC`/`$CXX`) and the expected patterns, the schema is documented in the docstring of `test_cases.py`
+- add a detection test by adding such a directory; known failures get `xfail = "<reason>"` (strict: a passing case is reported)
+- the pipeline (`test/end_to_end/pipeline.py`) runs in a temporary copy of `src/`, never in the source tree; a failing build/profiling/explorer stage is reported as an ERROR, a mismatch as a FAILED test listing all differences
+- `test_cases.py` uses pytest parametrization, so `python -m unittest` no longer runs these cases; the remaining `test.py` modules are still `unittest.TestCase`s (pytest runs them as well)
 
 ### MCP server end-to-end tests
 - `test/end_to_end/mcp_server` drives the MCP server as a client does: it starts `python -m mcp_server.server` from the repository root (so the server code of the checkout is tested) as a stdio subprocess and calls it with the MCP SDK client
