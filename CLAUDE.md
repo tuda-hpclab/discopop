@@ -51,17 +51,19 @@ This document contains critical information about working with this codebase. Fo
 - to install python packages, execute `venv/bin/pip install . ./profiler ./library` from the root directory of the project
 - **Important:** The profiler module must be installed without the `-e` (editable) flag. Use `pip install ./profiler`, not `pip install -e ./profiler`. Editable mode breaks the relative paths required by `CXX_wrapper.sh` to locate compiled artifacts like `LLVMDiscoPoP.so`.
 ### Python end-to-end tests
+- bare `venv/bin/python -m pytest` runs them too (`test/end_to_end` is in `testpaths`, the `test.py` files are collected via `python_files`); `test/end_to_end/conftest.py` puts the interpreter's `bin` directory on `PATH` and skips them when `discopop_cc`, `discopop_cxx`, `discopop_explorer` or `make` is missing
+- run only them via `venv/bin/python -m pytest test/end_to_end`, or via unittest as below
 - to execute the python end-to-end tests, use 'venv/bin/python -m unittest -v -k "*.end_to_end.*"'
 
 ### MCP server end-to-end tests
 - `test/end_to_end/mcp_server` drives the MCP server as a client does: it starts `python -m mcp_server.server` from the repository root (so the server code of the checkout is tested) as a stdio subprocess and calls it with the MCP SDK client
-- run only them via `venv/bin/python -m unittest -v -k "*.end_to_end.mcp_server.*"` or `venv/bin/python -m pytest test/end_to_end/mcp_server`; they are also part of the end-to-end command above, but not of the bare `pytest` run
+- run only them via `venv/bin/python -m unittest -v -k "*.end_to_end.mcp_server.*"` or `venv/bin/python -m pytest test/end_to_end/mcp_server`; they are also part of the end-to-end command above and of the bare `pytest` run
 - `test_stdio_server.py` (protocol, tool listing, setup tools, error paths) and `test_daemon_proxy.py` (stdio proxy forwarding to a `--daemon`) need no profiler; `test_workflows.py` (pipeline, auto-tuning, patches, failure paths, cancellation) runs the real pipeline on `src/code.cpp` and is skipped when `discopop_cc`/`discopop_cxx` are not installed
 - every server gets a free `--daemon-port`, so a developer's daemon on the default port never takes over the calls; known server bugs are marked `unittest.expectedFailure` with a comment naming the cause
 
 ### Python unit tests (all)
 - to run all Python unit tests at once, from the repository root: `venv/bin/python -m pytest`
-- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection` and `test/project_manager`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI pipeline runs exactly this
+- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection`, `test/project_manager` and `test/end_to_end`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI pipeline runs exactly this
 - the configuration sets `--import-mode=importlib` and puts the source trees on `pythonpath`: with the default import mode, collecting several package roots in one run aborts with an import file mismatch against the copies installed in site-packages
 
 ### Python unit tests (discopop_library)

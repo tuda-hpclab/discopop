@@ -46,16 +46,19 @@ line-length = 120
 target-version = ["py310"]  # oldest supported Python (requires-python), so black never emits newer syntax
 
 [tool.pytest.ini_options]
-# the unit tests only; the profiler and end-to-end tests under test/ run via unittest (see CLAUDE.md)
+# unit tests and end-to-end tests (the latter are skipped without the installed profiler, see CLAUDE.md)
 testpaths = [
     "explorer/discopop_explorer",
     "library/discopop_library",
     "mcp_server",
     "hotspot_detection",
     "test/project_manager",
+    "test/end_to_end",
     "test/leak_check",
     "benchmark/compare",
 ]
+# the end-to-end tests are named test.py
+python_files = ["test_*.py", "*_test.py", "test.py"]
 # importlib: the default prepend mode resolves colocated test modules to their installed copies in
 # site-packages once several package roots are collected together, and aborts with an import file mismatch
 addopts = "--import-mode=importlib"

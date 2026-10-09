@@ -33,7 +33,6 @@ class TestMethods(unittest.TestCase):
         env_vars = dict(os.environ)
 
         src_dir = os.path.join(current_dir, "src")
-        os.chdir(src_dir)
 
         # build
         env_vars["CC"] = "discopop_cc"
