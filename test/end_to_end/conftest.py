@@ -27,5 +27,8 @@ def pytest_collection_modifyitems(config, items):  # type: ignore
         if not path.startswith(root):
             continue
         item.add_marker(pytest.mark.e2e)
+        if item.cls is not None:
+            # with pytest-xdist (--dist loadgroup) the tests of a class share one worker, so its program is built once
+            item.add_marker(pytest.mark.xdist_group(item.cls.__module__ + "." + item.cls.__qualname__))
         if missing and not path.startswith(profiler_independent):
             item.add_marker(skip)

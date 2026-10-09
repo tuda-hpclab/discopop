@@ -24,7 +24,8 @@ documents the format. To add a test, add such a directory.
 
 Tests that check more than the detected patterns live in `test/end_to_end/<topic>/test_<topic>.py` next to their
 programs and derive from `PipelineTestCase` (`test/end_to_end/pipeline.py`). All of them run in temporary copies of
-the programs and never write to the source tree. They are marked `e2e`: `python -m pytest -m "not e2e"` skips them.
+the programs and never write to the source tree. They are marked `e2e`: `python -m pytest -m "not e2e"` skips them. They can run in parallel:
+`python -m pytest -n auto --dist loadgroup test/end_to_end` (pytest-xdist, see `requirements-dev.txt`).
 
 # Instrumentation Tests
 The tests below `test/instrumentation` compile small programs with the DiscoPoP compiler wrapper
