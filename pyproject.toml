@@ -19,7 +19,7 @@ license = {file = "LICENSE"}
 authors = [
     {name = "TU Darmstadt and Iowa State University", email = "discopop@lists.parallel.informatik.tu-darmstadt.de"},
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -43,18 +43,27 @@ Homepage = "https://www.discopop.tu-darmstadt.de/"
 
 [tool.black]
 line-length = 120
-target-version = ["py310"]  # oldest supported Python (requires-python), so black never emits newer syntax
+target-version = ["py311"]  # oldest supported Python (requires-python), so black never emits newer syntax
 
 [tool.pytest.ini_options]
-# the unit tests only; the profiler and end-to-end tests under test/ run via unittest (see CLAUDE.md)
+# unit tests, end-to-end and profiler tests (markers e2e, profiler; skipped without the installed profiler, see CLAUDE.md)
 testpaths = [
     "explorer/discopop_explorer",
     "library/discopop_library",
     "mcp_server",
     "hotspot_detection",
     "test/project_manager",
+    "test/end_to_end",
+    "test/profiler",
+    "test/instrumentation",
     "test/leak_check",
     "benchmark/compare",
+]
+# the work-in-progress end-to-end tests (test/wip_end_to_end, opt-in) are named test.py
+python_files = ["test_*.py", "*_test.py", "test.py"]
+markers = [
+    "e2e: end-to-end test below test/end_to_end (set by test/conftest.py)",
+    "profiler: profiler test below test/profiler or test/instrumentation (set by test/conftest.py)",
 ]
 # importlib: the default prepend mode resolves colocated test modules to their installed copies in
 # site-packages once several package roots are collected together, and aborts with an import file mismatch

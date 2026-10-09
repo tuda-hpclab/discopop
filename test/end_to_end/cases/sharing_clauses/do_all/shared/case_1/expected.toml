@@ -1,0 +1,6 @@
+[do_all]
+lines = ["1:13"]
+
+[do_all.clauses]
+shared = ["Arr"]
+private = ["z"]

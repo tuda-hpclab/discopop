@@ -1,0 +1,5 @@
+[do_all]
+lines = ["1:5", "1:10", "1:21"]
+
+[reduction]
+lines = ["1:29"]

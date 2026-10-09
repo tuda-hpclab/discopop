@@ -1,0 +1,5 @@
+[do_all]
+lines = ["1:8"]
+
+[do_all.clauses]
+# no clauses at all

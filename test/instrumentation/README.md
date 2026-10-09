@@ -28,8 +28,7 @@ dependencies it reports against a gold standard.
 ## Running them
 
 ```bash
-. venv/bin/activate
-python3 -m unittest -v -k "*test.instrumentation.*"
+venv/bin/python -m pytest -v test/instrumentation
 ```
 
 The tests need the profiler installed (`pip install ./profiler`, **without** `-e`), because they

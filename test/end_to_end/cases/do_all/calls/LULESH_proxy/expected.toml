@@ -1,0 +1,7 @@
+# The test used to expect a do-all at line 271, where no loop starts; the main loop (marked // DOALL) is at line 249.
+# It accumulates into domain.fx/fy/fz at the same nodes in every iteration, so whether a do-all is the right
+# expectation needs a review.
+xfail = "the main loop (line 249) is not detected as do-all, see the comment in expected.toml"
+
+[do_all]
+includes = ["1:249"]

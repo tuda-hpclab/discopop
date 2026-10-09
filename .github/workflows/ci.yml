@@ -41,8 +41,8 @@ jobs:
 # used for eventual multiple operating system testing
 # the full matrix runs when merging into master or new_explorer; other pushes only test debian trixie with LLVM 21
 # ("reduced"). The jobs outside the matrix run in both cases.
-# the entries cover each supported LLVM version (19-22) and the minimum Python (3.10) once, see CLAUDE.md.
-# LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.10 comes from the deadsnakes PPA.
+# the entries cover each supported LLVM version (19-22) and the minimum Python (3.11) once, see CLAUDE.md.
+# LLVM 21 is packaged by neither distribution (apt.llvm.org), Python 3.11 comes from the deadsnakes PPA.
 # "python" is the interpreter the venv is created with.
 #
 # PREREQUISITE IMAGES: installing the prerequisites (apt) in every job took longer than some of the jobs. Instead,
@@ -92,7 +92,7 @@ jobs:
 
           apt_common="export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y python3 python3-pip python3-venv python3-tk build-essential make cmake git libboost-all-dev"
 
-          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.10 ubuntu:24.04 python3.10 "$apt_common && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.10 python3.10-venv python3.10-tk python3.10-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev")"
+          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.11 ubuntu:24.04 python3.11 "$apt_common && apt install -y software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && apt install -y python3.11 python3.11-venv python3.11-tk python3.11-dev && apt install -y llvm-19-dev clang-19 libomp-19-dev")"
           e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && apt install -y llvm-20-dev clang-20 libomp-20-dev")"
           e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && apt install -y wget lsb-release gnupg && wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh && bash /tmp/llvm.sh 21 && apt install -y llvm-21-dev clang-21 libomp-21-dev")"
           e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && apt install -y llvm-22-dev clang-22 libomp-22-dev")"
@@ -371,10 +371,12 @@ jobs:
           environment: ${{ matrix.image }}
           python: ${{ matrix.python }}
 
+      # the end-to-end and profiler tests are part of the bare pytest run, but have their own jobs (end_to_end_tests,
+      # profiler_tests)
       - name: Run the Python unit tests
         run: |
           . venv/bin/activate
-          python3 -m pytest
+          python3 -m pytest -m "not e2e and not profiler"
 
   # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
   # built from the root CMakeLists.txt, they need no venv
@@ -443,12 +445,12 @@ jobs:
       - name: Instrumentation tests
         run: |
           . venv/bin/activate
-          python3 -m unittest -v -k "*test.instrumentation.*"
+          python3 -m pytest -v -n auto --dist loadgroup test/instrumentation
 
       - name: Profiler gold standard tests
         run: |
           . venv/bin/activate
-          python3 -m unittest -v -k "*test.profiler.*"
+          python3 -m pytest -v -n auto --dist loadgroup test/profiler
 
   # END-TO-END TESTS: the whole pipeline (profiling, pattern detection, patches, MCP server) on small programs
   end_to_end_tests:
@@ -481,7 +483,7 @@ jobs:
       - name: Python end-to-end tests
         run: |
           . venv/bin/activate
-          python3 -m unittest -v -k "*.end_to_end.*"
+          python3 -m pytest -v -n auto --dist loadgroup test/end_to_end
 
   # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
   # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's

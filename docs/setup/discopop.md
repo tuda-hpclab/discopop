@@ -17,8 +17,8 @@ nav_order: 1
 - Proposed method of installation for `developers` of DiscoPoP
 ## Prerequisites
 - LLVM/clang version 19, 20, 21, or 22
-- Python version 3.10 or greater
-- the versions tested in CI are listed in the matrix of `.github/workflows/ci.yml` (Ubuntu 24.04 and Debian 13, LLVM 19&ndash;22, Python 3.10, 3.12 and 3.13)
+- Python version 3.11 or greater
+- the versions tested in CI are listed in the matrix of `.github/workflows/ci.yml` (Ubuntu 24.04 and Debian 13, LLVM 19&ndash;22, Python 3.11, 3.12 and 3.13)
 - LLVM 21 is not packaged by Ubuntu 24.04 or Debian 13; install it from [apt.llvm.org](https://apt.llvm.org) if needed
 
 ## Setup
@@ -63,11 +63,11 @@ where `<CMAKE_FLAGS>` can consist of any combination of the following flags and 
 To test the installation, it is possible to execute the provided set of unit tests.
 ```
 cd <dp_source_dir>
-venv/bin/python -m unittest -v
+venv/bin/python -m pytest
 ```
 
 The tests below `test/wip_end_to_end` are work in progress and are skipped by default.
 To include them, set `DP_RUN_WIP_TESTS=1`:
 ```
-DP_RUN_WIP_TESTS=1 venv/bin/python -m unittest -v
+DP_RUN_WIP_TESTS=1 venv/bin/python -m pytest test/wip_end_to_end
 ```

@@ -1,0 +1,5 @@
+run_args = "64"
+
+# the inner loop at line 104 depends on the previous iteration; the other loops are not pinned
+[do_all]
+excludes = ["1:104"]

@@ -24,8 +24,8 @@ This document contains critical information about working with this codebase. Fo
 
 # Code Style
 - verify the type correctness of python code
-- verify correctness of code using the unittests
-- verify correctness of modifications to the profiler using the unittests
+- verify correctness of code using the unit tests (pytest)
+- verify correctness of modifications to the profiler using the unit tests and the profiler tests
 
 # Tools
 ## Setup
@@ -51,17 +51,25 @@ This document contains critical information about working with this codebase. Fo
 - to install python packages, execute `venv/bin/pip install . ./profiler ./library` from the root directory of the project
 - **Important:** The profiler module must be installed without the `-e` (editable) flag. Use `pip install ./profiler`, not `pip install -e ./profiler`. Editable mode breaks the relative paths required by `CXX_wrapper.sh` to locate compiled artifacts like `LLVMDiscoPoP.so`.
 ### Python end-to-end tests
-- to execute the python end-to-end tests, use 'venv/bin/python -m unittest -v -k "*.end_to_end.*"'
+- bare `venv/bin/python -m pytest` runs them too (`test/end_to_end` is in `testpaths`); `test/end_to_end/conftest.py` marks them `e2e` (`pytest -m "not e2e"` runs the unit tests only), puts the interpreter's `bin` directory on `PATH` and skips them, except the profiler independent MCP server tests, when `discopop_cc`, `discopop_cxx`, `discopop_explorer` or `make` is missing
+- to execute only the python end-to-end tests, use `venv/bin/python -m pytest -v test/end_to_end`
+- they are independent of each other and run in parallel with pytest-xdist (`requirements-dev.txt`): `venv/bin/python -m pytest -n auto --dist loadgroup test/end_to_end` (~25 s instead of ~75 s on 8 cores); `--dist loadgroup` keeps the tests of a class on one worker (`xdist_group`, set by `conftest.py`), so its program is built once; the CI job `end_to_end_tests` runs this with `-v`
+- the standard detection tests are data, not code: every directory below `test/end_to_end/cases` with an `expected.toml` is one test of `test/end_to_end/test_cases.py` (id = path below `cases`); it holds the program in `src/` (Makefile building `prog` with `$CC`/`$CXX`) and the expected patterns, the schema is documented in the docstring of `test_cases.py`
+- add a detection test by adding such a directory; known failures get `xfail = "<reason>"` (strict: a passing case is reported)
+- the pipeline (`test/end_to_end/pipeline.py`) runs in a temporary copy of `src/`, never in the source tree; a failing build/profiling/explorer stage is reported as an ERROR, a mismatch as a FAILED test listing all differences
+- tests that check more than the detected patterns (profiler output, collapse details) live in `test/end_to_end/<topic>/test_<topic>.py` next to their programs and derive from `pipeline.PipelineTestCase` (`SRC_DIR`, optional `ENABLE_PATTERNS`/`RUN_ARGS`): one build and profiling run per class, in a temporary directory, exposing `profiler_dir` and `test_output`
+- `test_cases.py` uses pytest parametrization, so `python -m unittest` does not run these cases; the `test_<topic>.py` modules are `unittest.TestCase`s and run under both
+- the `gold_std/` directories (expected dependencies) are not checked by any test at the moment
 
 ### MCP server end-to-end tests
 - `test/end_to_end/mcp_server` drives the MCP server as a client does: it starts `python -m mcp_server.server` from the repository root (so the server code of the checkout is tested) as a stdio subprocess and calls it with the MCP SDK client
-- run only them via `venv/bin/python -m unittest -v -k "*.end_to_end.mcp_server.*"` or `venv/bin/python -m pytest test/end_to_end/mcp_server`; they are also part of the end-to-end command above, but not of the bare `pytest` run
+- run only them via `venv/bin/python -m pytest test/end_to_end/mcp_server`; they are also part of the end-to-end command above and of the bare `pytest` run
 - `test_stdio_server.py` (protocol, tool listing, setup tools, error paths) and `test_daemon_proxy.py` (stdio proxy forwarding to a `--daemon`) need no profiler; `test_workflows.py` (pipeline, auto-tuning, patches, failure paths, cancellation) runs the real pipeline on `src/code.cpp` and is skipped when `discopop_cc`/`discopop_cxx` are not installed
 - every server gets a free `--daemon-port`, so a developer's daemon on the default port never takes over the calls; known server bugs are marked `unittest.expectedFailure` with a comment naming the cause
 
 ### Python unit tests (all)
 - to run all Python unit tests at once, from the repository root: `venv/bin/python -m pytest`
-- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection` and `test/project_manager`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI pipeline runs exactly this
+- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection`, `test/project_manager`, `test/leak_check`, `benchmark/compare`, `test/end_to_end`, `test/profiler` and `test/instrumentation`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI job `python_unit_tests` runs this with `-m "not e2e and not profiler"`, since the end-to-end and profiler tests have their own jobs `end_to_end_tests` and `profiler_tests`
 - the configuration sets `--import-mode=importlib` and puts the source trees on `pythonpath`: with the default import mode, collecting several package roots in one run aborts with an import file mismatch against the copies installed in site-packages
 
 ### Python unit tests (discopop_library)
@@ -72,10 +80,13 @@ This document contains critical information about working with this codebase. Fo
 - `mcp_server` and `hotspot_detection` have pytest-based unit tests colocated with the source as `test_*.py` files
 - to run them, from the repository root: `venv/bin/python -m pytest mcp_server` and `venv/bin/python -m pytest hotspot_detection`
 
-### Further unittest suites
-- `test/instrumentation` asserts on the callbacks the LLVM pass inserts; it drives `discopop_cxx`, so the venv has to be *activated* (`. venv/bin/activate`), not just addressed via `venv/bin/python`: `python3 -m unittest -v -k "*test.instrumentation.*"`
-- the CI matrix job `profiler_tests` runs the instrumentation tests on every matrix entry
-- `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1`; CI does not run it
+### Profiler tests (pytest)
+- `test/instrumentation` asserts on the callbacks the LLVM pass inserts, `test/profiler/{RAW,WAR,WAW,NONE}` on the dependencies a profiling run reports; both drive `discopop_cxx`, i.e. the *installed* profiler: reinstall it (`venv/bin/python -m pip install ./profiler`) after changing `profiler/`, otherwise they test the old pass
+- they are part of the bare `pytest` run with the marker `profiler` (set by `test/conftest.py`, which also puts the interpreter's `bin` directory on `PATH`, so the venv need not be activated, and skips them without the installed profiler)
+- to run only them: `venv/bin/python -m pytest -n auto --dist loadgroup test/instrumentation test/profiler` (~15 s on 8 cores, ~35 s without `-n`); the CI matrix job `profiler_tests` runs both directories this way on every matrix entry
+- `pytest -m "not e2e and not profiler"` runs the unit tests only; the CI job `python_unit_tests` runs exactly this
+- `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1` (`DP_RUN_WIP_TESTS=1 venv/bin/python -m pytest test/wip_end_to_end`); CI does not run it
+- all suites are run with pytest; many tests are still written as `unittest.TestCase` classes, which pytest runs unchanged. Write new tests in pytest style
 
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
@@ -102,7 +113,7 @@ This document contains critical information about working with this codebase. Fo
 #### Profiler
 - there are two GoogleTest binaries, both only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`: `DiscoPoP_UT` (runtime library, `test/unit_tests`) and `DiscoPoP_Pass_UT` (LLVM pass, `test/pass_unit_tests`)
 - to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`; the CI matrix job `profiler_unit_tests` runs both on every matrix entry
-- the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
+- the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW,NONE}`) are separate and run via `venv/bin/python -m pytest test/profiler` from the repository root (see "Profiler tests")
 
 #### Sanitizers (profiler)
 - the CMake option `DP_SANITIZERS` (value for `-fsanitize=`, e.g. `address,undefined` or `thread`) instruments the runtime library `DiscoPoP_RT` and everything linking it, i.e. `DiscoPoP_UT`; the LLVM pass plugin is not sanitized (it runs inside an uninstrumented clang)
@@ -148,12 +159,12 @@ To execute the CI pipeline locally, use the following command from the root fold
 - changing an install command means changing it in `create_matrix` only
 
 ### Supported versions and CI matrix
-- LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
+- LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.11 (`requires-python` of every package)
 - the CI runs on every push and on pull requests into master/new_explorer; the full matrix only runs when merging into master or new_explorer (pushes to them, and pull requests targeting them); every other push and manual run is "reduced": the matrix only tests debian 13 / LLVM 21, and only the environments that run needs are prepared. The jobs outside the matrix run in both cases
 - the tests of a matrix entry are split by kind into the jobs `type_check` (mypy), `python_unit_tests` (pytest), `profiler_unit_tests` (`DiscoPoP_UT`, `DiscoPoP_Pass_UT`), `profiler_tests` (`test.instrumentation`, `test.profiler`) and `end_to_end_tests`; `static_checks` (license tags, black) does not depend on the platform and runs once
 - `runtime_unit_tests_sanitized`, `instrumented_programs_leak_check` and `rtlib_coverage` only start once all of these basic jobs have succeeded
 - `checks_successful` covers the matrix entries of the run, i.e. LLVM 21 in a reduced, all entries in a full run; its log names the configuration
-- the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
+- the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.11 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
 - when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
 
 ## Benchmarks
