@@ -24,6 +24,8 @@ _PROFILER_INDEPENDENT = [os.path.join(_HERE, "end_to_end", "mcp_server") + os.se
 _REQUIRED_TOOLS = ["discopop_cc", "discopop_cxx", "discopop_explorer", "make"]
 
 
+# before pytest-xdist's own hook, which turns the xdist_group markers into the groups of --dist loadgroup
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):  # type: ignore
     missing = [tool for tool in _REQUIRED_TOOLS if shutil.which(tool) is None]
     skip = pytest.mark.skip(reason="the test needs " + ", ".join(missing) + " (install the profiler)")

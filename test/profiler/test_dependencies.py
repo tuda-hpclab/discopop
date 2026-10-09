@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""Dependency detection of the profiler: one test per category (RAW, WAR, WAW, NONE), one subtest per case.
+"""Dependency detection of the profiler: one test class per category (RAW, WAR, WAW, NONE), one test per case.
 
 A case is a directory ``<category>/<case>/`` holding ``test.cpp``, a ``Makefile`` (``make`` compiles it with
 ``discopop_cxx`` and runs it) and ``expected.toml``::
@@ -17,12 +17,11 @@ A case is a directory ``<category>/<case>/`` holding ``test.cpp``, a ``Makefile`
         { sink = "1:7", var = "y" },      #   a sink location and variable
     ]
 
-The cases of a category are built and profiled in parallel, each in its own copy below the test's ``tmp_path``
-(pytest keeps the last runs for inspection), and checked one after another. ``DP_TEST_PROFILER_CASES`` restricts a run
-to the cases matching one of its comma separated glob patterns, e.g. ``DP_TEST_PROFILER_CASES=raw_52,war_4*``.
+The tests are named ``Test<category>::test_dependencies[<case>]``. Before the first test of a class, the selected cases
+of its category (e.g. only ``raw_52`` with ``-k raw_52``) are built and profiled in parallel, each in its own temporary
+copy (pytest keeps the last runs for inspection); every test then checks the results of its case.
 """
 
-import fnmatch
 import os
 import shutil
 import subprocess
@@ -36,15 +35,10 @@ import pytest
 from test.profiler.utilities import get_dependencies
 
 HERE = Path(__file__).parent
-CATEGORIES = sorted(p.name for p in HERE.iterdir() if p.is_dir() and any(p.glob("*/expected.toml")))
 
 
-def _selected_cases(category: str) -> list[Path]:
-    cases = sorted(p.parent for p in (HERE / category).glob("*/expected.toml"))
-    patterns = [p.strip() for p in os.environ.get("DP_TEST_PROFILER_CASES", "").split(",") if p.strip()]
-    if patterns:
-        cases = [c for c in cases if any(fnmatch.fnmatch(c.name, p) for p in patterns)]
-    return cases
+def _cases(category: str) -> list[Path]:
+    return sorted(p.parent for p in (HERE / category).glob("*/expected.toml"))
 
 
 def _profile(case: Path, work_dir: Path) -> str | None:
@@ -76,24 +70,63 @@ def _problems(expected: dict[str, Any], profiler_dir: Path) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
-@pytest.mark.parametrize("category", CATEGORIES)
-def test_dependencies(category: str, tmp_path: Path, subtests: pytest.Subtests) -> None:
-    cases = _selected_cases(category)
-    if not cases:
-        pytest.skip("no case selected by DP_TEST_PROFILER_CASES")
-    # all cores also when pytest-xdist runs the categories at the same time: the cases are short, idle cores cost more
-    workers = os.cpu_count() or 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        build_errors = list(pool.map(lambda case: _profile(case, tmp_path / case.name), cases))
+@pytest.fixture(scope="class")
+def profiled(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> dict[Path, Any]:
+    """Build and profile the cases of the requesting class that are selected in this session, in parallel.
 
-    for case, build_error in zip(cases, build_errors):
-        with subtests.test(msg=case.name):
-            if build_error is not None:
-                pytest.fail(build_error, pytrace=False)
-            with open(case / "expected.toml", "rb") as f:
-                expected = tomllib.load(f)
-            problems = _problems(expected, tmp_path / case.name / ".discopop" / "profiler")
-            if problems:
-                pytest.fail(
-                    f"{case.relative_to(HERE)} ({tmp_path / case.name}):\n  " + "\n  ".join(problems), pytrace=False
-                )
+    Returns {case: (work directory, output of make if that failed, otherwise None)}.
+    """
+    selected = [
+        item.callspec.params["case"]  # type: ignore[attr-defined]
+        for item in request.session.items
+        if getattr(item, "cls", None) is request.cls
+    ]
+    work_root = tmp_path_factory.mktemp(request.cls.CATEGORY)
+    # all cores also when pytest-xdist runs the classes at the same time: the cases are short, idle cores cost more
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+        errors = pool.map(lambda case: _profile(case, work_root / case.name), selected)
+        return {case: (work_root / case.name, error) for case, error in zip(selected, errors)}
+
+
+class _Category:
+    """Base of the test classes (not collected itself): CATEGORY is the directory of the cases."""
+
+    CATEGORY: str
+
+    def test_dependencies(self, case: Path, profiled: dict[Path, Any]) -> None:
+        work_dir, build_error = profiled[case]
+        if build_error is not None:
+            pytest.fail(build_error, pytrace=False)
+        with open(case / "expected.toml", "rb") as f:
+            expected = tomllib.load(f)
+        problems = _problems(expected, work_dir / ".discopop" / "profiler")
+        if problems:
+            pytest.fail(f"{case.relative_to(HERE)} ({work_dir}):\n  " + "\n  ".join(problems), pytrace=False)
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    if metafunc.cls is not None and issubclass(metafunc.cls, _Category) and "case" in metafunc.fixturenames:
+        cases = _cases(metafunc.cls.CATEGORY)
+        metafunc.parametrize("case", cases, ids=[case.name for case in cases])
+
+
+class TestRAW(_Category):
+    CATEGORY = "RAW"
+
+
+class TestWAR(_Category):
+    CATEGORY = "WAR"
+
+
+class TestWAW(_Category):
+    CATEGORY = "WAW"
+
+
+class TestNONE(_Category):
+    CATEGORY = "NONE"
+
+
+# a new category directory needs its class here
+assert {p.parent.parent.name for p in HERE.glob("*/*/expected.toml")} == {
+    cls.CATEGORY for cls in _Category.__subclasses__()
+}
