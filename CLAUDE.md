@@ -63,7 +63,7 @@ This document contains critical information about working with this codebase. Fo
 
 ### Python unit tests (all)
 - to run all Python unit tests at once, from the repository root: `venv/bin/python -m pytest`
-- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection`, `test/project_manager` and `test/end_to_end`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI pipeline runs exactly this
+- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection`, `test/project_manager` and `test/end_to_end`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI job `python_unit_tests` runs this with `--ignore-glob='test/end_to_end/*'`, since the end-to-end tests have their own job `end_to_end_tests`
 - the configuration sets `--import-mode=importlib` and puts the source trees on `pythonpath`: with the default import mode, collecting several package roots in one run aborts with an import file mismatch against the copies installed in site-packages
 
 ### Python unit tests (discopop_library)

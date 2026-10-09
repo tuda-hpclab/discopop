@@ -371,10 +371,11 @@ jobs:
           environment: ${{ matrix.image }}
           python: ${{ matrix.python }}
 
+      # the end-to-end tests are part of the bare pytest run, but have their own job (end_to_end_tests)
       - name: Run the Python unit tests
         run: |
           . venv/bin/activate
-          python3 -m pytest
+          python3 -m pytest --ignore-glob='test/end_to_end/*'
 
   # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
   # built from the root CMakeLists.txt, they need no venv
