@@ -81,12 +81,13 @@ This document contains critical information about working with this codebase. Fo
 - to run them, from the repository root: `venv/bin/python -m pytest mcp_server` and `venv/bin/python -m pytest hotspot_detection`
 
 ### Profiler tests (pytest)
-- `test/instrumentation` asserts on the callbacks the LLVM pass inserts, `test/profiler/{RAW,WAR,WAW,NONE}` on the dependencies a profiling run reports; both drive `discopop_cxx`, i.e. the *installed* profiler: reinstall it (`venv/bin/python -m pip install ./profiler`) after changing `profiler/`, otherwise they test the old pass
+- `test/instrumentation` asserts on the callbacks the LLVM pass inserts, `test/profiler/{RAW,WAR,WAW,NONE}` on the dependencies a profiling run reports (`test/profiler/test_dependencies.py`: one test per category, one subtest per case directory with `test.cpp`, `Makefile` and `expected.toml`; the cases of a category are profiled in parallel in temporary copies; `DP_TEST_PROFILER_CASES=raw_52,war_4*` selects cases; see `test/profiler/README.md`); both drive `discopop_cxx`, i.e. the *installed* profiler: reinstall it (`venv/bin/python -m pip install ./profiler`) after changing `profiler/`, otherwise they test the old pass
 - they are part of the bare `pytest` run with the marker `profiler` (set by `test/conftest.py`, which also puts the interpreter's `bin` directory on `PATH`, so the venv need not be activated, and skips them without the installed profiler)
-- to run only them: `venv/bin/python -m pytest -n auto --dist loadgroup test/instrumentation test/profiler` (~15 s on 8 cores, ~35 s without `-n`); the CI matrix job `profiler_tests` runs both directories this way on every matrix entry
+- to run only them: `venv/bin/python -m pytest -n auto --dist loadgroup test/instrumentation test/profiler` (~15 s on 8 cores); the CI matrix job `profiler_tests` runs both directories this way on every matrix entry
 - `pytest -m "not e2e and not profiler"` runs the unit tests only; the CI job `python_unit_tests` runs exactly this
 - `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1` (`DP_RUN_WIP_TESTS=1 venv/bin/python -m pytest test/wip_end_to_end`); CI does not run it
 - all suites are run with pytest; many tests are still written as `unittest.TestCase` classes, which pytest runs unchanged. Write new tests in pytest style
+- `verbosity_subtests = "0"` (root `pyproject.toml`) hides passing subtests even with `-v`; `-o verbosity_subtests=1` lists them
 
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)

@@ -1,0 +1,11 @@
+required = [
+    "1:8 WAW 1:4|x",
+    "1:12 WAW 1:5|y",
+]
+forbidden = [
+    { sink = "1:11", var = "x" },
+    { sink = "1:12", var = "x" },
+    { sink = "1:4", var = "y" },
+    { sink = "1:7", var = "y" },
+    { sink = "1:8", var = "y" },
+]

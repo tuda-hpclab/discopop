@@ -1,0 +1,7 @@
+required = [
+    "1:9 RAW 1:8|i",
+    "1:25 RAW 1:9|GEPRESULT_global_table",
+    "1:14 RAW 1:14|i",
+    "1:15 RAW 1:9|this1",
+    "1:15 WAR 1:15|this1",
+]
