@@ -9,6 +9,7 @@
 #include "../../../profiler/rtlib/injected_functions/dp_add_bb_deps.hpp"
 #include "../../../profiler/rtlib/injected_functions/dp_report_bb.hpp"
 #include "../../../profiler/rtlib/injected_functions/dp_report_bb_pair.hpp"
+#include "../../../profiler/rtlib/hybrid_analysis/bb_deps.hpp"
 #include "../../../profiler/rtlib/runtimeFunctions.hpp"
 #include "../../../profiler/rtlib/runtimeFunctionsGlobals.hpp"
 
@@ -21,8 +22,7 @@
 class HybridAnalysisBBDepsTest : public ::testing::Test {
 protected:
   std::unique_ptr<CallStateGraph> graph;
-  bool saved_dp_inited = false;
-  bool saved_target_terminated = false;
+  __dp::RuntimeState saved_runtime_state = __dp::RuntimeState::NotInitialized;
   __dp::ReportedBBRecorder *saved_bb_list = nullptr;
   CallState *saved_state = nullptr;
 
@@ -30,13 +30,11 @@ protected:
     setenv("DOT_DISCOPOP_PROFILER", "/tmp/discopop_ut_nonexistent_dir", 1);
     graph = std::make_unique<CallStateGraph>();
 
-    saved_dp_inited = __dp::dpInited;
-    saved_target_terminated = __dp::targetTerminated;
+    saved_runtime_state = __dp::runtime_state;
     saved_bb_list = __dp::bbList;
     saved_state = __dp::current_callpath_state;
 
-    __dp::dpInited = true;
-    __dp::targetTerminated = false;
+    __dp::runtime_state = __dp::RuntimeState::Running;
     __dp::bbList = new __dp::ReportedBBRecorder();
     enter_state(7);
   }
@@ -44,8 +42,7 @@ protected:
   void TearDown() override {
     delete __dp::bbList;
     __dp::bbList = saved_bb_list;
-    __dp::dpInited = saved_dp_inited;
-    __dp::targetTerminated = saved_target_terminated;
+    __dp::runtime_state = saved_runtime_state;
     __dp::current_callpath_state = saved_state;
   }
 
@@ -74,10 +71,9 @@ TEST_F(HybridAnalysisBBDepsTest, testBBStateIsZeroWithoutKnownState) {
   __dp::current_callpath_state = nullptr;
   EXPECT_EQ(__dp::__dp_bb_state(), 0u);
   enter_state(7);
-  __dp::dpInited = false;
+  __dp::runtime_state = __dp::RuntimeState::NotInitialized;
   EXPECT_EQ(__dp::__dp_bb_state(), 0u);
-  __dp::dpInited = true;
-  __dp::targetTerminated = true;
+  __dp::runtime_state = __dp::RuntimeState::Terminated;
   EXPECT_EQ(__dp::__dp_bb_state(), 0u);
 }
 
@@ -98,11 +94,10 @@ TEST_F(HybridAnalysisBBDepsTest, testReportBBPairTakesSourceStateFromSemaphore) 
 }
 
 TEST_F(HybridAnalysisBBDepsTest, testReportsAreIgnoredOutsideOfTheProfiledRun) {
-  __dp::dpInited = false;
+  __dp::runtime_state = __dp::RuntimeState::NotInitialized;
   __dp::__dp_report_bb(1);
   __dp::__dp_report_bb_pair(8, 2);
-  __dp::dpInited = true;
-  __dp::targetTerminated = true;
+  __dp::runtime_state = __dp::RuntimeState::Terminated;
   __dp::__dp_report_bb(1);
   __dp::__dp_report_bb_pair(8, 2);
   EXPECT_TRUE(__dp::bbList->get_executions().empty());

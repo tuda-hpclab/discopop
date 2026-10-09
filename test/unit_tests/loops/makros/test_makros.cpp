@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "../../../../profiler/rtlib/loop/LoopTable.hpp"
 #include "../../../../profiler/rtlib/loop/Makros.hpp"
 
 // Tests for old version (i.e., capturing functionality)
@@ -207,4 +208,81 @@ TEST_F(MakrosTest, testValidity2) {
   ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_2(lid_6), expected_lid_6);
   ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_2(lid_7), expected_lid_7);
   ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_2(lid_8), expected_lid_8);
+}
+
+// The macros above read what LoopTable::update_lid writes. Neither side has a caller in the
+// runtime at the moment, so this is the only place where the two halves of the encoding meet.
+TEST_F(MakrosTest, testRoundTripWithUpdateLid) {
+  __dp::LoopTable lt;
+
+  lt.push(__dp::LoopTableEntry{1, 42, 0, 0});
+  for (auto i = 0; i < 5; ++i) {
+    lt.increment_top_count();
+  }
+  lt.push(__dp::LoopTableEntry{1, 43, 0, 0});
+  for (auto i = 0; i < 3; ++i) {
+    lt.increment_top_count();
+  }
+  lt.push(__dp::LoopTableEntry{1, 44, 0, 0});
+  lt.increment_top_count();
+
+  const LID lid = lt.update_lid(0x1234);
+
+  // the loop id comes from the outermost entry, the iteration counts from the top downwards
+  ASSERT_EQ(unpackLIDMetadata_getLoopID(lid), 42);
+  ASSERT_EQ(unpackLIDMetadata_getLoopIteration_0(lid), 1);
+  ASSERT_EQ(unpackLIDMetadata_getLoopIteration_1(lid), 3);
+  ASSERT_EQ(unpackLIDMetadata_getLoopIteration_2(lid), 5);
+
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_0(lid), 1);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_1(lid), 1);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_2(lid), 1);
+
+  // the lid itself lives in the lower 32 bits and is left alone
+  ASSERT_EQ(lid & 0xFFFFFFFF, 0x1234);
+}
+
+TEST_F(MakrosTest, testRoundTripWithUpdateLidSingleLoop) {
+  __dp::LoopTable lt;
+  lt.push(__dp::LoopTableEntry{1, 7, 0, 0});
+  lt.increment_top_count();
+  lt.increment_top_count();
+
+  const LID lid = lt.update_lid(0x1234);
+
+  ASSERT_EQ(unpackLIDMetadata_getLoopID(lid), 7);
+  ASSERT_EQ(unpackLIDMetadata_getLoopIteration_0(lid), 2);
+
+  // only one entry on the stack, so the two outer iteration counts are marked invalid
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_0(lid), 1);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_1(lid), 0);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_2(lid), 0);
+}
+
+TEST_F(MakrosTest, testRoundTripWithUpdateLidWithoutLoop) {
+  __dp::LoopTable lt;
+
+  const LID lid = lt.update_lid(0x1234);
+
+  // update_lid writes 0xFF as the "no loop active" marker
+  ASSERT_EQ(unpackLIDMetadata_getLoopID(lid), 0xFF);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_0(lid), 0);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_1(lid), 0);
+  ASSERT_EQ(checkLIDMetadata_getLoopIterationValidity_2(lid), 0);
+}
+
+TEST_F(MakrosTest, testRoundTripWithUpdateLidTruncates) {
+  __dp::LoopTable lt;
+
+  // update_lid keeps 8 bits of the loop id and 7 of the iteration count on purpose: the metadata
+  // only has to tell iterations apart, not name them
+  lt.push(__dp::LoopTableEntry{1, 0x1F2, 0, 0});
+  for (auto i = 0; i < 130; ++i) {
+    lt.increment_top_count();
+  }
+
+  const LID lid = lt.update_lid(0x1234);
+
+  ASSERT_EQ(unpackLIDMetadata_getLoopID(lid), 0xF2);
+  ASSERT_EQ(unpackLIDMetadata_getLoopIteration_0(lid), 130 & 0x7F);
 }

@@ -1,0 +1,74 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+# Adds the callback breakdown to the benchmark comparison of a pull request on request: adding the label
+# "benchmark-breakdown" re-runs the job callback_benchmark of the latest CI run of the pull request (ci.yml). That job
+# reads the labels when it runs, finds this one, and measures the breakdown too; the report job that depends on it
+# runs again and updates the comment. The breakdown is added to every further run as long as the label is set.
+#
+# A workflow of its own, because ci.yml must not react to labels: any label would start (and, through its
+# concurrency group, cancel) a whole CI run.
+name: "Benchmark breakdown on request"
+
+on:
+  pull_request:
+    types: [labeled]
+    branches:
+      - master
+      - new_explorer
+
+permissions:
+  contents: read
+
+jobs:
+  rerun_callback_benchmark:
+    runs-on: self-hosted
+    name: "Re-run the callback benchmark with the breakdown"
+    # never for pull requests of forks (see ci.yml, create_matrix)
+    if: ${{ github.event.label.name == 'benchmark-breakdown' && github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      # re-runs a job of ci.yml
+      actions: write
+    timeout-minutes: 5
+    steps:
+      - name: Re-run the callback benchmark of the latest CI run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const job_name = 'Benchmark: cost of the injected callbacks';
+            const head_sha = context.payload.pull_request.head.sha;
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo, workflow_id: 'ci.yml', event: 'pull_request', head_sha, per_page: 1,
+            });
+            const run = data.workflow_runs[0];
+            if (!run) {
+              core.notice('There is no CI run of this pull request yet; its callback benchmark will include the breakdown.');
+              return;
+            }
+            if (run.status !== 'completed') {
+              core.notice(
+                `The CI run ${run.html_url} is still running. Its callback benchmark reads the labels when it starts ` +
+                `and includes the breakdown if it has not started yet; otherwise re-run "${job_name}" once the run ` +
+                'has finished, or remove and add the label again.'
+              );
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...context.repo, run_id: run.id, filter: 'latest',
+            });
+            const job = jobs.find((candidate) => candidate.name === job_name);
+            if (!job) {
+              core.setFailed(`The CI run ${run.html_url} has no job "${job_name}".`);
+              return;
+            }
+            if (job.conclusion === 'skipped') {
+              core.notice(`"${job_name}" was skipped in ${run.html_url} (an earlier job failed): nothing to re-run.`);
+              return;
+            }
+            await github.rest.actions.reRunJobForWorkflowRun({ ...context.repo, job_id: job.id });
+            core.notice(`Re-running ${job.html_url} with the callback breakdown.`);

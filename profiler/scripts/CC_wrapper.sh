@@ -67,7 +67,13 @@ fi
 # pthread is bundled into libSystem on macOS; only link explicitly on Linux
 PTHREAD_XLINKER_FLAGS=()
 [[ "$(uname)" != "Darwin" ]] && PTHREAD_XLINKER_FLAGS=(-Xlinker -lpthread)
-${LLVM_CLANG} "$@" -g -O0 -fno-discard-value-names -Xclang -load -Xclang ${DISCOPOP_PLUGIN} -Xclang -fpass-plugin=${DISCOPOP_PLUGIN} -fPIC -Xlinker -L${PARENT_PATH} -Xlinker -lDiscoPoP_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v -Xlinker -lstdc++
+# libDiscoPoP_RT.a is a static archive, so the linker only pulls in the members that resolve
+# an undefined symbol. Nothing in the instrumented code references __dp_init any more -- the
+# runtime starts from the constructor in lifecycle/runtime_startup.cpp -- so that member has to be requested
+# explicitly, or the runtime is never brought up.
+# Mach-O prefixes C symbols with an underscore, so ld64 has to be asked for ___dp_init.
+DP_INIT_SYMBOL="__dp_init"; [[ "$(uname)" == "Darwin" ]] && DP_INIT_SYMBOL="___dp_init"
+${LLVM_CLANG} "$@" -g -O0 -fno-discard-value-names -Xclang -load -Xclang ${DISCOPOP_PLUGIN} -Xclang -fpass-plugin=${DISCOPOP_PLUGIN} -fPIC -Xlinker -L${PARENT_PATH} -Xlinker -u -Xlinker ${DP_INIT_SYMBOL} -Xlinker -lDiscoPoP_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v -Xlinker -lstdc++
 
 # dump ast for later use during pattern detection
 if [ -n "$DOT_DISCOPOP" ]; then

@@ -15,16 +15,10 @@
 #include "../runtimeFunctions.hpp"
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 
 #include "../static_callstate_transitions/utils.hpp"
 
-#ifdef __linux__
-#include <linux/limits.h>
-#endif
-
-#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
@@ -39,124 +33,14 @@ namespace __dp {
 extern "C" {
 
 void __dp_func_entry(LID lid, int32_t isStart, int32_t functionEntryID) {
-  if (targetTerminated) {
-    // prevent deleting generated results after the main function has been
-    // exited. This might happen, e.g., if a destructor of a global struct is
-    // called after exiting the main function.
-    return;
-  }
+  DP_CALLBACK_SCOPE(FUNC_ENTRY);
 
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_func_entry");
-#endif
-
-  if (!dpInited) {
-    // This part should be executed only once.
-    readRuntimeInfo();
-    timers = new Timers();
-    statistics_profiling_start_time = std::chrono::high_resolution_clock::now();
-#ifdef DP_INTERNAL_TIMER
-    const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
-#endif
-    function_manager = new FunctionManager();
-    loop_manager = new LoopManager();
-    memory_manager = new MemoryManager();
-    //
-#if DP_CALLTREE_PROFILING
-//    call_tree = new CallTree();
-// metadata_queue = new MetaDataQueue(6); // TODO: add Worker argument
-//    dependency_metadata_results_mtx = new std::mutex();
-//    dependency_metadata_results = new std::unordered_set<DependencyMetadata>();
-#endif
-
-    mainThread_AccessInfoBuffer = firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
-
-    out = new ofstream();
-
-    // hybrid analysis
-    allDeps = new depMap();
-    outPutDeps = new stringDepMap();
-    bbList = new ReportedBBRecorder();
-    // End HA
-
-    memory_manager->allocate_dummy_region();
-
-#ifdef __linux__
-    // try to get an output file name w.r.t. the target application
-    // if it is not available, fall back to "Output.txt"
-    char *selfPath = new char[PATH_MAX];
-    if (selfPath != nullptr) {
-      if (readlink("/proc/self/exe", selfPath, PATH_MAX - 1) == -1) {
-        delete[] selfPath;
-        selfPath = nullptr;
-        out->open("Output.txt", ios::out);
-      }
-      // out->open(string(selfPath) + "_dep.txt", ios::out);  # results in the
-      // old <prog>_dep.txt
-      //  prepare environment variables
-      char const *tmp = getenv("DOT_DISCOPOP");
-      if (tmp == NULL) {
-        // DOT_DISCOPOP needs to be initialized
-        setenv("DOT_DISCOPOP", ".discopop", 1);
-      }
-      std::string tmp_str(getenv("DOT_DISCOPOP"));
-      setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-      std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-      tmp2 += "/dynamic_dependencies.txt";
-
-      out->open(tmp2.data(), ios::out);
-
-      // Static callPath tracing
-      call_state_graph = new CallStateGraph();
-      initialize_current_callpath_state();
-    }
-#else
-    // Non-Linux: replicate the env-var + output-file + call-state setup from
-    // the Linux path above, but without /proc/self/exe (POSIX only).
-    {
-      char const *tmp = getenv("DOT_DISCOPOP");
-      if (tmp == NULL) {
-        setenv("DOT_DISCOPOP", ".discopop", 1);
-      }
-      std::string tmp_str(getenv("DOT_DISCOPOP"));
-      setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
-      std::string tmp2(getenv("DOT_DISCOPOP_PROFILER"));
-      tmp2 += "/dynamic_dependencies.txt";
-      out->open(tmp2.data(), ios::out);
-
-      call_state_graph = new CallStateGraph();
-      initialize_current_callpath_state();
-    }
-#endif
-    assert(out->is_open() && "Cannot open a file to output dependences.\n");
-
-    if (DP_DEBUG) {
-      cout << "DP initialized at LID " << std::dec << dputil::decodeLID(lid) << endl;
-    }
-    dpInited = true;
-    if (NUM_WORKERS > 0) {
-      initParallelization();
-    } else {
-      initSingleThreadedExecution();
-    }
-  } else if (targetTerminated) {
-    if (DP_DEBUG) {
-      cout << "Entering function LID " << std::dec << dputil::decodeLID(lid);
-      cout << " but target program has returned from main(). Destructors?" << endl;
-    }
-  } else {
-    function_manager->register_function_start(lid);
-  }
+  // The runtime is up before the first callback: it is brought up from .init_array, see
+  // lifecycle/runtime_startup.cpp. No lazy initialization is needed here.
+  function_manager->register_function_start(lid);
 
   // follow the pending call into this function (or switch to the function's own root state)
   enter_function_for_callstate(functionEntryID);
-
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::FUNC_ENTRY);
-#endif
 
 #if DP_STACK_ACCESS_DETECTION
   memory_manager->enter_new_function();

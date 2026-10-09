@@ -61,40 +61,6 @@ void DiscoPoP::dp_reduction_insert_functions() {
   }
   loop_metadata_file.close();
 
-  // add a function to output the final data
-  // dp_loop_output must be inserted BEFORE __dp_finalize to ensure loop_manager is still valid
-  llvm::FunctionType *output_fn_type = llvm::FunctionType::get(llvm::Type::getVoidTy(*ctx_), false);
-  FunctionCallee loop_counter_output_callee = module_->getOrInsertFunction("__dp_loop_output", output_fn_type);
-  FunctionCallee cu_taken_branch_counter_output_callee =
-      module_->getOrInsertFunction("__dp_taken_branch_counter_output", output_fn_type);
-  llvm::Function *main_fn = module_->getFunction("main");
-  if (main_fn) {
-    // Find the __dp_finalize call and insert before it; fall back to before the return
-    llvm::Instruction *insert_before = nullptr;
-    for (auto it = llvm::inst_begin(main_fn); it != llvm::inst_end(main_fn); ++it) {
-      if (llvm::isa<llvm::CallInst>(&(*it))) {
-        llvm::CallInst *call = llvm::cast<llvm::CallInst>(&(*it));
-        llvm::Function *called_fn = call->getCalledFunction();
-        if (called_fn && called_fn->getName() == "__dp_finalize") {
-          insert_before = &(*it);
-          break;
-        }
-      }
-      if (llvm::isa<llvm::ReturnInst>(&(*it))) {
-        if (insert_before == nullptr) {
-          insert_before = &(*it);
-        }
-        break;
-      }
-    }
-    if (insert_before != nullptr) {
-      llvm::IRBuilder<> ir_builder(insert_before);
-      ir_builder.CreateCall(loop_counter_output_callee);
-      if (DP_BRANCH_TRACKING) {
-        ir_builder.CreateCall(cu_taken_branch_counter_output_callee);
-      }
-    }
-  } else {
-    llvm::errs() << "Warning : Could not find a main function\n";
-  }
+  // Nothing dumps the counters from here any more. __dp_finalize does it, which reaches the
+  // modules that do not define main as well and survives a target that leaves through exit().
 }

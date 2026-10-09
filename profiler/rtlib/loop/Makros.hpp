@@ -12,7 +12,10 @@
 
 #pragma once
 
-#define unpackLIDMetadata_getLoopID(lid) ((lid) >> 56)
+// masked, because LID is signed: without the mask a loop id with its top bit set -- and the 0xFF
+// that update_lid writes when no loop is active -- sign extends into a negative number instead of
+// coming back out as the byte that was put in. The other macros below mask already.
+#define unpackLIDMetadata_getLoopID(lid) (((lid) >> 56) & 0xFF)
 
 #define unpackLIDMetadata_getLoopIteration_0(lid) (((lid) >> 48) & 0x7F)
 

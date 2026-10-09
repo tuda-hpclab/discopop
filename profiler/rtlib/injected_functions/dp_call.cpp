@@ -14,8 +14,7 @@
 
 #include "../runtimeFunctionsGlobals.hpp"
 
-#include "../../share/include/debug_print.hpp"
-#include "../../share/include/timer.hpp"
+#include "../callback_scope.hpp"
 #include "../static_callstate_transitions/utils.hpp"
 
 #include <cstdint>
@@ -31,22 +30,14 @@ namespace __dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_call(LID instructionID) {
-  if (!dpInited || targetTerminated) {
-    return;
-  }
+void __dp_call(LID lid, int32_t instructionID) {
+  DP_CALLBACK_SCOPE(CALL);
 
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
-#ifdef DP_RTLIB_VERBOSE
-  const auto debug_print = make_debug_print("__dp_call");
-#endif
-#ifdef DP_INTERNAL_TIMER
-  const auto timer = Timer(timers, TimerRegion::CALL);
-#endif
-
-  function_manager->log_call(instructionID);
+  // The location of the call site and its instruction id, which the function manager pairs with
+  // the entry of the function that is about to run and reports as
+  // "<call site> BGN func <entry> <instruction id>". It used to be handed the instruction id only,
+  // which decodeLID then read as a location and printed as "0:<id>".
+  function_manager->log_call(lid, instructionID);
 
   // the callpath state transition happens when the callee enters an instrumented function, see
   // enter_function_for_callstate. A callee without instrumentation does not change the state.

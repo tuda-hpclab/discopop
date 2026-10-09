@@ -50,9 +50,9 @@ public:
     if (loops.find(begin_line) == loops.end()) {
       loops.insert(pair<LID, LoopRecord *>(begin_line, new LoopRecord(0, 0, 0)));
     }
-#ifdef DP_DEBUG
-    std::cout << "(" << std::dec << FuncStackLevel << ")Loop " << loop_id << " enters." << std::endl;
-#endif
+    if (DP_DEBUG) {
+      std::cout << "(" << std::dec << function_level << ")Loop " << loop_id << " enters." << std::endl;
+    }
   }
 
   bool is_new_loop(const std::int32_t loop_id) const {
@@ -80,10 +80,11 @@ public:
 #endif
     }
 #endif
-#ifdef DP_DEBUG
-    std::cout << "(" << std::dec << loopStack.top().funcLevel << ")";
-    std::cout << "Loop " << loopStack.top().loopID << " iterates " << loopStack.top().count << " times." << std::endl;
-#endif
+    if (DP_DEBUG) {
+      std::cout << "(" << std::dec << loopStack.top().funcLevel << ")";
+      std::cout << "Loop " << loopStack.top().loopID << " iterates " << loopStack.top().get_count() << " times."
+                << std::endl;
+    }
   }
 
   void clean_function_exit(const std::int32_t function_level, const LID end_line) {
@@ -151,16 +152,27 @@ public:
 
   void correct_func_level(const std::int32_t function_level) { loopStack.correct_func_level(function_level); }
 
-  std::int32_t get_current_loop_id() { return loopStack.top().loopID; }
+  // -1 when no loop is on the stack. __dp_loop_exit asks for the id in its "ignored single exit"
+  // branch, and is_single_exit() takes that branch for an empty stack as well -- reading top()
+  // there is a read past the end of the loop stack.
+  std::int32_t get_current_loop_id() const { return loopStack.empty() ? -1 : loopStack.top().loopID; }
 
   bool empty() { return loopStack.empty(); }
 
   void output(std::ostream &stream) {
     for (const auto &loop : loops) {
+      // A loop that was entered and never left contributes no completed iteration: its record is
+      // created on entry and every counter is raised on exit, so all of them are still zero --
+      // including nEntered, which is what the average is divided by. The assert in
+      // unwind_function_stack() that is meant to rule this state out is compiled out of the
+      // release build, so the division needs the guard rather than the invariant.
+      const std::int32_t entered = loop.second->nEntered;
+      const std::int32_t average_iterations = (entered == 0) ? 0 : (loop.second->total / entered);
+
       stream << dputil::decodeLID(loop.first) << " BGN loop ";
       stream << loop.second->total << ' ';
-      stream << loop.second->nEntered << ' ';
-      stream << static_cast<std::int32_t>(loop.second->total / loop.second->nEntered) << ' ';
+      stream << entered << ' ';
+      stream << average_iterations << ' ';
       stream << loop.second->maxIterationCount << std::endl;
       stream << dputil::decodeLID(loop.second->end) << " END loop" << std::endl;
     }

@@ -23,9 +23,3 @@
 # (frames innermost first, runtime library frames and main only; "Class::*" matches all members of Class)
 #
 # Every entry is a real leak that should be fixed; remove the entry together with the fix.
-
-# __dp_func_entry, on the first call (from main) only: the runtime library's initialization reads the path of
-# the executable into `char *selfPath = new char[PATH_MAX]` and never frees it (it is only freed if readlink
-# fails). One object of PATH_MAX (4096) bytes per run, found again after the teardown.
-before Direct 1 4096 __dp_func_entry <- main
-after  Direct 1 4096 __dp_func_entry <- main

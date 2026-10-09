@@ -12,6 +12,9 @@
 
 #pragma once
 
+// Every callback the LLVM pass can insert. __dp_init is not among them: nothing in instrumented
+// code calls it, the runtime starts itself from .init_array (see lifecycle/runtime_startup.hpp).
+
 #include "dp_add_bb_deps.hpp"
 #include "dp_alloca.hpp"
 #include "dp_call.hpp"

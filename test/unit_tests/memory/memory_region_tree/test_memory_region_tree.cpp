@@ -3,6 +3,7 @@
 #include "../../../../profiler/rtlib/memory/MemoryRegionTree.hpp"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 class MemoryRegionTreeTest : public ::testing::Test {};
@@ -684,4 +685,43 @@ TEST_F(MemoryRegionTreeTest, testFreeRegion7) {
   for (auto i = 0; i < 16; i++) {
     ASSERT_EQ(root->get_child(i), nullptr);
   }
+}
+
+TEST_F(MemoryRegionTreeTest, testMoveConstructor) {
+  auto tree = __dp::MemoryRegionTree{};
+  tree.allocate_region(0x1000, 0x1FFF, 42);
+
+  const auto *root_before = tree.get_root();
+
+  auto moved = __dp::MemoryRegionTree{std::move(tree)};
+
+  // the whole tree is handed over by its root pointer, nothing is copied
+  ASSERT_EQ(moved.get_root(), root_before);
+  ASSERT_EQ(moved.get_memory_region_id(0x1500), 42);
+
+  // the moved-from tree is left without a root, which is what keeps its destructor from freeing the
+  // nodes a second time. It cannot answer any lookup afterwards.
+  ASSERT_EQ(tree.get_root(), nullptr);
+}
+
+TEST_F(MemoryRegionTreeTest, testMoveAssignment) {
+  auto source = __dp::MemoryRegionTree{};
+  source.allocate_region(0x1000, 0x1FFF, 42);
+
+  auto target = __dp::MemoryRegionTree{};
+  target.allocate_region(0x2000, 0x2FFF, 7);
+
+  const auto *source_root = source.get_root();
+  const auto *target_root = target.get_root();
+
+  target = std::move(source);
+
+  ASSERT_EQ(target.get_root(), source_root);
+  ASSERT_EQ(target.get_memory_region_id(0x1500), 42);
+  ASSERT_EQ(target.get_memory_region_id(0x2500), 0xFFFFFFFFU);
+
+  // assignment swaps the roots rather than releasing the old one, so the target keeps its nodes
+  // alive in the source until that goes out of scope
+  ASSERT_EQ(source.get_root(), target_root);
+  ASSERT_EQ(source.get_memory_region_id(0x2500), 7);
 }

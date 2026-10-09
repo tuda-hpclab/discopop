@@ -51,9 +51,9 @@ CallTree::~CallTree() {
 
   pthread_join(calltree_thread, NULL);
   pthread_join(calltree_thread_2, NULL);
-  // the chunk in use; the chunks still queued in ctnqcb are freed by its destructor
+
+  // the nodes left in the chunk the tree was taking from are owned by nobody else
   delete prepared_chunk;
-  std::cout << "Joined calltree_threads" << std::endl;
 }
 
 unsigned int CallTree::get_node_count() {
@@ -105,7 +105,7 @@ void CallTree::enter_function(unsigned int function_id) {
     delete prepared_chunk;
     prepared_chunk = ctnqcb.get_prepared_chunk();
   }
-  std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+  std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
   CallTreeNode *new_node_raw = new_node.get();
   new_node_raw->set(std::move(current), current_raw, CallTreeNodeType::Function, function_id, 0);
   current_raw = new_node.get();
@@ -121,7 +121,7 @@ void CallTree::enter_loop(unsigned int loop_id) {
     delete prepared_chunk;
     prepared_chunk = ctnqcb.get_prepared_chunk();
   }
-  std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+  std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
   new_node->set(std::move(current), current_raw, CallTreeNodeType::Loop, loop_id, 0);
   current_raw = new_node.get();
   current = std::move(new_node);
@@ -148,7 +148,7 @@ void CallTree::enter_iteration(unsigned int iteration_id) {
       delete prepared_chunk;
       prepared_chunk = ctnqcb.get_prepared_chunk();
     }
-    std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+    std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
     CallTreeNode *new_node_raw = new_node.get();
     new_node_raw->set(std::move(current), current_raw, CallTreeNodeType::Iteration, loop_id, iteration_id);
     current_raw = new_node.get();
@@ -181,7 +181,7 @@ void CallTree::enter_iteration(unsigned int iteration_id) {
     delete prepared_chunk;
     prepared_chunk = ctnqcb.get_prepared_chunk();
   }
-  std::shared_ptr<CallTreeNode> new_node = std::move(prepared_chunk->get_prepared_node());
+  std::shared_ptr<CallTreeNode> new_node = prepared_chunk->get_prepared_node();
   CallTreeNode *new_node_raw = new_node.get();
   new_node_raw->set(std::move(node_ptr_raw->get_parent_ptr()), parent_ptr_raw, CallTreeNodeType::Iteration, loop_id,
                     iteration_id);
@@ -242,7 +242,6 @@ void CallTree::exit_loop() {
 }
 
 void *manage_calltree(void *arg) {
-  std::cout << "Hello world from CallTree manager thread!" << std::endl;
   CallTree *call_tree_ptr = (CallTree *)arg;
   while (!calltree_thread_stop) {
     call_tree_ptr->ctnqcb.prepare_chunk_if_required();

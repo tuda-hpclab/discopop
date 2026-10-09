@@ -1,0 +1,69 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "Venv with DiscoPoP installed"
+description: >
+  Provides ./venv with the development requirements and all DiscoPoP packages, installed without -e (the editable
+  installs are a convenience for developers, the CI does not need them). The venv is restored from the actions cache,
+  keyed by the environment (system image) and the files the installation depends on, and only built on a miss. The
+  job "prepare_build" builds and saves it once per environment; the jobs that need it only restore it.
+  Building the profiler (LLVM pass, runtime library) is the expensive part, and its sources change less often than
+  the Python packages: its wheel is cached separately (action profiler-wheel), keyed by profiler/ only, so a change of
+  the Python sources reinstalls the packages but reuses the built profiler.
+  The caches are evicted by GitHub when unused, nothing is stored permanently. Needs the repository to be checked
+  out, and runs at the same workspace path as the job that saved the cache (the venv contains absolute paths).
+
+inputs:
+  environment:
+    description: "Identifies the system the venv is built for, e.g. the image of the container (part of the cache keys)"
+    required: true
+  python:
+    description: "Interpreter the venv is created with"
+    required: false
+    default: "python3"
+  save:
+    description: "Save the venv and the profiler wheel to the cache after building them ('true' only in the job that prepares them)"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    # local runs with act (scripts/dev/run_ci_locally.sh) have no node in the containers for the cache actions and no
+    # cache service: there everything is always built
+    # the key covers every file the installed packages are built from (the root package "discopop" is metadata only)
+    - name: Restore the venv from the cache
+      id: restore_venv
+      if: ${{ !env.ACT }}
+      uses: actions/cache/restore@v4
+      with:
+        path: venv
+        key: venv-${{ inputs.environment }}-${{ hashFiles('requirements-dev.txt', 'pyproject.toml', 'VERSION', 'README.md', 'LICENSE', 'profiler/**', 'explorer/**', 'library/**', 'hotspot_detection/**', 'GUI/**', 'mcp_server/**') }}
+
+    - name: Provide the profiler wheel
+      if: ${{ steps.restore_venv.outputs.cache-hit != 'true' }}
+      uses: ./.github/actions/profiler-wheel
+      with:
+        environment: ${{ inputs.environment }}
+        python: ${{ inputs.python }}
+        save: ${{ inputs.save }}
+
+    - name: Build the venv and install DiscoPoP (not in the cache)
+      if: ${{ steps.restore_venv.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        rm -rf venv
+        ${{ inputs.python }} -m venv venv
+        venv/bin/pip install -r requirements-dev.txt ci_profiler_wheel/*.whl . ./explorer ./library ./hotspot_detection ./GUI ./mcp_server
+
+    - name: Save the venv to the cache
+      if: ${{ !env.ACT && steps.restore_venv.outputs.cache-hit != 'true' && inputs.save == 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: venv
+        key: ${{ steps.restore_venv.outputs.cache-primary-key }}

@@ -150,6 +150,9 @@ DependencyMetadata processQueueElement(MetaDataQueueElement &&mdqe) {
       // check for inter iteration dependencies
       if ((disjoint_sink_anc->get_node_type() == CallTreeNodeType::Iteration) &&
           (disjoint_source_anc->get_node_type() == CallTreeNodeType::Iteration) &&
+          // two iterations without a parent both answer nullptr here, which makes them compare
+          // equal and sends the node type check below through a null pointer
+          disjoint_sink_anc->get_parent_ptr_raw() &&
           (disjoint_sink_anc->get_parent_ptr_raw() == disjoint_source_anc->get_parent_ptr_raw()) &&
           (disjoint_sink_anc->get_parent_ptr_raw()->get_node_type() == CallTreeNodeType::Loop)) {
         // using get_parent_ptr_raw is unclean but fine here, since disjoint_sink_anc hold a shared_ptr to parent and

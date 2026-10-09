@@ -13,6 +13,7 @@
 #pragma once
 
 #include "../share/include/timer.hpp"
+#include "Immortal.hpp"
 #include "calltree/CallTree.hpp"
 #include "calltree/DependencyMetadata.hpp"
 #include "memory/AbstractShadow.hpp"
@@ -45,15 +46,27 @@ extern std::uint64_t *numAccesses;
 
 namespace __dp {
 
-extern bool DP_DEBUG; // debug flag
+// DP_DEBUG is declared in DPTypes.hpp, see the note there.
 
 extern Timers *timers;
 
 extern std::mutex pthread_compatibility_mutex;
 
-extern FunctionManager *function_manager;
-extern LoopManager *loop_manager;
-extern MemoryManager *memory_manager;
+// The three managers the callbacks reach through. The storage is the global, rather than a
+// pointer to a heap object: reaching one then costs no load of a pointer first, and __dp_read
+// and __dp_write ask the function manager to reset the call tracker on every single access.
+//
+// Their lifetime is unchanged -- construct_manager_globals() runs where __dp_init used to new
+// them, destroy_manager_globals() where __dp_finalize used to delete them. Outside that window
+// they do not exist, which manager_globals_constructed() answers for the one caller that used
+// to compare the pointer against null.
+extern ImmortalStorage<FunctionManager> function_manager;
+extern ImmortalStorage<LoopManager> loop_manager;
+extern ImmortalStorage<MemoryManager> memory_manager;
+
+void construct_manager_globals();
+void destroy_manager_globals();
+bool manager_globals_constructed() noexcept;
 
 #if DP_CALLTREE_PROFILING
 extern CallTree call_tree;
@@ -67,15 +80,32 @@ extern ReportedBBRecorder *bbList;
 extern stringDepMap *outPutDeps;
 // end hybrid analysis
 
-extern std::unordered_map<char *, long> cuec;
+// The globals declared as references below outlive the static destructors of the target
+// program: __dp_finalize still uses them after those have run. They are constructed by
+// construct_immortal_globals() and destroyed at the end of __dp_finalize; before the runtime
+// has been initialized, the referenced objects do not exist yet. See Immortal.hpp.
+void construct_immortal_globals();
+void destroy_immortal_globals();
 
-extern bool dpInited;         // library initialization flag
-extern bool targetTerminated; // whether the target program has returned from main()
-// In C++, destructors of global objects can run after main().
-// However, when the target program returns from main(), dp
-// also frees all the resources. If there are destructors run
-// after main(), __dp_func_entry() will be called again, but
-// resources are freed, leading to segmentation fault.
+extern std::unordered_map<char *, long> &cuec;
+
+// What the runtime is currently doing. There are exactly three states and they are reached in
+// order: __dp_init moves to Running, __dp_finalize moves to Terminated.
+//
+// Terminated is not the same as "not initialized". The target's global destructors run after
+// __dp_finalize has written the results and released the runtime's resources, and they are
+// instrumented like everything else, so their callbacks still arrive -- they have to return
+// without touching anything, not start the runtime up again.
+enum class RuntimeState {
+  NotInitialized,
+  Running,
+  Terminated,
+};
+
+extern RuntimeState runtime_state;
+
+// The question every instrumented callback asks: may it do its work?
+inline bool profiling_active() noexcept { return runtime_state == RuntimeState::Running; }
 
 // Runtime merging structures
 extern depMap *allDeps;
@@ -95,10 +125,10 @@ extern FirstAccessQueueChunk *mainThread_AccessInfoBuffer;
 #define DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER 4
 #define DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER 4
 
-extern FirstAccessQueue firstAccessQueue;
-extern SecondAccessQueue secondAccessQueue;
+extern FirstAccessQueue &firstAccessQueue;
+extern SecondAccessQueue &secondAccessQueue;
 extern pthread_t *secondAccessQueue_worker_thread;
-extern FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer;
+extern FirstAccessQueueChunkBuffer &firstAccessQueueChunkBuffer;
 
 extern AbstractShadow *singleThreadedExecutionSMem;
 

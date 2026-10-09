@@ -21,7 +21,7 @@ namespace __dp {
 // For loop tracking
 struct LoopTableEntry {
   LoopTableEntry(std::int32_t function_level, std::int32_t loop_id, std::int32_t number_hits, LID begin_line)
-      : funcLevel(function_level), loopID(loop_id), count(number_hits), begin(begin_line) {
+      : funcLevel(function_level), loopID(loop_id), begin(begin_line), count(number_hits) {
 #if DP_CALLTREE_PROFILING
     dependency_metadata_calculation_enabled = true;
 #endif

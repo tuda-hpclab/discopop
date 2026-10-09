@@ -23,6 +23,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <future>
 #include <mutex>
@@ -64,14 +65,14 @@ typedef enum {
 
 struct AccessInfo {
   AccessInfo(bool isRead, LID lid, char *var, std::int64_t AAvar, ADDR addr, bool skip = false)
-      : isRead(isRead), lid(lid), var(var), AAvar(AAvar), addr(addr), skip(skip) {
+      : isRead(isRead), skip(skip), lid(lid), var(var), AAvar(AAvar), addr(addr) {
 #if DP_CALLTREE_PROFILING
     call_tree_node_ptr = nullptr;
     calculate_dependency_metadata = true;
 #endif
   }
 
-  AccessInfo() : isRead(false), lid(0), var(""), AAvar(0), addr(0), skip(false) {
+  AccessInfo() : isRead(false), skip(false), lid(0), var(""), AAvar(0), addr(0) {
 #if DP_CALLTREE_PROFILING
     call_tree_node_ptr = nullptr;
     calculate_dependency_metadata = true;
@@ -102,23 +103,6 @@ struct Dep {
   std::int64_t AAvar;
 };
 
-struct compDep {
-  bool operator()(const Dep &a, const Dep &b) const {
-    if (a.type < b.type) {
-      return true;
-    } else if (a.type == b.type && a.depOn < b.depOn) {
-      return true;
-    }
-    // comparison between string is very time-consuming. So just compare
-    // variable names according to address (we only need to distinguish them)
-    else if (a.type == b.type && a.depOn == b.depOn && ((size_t)a.var < (size_t)b.var)) {
-      return true;
-    }
-
-    return false;
-  }
-};
-
 struct eqDep {
   bool operator()(const Dep &a, const Dep &b) const {
     if (a.type != b.type) {
@@ -147,7 +131,10 @@ public:
 };
 
 typedef std::unordered_set<Dep, DepHasher, eqDep> depSet;
-typedef std::unordered_map<LID, depSet *> depMap;
+// The sets are held by value. As owning raw pointers they outlived every map they were stored
+// in: the per-thread map is cleared once per processed chunk, which dropped the pointers and
+// leaked one set per dependency source line and chunk for the whole run.
+typedef std::unordered_map<LID, depSet> depMap;
 
 // Hybrid anaysis
 typedef std::unordered_map<std::string, std::unordered_set<std::string>> stringDepMap;
@@ -300,12 +287,14 @@ public:
 
   void push(SecondAccessQueueElement *elem) {
     // wait until the consumer has made room: every element keeps the shadow memory of a whole chunk alive,
-    // so an unbounded queue grows by gigabytes when the single consumer falls behind the workers
+    // so an unbounded queue grows by gigabytes when the single consumer falls behind the workers. The
+    // size is checked under the lock, so that concurrent producers cannot overshoot max_size.
     while (true) {
       {
         const std::lock_guard<std::mutex> lock(internal_mtx);
         if (internal_queue.size() < max_size) {
           internal_queue.push(elem);
+          queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
           return;
         }
       }
@@ -323,6 +312,7 @@ public:
     }
     SecondAccessQueueElement *buffer = internal_queue.front();
     internal_queue.pop();
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
     return buffer;
   }
 
@@ -334,6 +324,8 @@ public:
 private:
   std::queue<SecondAccessQueueElement *> internal_queue;
   std::mutex internal_mtx;
+  // the size of internal_queue, readable without holding internal_mtx
+  std::atomic<std::size_t> queued_elements{0};
   std::size_t max_size;
 };
 
@@ -341,16 +333,16 @@ class FirstAccessQueue {
 public:
   FirstAccessQueue(std::size_t arg_max_size) : max_size(arg_max_size) {}
 
-  bool can_accept_entries() {
-    const std::lock_guard<std::mutex> lock(internal_mtx);
-    return internal_queue.size() < max_size;
-  }
+  // Asked by the profiled thread before every push, without taking the lock, so it reads the
+  // counter instead of the queue: std::queue::size() while a worker is popping is a data race.
+  bool can_accept_entries() { return queued_elements.load(std::memory_order_relaxed) < max_size; }
 
   void set_max_size(std::size_t arg_max_size) { max_size = std::max<std::size_t>(arg_max_size, 1); }
 
   void push(FirstAccessQueueChunk *elem) {
     const std::lock_guard<std::mutex> lock(internal_mtx);
     internal_queue.push(elem);
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
   }
 
   FirstAccessQueueChunk *get(SecondAccessQueue *secondAccessQueue_ptr) {
@@ -361,10 +353,11 @@ public:
     }
     FirstAccessQueueChunk *buffer = internal_queue.front();
     internal_queue.pop();
+    queued_elements.store(internal_queue.size(), std::memory_order_relaxed);
 
     // register Futures in SecondAccessQueue
     SecondAccessQueueElement *saqe =
-        new SecondAccessQueueElement(std::move(buffer->get_entry_future()), std::move(buffer->get_exit_future()));
+        new SecondAccessQueueElement(buffer->get_entry_future(), buffer->get_exit_future());
     secondAccessQueue_ptr->push(saqe);
 
     return buffer;
@@ -378,6 +371,8 @@ public:
 private:
   std::queue<FirstAccessQueueChunk *> internal_queue;
   std::mutex internal_mtx;
+  // the size of internal_queue, readable without holding internal_mtx
+  std::atomic<std::size_t> queued_elements{0};
   std::size_t max_size;
 };
 

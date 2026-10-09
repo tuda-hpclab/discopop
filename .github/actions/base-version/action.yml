@@ -1,0 +1,52 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "Version to compare with"
+description: >
+  Prepares the version the benchmarks compare the version under test with: checks out `sha` into ./base and
+  installs its profiler into ./venv_base (its wheel goes through the actions cache like the one of the version
+  under test, see profiler-wheel). The benchmarks are run with the drivers of the version under test, so only the
+  profiler (and, for the callback benchmark, the sources in ./base) are taken from this version.
+  Call it with continue-on-error: a version that cannot be prepared is left out of the comparison.
+
+inputs:
+  sha:
+    description: "Commit to compare with"
+    required: true
+  environment:
+    description: "Identifies the system the profiler is built for (part of the cache key of its wheel)"
+    required: true
+  python:
+    description: "Interpreter the venv is created with"
+    required: false
+    default: "python3"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout the version to compare with
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.sha }}
+        path: base
+
+    - name: Provide its profiler wheel
+      uses: ./.github/actions/profiler-wheel
+      with:
+        environment: ${{ inputs.environment }}
+        source: base
+        wheel_dir: ci_profiler_wheel_base
+        python: ${{ inputs.python }}
+        save: "true"
+
+    - name: Install its profiler
+      shell: bash
+      run: |
+        rm -rf venv_base
+        ${{ inputs.python }} -m venv venv_base
+        venv_base/bin/pip install ci_profiler_wheel_base/*.whl

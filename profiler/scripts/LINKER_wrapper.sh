@@ -45,4 +45,10 @@ fi
 PARENT_PATH=$( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
 # pthread is bundled into libSystem on macOS; only link explicitly on Linux
 PTHREAD_FLAG=""; [[ "$(uname)" != "Darwin" ]] && PTHREAD_FLAG="-lpthread"
-${LLVM_CLANGPP} "$@" -L${PARENT_PATH} -lDiscoPoP_RT ${PTHREAD_FLAG} -fPIC -v
+# libDiscoPoP_RT.a is a static archive, so the linker only pulls in the members that resolve
+# an undefined symbol. Nothing in the instrumented code references __dp_init any more -- the
+# runtime starts from the constructor in lifecycle/runtime_startup.cpp -- so that member has to be requested
+# explicitly, or the runtime is never brought up.
+# Mach-O prefixes C symbols with an underscore, so ld64 has to be asked for ___dp_init.
+DP_INIT_SYMBOL="__dp_init"; [[ "$(uname)" == "Darwin" ]] && DP_INIT_SYMBOL="___dp_init"
+${LLVM_CLANGPP} "$@" -L${PARENT_PATH} -Wl,-u,${DP_INIT_SYMBOL} -lDiscoPoP_RT ${PTHREAD_FLAG} -fPIC -v

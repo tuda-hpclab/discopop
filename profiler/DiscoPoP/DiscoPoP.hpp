@@ -188,7 +188,6 @@ private:
   void CFA(Function &F, LoopInfo &LI);
 
   // Callback Inserters
-  // void insertDpInit(const vector<Value*> &args, Instruction *before);
   // void insertDpFinalize(Instruction *before);
   void instrumentAlloca(AllocaInst *toInstrument);
 
@@ -214,7 +213,7 @@ private:
   int64_t uniqueNum;
 
   // Callbacks to run-time library
-  FunctionCallee DpInit, DpFinalize;
+  FunctionCallee DpFinalize;
   FunctionCallee DpRead, DpWrite;
   FunctionCallee DpAlloca, DpNew, DpDelete; //, DpDecl;
   FunctionCallee DpCallOrInvoke;
@@ -236,6 +235,13 @@ private:
   // Export Module M from runOnModule() to the whole structure space
   Module *ThisModule;
   LLVMContext *ThisModuleContext;
+
+  // The __dp_read / __dp_write / __dp_alloca call inserted for a load, store or alloca. The
+  // omission analysis erases the ones whose instruction it can predict statically, and it
+  // used to find them as the neighbour of that instruction -- which stops being true as soon
+  // as anything moves the two apart, and then silently left the call in place. Filled while
+  // instrumenting one function, cleared when the next one starts.
+  map<Instruction *, CallInst *> insertedAccessCallbacks;
 
   map<string, Value *> VarNames;
   set<DIGlobalVariable *> GlobalVars;

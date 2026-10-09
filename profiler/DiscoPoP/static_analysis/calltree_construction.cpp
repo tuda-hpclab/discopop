@@ -564,9 +564,9 @@ StaticCalltree DiscoPoP::buildStaticCalltree(Module &M) {
               trigger_instructions.push_back(increment->second);
             }
             else{
-              // loops without __dp_loop_incr (fewer than three basic blocks, e.g. do-while loops
-              // and while loops with a straight-line body, see instrument_loop) start a new
-              // iteration whenever their header, and thus the loop entry call, is executed again
+              // loops without __dp_loop_incr (instrument_loop skips loops without a source location
+              // and loops of a single basic block) start a new iteration whenever their header, and
+              // thus the loop entry call, is executed again
               trigger_instructions.push_back(loop_entry_instructionIDs[loop_id]);
             }
           }

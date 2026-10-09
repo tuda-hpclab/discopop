@@ -29,7 +29,7 @@ bool MetaDataQueueElement::operator==(const MetaDataQueueElement &other) const {
          (source_ctn->get_iteration_id() == other.source_ctn->get_iteration_id());
 }
 
-string MetaDataQueueElement::toString() {
+string MetaDataQueueElement::toString() const {
   string result = "MDQE( ";
   switch (type) {
   case RAW:
@@ -47,7 +47,7 @@ string MetaDataQueueElement::toString() {
   result += dputil::decodeLID(sink) + " - " + dputil::decodeLID(source) + " ";
   result += var;
   result += " ";
-  result += AAvar + " ";
+  result += to_string(AAvar) + " ";
   result += "sink_ctn: " + to_string(sink_ctn->get_loop_or_function_id()) + " ";
   result += "it: " + to_string(sink_ctn->get_iteration_id()) + " ";
   result += "source_ctn: " + to_string(source_ctn->get_loop_or_function_id()) + " ";

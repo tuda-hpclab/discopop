@@ -12,7 +12,6 @@
 
 #pragma once
 
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -59,8 +58,9 @@ class CallTreeNodeQueueChunkBuffer {
 public:
   CallTreeNodeQueueChunkBuffer(std::size_t arg_size) : size(arg_size) {}
 
-  // free the chunks prepared but never handed out
   ~CallTreeNodeQueueChunkBuffer() {
+    // the chunks in the pool have been prepared but never handed out, so nobody else can free them
+    const std::lock_guard<std::mutex> lock(internal_mtx);
     while (!internal_queue.empty()) {
       delete internal_queue.front();
       internal_queue.pop();
@@ -94,8 +94,7 @@ public:
       internal_queue.pop();
       return buffer;
     } else {
-      // allocate a new chunk
-      std::cout << "FETCH FAILED!" << std::endl;
+      // pool is empty, allocate a new chunk
       return new CallTreeNodeQueueChunk();
     }
   }

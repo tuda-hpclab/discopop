@@ -343,7 +343,7 @@ def get_alias_information(file_mapping: str, cu_xml: str, temp_file: str, build_
     __create_statements_file(
         file_mapping,
         temp_file + "_statements",
-        str(pathlib.Path(build_path).joinpath("rtlib", "simple-alias-detection", "getStatements")),
+        str(pathlib.Path(build_path).joinpath("profiler", "simple-alias-detection", "getStatements")),
     )
     # get function information file
     function_information = __get_function_information(cu_xml)

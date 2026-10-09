@@ -13,6 +13,8 @@
 #include "dp_landing_pad.hpp"
 
 #include "../runtimeFunctionsGlobals.hpp"
+
+#include "../callback_scope.hpp"
 #include "../static_callstate_transitions/utils.hpp"
 
 #include <mutex>
@@ -26,12 +28,8 @@ extern "C" {
 // Their callpath states are discarded here, when the landing pad of the function which continues
 // is reached.
 void __dp_landing_pad(int32_t functionEntryID) {
-  if (!dpInited || targetTerminated) {
-    return;
-  }
-#ifdef DP_PTHREAD_COMPATIBILITY_MODE
-  std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
-#endif
+  DP_CALLBACK_SCOPE(LANDING_PAD);
+
   resume_function_for_callstate(functionEntryID);
 }
 }

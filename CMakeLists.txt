@@ -68,16 +68,20 @@ separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 include_directories(${LLVM_INCLUDE_DIRS})
 
+# Decided before profiler/ is configured: the runtime library builds an extra variant of itself
+# for the callback benchmarks when the unit tests are requested, see profiler/rtlib/CMakeLists.txt.
+if( NOT DEFINED DP_BUILD_UNITTESTS)
+    set(DP_BUILD_UNITTESTS 0)
+endif()
+
 add_subdirectory(profiler)
 
 add_subdirectory(scripts)
 
 # build unittests and performance benchmarks, if requested
-if( NOT DEFINED DP_BUILD_UNITTESTS)
-    set(DP_BUILD_UNITTESTS 0)
-endif()
 if(${DP_BUILD_UNITTESTS} STREQUAL "1")
     add_subdirectory(test/unit_tests)
+    add_subdirectory(test/pass_unit_tests)
     add_subdirectory(benchmark)
 endif()
 

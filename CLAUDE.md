@@ -37,12 +37,12 @@ This document contains critical information about working with this codebase. Fo
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the mypy version CI uses; a different version can report different errors)
 - to execute type checking of python files use the following command as the basis: `venv/bin/python -m mypy --config-file=mypy.ini -p`
-- to type check everything CI checks (`files` in `mypy.ini`: `discopop_explorer`, `discopop_library`, `discopop_gui` and `mcp_server`), run `venv/bin/python -m mypy --config-file=mypy.ini` without further arguments
+- to type check everything CI checks (`files` in `mypy.ini`: `discopop_explorer`, `discopop_library`, `discopop_gui`, `mcp_server`, `test/leak_check`, `test/instrumentation` and the benchmark drivers in `benchmark/pass_overhead` and `benchmark/injected_functions`), run `venv/bin/python -m mypy --config-file=mypy.ini` without further arguments
 
 ## Formatting
 ### Python
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt` (pins the black version CI uses)
-- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server`
+- CI checks the formatting of these paths only: `explorer library hotspot_detection/discopop_hotspot_analyzer hotspot_detection/discopop_hotspot_cc hotspot_detection/discopop_hotspot_cxx GUI mcp_server test/leak_check benchmark/pass_overhead benchmark/injected_functions benchmark/compare test/instrumentation`
 - to execute the formatting check, use `venv/bin/python -m black -l 120 --check <paths>` with the paths above
 - to execute automatic formatting, use `venv/bin/python -m black -l 120 <paths>`, restricted to the paths you changed; never run black on `.`, as it would reformat many unrelated, unchecked files
 
@@ -72,6 +72,11 @@ This document contains critical information about working with this codebase. Fo
 - `mcp_server` and `hotspot_detection` have pytest-based unit tests colocated with the source as `test_*.py` files
 - to run them, from the repository root: `venv/bin/python -m pytest mcp_server` and `venv/bin/python -m pytest hotspot_detection`
 
+### Further unittest suites
+- `test/instrumentation` asserts on the callbacks the LLVM pass inserts; it drives `discopop_cxx`, so the venv has to be *activated* (`. venv/bin/activate`), not just addressed via `venv/bin/python`: `python3 -m unittest -v -k "*test.instrumentation.*"`
+- the CI matrix job `profiler_tests` runs the instrumentation tests on every matrix entry
+- `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1`; CI does not run it
+
 ### Python unit tests (discopop_explorer)
 - the `discopop_explorer` package (`explorer/discopop_explorer`) has pytest-based unit tests colocated with the source as `test_*.py` files (e.g. `explorer/discopop_explorer/utilities/ASTUtils/test_ASTQueries.py`, `explorer/discopop_explorer/test_utils.py`, `explorer/discopop_explorer/pattern_detectors/test_do_all_detector.py`)
 - install prerequisites via `venv/bin/pip install -r requirements-dev.txt pytest-cov`
@@ -95,16 +100,25 @@ This document contains critical information about working with this codebase. Fo
 
 ### C++
 #### Profiler
-- the profiler's C++ unit tests (GoogleTest, in `test/unit_tests`) are only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`
-- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT`
+- there are two GoogleTest binaries, both only reachable via the root `CMakeLists.txt`, not via `pip install ./profiler`: `DiscoPoP_UT` (runtime library, `test/unit_tests`) and `DiscoPoP_Pass_UT` (LLVM pass, `test/pass_unit_tests`)
+- to execute them, configure and build from the repository root with `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_UT DiscoPoP_Pass_UT -j "$(nproc)"`, then run `build_tests/test/unit_tests/DiscoPoP_UT` and `build_tests/test/pass_unit_tests/DiscoPoP_Pass_UT`; the CI matrix job `profiler_unit_tests` runs both on every matrix entry
 - the end-to-end profiler dependency-detection tests (`test/profiler/{RAW,WAR,WAW}`) are separate and run via `venv/bin/python -m unittest -v -k "*test.profiler.*"` from the repository root
 
 #### Sanitizers (profiler)
 - the CMake option `DP_SANITIZERS` (value for `-fsanitize=`, e.g. `address,undefined` or `thread`) instruments the runtime library `DiscoPoP_RT` and everything linking it, i.e. `DiscoPoP_UT`; the LLVM pass plugin is not sanitized (it runs inside an uninstrumented clang)
-- to build and run `DiscoPoP_UT` with ASan+UBSan(+LSan) resp. TSan, from the repository root: `scripts/dev/run_profiler_sanitizers.sh address,undefined` resp. `scripts/dev/run_profiler_sanitizers.sh thread` (build dirs `build_asan` / `build_tsan`, gitignored; ~30 s each); the CI job `sanitizers` runs exactly this
+- to build and run `DiscoPoP_UT` with ASan+UBSan(+LSan) resp. TSan, from the repository root: `scripts/dev/run_profiler_sanitizers.sh address,undefined` resp. `scripts/dev/run_profiler_sanitizers.sh thread` (build dirs `build_asan` / `build_tsan`, gitignored; ~30 s each); the CI job "Runtime unit tests with sanitizers" (`runtime_unit_tests_sanitized`) runs exactly this; it covers only what the unit tests exercise (no LLVM pass, no instrumented programs)
 - the script sets the `*SAN_OPTIONS` (halt on error, suppression files); any finding fails the run
 - TSan needs ASLR disabled on kernels with high mmap entropy (`FATAL: ThreadSanitizer: unexpected memory mapping`); the script runs it via `setarch "$(uname -m)" -R`, which in Docker needs `--security-opt seccomp=unconfined`
 - accepted leaks / races go into `test/unit_tests/sanitizers/{lsan,tsan}.supp`, one comment per entry explaining why; prefer fixing the code or the test
+
+#### Leak check of instrumented programs (profiler)
+- `scripts/dev/check_profiler_leaks.sh` compiles the programs in `test/leak_check/programs` with the DiscoPoP pass, links them against an ASan/LSan runtime and evaluates the leaks of the runtime library (`test/leak_check/evaluate_leaks.py`): before and after the runtime's shutdown, against `test/leak_check/known_leaks.txt`, and short against long runs (growth); it only looks for leaks
+- the CI job "Leak check of instrumented programs (ASan/LSan)" (`instrumented_programs_leak_check`) runs it with `--skip-unit-tests`, since the sanitized unit tests are a separate job (see above)
+
+#### Coverage (runtime library)
+- `scripts/dev/run_rtlib_coverage.sh` builds `DiscoPoP_UT` with clang source based coverage (build dir `build_coverage`), runs it and reports line / function / branch coverage of `profiler/rtlib` (llvm-cov and llvm-profdata of clang's major version are required, e.g. the `llvm-19` package)
+- `--min-line-coverage <n>` fails below n percent lines, `--markdown-out <file>` / `--html-out <dir>` write reports; test failures do not stop the report
+- the CI job `rtlib_coverage` runs it with a floor of 90% lines; it is not part of `checks_successful` yet
 
 ### Execute example
 You can execute a full example by following the steps below. The example should not raise any errors. Warnings may arise during different parts of the process and can be tolerated.
@@ -125,8 +139,58 @@ You can execute a full example by following the steps below. The example should 
 ### Excecute CI Pipeline locally
 To execute the CI pipeline locally, use the following command from the root folder: `scripts/dev/run_ci_locally.sh`.
 - a single matrix entry can be selected with act's `--matrix` filter on its `id`, e.g. `scripts/dev/run_ci_locally.sh --matrix id:ubuntu-24-04-llvm-20`
+- locally, the images stay in the local docker store and the cache actions are skipped (the containers have no node), so everything is built
+
+### Prepared CI environments
+- the jobs do not install their prerequisites themselves: `create_matrix` defines one environment (base image + apt install command) per matrix entry plus two without a venv, for the sanitizer/coverage jobs and the leak check, and `prepare_images` builds each as an image and pushes it to `ghcr.io/<owner>/discopop-ci`, unless its tag exists; the tag is a hash of the base image, the install command and `IMAGE_REVISION` (bump it in `create_matrix` to rebuild all images, e.g. for newer packages)
+- `static_checks` and the benchmark jobs run in the environment of the LLVM 21 matrix entry, which both configurations contain: a reduced run prepares a single venv
+- the built code is not part of the images: `prepare_build` builds a venv with all DiscoPoP packages (installed without `-e`; editable installs are a developer convenience) per environment and saves it with `actions/cache` (composite action `.github/actions/prepared-venv`), keyed by the image and a hash of the package sources and `requirements-dev.txt`; the profiler wheel is cached separately, keyed by `profiler/` only, so a change of the Python sources does not rebuild the profiler. The other jobs restore the venv and build it only on a miss
+- changing an install command means changing it in `create_matrix` only
 
 ### Supported versions and CI matrix
 - LLVM/clang 19-22 (accepted by `profiler/CMakeLists.txt` and `profiler/hatch_build.py`), Python >= 3.10 (`requires-python` of every package)
+- the CI runs on every push and on pull requests into master/new_explorer; the full matrix only runs when merging into master or new_explorer (pushes to them, and pull requests targeting them); every other push and manual run is "reduced": the matrix only tests debian 13 / LLVM 21, and only the environments that run needs are prepared. The jobs outside the matrix run in both cases
+- the tests of a matrix entry are split by kind into the jobs `type_check` (mypy), `python_unit_tests` (pytest), `profiler_unit_tests` (`DiscoPoP_UT`, `DiscoPoP_Pass_UT`), `profiler_tests` (`test.instrumentation`, `test.profiler`) and `end_to_end_tests`; `static_checks` (license tags, black) does not depend on the platform and runs once
+- `runtime_unit_tests_sanitized`, `instrumented_programs_leak_check` and `rtlib_coverage` only start once all of these basic jobs have succeeded
+- `checks_successful` covers the matrix entries of the run, i.e. LLVM 21 in a reduced, all entries in a full run; its log names the configuration
 - the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.10 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
 - when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
+
+## Benchmarks
+### Runtime library micro-benchmarks
+- Google Benchmark micro-benchmarks for the runtime library data structures live in `benchmark/`
+- they are built through the root `CMakeLists.txt`: `cmake -S . -B build_tests -DCMAKE_BUILD_TYPE=Release -DDP_BUILD_UNITTESTS=1`, then `cmake --build build_tests --target DiscoPoP_BM -j "$(nproc)"`, then run `build_tests/benchmark/DiscoPoP_BM`
+
+### Runtime library benchmark variants
+- `profiler/rtlib/CMakeLists.txt` builds the runtime 18 times when `DP_BUILD_UNITTESTS=1`: the shipped `DiscoPoP_RT`, plus `DiscoPoP_RT_EmptyCallbacks` (no callback body at all) and one `DiscoPoP_RT_Only_<CALLBACK>` per callback (only that body)
+- the switch is `callback_body_enabled(CallbackId)` in `profiler/rtlib/callback_scope.hpp`, driven by `DP_BENCHMARK_EMPTY_CALLBACKS` and `DP_BENCHMARK_ONLY_CALLBACK=<enumerator>`; it is a compile-time constant, so a body that is off is gone from the generated code rather than skipped over
+- build them all with `cmake --build build_tests --target DiscoPoP_RT_BenchmarkVariants`; they are not installed and must never be linked into a profiled program
+- the shared half of the runtime is compiled once into `DiscoPoP_RT_BenchmarkShared` and reused; `DiscoPoP_CALLBACK_SOURCES` in that CMakeLists lists the files whose code depends on the switch (everything including `callback_scope.hpp`) — a new callback file belongs there, not in `DiscoPoP_SHARED_SOURCES`
+
+### Injected callback benchmark
+- `benchmark/injected_functions` measures what each callback the LLVM pass injects costs, split into the call the pass adds and the body the runtime executes inside it
+- to run it: `venv/bin/python benchmark/injected_functions/run_callback_benchmark.py`; it configures, builds `DiscoPoP_BM_Callbacks` and `DiscoPoP_BM_Callbacks_Empty`, runs both and subtracts them per callback
+- `--no-build`, `--filter <regex>`, `--repetitions <n>` and `--min-time <s>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
+- it fails when a binary does not build or run, when the runtime does not come up, or when the two runs no longer agree on the set of benchmarks; the times are reported, never enforced
+- the binaries need `DOT_DISCOPOP` to point at a directory containing a `profiler/` subdirectory when run by hand -- the runtime opens its result files before `main`; the driver supplies one
+- see `benchmark/injected_functions/README.md` for what is and is not covered, and for how to add a callback
+- the CI job `callback_benchmark` runs it on pull requests into and pushes to master/new_explorer and on manual runs (`workflow_dispatch`), compared with the previous version (see "Benchmark comparison in CI"); the `--callback-breakdown` of the pass overhead benchmark only on request; it is not part of `checks_successful`
+
+### Pass overhead benchmark
+- `benchmark/pass_overhead` compiles the test programs in `benchmark/pass_overhead/programs` twice -- once plain, once with the LLVM pass from `profiler/DiscoPoP` plus the linked runtime library -- and reports compile time, run time and binary size side by side
+- it needs the profiler installed without `-e`: `venv/bin/pip install -r requirements-dev.txt ./profiler`
+- to run it: `venv/bin/python benchmark/pass_overhead/run_pass_benchmark.py`
+- `--filter <substring>` and `--repetitions <n>` shorten the run while iterating; `--json-out` / `--markdown-out` write machine readable results
+- it fails when a program does not build or run, or when the instrumented binary stops reproducing the baseline output; timings only fail the run if `--max-compile-factor` / `--max-run-factor` are given
+- the CI job `pass_overhead_benchmark` runs it (without timing limits) and is part of `checks_successful`: a program that no longer builds, runs or reproduces its output fails the pipeline
+- adding a program means dropping a `.cpp` file with a `// BENCHMARK: <description>` comment into `benchmark/pass_overhead/programs`; see `benchmark/pass_overhead/README.md`
+- `--callback-breakdown` additionally builds every program against each runtime variant above, which attributes the whole-program overhead to the individual callbacks; it needs the variants built and links *every* instrumented configuration from `--variants-dir` so they all come from one build
+- the breakdown rows do not add up to the total: a body running on its own never saturates the access queue, so the main thread never waits for the workers the way it does in a real profiling run. Read it as a ranking, not as a decomposition
+
+### Benchmark comparison in CI
+- `pass_overhead_benchmark` and `callback_benchmark` measure the version under test and the version before it (a pull request: the tip of its target branch; a push: the state before the push; determined in `create_matrix`) on the same runner, interleaved round by round; they run last and one after the other, so no other job competes for the machine
+- the version before is prepared by the composite action `.github/actions/base-version`: a checkout in `base/` and its profiler in `venv_base` (the wheel is cached like the one of the version under test, `.github/actions/profiler-wheel`); the drivers of the version under test are used for both, so only the profiler (and the sources of the callback benchmark) come from the older version. A version that cannot be prepared or measured is left out, and the report says why
+- `benchmark_report` turns the results into a comment on the pull request (updated by every run), the job summary and the artifact `benchmark-report` (self-contained HTML with charts, plus the comparison as JSON)
+- a change is flagged (⚠️ regression / ✅ improvement) when it exceeds 10% and, where measured repeatedly, is significant (two-sided Mann-Whitney U test, p < 0.05); callback changes below 0.25 ns are never flagged. Flags never fail the CI; a regression is for the reviewer to judge
+- the callback breakdown takes long and only runs on request: the pull request label `benchmark-breakdown` (`.github/workflows/benchmark_breakdown.yml` re-runs `callback_benchmark` of the latest CI run, which reads the labels when it runs; every further run includes it while the label is set) or the input `callback_breakdown` of a manual run
+- the code lives in `benchmark/compare`: `run_ab_benchmarks.py` measures both versions, `compare_benchmarks.py` writes the reports, the package `benchmark_compare` holds statistics, loading and formatting (standard library only, unit tests colocated as `test_*.py`, part of the bare `pytest` run); see `benchmark/compare/README.md`

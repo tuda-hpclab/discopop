@@ -48,10 +48,10 @@ public:
 
   void correct_func_level(const std::int32_t func_level) {
     if (top().funcLevel != func_level) {
-#ifdef DP_DEBUG
-      std::cout << "WARNING: changing funcLevel of Loop " << top().loopID << " from " << top().funcLevel << " to "
-                << func_level << std::endl;
-#endif
+      if (DP_DEBUG) {
+        std::cout << "WARNING: changing funcLevel of Loop " << top().loopID << " from " << top().funcLevel << " to "
+                  << func_level << std::endl;
+      }
       contents.back().funcLevel = func_level;
     }
   }
@@ -95,14 +95,15 @@ public:
   void increment_top_count() { contents.back().increment_count(); }
 
   void debug_output() const {
-#ifdef DP_DEBUG
-    if (empty())
-      std::cout << "Loop Stack is empty." << endl;
-    else {
+    if (!DP_DEBUG) {
+      return;
+    }
+    if (empty()) {
+      std::cout << "Loop Stack is empty." << std::endl;
+    } else {
       std::cout << "TOP: (" << std::dec << top().funcLevel << ")";
       std::cout << "Loop " << top().loopID << "." << std::endl;
     }
-#endif
   }
 
 private:

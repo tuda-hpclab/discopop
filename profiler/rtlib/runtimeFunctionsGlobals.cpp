@@ -12,6 +12,10 @@
 
 #include "runtimeFunctionsGlobals.hpp"
 
+#include "Immortal.hpp"
+#include "hybrid_analysis/bb_deps.hpp"
+#include "runtimeFunctions.hpp"
+
 bool USE_PERFECT = true;
 
 // Shadow memory parameters
@@ -23,15 +27,27 @@ std::uint64_t *numAccesses = nullptr;
 
 namespace __dp {
 
+namespace {
+// The backing storage of the globals whose lifetime the runtime manages itself, see
+// Immortal.hpp for why they must not be destroyed along with the target's own globals.
+ImmortalStorage<std::unordered_map<char *, long>> cuec_storage;
+ImmortalStorage<FirstAccessQueue> firstAccessQueue_storage;
+ImmortalStorage<SecondAccessQueue> secondAccessQueue_storage;
+ImmortalStorage<FirstAccessQueueChunkBuffer> firstAccessQueueChunkBuffer_storage;
+
+bool immortal_globals_constructed = false;
+bool manager_globals_alive = false;
+} // namespace
+
 bool DP_DEBUG = false; // debug flag
 
 Timers *timers = nullptr;
 
 std::mutex pthread_compatibility_mutex;
 
-FunctionManager *function_manager = nullptr;
-LoopManager *loop_manager = nullptr;
-MemoryManager *memory_manager = nullptr;
+ImmortalStorage<FunctionManager> function_manager;
+ImmortalStorage<LoopManager> loop_manager;
+ImmortalStorage<MemoryManager> memory_manager;
 
 #if DP_CALLTREE_PROFILING
 CallTree call_tree;
@@ -45,15 +61,9 @@ ReportedBBRecorder *bbList = nullptr;
 stringDepMap *outPutDeps = nullptr;
 // end hybrid analysis
 
-std::unordered_map<char *, long> cuec;
+std::unordered_map<char *, long> &cuec = cuec_storage.value;
 
-bool dpInited = false;         // library initialization flag
-bool targetTerminated = false; // whether the target program has returned from main()
-// In C++, destructors of global objects can run after main().
-// However, when the target program returns from main(), dp
-// also frees all the resources. If there are destructors run
-// after main(), __dp_func_entry() will be called again, but
-// resources are freed, leading to segmentation fault.
+RuntimeState runtime_state = RuntimeState::NotInitialized;
 
 // Runtime merging structures
 depMap *allDeps = nullptr;
@@ -66,11 +76,10 @@ pthread_t *workers = nullptr; // worker threads
 std::atomic<bool> finalizeParallelizationCalled =
     false; // signals to worker threads that no further data access will be registered in the first queue
 FirstAccessQueueChunk *mainThread_AccessInfoBuffer = nullptr;
-// the limits are scaled by NUM_WORKERS in initParallelization
-FirstAccessQueue firstAccessQueue(DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER);
-SecondAccessQueue secondAccessQueue(DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER);
+FirstAccessQueue &firstAccessQueue = firstAccessQueue_storage.value;
+SecondAccessQueue &secondAccessQueue = secondAccessQueue_storage.value;
 pthread_t *secondAccessQueue_worker_thread = nullptr;
-FirstAccessQueueChunkBuffer firstAccessQueueChunkBuffer(10);
+FirstAccessQueueChunkBuffer &firstAccessQueueChunkBuffer = firstAccessQueueChunkBuffer_storage.value;
 
 #define XSTR(x) STR(x)
 #define STR(x) #x
@@ -93,6 +102,60 @@ CallStateGraph *call_state_graph;
 
 // statistics
 std::chrono::high_resolution_clock::time_point statistics_profiling_start_time;
+
+// The managers, constructed where __dp_init used to new them. Kept apart from the immortal
+// globals below because they are created later in the startup sequence and a unit test brings
+// them up on its own.
+void construct_manager_globals() {
+  if (manager_globals_alive) {
+    return;
+  }
+  function_manager.construct();
+  loop_manager.construct();
+  memory_manager.construct();
+  manager_globals_alive = true;
+}
+
+// Destroyed in the reverse order, where __dp_finalize used to delete them.
+void destroy_manager_globals() {
+  if (!manager_globals_alive) {
+    return;
+  }
+  memory_manager.destroy();
+  loop_manager.destroy();
+  function_manager.destroy();
+  manager_globals_alive = false;
+}
+
+bool manager_globals_constructed() noexcept { return manager_globals_alive; }
+
+// Constructs the globals above. Called from __dp_init, before anything reads them, and
+// idempotent so that a second entry point can call it too.
+void construct_immortal_globals() {
+  if (immortal_globals_constructed) {
+    return;
+  }
+  cuec_storage.construct();
+  // the limits are scaled by NUM_WORKERS in initParallelization
+  firstAccessQueue_storage.construct(DEFAULT_FIRST_ACCESS_QUEUE_CHUNKS_PER_WORKER);
+  secondAccessQueue_storage.construct(DEFAULT_SECOND_ACCESS_QUEUE_ELEMENTS_PER_WORKER);
+  firstAccessQueueChunkBuffer_storage.construct(10);
+  immortal_globals_constructed = true;
+}
+
+// Destroys them again, at the end of __dp_finalize. Every callback returns early once the
+// runtime state is Terminated, so nothing reaches these objects afterwards.
+void destroy_immortal_globals() {
+  release_registered_bb_deps();
+  if (!immortal_globals_constructed) {
+    return;
+  }
+  firstAccessQueueChunkBuffer_storage.destroy();
+  secondAccessQueue_storage.destroy();
+  firstAccessQueue_storage.destroy();
+  cuec_storage.destroy();
+  immortal_globals_constructed = false;
+}
 
 /******* END: parallelization section *******/
 

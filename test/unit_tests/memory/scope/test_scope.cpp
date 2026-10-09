@@ -955,3 +955,112 @@ TEST_F(ScopeManager2Test, testPositiveChange) {
   ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(32));
   ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(64));
 }
+
+TEST_F(ScopeManagerTest, testNumberOpenScopes) {
+  auto manager = __dp::ScopeManager{};
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 1);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+
+  manager.enterScope("loop", 2);
+  manager.enterScope("loop_iteration", 3);
+  ASSERT_EQ(manager.number_open_scopes(), 3);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 3);
+
+  manager.leaveScope("loop_iteration", 4);
+  ASSERT_EQ(manager.number_open_scopes(), 2);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 2);
+
+  manager.leaveScope("loop", 5);
+  manager.leaveScope("function", 6);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  // the type a scope is left with is never compared against the one it was entered with, so the
+  // manager cannot tell a mismatched pair from a matching one
+  manager.enterScope("loop", 7);
+  manager.leaveScope("function", 8);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+}
+
+TEST_F(ScopeManager2Test, testNumberOpenScopes) {
+  auto manager = __dp::ScopeManager2{};
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 1);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+
+  manager.enterScope("loop", 2);
+  manager.enterScope("loop_iteration", 3);
+  ASSERT_EQ(manager.number_open_scopes(), 3);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 3);
+
+  manager.leaveScope("loop_iteration", 4);
+  ASSERT_EQ(manager.number_open_scopes(), 2);
+  ASSERT_EQ(manager.getCurrentScope().get_id(), 2);
+
+  manager.leaveScope("loop", 5);
+  manager.leaveScope("function", 6);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("loop", 7);
+  manager.leaveScope("function", 8);
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+}
+
+TEST_F(ScopeManagerTest, testLeavingAScopeThatWasNeverEntered) {
+  auto manager = __dp::ScopeManager{};
+
+  manager.leaveScope("function", 1);
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  // and the manager still works afterwards
+  manager.enterScope("function", 2);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+}
+
+TEST_F(ScopeManagerTest, testTheScopeChangeIsMeasuredAgainstTheLastAccess) {
+  auto manager = __dp::ScopeManager{};
+  manager.enterScope("function", 1);
+
+  // an address nothing has ever touched has no last access, so anything counts as a change
+  ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(0x1000));
+
+  // an address accessed in the current scope has not seen one
+  manager.registerStackWrite(0x2000, 2, "x");
+  ASSERT_FALSE(manager.positiveScopeChangeOccuredSinceLastAccess(0x2000));
+
+  manager.enterScope("loop", 3);
+  ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(0x2000));
+
+  // the answer for an unknown address is the same whether the map holds a zero for it or nothing
+  // at all, which is why only the growth of the map tells the two apart
+  ASSERT_TRUE(manager.positiveScopeChangeOccuredSinceLastAccess(0x1000));
+}
+
+TEST_F(ScopeManager2Test, testLeavingAScopeThatWasNeverEntered) {
+  auto manager = __dp::ScopeManager2{};
+
+  manager.leaveScope("function", 1);
+
+  ASSERT_EQ(manager.number_open_scopes(), 0);
+
+  manager.enterScope("function", 2);
+  ASSERT_EQ(manager.number_open_scopes(), 1);
+}
+
+TEST_F(ScopeManager2Test, testTheSecondManagerTakesTheSameArgumentsAsTheFirst) {
+  auto manager = __dp::ScopeManager2{};
+  manager.enterScope("function", 1);
+
+  // the variable name is only there for debugging, and a literal is what the callbacks pass. The
+  // second manager used to take it as char *, which no caller of the first one could satisfy.
+  manager.registerStackWrite(0x1000, 2, "x");
+  manager.registerStackRead(0x2000, 3, "y");
+
+  ASSERT_TRUE(manager.isOwnedByScope(0x1000, false));
+  ASSERT_FALSE(manager.isOwnedByScope(0x2000, false));
+}

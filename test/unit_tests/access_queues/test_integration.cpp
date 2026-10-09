@@ -8,6 +8,7 @@ using namespace __dp;
 
 class AccessQueueIntegrationTest : public ::testing::Test {
     void SetUp() override{
+        __dp::construct_immortal_globals();
         __dp::allDeps = new __dp::depMap();
         __dp::mainThread_AccessInfoBuffer = __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
         __dp::initParallelization();
@@ -22,16 +23,13 @@ class AccessQueueIntegrationTest : public ::testing::Test {
         // finalizeParallelization leaves a fresh chunk for late accesses; SetUp replaces it
         delete __dp::mainThread_AccessInfoBuffer;
         __dp::mainThread_AccessInfoBuffer = nullptr;
-        // allDeps owns its dependency sets
-        for (auto &entry : *__dp::allDeps) {
-            delete entry.second;
-        }
         delete __dp::allDeps;
         __dp::allDeps = nullptr;
         // chunks the worker threads prepared in advance
         while (__dp::firstAccessQueueChunkBuffer.get_queue_size() > 0) {
             delete __dp::firstAccessQueueChunkBuffer.get_prepared_chunk(FIRST_ACCESS_QUEUE_CHUNK_SIZE);
         }
+        __dp::destroy_immortal_globals();
     }
 };
 
@@ -39,7 +37,7 @@ void printAllDeps(){
     std::cout << "allDeps:" << std::endl;
     for(auto pair : *allDeps){
         std::cout << "LID: " << pair.first << std::endl;
-        for(auto dep: *(pair.second)){
+        for(auto dep: pair.second){
             std::cout << "--> ";
             switch(dep.type){
                 case(RAW):
@@ -116,9 +114,9 @@ void check_lid_deps(LID lid, int expected_INIT, int expected_RAW, int expected_W
 
     ASSERT_TRUE(lid_contained);
     int expected_size = expected_INIT + expected_RAW + expected_WAR + expected_WAW;
-    ASSERT_EQ(((*allDeps)[lid])->size(), expected_size);
+    ASSERT_EQ((*allDeps)[lid].size(), expected_size);
     int count_INIT = 0, count_RAW = 0, count_WAR = 0, count_WAW = 0;
-    for(Dep elem: *((*allDeps)[lid])){
+    for(Dep elem: (*allDeps)[lid]){
         switch(elem.type){
             case(INIT):
                 count_INIT++;
@@ -216,7 +214,9 @@ TEST_F(AccessQueueIntegrationTest, RPW) {
     write(42, 1337);
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1337, 1, 0, 0, 0);
+    // The write is the first one to this address, which makes it an INIT -- and it still comes
+    // after a read of the same address, which makes it a WAR as well.
+    check_lid_deps(1337, 1, 0, 1, 0);
 }
 
 TEST_F(AccessQueueIntegrationTest, WPR) {
@@ -254,7 +254,7 @@ TEST_F(AccessQueueIntegrationTest, RPWP) {
     push();
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1337, 1, 0, 0, 0);
+    check_lid_deps(1337, 1, 0, 1, 0);
 }
 
 TEST_F(AccessQueueIntegrationTest, WPRP) {
@@ -305,7 +305,8 @@ TEST_F(AccessQueueIntegrationTest, PRW) {
     write(42, 1337);
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1337, 1, 0, 0, 0);
+    // Read and write in one chunk, so the WAR is found against the chunk local shadow.
+    check_lid_deps(1337, 1, 0, 1, 0);
 }
 
 TEST_F(AccessQueueIntegrationTest, PWR) {
@@ -373,7 +374,8 @@ TEST_F(AccessQueueIntegrationTest, RPPPPW) {
     write(42, 1338);
     finalizeParallelization();
     check_registered_lids(1);
-    check_lid_deps(1338, 1, 0,0,0);
+    // Four chunk boundaries between the read and the write, and the WAR survives all of them.
+    check_lid_deps(1338, 1, 0,1,0);
 }
 
 TEST_F(AccessQueueIntegrationTest, WPPPPR) {

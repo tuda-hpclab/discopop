@@ -39,6 +39,7 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <unordered_set>
 #include <utility>
 // hybrid analysis
 #include <regex>
@@ -76,15 +77,8 @@ void addDep(depType type, LID curr, LID depOn, const char *var, std::int64_t AAv
   // Remove metadata to preserve result correctness and add metadata to `Dep`
   // object
 
-  // register dependency
-  depMap::iterator posInDeps = myMap->find(curr);
-  if (posInDeps == myMap->end()) {
-    depSet *tmp_depSet = new depSet();
-    tmp_depSet->insert(Dep(type, depOn, var, AAvar));
-    myMap->insert(std::pair<LID, depSet *>(curr, tmp_depSet));
-  } else {
-    posInDeps->second->insert(Dep(type, depOn, var, AAvar));
-  }
+  // register dependency. operator[] creates the set when the lid is seen for the first time.
+  (*myMap)[curr].insert(Dep(type, depOn, var, AAvar));
 
 #if DP_CALLTREE_PROFILING
   // register dependency for call_tree based metadata calculation
@@ -159,7 +153,7 @@ void generateStringDepMap() {
       string unpacked_lid = to_string(dline_first_instID) + "@" +
                             to_string(dline_first_callpathStateID); // use instructionID instead of lineID
       unordered_set<string> lineDeps;
-      for (auto &d : *(dline.second)) {
+      for (auto &d : dline.second) {
         string dep = "";
         switch (d.type) {
         case RAW:
@@ -195,7 +189,6 @@ void generateStringDepMap() {
       } else {
         (*outPutDeps)[unpacked_lid].insert(lineDeps.begin(), lineDeps.end());
       }
-      delete dline.second;
     }
   }
 }
@@ -302,12 +295,13 @@ void initParallelization() {
 
   // create worker threads to process the firstAccessQueue
   for (int64_t i = 0; i < NUM_WORKERS; ++i) {
-    pthread_create(&workers[i], &attr, processFirstAccessQueue, (void *)i);
+    pthread_create(&workers[i], &attr, processFirstAccessQueue, reinterpret_cast<void *>(i));
   }
 
   // create worker thread to process the secondAccessQueue
   secondAccessQueue_worker_thread = new pthread_t();
-  pthread_create(secondAccessQueue_worker_thread, &attr, processSecondAccessQueue, (void *)NUM_WORKERS);
+  pthread_create(secondAccessQueue_worker_thread, &attr, processSecondAccessQueue,
+                 reinterpret_cast<void *>(static_cast<std::intptr_t>(NUM_WORKERS)));
 
   pthread_attr_destroy(&attr);
 }
@@ -341,30 +335,20 @@ string getMemoryRegionIdFromAddr(string fallback, ADDR addr) {
 }
 
 void mergeDeps() {
-  depSet *tmp_depSet = nullptr; // pointer to the current processing set of dps
-  depMap::iterator globalPos;   // position of the current processing lid in allDeps
-
   allDepsLock.lock();
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::MERGE_DEPS);
 #endif
 
   for (auto &dep : *myMap) {
-    // if a lid occurs the first time, the thread's set of dependencies becomes the global one.
-    // Otherwise it is merged into the global set and freed.
-    globalPos = allDeps->find(dep.first);
-    if (globalPos == allDeps->end()) {
-      (*allDeps)[dep.first] = dep.second;
-    } else {
-      tmp_depSet = globalPos->second;
-      for (auto &d : *(dep.second)) {
-        tmp_depSet->insert(d);
-      }
-      delete dep.second;
+    // if a lid occurs the first time, operator[] adds its set to the global hash table;
+    // otherwise the set that is already there is extended.
+    depSet &global_deps = (*allDeps)[dep.first];
+    for (auto &d : dep.second) {
+      global_deps.insert(d);
     }
   }
   allDepsLock.unlock();
-  // the sets are owned by allDeps now or freed (clearing the map without freeing them leaked every set)
   myMap->clear();
 }
 
@@ -398,9 +382,12 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
     }
     // End HA
     sigElement lastWrite = SMem->testInWrite(access.addr);
+    // Every read, not only the ones that turn out to be RAWs: a read that found no earlier write
+    // is still the read a later write has to come after, and leaving it out of the shadow made
+    // that WAR depend on whether the read happened to open a chunk.
+    SMem->insertToRead(access.addr, access.lid);
     if (lastWrite != 0 && lastWrite != 1) {
       // RAW
-      SMem->insertToRead(access.addr, access.lid);
 #if DP_CALLTREE_PROFILING
       read_ctn = std::move(access.call_tree_node_ptr);
 #endif
@@ -420,6 +407,7 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
     if (access.skip) {
       return;
     }
+    sigElement lastRead = SMem->testInRead(access.addr);
     if (lastWrite == 0 || lastWrite == 1) {
       // INIT
 #if DP_CALLTREE_PROFILING
@@ -428,8 +416,21 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
 #else
       addDep(INIT, access.lid, 0, access.var, access.AAvar, access.addr);
 #endif
+      // A read that came before this write is a WAR no matter whether a write came before it as
+      // well. Asking only in the branch below used to lose those dependencies -- and the chunked
+      // analysis made that the common case rather than a corner case, because every chunk starts
+      // from an empty shadow, so "no earlier write" there only means "none in this chunk".
+      if (lastRead != 0 && lastRead != 1) {
+#if DP_CALLTREE_PROFILING
+        addDep(WAR, access.lid, lastRead, access.var, access.AAvar, access.addr, write_ctn, read_ctn,
+               access.calculate_dependency_metadata);
+#else
+        addDep(WAR, access.lid, lastRead, access.var, access.AAvar, access.addr);
+#endif
+        // Clear intermediate read ops
+        SMem->insertToRead(access.addr, 0);
+      }
     } else {
-      sigElement lastRead = SMem->testInRead(access.addr);
       if (lastRead != 0 && lastRead != 1) {
         // WAR
 #if DP_CALLTREE_PROFILING
@@ -456,12 +457,49 @@ void analyzeSingleAccess(__dp::AbstractShadow *SMem, __dp::AccessInfo &access) {
   }
 }
 
+namespace {
+
+// What a deferred access is identified by: the address, the instruction and call path state
+// its LID carries, whether it reads or writes, and whether it is one of the markers the
+// hybrid analysis inserts. Two accesses that agree on all of it derive the same dependency
+// from the state the earlier chunks left behind. Leaving the direction out of this made a
+// read swallow the write that followed it on the same address and line.
+struct DeferredAccess {
+  ADDR addr;
+  LID lid;
+  bool isRead;
+  bool skip;
+
+  bool operator==(const DeferredAccess &other) const noexcept {
+    return addr == other.addr && lid == other.lid && isRead == other.isRead && skip == other.skip;
+  }
+};
+
+struct DeferredAccessHash {
+  std::size_t operator()(const DeferredAccess &access) const noexcept {
+    const std::size_t flags = (access.isRead ? 1u : 0u) | (access.skip ? 2u : 0u);
+    return std::hash<ADDR>()(access.addr) ^ (std::hash<LID>()(access.lid) << 1) ^ (flags << 3);
+  }
+};
+
+// After this many deferred accesses in one chunk, the deduplication has to have paid for
+// itself -- see DEFERRED_DEDUP_MIN_HIT_RATE. Long enough to measure, short enough that a
+// chunk of 100000 accesses does not spend much of itself deciding.
+constexpr std::size_t DEFERRED_DEDUP_TRIAL = 4096;
+
+// The share of deferred accesses that has to be a repeat of one already queued for the table
+// to be worth a hash insert per access. Code that walks a new address every time -- a linked
+// list, a large array touched once -- finds nothing and drops far below this.
+constexpr double DEFERRED_DEDUP_MIN_HIT_RATE = 0.25;
+
+} // namespace
+
 void *processFirstAccessQueue(void *arg) {
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
 #endif
 
-  int64_t id = (int64_t)arg;
+  const std::intptr_t id = reinterpret_cast<std::intptr_t>(arg);
   myMap = new depMap();
 
   FirstAccessQueueChunk *current = nullptr;
@@ -482,17 +520,46 @@ void *processFirstAccessQueue(void *arg) {
       // process chunk
       AbstractShadow *SMem = new PerfectShadow2();
       std::vector<AccessInfo> *entry_condition_accesses = new std::vector<AccessInfo>();
+      std::unordered_set<DeferredAccess, DeferredAccessHash> already_deferred;
+      // Given up once the chunk turns out not to repeat its accesses.
+      bool deduplicate = true;
+      std::size_t deferred_seen = 0;
+      std::size_t deferred_repeats = 0;
 
       for (AccessInfo access : *(current->get_buffer())) {
         if (!(access.addr || access.lid)) {
           continue;
         }
 
-        // check if access is the first access to a memory location in the current chunk
-        bool is_entry_condition_access = (SMem->testInRead(access.addr) == 0) && (SMem->testInWrite(access.addr) == 0);
+        // An access can be analyzed against the chunk local shadow only once that shadow
+        // knows everything about its address, and it does from the first write to it on.
+        // Before that, "no earlier write in this chunk" is not "no earlier write", and where
+        // the chunk boundary happens to fall decides what is reported. So everything up to
+        // and including the first write to an address is analyzed by the second queue, which
+        // carries the state the earlier chunks left behind.
+        bool is_entry_condition_access = SMem->testInWrite(access.addr) == 0;
         if (is_entry_condition_access) {
-          // register the access in the list of entry conditions
-          entry_condition_accesses->push_back(access);
+          // Once per address and LID: the second queue would derive the same dependency from
+          // the second one, and a read heavy chunk repeats the same pair thousands of times.
+          // The shadow below is still updated for every one of them, so the state this chunk
+          // hands on is the state of its last access.
+          if (deduplicate) {
+            ++deferred_seen;
+            if (already_deferred.insert(DeferredAccess{access.addr, access.lid, access.isRead, access.skip})
+                    .second) {
+              entry_condition_accesses->push_back(access);
+            } else {
+              ++deferred_repeats;
+            }
+            if (deferred_seen == DEFERRED_DEDUP_TRIAL &&
+                static_cast<double>(deferred_repeats) / static_cast<double>(deferred_seen) <
+                    DEFERRED_DEDUP_MIN_HIT_RATE) {
+              already_deferred.clear();
+              deduplicate = false;
+            }
+          } else {
+            entry_condition_accesses->push_back(access);
+          }
           // register the read / write represented by the access to allow the identification of correct dependencies for
           // the rest of the chunk
           if (access.isRead) {
@@ -532,7 +599,7 @@ void *processFirstAccessQueue(void *arg) {
   }
 
   mergeDeps();
-  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete myMap;
   myMap = nullptr;
 
@@ -563,7 +630,7 @@ void *processSecondAccessQueue(void *arg) {
   const auto timer = Timer(timers, TimerRegion::ANALYZE_DEPS);
 #endif
 
-  int64_t id = (int64_t)arg;
+  const std::intptr_t id = reinterpret_cast<std::intptr_t>(arg);
   myMap = new depMap();
 
   SecondAccessQueueElement *current = nullptr;
@@ -646,7 +713,7 @@ void *processSecondAccessQueue(void *arg) {
 
   delete SMem;
   mergeDeps();
-  // the dependency sets are owned by allDeps now; the map itself belongs to this thread
+  // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete myMap;
   myMap = nullptr;
 
@@ -708,7 +775,10 @@ void finalizeSingleThreadedExecution() {
   }
 
   delete singleThreadedExecutionSMem;
+  singleThreadedExecutionSMem = nullptr;
   mergeDeps();
+  delete myMap;
+  myMap = nullptr;
 
   if (DP_DEBUG) {
     std::cout << "END: finalize Single Threaded Execution... \n";

@@ -67,5 +67,5 @@ void DiscoPoP::instrumentAlloca(AllocaInst *toInstrument) {
   args.push_back(
       IRB.CreateMul(IRB.CreateIntCast(numElements, Int64, true), ConstantInt::get(Int64, elementSizeInBytes)));
   args.push_back(IRB.CreateIntCast(numElements, Int64, true));
-  IRB.CreateCall(DpAlloca, args, "");
+  insertedAccessCallbacks[toInstrument] = IRB.CreateCall(DpAlloca, args, "");
 }

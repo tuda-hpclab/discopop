@@ -6,7 +6,18 @@
 
 using namespace __dp;
 
-class FirstAccessQueueTest : public ::testing::Test {};
+class FirstAccessQueueTest : public ::testing::Test {
+    // firstAccessQueue and secondAccessQueue live in ImmortalStorage and are left unconstructed
+    // until the runtime starts up. Outside of an instrumented target nothing calls __dp_init, so
+    // the fixture has to construct them itself before any test touches them.
+    void SetUp() override {
+        __dp::construct_immortal_globals();
+    }
+
+    void TearDown() override {
+        __dp::destroy_immortal_globals();
+    }
+};
 
 // FirstAccessQueue::get registers a SecondAccessQueueElement in the given queue, owned by the caller
 static void delete_elements(SecondAccessQueue &SAQ) {

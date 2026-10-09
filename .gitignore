@@ -177,3 +177,17 @@ _deps
 
 **/.discopop
 **/prog
+
+# results of the pass overhead benchmark (benchmark/pass_overhead)
+pass_overhead_results.json
+pass_overhead_summary.md
+
+# coverage build of the runtime library
+build_coverage/
+rtlib_coverage_summary.md
+
+# results of the injected callback benchmark (benchmark/injected_functions) and of the callback breakdown
+callback_benchmark_results.json
+callback_benchmark_summary.md
+callback_breakdown_results.json
+callback_breakdown_summary.md
