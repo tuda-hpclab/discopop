@@ -19,7 +19,7 @@ license = {file = "LICENSE"}
 authors = [
     {name = "TU Darmstadt and Iowa State University", email = "discopop@lists.parallel.informatik.tu-darmstadt.de"},
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -43,7 +43,7 @@ Homepage = "https://www.discopop.tu-darmstadt.de/"
 
 [tool.black]
 line-length = 120
-target-version = ["py310"]  # oldest supported Python (requires-python), so black never emits newer syntax
+target-version = ["py311"]  # oldest supported Python (requires-python), so black never emits newer syntax
 
 [tool.pytest.ini_options]
 # unit tests and end-to-end tests (the latter are skipped without the installed profiler, see CLAUDE.md)

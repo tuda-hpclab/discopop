@@ -544,7 +544,7 @@ mypy mcp_server/server.py
 - See [CLAUDE_INTEGRATION.md](CLAUDE_INTEGRATION.md) for detailed troubleshooting
 
 ### Server won't start
-- Check Python version (requires 3.10+)
+- Check Python version (requires 3.11+)
 - Verify MCP package is installed: `pip show mcp`
 - Run with `--debug` for detailed error messages
 
