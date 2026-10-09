@@ -2,6 +2,7 @@
 
 The tests call ``discopop_cc``, ``discopop_cxx`` and ``discopop_explorer`` by name. They are found next to the
 running interpreter, so the venv does not have to be activated. Without the installed profiler the tests are skipped.
+All tests below this directory get the marker ``e2e``: ``pytest -m "not e2e"`` runs the unit tests only.
 """
 
 import os
@@ -16,11 +17,15 @@ _REQUIRED_TOOLS = ["discopop_cc", "discopop_cxx", "discopop_explorer", "make"]
 
 
 def pytest_collection_modifyitems(config, items):  # type: ignore
+    root = os.path.dirname(__file__) + os.sep
+    # the MCP server tests skip the profiler dependent tests themselves, the others need no profiler
+    profiler_independent = os.path.join(root, "mcp_server") + os.sep
     missing = [tool for tool in _REQUIRED_TOOLS if shutil.which(tool) is None]
-    if not missing:
-        return
     skip = pytest.mark.skip(reason="end-to-end tests need " + ", ".join(missing) + " (install the profiler)")
-    root = os.path.dirname(__file__)
     for item in items:
-        if str(item.path).startswith(root + os.sep):
+        path = str(item.path)
+        if not path.startswith(root):
+            continue
+        item.add_marker(pytest.mark.e2e)
+        if missing and not path.startswith(profiler_independent):
             item.add_marker(skip)

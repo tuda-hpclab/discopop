@@ -16,7 +16,7 @@ import pathlib
 import re
 import unittest
 
-from test.utils.subprocess_wrapper.command_execution_wrapper import run_cmd
+from test.end_to_end.pipeline import PipelineTestCase
 
 SUM = "_Z3sumPKdi"
 LS = [SUM + "_loopstate" + str(i) for i in range(3)]
@@ -25,18 +25,13 @@ GLS = [GUARDED + "_loopstate" + str(i) for i in range(3)]
 NESTED_LS = "_Z6nestedPKdi_loopstate"
 
 
-class TestMethods(unittest.TestCase):
+class TestStackAccessStates(PipelineTestCase):
+    SRC_DIR = pathlib.Path(__file__).parent / "src"
+
     @classmethod
     def setUpClass(self):
-        current_dir = pathlib.Path(__file__).parent.resolve()
-        self.src_dir = os.path.join(current_dir, "src")
-        self.env_vars = dict(os.environ)
-        self.env_vars["CC"] = "discopop_cc"
-        self.env_vars["CXX"] = "discopop_cxx"
-        self.env_vars["DP_PROJECT_ROOT_DIR"] = self.src_dir
-        run_cmd("make", self.src_dir, self.env_vars)
-        run_cmd("./prog", self.src_dir, self.env_vars)
-        profiler_dir = os.path.join(self.src_dir, ".discopop", "profiler")
+        super().setUpClass()
+        profiler_dir = self.profiler_dir
 
         labels = dict()
         with open(os.path.join(profiler_dir, "stateID_to_callpath_mapping.txt")) as f:
@@ -77,10 +72,6 @@ class TestMethods(unittest.TestCase):
                         self.records.add((sink_line, sink_label, dep_type, source_line, source_label, variable, region))
                     else:
                         self.dynamic_sink_labels.setdefault(sink_line, set()).add(sink_label)
-
-    @classmethod
-    def tearDownClass(self):
-        run_cmd("make veryclean", self.src_dir, self.env_vars)
 
     def state_pairs(self, sink_line, dep_type, source_line, variable):
         return {

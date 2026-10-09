@@ -22,22 +22,15 @@ import pathlib
 import re
 import unittest
 
-from test.utils.subprocess_wrapper.command_execution_wrapper import run_cmd
+from test.end_to_end.pipeline import PipelineTestCase
 
 
-class TestMethods(unittest.TestCase):
+class TestCallpathStates(PipelineTestCase):
+    SRC_DIR = pathlib.Path(__file__).parent / "src"
+
     @classmethod
     def setUpClass(self):
-        current_dir = pathlib.Path(__file__).parent.resolve()
-        self.src_dir = os.path.join(current_dir, "src")
-        self.env_vars = dict(os.environ)
-        self.env_vars["CC"] = "discopop_cc"
-        self.env_vars["CXX"] = "discopop_cxx"
-        self.env_vars["DP_PROJECT_ROOT_DIR"] = self.src_dir
-        run_cmd("make", self.src_dir, self.env_vars)
-        run_cmd("./prog", self.src_dir, self.env_vars)
-        self.profiler_dir = os.path.join(self.src_dir, ".discopop", "profiler")
-
+        super().setUpClass()
         # callpath per state id, from the prefix tree "<state_id> <parent_state_id> <label>"
         tree = dict()
         with open(os.path.join(self.profiler_dir, "stateID_to_callpath_mapping.txt")) as f:
@@ -56,10 +49,6 @@ class TestMethods(unittest.TestCase):
         self.callpath = staticmethod(callpath)
         with open(os.path.join(self.profiler_dir, "dynamic_dependencies.txt")) as f:
             self.used_states = set(re.findall(r"@(\d+)", f.read()))
-
-    @classmethod
-    def tearDownClass(self):
-        run_cmd("make veryclean", self.src_dir, self.env_vars)
 
     def test_initial_state_is_main(self):
         with open(os.path.join(self.profiler_dir, "initial_stateID.txt")) as f:

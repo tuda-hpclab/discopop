@@ -51,12 +51,14 @@ This document contains critical information about working with this codebase. Fo
 - to install python packages, execute `venv/bin/pip install . ./profiler ./library` from the root directory of the project
 - **Important:** The profiler module must be installed without the `-e` (editable) flag. Use `pip install ./profiler`, not `pip install -e ./profiler`. Editable mode breaks the relative paths required by `CXX_wrapper.sh` to locate compiled artifacts like `LLVMDiscoPoP.so`.
 ### Python end-to-end tests
-- bare `venv/bin/python -m pytest` runs them too (`test/end_to_end` is in `testpaths`, the `test.py` files are collected via `python_files`); `test/end_to_end/conftest.py` puts the interpreter's `bin` directory on `PATH` and skips them when `discopop_cc`, `discopop_cxx`, `discopop_explorer` or `make` is missing
+- bare `venv/bin/python -m pytest` runs them too (`test/end_to_end` is in `testpaths`); `test/end_to_end/conftest.py` marks them `e2e` (`pytest -m "not e2e"` runs the unit tests only), puts the interpreter's `bin` directory on `PATH` and skips them, except the profiler independent MCP server tests, when `discopop_cc`, `discopop_cxx`, `discopop_explorer` or `make` is missing
 - to execute only the python end-to-end tests, use `venv/bin/python -m pytest -v test/end_to_end`; the CI job `end_to_end_tests` runs exactly this
 - the standard detection tests are data, not code: every directory below `test/end_to_end/cases` with an `expected.toml` is one test of `test/end_to_end/test_cases.py` (id = path below `cases`); it holds the program in `src/` (Makefile building `prog` with `$CC`/`$CXX`) and the expected patterns, the schema is documented in the docstring of `test_cases.py`
 - add a detection test by adding such a directory; known failures get `xfail = "<reason>"` (strict: a passing case is reported)
 - the pipeline (`test/end_to_end/pipeline.py`) runs in a temporary copy of `src/`, never in the source tree; a failing build/profiling/explorer stage is reported as an ERROR, a mismatch as a FAILED test listing all differences
-- `test_cases.py` uses pytest parametrization, so `python -m unittest` no longer runs these cases; the remaining `test.py` modules are still `unittest.TestCase`s (pytest runs them as well)
+- tests that check more than the detected patterns (profiler output, collapse details) live in `test/end_to_end/<topic>/test_<topic>.py` next to their programs and derive from `pipeline.PipelineTestCase` (`SRC_DIR`, optional `ENABLE_PATTERNS`/`RUN_ARGS`): one build and profiling run per class, in a temporary directory, exposing `profiler_dir` and `test_output`
+- `test_cases.py` uses pytest parametrization, so `python -m unittest` does not run these cases; the `test_<topic>.py` modules are `unittest.TestCase`s and run under both
+- the `gold_std/` directories (expected dependencies) are not checked by any test at the moment
 
 ### MCP server end-to-end tests
 - `test/end_to_end/mcp_server` drives the MCP server as a client does: it starts `python -m mcp_server.server` from the repository root (so the server code of the checkout is tested) as a stdio subprocess and calls it with the MCP SDK client
@@ -66,7 +68,7 @@ This document contains critical information about working with this codebase. Fo
 
 ### Python unit tests (all)
 - to run all Python unit tests at once, from the repository root: `venv/bin/python -m pytest`
-- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection`, `test/project_manager` and `test/end_to_end`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI job `python_unit_tests` runs this with `--ignore-glob='test/end_to_end/*'`, since the end-to-end tests have their own job `end_to_end_tests`
+- this collects `explorer/discopop_explorer`, `library/discopop_library`, `mcp_server`, `hotspot_detection`, `test/project_manager` and `test/end_to_end`, as configured in `[tool.pytest.ini_options]` of the root `pyproject.toml`; the CI job `python_unit_tests` runs this with `-m "not e2e"`, since the end-to-end tests have their own job `end_to_end_tests`
 - the configuration sets `--import-mode=importlib` and puts the source trees on `pythonpath`: with the default import mode, collecting several package roots in one run aborts with an import file mismatch against the copies installed in site-packages
 
 ### Python unit tests (discopop_library)

@@ -375,7 +375,7 @@ jobs:
       - name: Run the Python unit tests
         run: |
           . venv/bin/activate
-          python3 -m pytest --ignore-glob='test/end_to_end/*'
+          python3 -m pytest -m "not e2e"
 
   # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
   # built from the root CMakeLists.txt, they need no venv

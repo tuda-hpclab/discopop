@@ -14,7 +14,7 @@ import pathlib
 import re
 import unittest
 
-from test.utils.subprocess_wrapper.command_execution_wrapper import run_cmd
+from test.end_to_end.pipeline import PipelineTestCase
 
 # {function: [start line of the loop at each loopstate position]}
 EXPECTED_POSITIONS = {
@@ -31,22 +31,8 @@ EXPECTED_PARENTS = {
 }
 
 
-class TestMethods(unittest.TestCase):
-    @classmethod
-    def setUpClass(self):
-        current_dir = pathlib.Path(__file__).parent.resolve()
-        self.src_dir = os.path.join(current_dir, "src")
-        self.env_vars = dict(os.environ)
-        self.env_vars["CC"] = "discopop_cc"
-        self.env_vars["CXX"] = "discopop_cxx"
-        self.env_vars["DP_PROJECT_ROOT_DIR"] = self.src_dir
-        run_cmd("make", self.src_dir, self.env_vars)
-        run_cmd("./prog", self.src_dir, self.env_vars)
-        self.profiler_dir = os.path.join(self.src_dir, ".discopop", "profiler")
-
-    @classmethod
-    def tearDownClass(self):
-        run_cmd("make veryclean", self.src_dir, self.env_vars)
+class TestLoopstatePositions(PipelineTestCase):
+    SRC_DIR = pathlib.Path(__file__).parent / "src"
 
     def __read_positions(self):
         positions = dict()

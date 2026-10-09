@@ -46,7 +46,7 @@ line-length = 120
 target-version = ["py311"]  # oldest supported Python (requires-python), so black never emits newer syntax
 
 [tool.pytest.ini_options]
-# unit tests and end-to-end tests (the latter are skipped without the installed profiler, see CLAUDE.md)
+# unit tests and end-to-end tests (marker e2e; skipped without the installed profiler, see CLAUDE.md)
 testpaths = [
     "explorer/discopop_explorer",
     "library/discopop_library",
@@ -57,8 +57,9 @@ testpaths = [
     "test/leak_check",
     "benchmark/compare",
 ]
-# the end-to-end tests are named test.py
+# the work-in-progress end-to-end tests (test/wip_end_to_end, opt-in) are named test.py
 python_files = ["test_*.py", "*_test.py", "test.py"]
+markers = ["e2e: end-to-end test below test/end_to_end (set by its conftest.py)"]
 # importlib: the default prepend mode resolves colocated test modules to their installed copies in
 # site-packages once several package roots are collected together, and aborts with an import file mismatch
 addopts = "--import-mode=importlib"
