@@ -371,11 +371,12 @@ jobs:
           environment: ${{ matrix.image }}
           python: ${{ matrix.python }}
 
-      # the end-to-end tests are part of the bare pytest run, but have their own job (end_to_end_tests)
+      # the end-to-end and profiler tests are part of the bare pytest run, but have their own jobs (end_to_end_tests,
+      # profiler_tests)
       - name: Run the Python unit tests
         run: |
           . venv/bin/activate
-          python3 -m pytest -m "not e2e"
+          python3 -m pytest -m "not e2e and not profiler"
 
   # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
   # built from the root CMakeLists.txt, they need no venv
@@ -444,12 +445,12 @@ jobs:
       - name: Instrumentation tests
         run: |
           . venv/bin/activate
-          python3 -m unittest -v -k "*test.instrumentation.*"
+          python3 -m pytest -v -n auto --dist loadgroup test/instrumentation
 
       - name: Profiler gold standard tests
         run: |
           . venv/bin/activate
-          python3 -m unittest -v -k "*test.profiler.*"
+          python3 -m pytest -v -n auto --dist loadgroup test/profiler
 
   # END-TO-END TESTS: the whole pipeline (profiling, pattern detection, patches, MCP server) on small programs
   end_to_end_tests:
