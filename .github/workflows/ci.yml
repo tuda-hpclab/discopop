@@ -73,6 +73,10 @@ jobs:
       - name: Create build matrix
         id: create_matrix
         shell: bash
+        env:
+          # the direct target of a pull request: for a stacked pull request, GITHUB_BASE_REF names the bottom of the
+          # stack instead (e.g. new_explorer for a pull request into another feature branch of the stack)
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           IMAGE_REVISION=1
           repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/discopop-ci"
@@ -100,7 +104,7 @@ jobs:
           # the full matrix only where code is merged into master or new_explorer (pushes and pull requests
           # targeting them); every other push is checked on one platform to keep development runs short
           if [[ ( "$GITHUB_EVENT_NAME" = "push" && ( "$GITHUB_REF" = "refs/heads/master" || "$GITHUB_REF" = "refs/heads/new_explorer" ) ) \
-             || ( "$GITHUB_EVENT_NAME" = "pull_request" && ( "$GITHUB_BASE_REF" = "master" || "$GITHUB_BASE_REF" = "new_explorer" ) ) ]]; then
+             || ( "$GITHUB_EVENT_NAME" = "pull_request" && ( "$PR_BASE_REF" = "master" || "$PR_BASE_REF" = "new_explorer" ) ) ]]; then
             matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
             images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
             # the environments that need the venv with DiscoPoP (see prepare_build)
@@ -112,7 +116,7 @@ jobs:
             build_environments="[$e_llvm21]"
             scope="reduced"
           fi
-          echo "Configuration: $scope"
+          echo "Configuration: $scope (event: $GITHUB_EVENT_NAME, ref: $GITHUB_REF, pull request target: ${PR_BASE_REF:-none}, GITHUB_BASE_REF: ${GITHUB_BASE_REF:-none})"
 
           {
             echo "scope=$scope"
@@ -139,6 +143,7 @@ jobs:
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
@@ -151,7 +156,7 @@ jobs:
           if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
             base_sha="$BASE_SHA"
             if [ -n "$PR_NUMBER" ]; then
-              base_label="$GITHUB_BASE_REF (${BASE_SHA:0:8})"
+              base_label="$PR_BASE_REF (${BASE_SHA:0:8})"
             else
               base_label="before the push (${BASE_SHA:0:8})"
             fi
@@ -633,6 +638,7 @@ jobs:
           environment: ${{ needs.create_matrix.outputs.primary_image }}
 
       - name: Compare builds with and without the DiscoPoP pass, both versions interleaved
+        shell: bash
         env:
           HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
           BASE_LABEL: ${{ needs.create_matrix.outputs.base_label }}
@@ -716,6 +722,7 @@ jobs:
 
       # configures and builds both versions of the benchmark itself (build_tests, build_base)
       - name: Measure the injected callbacks with and without their bodies, both versions interleaved
+        shell: bash
         env:
           HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
           BASE_LABEL: ${{ needs.create_matrix.outputs.base_label }}
