@@ -1,0 +1,12 @@
+required = [
+    "1:8 INIT *|GEPRESULT_a",
+    "1:12 INIT *|GEPRESULT_b",
+]
+forbidden = [
+    { type = "RAW", var = "GEPRESULT_a" },
+    { type = "WAR", var = "GEPRESULT_a" },
+    { type = "WAW", var = "GEPRESULT_a" },
+    { type = "RAW", var = "GEPRESULT_b" },
+    { type = "WAR", var = "GEPRESULT_b" },
+    { type = "WAW", var = "GEPRESULT_b" },
+]

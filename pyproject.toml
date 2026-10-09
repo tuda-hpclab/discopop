@@ -61,6 +61,8 @@ testpaths = [
 ]
 # the work-in-progress end-to-end tests (test/wip_end_to_end, opt-in) are named test.py
 python_files = ["test_*.py", "*_test.py", "test.py"]
+# list failing subtests only (-o verbosity_subtests=1 lists all)
+verbosity_subtests = "0"
 markers = [
     "e2e: end-to-end test below test/end_to_end (set by test/conftest.py)",
     "profiler: profiler test below test/profiler or test/instrumentation (set by test/conftest.py)",
