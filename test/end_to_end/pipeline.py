@@ -31,8 +31,9 @@ def _run(stage: str, cmd: str, cwd: Path, env: dict[str, str]) -> None:
         )
 
 
-def run_pipeline(src_dir: Path, work_dir: Path, enable_patterns: str) -> DetectionResult:
-    """Copy src_dir to work_dir, build it with the DiscoPoP compiler wrappers, run it and the explorer.
+def run_pipeline(src_dir: Path, work_dir: Path, enable_patterns: str, run_args: str = "") -> DetectionResult:
+    """Copy src_dir to work_dir, build it with the DiscoPoP compiler wrappers, run it (./prog run_args) and the
+    explorer.
 
     The source tree is never written to; work_dir is kept for inspection after a failure.
     """
@@ -43,7 +44,7 @@ def run_pipeline(src_dir: Path, work_dir: Path, enable_patterns: str) -> Detecti
     env["DP_PROJECT_ROOT_DIR"] = str(work_dir)
 
     _run("build", "make", work_dir, env)
-    _run("profiling", "./prog", work_dir, env)
+    _run("profiling", f"./prog {run_args}".strip(), work_dir, env)
     dot_discopop = work_dir / ".discopop"
     _run("explorer", f"discopop_explorer --enable-patterns {enable_patterns}", dot_discopop, env)
 

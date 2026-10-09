@@ -1,0 +1,5 @@
+[do_all]
+lines = ["1:9"]
+
+[do_all.clauses]
+last_private = ["z"]

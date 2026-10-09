@@ -12,10 +12,14 @@ Each case directory holds the test program in ``src/`` (a Makefile building ``pr
 expected suggestions in ``expected.toml``::
 
     enable_patterns = "doall,reduction"   # optional, passed to discopop_explorer --enable-patterns
+    run_args = "64"                       # optional, the arguments of the profiled run (./prog 64)
     xfail = "why the case fails today"    # optional, the case is expected to fail (strict: a pass is reported)
 
     [do_all]                              # one table per pattern type expected to be found
     lines = ["1:9"]                       # start lines (file id:line) of the expected patterns, exactly these
+                                          # instead of lines, for a case that pins only some of them:
+                                          #   includes = [...]  patterns that must be found, others are allowed
+                                          #   excludes = [...]  patterns that must not be found
 
     [reduction]
     lines = ["1:42"]
@@ -42,8 +46,8 @@ from test.end_to_end.pipeline import run_pipeline
 CASES_DIR = Path(__file__).parent / "cases"
 DEFAULT_ENABLE_PATTERNS = "doall,reduction"
 
-_CASE_KEYS = {"enable_patterns", "xfail"}
-_PATTERN_KEYS = {"lines", "clauses", "allowed_clauses"}
+_CASE_KEYS = {"enable_patterns", "run_args", "xfail"}
+_PATTERN_KEYS = {"lines", "includes", "excludes", "clauses", "allowed_clauses"}
 # the clause lists of a pattern checked for unexpected entries; "reduction" is only checked for missing ones
 _SHARING_CLAUSES = ["private", "shared", "first_private", "last_private"]
 
@@ -59,6 +63,8 @@ def _load_expectation(case_dir: Path) -> dict[str, Any]:
         unknown = set(value) - _PATTERN_KEYS
         if unknown:
             raise ValueError(f"{case_dir}/expected.toml: unknown keys {sorted(unknown)} in [{key}]")
+        if "lines" in value and ("includes" in value or "excludes" in value):
+            raise ValueError(f"{case_dir}/expected.toml: [{key}] has lines and includes/excludes")
     return expectation
 
 
@@ -80,7 +86,8 @@ def detection(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[dict[str,
     case_dir: Path = request.param
     expectation = _load_expectation(case_dir)
     enable_patterns = expectation.get("enable_patterns", DEFAULT_ENABLE_PATTERNS)
-    return expectation, run_pipeline(case_dir / "src", tmp_path / "src", enable_patterns)
+    run_args = expectation.get("run_args", "")
+    return expectation, run_pipeline(case_dir / "src", tmp_path / "src", enable_patterns, run_args)
 
 
 def _clause_problems(pattern: Any, clauses: dict[str, list[str]], allowed: dict[str, list[str]]) -> list[str]:
@@ -122,10 +129,14 @@ def _compare(expectation: dict[str, Any], result: DetectionResult) -> list[str]:
         problems.append(f"{pattern_type}: not a pattern type of the detection result ({sorted(found_patterns)})")
     for pattern_type, patterns in sorted(found_patterns.items()):
         expected = expectation.get(pattern_type, {})
-        expected_lines = set(expected.get("lines", []))
         found_lines = {p.start_line for p in patterns}
-        missing = sorted(expected_lines - found_lines)
-        unexpected = sorted(found_lines - expected_lines)
+        if "includes" in expected or "excludes" in expected:
+            missing = sorted(set(expected.get("includes", [])) - found_lines)
+            unexpected = sorted(set(expected.get("excludes", [])) & found_lines)
+        else:
+            expected_lines = set(expected.get("lines", []))
+            missing = sorted(expected_lines - found_lines)
+            unexpected = sorted(found_lines - expected_lines)
         if missing:
             problems.append(f"{pattern_type}: missing patterns at {', '.join(missing)}")
         if unexpected:

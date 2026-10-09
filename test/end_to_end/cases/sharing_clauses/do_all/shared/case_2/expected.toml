@@ -1,0 +1,5 @@
+[do_all]
+lines = ["1:12"]
+
+[do_all.clauses]
+shared = ["Arr"]
