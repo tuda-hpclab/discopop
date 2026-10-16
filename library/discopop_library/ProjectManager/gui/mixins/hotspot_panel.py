@@ -39,9 +39,8 @@ import datetime
 import functools
 import logging
 import os
+import queue
 import shutil
-import subprocess
-import threading
 import tkinter as tk
 from dataclasses import replace
 from tkinter import scrolledtext, ttk
@@ -49,6 +48,17 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.services.jobs import (
+    JobSpec,
+    StatusKind,
+    WorkContext,
+    WorkEvent,
+    WorkFinished,
+    WorkOutput,
+    WorkRunner,
+    WorkStatus,
+)
 from discopop_library.ProjectManager.services.commands import (
     environment_with_interpreter_on_path,
     hotspot_analyzer_command,
@@ -103,6 +113,14 @@ _ADD_TAB_TEXT = "  ＋  "
 _DETAIL_BAR_WIDTH = 300
 _DETAIL_PLACEHOLDER = "Click a code region in a\nchart or the table to see\nits details here."
 
+_STATUS_COLORS = {
+    StatusKind.BUSY: widgets.STATUS_BUSY,
+    StatusKind.IDLE: widgets.STATUS_IDLE,
+    StatusKind.OK: widgets.STATUS_OK,
+    StatusKind.FAIL: widgets.STATUS_FAIL,
+    StatusKind.STOP: widgets.STATUS_STOP,
+}
+
 _REGION_COLUMNS: Tuple[Tuple[str, int], ...] = (
     ("Hotness", 90),
     ("Kind", 80),
@@ -154,14 +172,11 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
     _hotspot_add_tab: Optional[tk.Widget] = None
     _hotspot_prev_tab: Optional[str] = None
     _hotspot_plot_counter: int = 0
-    _hotspot_process: Optional["subprocess.Popen[bytes]"] = None
-    _hotspot_analysis_process: Optional["subprocess.Popen[str]"] = None
-    _hotspot_stop_event: Optional[threading.Event] = None
+    _hotspot_job: Optional[WorkRunner] = None
 
     # ── construction ───────────────────────────────────────────────────────────
 
     def _build_hotspot_panel(self, parent: tk.Widget) -> None:
-        self._hotspot_stop_event = threading.Event()
         self._hotspot_plot_tabs = {}
         self.hotspot_notebook = ttk.Notebook(parent)
         self.hotspot_notebook.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
@@ -840,18 +855,35 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
 
     # ── running measurements ───────────────────────────────────────────────────
 
-    def _hotspot_emit(self, text: str) -> None:
-        """Append to the output console; safe to call from a worker thread."""
+    def _hotspot_append_output(self, text: str) -> None:
+        """Append to the output console; main thread only."""
+        if self.hotspot_output_text is None:
+            return
+        self.hotspot_output_text.config(state=tk.NORMAL)
+        self.hotspot_output_text.insert(tk.END, text)
+        self.hotspot_output_text.see(tk.END)
+        self.hotspot_output_text.config(state="disabled")
 
-        def append() -> None:
-            if self.hotspot_output_text is None:
-                return
-            self.hotspot_output_text.config(state=tk.NORMAL)
-            self.hotspot_output_text.insert(tk.END, text)
-            self.hotspot_output_text.see(tk.END)
-            self.hotspot_output_text.config(state="disabled")
+    def _run_hotspot_job(self, work: Callable[[WorkContext], bool]) -> None:
+        """Run ``work`` on a worker thread and show what it reports; ``_on_hotspot_work_complete`` ends it."""
+        events: "queue.Queue[WorkEvent]" = queue.Queue()
+        job = WorkRunner(work, events)
+        self._hotspot_job = job
+        TkJobAdapter(self, events, lambda event: self._on_hotspot_event(job, event)).start()
+        job.start()
 
-        self.after(0, append)  # type: ignore
+    def _on_hotspot_event(self, job: WorkRunner, event: WorkEvent) -> None:
+        """Handle one event of the hotspot work; runs on the Tk main thread."""
+        if isinstance(event, WorkOutput):
+            self._hotspot_append_output(event.text)
+        elif isinstance(event, WorkStatus):
+            self.status_label.config(text=event.text, foreground=_STATUS_COLORS[event.kind])
+        elif isinstance(event, WorkFinished):
+            if event.error is not None:  # a crash of the work must not leave the UI stuck
+                logger.error("hotspot work failed: %s", event.error)
+                self._hotspot_append_output(f"\nError: {event.error}\n")
+            self._hotspot_job = None
+            self._on_hotspot_work_complete(bool(event.result) and event.error is None, job.cancel_requested)
 
     def _clear_hotspot_output(self) -> None:
         if self.hotspot_output_text is None:
@@ -884,8 +916,6 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
             except (tk.TclError, ValueError):
                 repetitions = 1
 
-        assert self._hotspot_stop_event is not None
-        self._hotspot_stop_event.clear()
         self.hotspot_running = True
         self._update_hotspot_ui()
         if self.hotspot_run_button is not None:
@@ -910,27 +940,22 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         args_copy.timeout_compilation = self.timeout_compilation_var.get()
         args_copy.timeout_validation = self.timeout_validation_var.get()
 
-        def thread_func() -> None:
-            success = False
-            try:
-                success = self._hotspot_worker(
-                    config_name=config_name,
-                    config_path=config_path,
-                    compile_sh=compile_sh,
-                    settings_path=settings_path,
-                    args_copy=args_copy,
-                    needs_compile=needs_compile,
-                    repetitions=repetitions if execute_runs else 0,
-                )
-            except Exception as e:  # a worker crash must not leave the UI stuck
-                logger.exception("hotspot measurement failed")
-                self._hotspot_emit(f"\nError: {e}\n")
-            self.after(0, lambda: self._on_hotspot_work_complete(success))  # type: ignore
-
-        threading.Thread(target=thread_func, daemon=True).start()
+        self._run_hotspot_job(
+            lambda ctx: self._hotspot_worker(
+                ctx,
+                config_name=config_name,
+                config_path=config_path,
+                compile_sh=compile_sh,
+                settings_path=settings_path,
+                args_copy=args_copy,
+                needs_compile=needs_compile,
+                repetitions=repetitions if execute_runs else 0,
+            )
+        )
 
     def _hotspot_worker(
         self,
+        ctx: WorkContext,
         *,
         config_name: str,
         config_path: str,
@@ -942,13 +967,12 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
     ) -> bool:
         """Compile if needed, execute ``repetitions`` runs, then analyze.
 
-        Runs on a worker thread; every UI touch goes through ``self.after``.
+        Runs on a worker thread; it reports through ``ctx`` and touches no widget.
         """
-        assert self._hotspot_stop_event is not None
         dot_dp = self.arguments.dot_dp
 
         if not os.path.exists(settings_path):
-            self._hotspot_emit(f"hd_settings.json not found at {settings_path}\n")
+            ctx.output(f"hd_settings.json not found at {settings_path}\n")
             return False
 
         log = self._load_hotspot_log()
@@ -960,10 +984,10 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
             # next free hotspot_result_<N>.txt -- nothing that the previous runs
             # refer to is overwritten. The analysis joins them by source location.
             if log.runs:
-                self._hotspot_emit(f"Keeping the {len(log.runs)} accumulated run(s); they will be combined.\n")
+                ctx.output(f"Keeping the {len(log.runs)} accumulated run(s); they will be combined.\n")
 
-            self.after(0, lambda: self.status_label.config(text="⏳ Instrumenting...", foreground=widgets.STATUS_BUSY))  # type: ignore
-            self._hotspot_emit(f"Compiling '{config_name}' in 'hd' mode (inplace)...\n")
+            ctx.status("⏳ Instrumenting...", StatusKind.BUSY)
+            ctx.output(f"Compiling '{config_name}' in 'hd' mode (inplace)...\n")
             result = execute_configuration(
                 args_copy,
                 self.arguments.project_root,
@@ -972,23 +996,23 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
                 compile_sh,
                 1,
                 args_copy.timeout_compilation,
-                process_started_callback=self._register_hotspot_process,
+                process_started_callback=ctx.register_process,
             )
-            self._hotspot_process = None
+            ctx.clear_process()
             if result is None or result[0] != 0:
                 code = result[0] if result else "None"
-                self._hotspot_emit(f"Instrumentation failed (return code: {code})\n")
+                ctx.output(f"Instrumentation failed (return code: {code})\n")
                 return False
             _code, elapsed, stdout, stderr = result
-            self._hotspot_emit(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
+            ctx.output(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
             if stdout:
-                self._hotspot_emit(f"stdout: {stdout}\n")
+                ctx.output(f"stdout: {stdout}\n")
             if stderr:
-                self._hotspot_emit(f"stderr: {stderr}\n")
+                ctx.output(f"stderr: {stderr}\n")
 
             fingerprint = self._current_region_fingerprint()
             if fingerprint is None:
-                self._hotspot_emit(
+                ctx.output(
                     "Warning: no code regions were instrumented (cs_id.txt is missing or empty).\n"
                     "Check that the configuration compiles with the hotspot detection wrappers.\n"
                 )
@@ -997,21 +1021,21 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
             log.compile_script = os.path.abspath(compile_sh)
             self._save_hotspot_log(log)
 
-        if self._hotspot_stop_event.is_set():
-            self._hotspot_emit("Stopped by user.\n")
+        if ctx.cancel_event.is_set():
+            ctx.output("Stopped by user.\n")
             return False
 
         keys = self._load_hotspot_region_keys()
         private = hotspot_data.private_dir(dot_dp)
 
         for repetition in range(repetitions):
-            if self._hotspot_stop_event.is_set():
-                self._hotspot_emit("Stopped by user.\n")
+            if ctx.cancel_event.is_set():
+                ctx.output("Stopped by user.\n")
                 return False
 
             label = f" ({repetition + 1}/{repetitions})" if repetitions > 1 else ""
-            self.after(0, lambda: self.status_label.config(text="⏳ Measuring...", foreground=widgets.STATUS_BUSY))  # type: ignore
-            self._hotspot_emit(f"\nExecuting '{config_name}'{label}...\n")
+            ctx.status("⏳ Measuring...", StatusKind.BUSY)
+            ctx.output(f"\nExecuting '{config_name}'{label}...\n")
 
             before = set(hotspot_data.result_file_indices(private))
             result = execute_configuration(
@@ -1022,26 +1046,26 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
                 os.path.join(config_path, "execute.sh"),
                 1,
                 args_copy.timeout_execution,
-                process_started_callback=self._register_hotspot_process,
+                process_started_callback=ctx.register_process,
             )
-            self._hotspot_process = None
+            ctx.clear_process()
             if result is None:
-                self._hotspot_emit("Execution failed (no result)\n")
+                ctx.output("Execution failed (no result)\n")
                 return False
             code, elapsed, stdout, stderr = result
             if code != 0:
-                self._hotspot_emit(f"Execution failed (return code: {code})\n")
+                ctx.output(f"Execution failed (return code: {code})\n")
                 if stderr:
-                    self._hotspot_emit(f"stderr: {stderr}\n")
+                    ctx.output(f"stderr: {stderr}\n")
                 return False
-            self._hotspot_emit(f"Execution succeeded ({elapsed:.2f}s)\n")
+            ctx.output(f"Execution succeeded ({elapsed:.2f}s)\n")
             if stdout:
-                self._hotspot_emit(f"stdout: {stdout}\n")
+                ctx.output(f"stdout: {stdout}\n")
 
             after = set(hotspot_data.result_file_indices(private))
             new_indices = sorted(after - before)
             if not new_indices:
-                self._hotspot_emit(
+                ctx.output(
                     "Warning: the binary ran but produced no hotspot_result_*.txt file.\n"
                     "It is probably not instrumented -- use Re-instrument.\n"
                 )
@@ -1058,14 +1082,14 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
                         regions=self._resolve_run_regions(private, index, keys),
                     )
                 )
-                self._hotspot_emit(f"Recorded run {index}.\n")
+                ctx.output(f"Recorded run {index}.\n")
             self._save_hotspot_log(log)
 
-        if self._hotspot_stop_event.is_set():
-            self._hotspot_emit("Stopped by user.\n")
+        if ctx.cancel_event.is_set():
+            ctx.output("Stopped by user.\n")
             return False
 
-        return self._invoke_hotspot_analyzer()
+        return self._invoke_hotspot_analyzer(ctx)
 
     def _resolve_run_regions(
         self, private: str, index: int, keys: Dict[int, hotspot_data.RegionKey]
@@ -1082,15 +1106,10 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
                 regions[key.serialize()] = runtime
         return regions
 
-    def _register_hotspot_process(self, process: "subprocess.Popen[bytes]") -> None:
-        self._hotspot_process = process
-
     def _rerun_hotspot_analysis(self) -> None:
         if self.hotspot_running:
             show_error(self, "Already Running", "A hotspot measurement is already running.")
             return
-        assert self._hotspot_stop_event is not None
-        self._hotspot_stop_event.clear()
         self.hotspot_running = True
         self._update_hotspot_ui()
         if self.hotspot_stop_button is not None:
@@ -1098,16 +1117,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         self._clear_hotspot_output()
         self.status_label.config(text="⏳ Hotspot analysis in progress...", foreground=widgets.STATUS_BUSY)
 
-        def thread_func() -> None:
-            success = False
-            try:
-                success = self._invoke_hotspot_analyzer()
-            except Exception as e:
-                logger.exception("hotspot analysis failed")
-                self._hotspot_emit(f"\nError: {e}\n")
-            self.after(0, lambda: self._on_hotspot_work_complete(success))  # type: ignore
-
-        threading.Thread(target=thread_func, daemon=True).start()
+        self._run_hotspot_job(self._invoke_hotspot_analyzer)
 
     def _runs_for_analysis(self) -> List[MeasurementRun]:
         """The accumulated runs, each with its per-region measurements resolved.
@@ -1133,7 +1143,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
                 runs.append(run)
         return runs
 
-    def _invoke_hotspot_analyzer(self) -> bool:
+    def _invoke_hotspot_analyzer(self, ctx: WorkContext) -> bool:
         """Run ``discopop_hotspot_analyzer`` over the accumulated runs.
 
         The analyzer is not pointed at ``private/`` directly. Region ids there are
@@ -1151,11 +1161,11 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         private = hotspot_data.private_dir(dot_dp)
 
         if not os.path.isdir(private):
-            self._hotspot_emit(f"\nAnalysis skipped: no profiling data found at {private}\n")
+            ctx.output(f"\nAnalysis skipped: no profiling data found at {private}\n")
             return False
         runs = self._runs_for_analysis()
         if not runs:
-            self._hotspot_emit("\nAnalysis skipped: no accumulated runs with measurements.\n")
+            ctx.output("\nAnalysis skipped: no accumulated runs with measurements.\n")
             return False
 
         file_mapping = hotspot_data.parse_file_mapping(self._read_text(os.path.join(dot_dp, "FileMapping.txt")) or "")
@@ -1163,13 +1173,13 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         try:
             region_count = hotspot_data.write_merged_analysis_input(runs, file_mapping, merged)
         except OSError as e:
-            self._hotspot_emit(f"\nAnalysis skipped: could not write merged analysis input: {e}\n")
+            ctx.output(f"\nAnalysis skipped: could not write merged analysis input: {e}\n")
             return False
         if not region_count:
-            self._hotspot_emit("\nAnalysis skipped: the accumulated runs contain no known code regions.\n")
+            ctx.output("\nAnalysis skipped: the accumulated runs contain no known code regions.\n")
             return False
         configs = sorted({run.config for run in runs if run.config})
-        self._hotspot_emit(
+        ctx.output(
             f"\nMerged {len(runs)} run(s) over {region_count} code region(s)"
             + (f" from configuration(s): {', '.join(configs)}\n" if configs else "\n")
         )
@@ -1177,39 +1187,38 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         my_env = environment_with_interpreter_on_path()
         analyzer = shutil.which(HOTSPOT_ANALYZER, path=my_env["PATH"])
         if analyzer is None:
-            self._hotspot_emit(f"\nAnalysis skipped: {HOTSPOT_ANALYZER} not found on PATH.\n")
+            ctx.output(f"\nAnalysis skipped: {HOTSPOT_ANALYZER} not found on PATH.\n")
             return False
 
-        self.after(0, lambda: self.status_label.config(text="⏳ Analyzing...", foreground=widgets.STATUS_BUSY))  # type: ignore
-        self._hotspot_emit(f"Running hotspot analysis over {len(runs)} accumulated run(s)...\n")
+        ctx.status("⏳ Analyzing...", StatusKind.BUSY)
+        ctx.output(f"Running hotspot analysis over {len(runs)} accumulated run(s)...\n")
 
-        self._hotspot_analysis_process = subprocess.Popen(
-            hotspot_analyzer_command(analyzer, hotspot_data.MERGED_DIRNAME),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=dot_dp,
-            env=my_env,
-            start_new_session=True,
-        )
-        process = self._hotspot_analysis_process
-        assert process.stdout is not None
-        for line in process.stdout:
-            cleaned = clean_ansi_output(line.rstrip("\n"))
+        def on_analyzer_line(line: str) -> None:
+            cleaned = clean_ansi_output(line)
             if cleaned:
-                self._hotspot_emit(cleaned + "\n")
-        process.wait()
-        returncode = process.returncode
-        self._hotspot_analysis_process = None
+                ctx.output(cleaned + "\n")
+
+        try:
+            returncode = ctx.run_command(
+                JobSpec(
+                    hotspot_analyzer_command(analyzer, hotspot_data.MERGED_DIRNAME),
+                    cwd=dot_dp,
+                    env=my_env,
+                    new_session=True,
+                ),
+                on_analyzer_line,
+            )
+        except OSError as e:
+            ctx.output(f"\nAnalysis skipped: could not start {HOTSPOT_ANALYZER}: {e}\n")
+            return False
 
         if returncode != 0:
-            self._hotspot_emit(f"Hotspot analysis failed (return code: {returncode})\n")
+            ctx.output(f"Hotspot analysis failed (return code: {returncode})\n")
             return False
-        self._hotspot_emit("Hotspot analysis complete.\n")
+        ctx.output("Hotspot analysis complete.\n")
         return True
 
-    def _on_hotspot_work_complete(self, success: bool) -> None:
+    def _on_hotspot_work_complete(self, success: bool, cancelled: bool) -> None:
         self.hotspot_running = False
         if self.hotspot_run_button is not None:
             self.hotspot_run_button.config(text="Run Measurement")
@@ -1221,8 +1230,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         if hasattr(self, "_update_autotuning_ui"):
             self._update_autotuning_ui()
 
-        assert self._hotspot_stop_event is not None
-        if self._hotspot_stop_event.is_set():
+        if cancelled:
             self._set_status("Hotspot measurement stopped", fg=widgets.STATUS_STOP, reset_delay=3000)
         elif success:
             self._set_status("Hotspot measurement completed", fg=widgets.STATUS_OK, reset_delay=3000)
@@ -1230,18 +1238,9 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
             self._set_status("Hotspot measurement failed", fg=widgets.STATUS_FAIL, reset_delay=3000)
 
     def _stop_hotspot_measurement(self) -> None:
-        if self._hotspot_stop_event is not None:
-            self._hotspot_stop_event.set()
-        if self._hotspot_process is not None:
-            try:
-                self._hotspot_process.terminate()
-            except OSError:
-                pass
-        if self._hotspot_analysis_process is not None:
-            try:
-                self._hotspot_analysis_process.terminate()
-            except OSError:
-                pass
+        job = self._hotspot_job
+        if job is not None:
+            job.cancel()
         if self.hotspot_stop_button is not None:
             self.hotspot_stop_button.config(state="disabled")
         self.status_label.config(text="Stopping hotspot measurement...", foreground=widgets.STATUS_STOP)
