@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
+import queue
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -35,6 +34,16 @@ from discopop_library.PatchRepair import llm_backends
 from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.PatchRepair.results import PROGRESS_PREFIX
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.services.jobs import (
+    CancelPolicy,
+    JobEvent,
+    JobFailedToStart,
+    JobFinished,
+    JobOutput,
+    JobRunner,
+    JobSpec,
+)
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.commands import patch_repair_command
 from discopop_library.ProjectManager.services.patches import has_patches
@@ -100,7 +109,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
     patch_repair_file_combo: Optional[ttk.Combobox] = None
     patch_repair_diff_source_label: Optional[ttk.Label] = None
     patch_repair_selector: Optional[SuggestionSelector] = None
-    _patch_repair_process: Optional["subprocess.Popen[str]"] = None
+    _patch_repair_job: Optional[JobRunner] = None
     # results.json as it currently stands, keyed by suggestion id (as a string).
     _patch_repair_records: Dict[str, Dict[str, Any]] = {}
 
@@ -530,23 +539,57 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
                 self.patch_repair_output_text.see(tk.END)
                 self.patch_repair_output_text.config(state="disabled")
 
-        def thread_safe_append(text: str) -> None:
-            self.after(0, lambda: append_output(text))  # type: ignore
-
-        # the worker thread must not read Tk variables or selectors
+        # the job's thread must not read Tk variables or selectors
         request = self._snapshot_patch_repair_request()
+        dot_discopop = self.arguments.dot_dp
+        append_output("Starting patch repair...\n")
+        self._announce_patch_repair_request(request, append_output)
 
-        def thread_func() -> None:
-            try:
-                thread_safe_append("Starting patch repair...\n")
-                self._invoke_patch_repair(request, thread_safe_append)
-                self.after(0, lambda: self._on_patch_repair_complete())  # type: ignore
-            except Exception as error:
-                message = str(error)
-                thread_safe_append("\nError: " + message + "\n")
-                self.after(0, lambda: self._on_patch_repair_complete(error=True))  # type: ignore
+        events: "queue.Queue[JobEvent]" = queue.Queue()
+        # A subprocess, never in-process: the tool drives the autotuner and an external agent, and its console
+        # output would otherwise fight the Tk main loop. SIGINT rather than terminate(): the tool finishes the
+        # suggestion it is on and writes results.json, instead of leaving a half-written patch behind.
+        job = JobRunner(
+            JobSpec(patch_repair_command(request, dot_discopop), cwd=dot_discopop, cancel_policy=CancelPolicy.SIGINT),
+            events,
+        )
+        self._patch_repair_job = job
+        TkJobAdapter(self, events, lambda event: self._on_patch_repair_job_event(event, append_output)).start()
+        job.start()
 
-        threading.Thread(target=thread_func, daemon=True).start()
+    def _announce_patch_repair_request(
+        self, request: PatchRepairRequest, output_callback: Callable[[str], None]
+    ) -> None:
+        if request.suggestion_ids is not None:
+            output_callback("Restricting to suggestion IDs: " + (", ".join(request.suggestion_ids) or "(none)") + "\n")
+
+        output_callback("Configuration:\n")
+        output_callback("  Configuration: " + request.configuration + "\n")
+        output_callback("  Hotspot Types: " + request.hotspot_types + "\n")
+        output_callback("  Backend: " + request.backend + "\n")
+        output_callback("  Model: " + (request.model or "(default)") + "\n\n")
+
+    def _on_patch_repair_job_event(self, event: JobEvent, output_callback: Callable[[str], None]) -> None:
+        """Handle one event of the patch repair job; runs on the Tk main thread."""
+        if isinstance(event, JobOutput):
+            progress_events, residual = split_progress_events(event.line + "\n", PROGRESS_PREFIX)
+            for progress_event in progress_events:
+                self._on_patch_repair_progress(progress_event)
+            cleaned = clean_ansi_output(residual.rstrip("\n"))
+            if cleaned:
+                output_callback(cleaned + "\n")
+        elif isinstance(event, JobFinished):
+            self._patch_repair_job = None
+            if event.returncode != 0:
+                output_callback("\nError: Patch repair exited with return code " + str(event.returncode) + "\n")
+                self._on_patch_repair_complete(error=True)
+            else:
+                output_callback("\nPatch repair completed.\n")
+                self._on_patch_repair_complete()
+        elif isinstance(event, JobFailedToStart):
+            self._patch_repair_job = None
+            output_callback("\nError: " + event.error + "\n")
+            self._on_patch_repair_complete(error=True)
 
     def _snapshot_patch_repair_request(self) -> PatchRepairRequest:
         """Read the panel into an immutable request; call on the main thread only."""
@@ -569,49 +612,6 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
             dry_run=self.patch_repair_dry_run_var is not None and bool(self.patch_repair_dry_run_var.get()),
             suggestion_ids=suggestion_ids,
         )
-
-    def _invoke_patch_repair(self, request: PatchRepairRequest, output_callback: Callable[[str], None]) -> None:
-        dot_discopop = self.arguments.dot_dp
-        hotspot_types = request.hotspot_types
-
-        command = patch_repair_command(request, dot_discopop)
-        if request.suggestion_ids is not None:
-            output_callback("Restricting to suggestion IDs: " + (", ".join(request.suggestion_ids) or "(none)") + "\n")
-
-        output_callback("Configuration:\n")
-        output_callback("  Configuration: " + request.configuration + "\n")
-        output_callback("  Hotspot Types: " + hotspot_types + "\n")
-        output_callback("  Backend: " + request.backend + "\n")
-        output_callback("  Model: " + (request.model or "(default)") + "\n\n")
-
-        # A subprocess, never in-process: the tool drives the autotuner and an external
-        # agent, and its console output would otherwise fight the Tk main loop.
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=dot_discopop,
-        )
-        self._patch_repair_process = process
-        try:
-            assert process.stdout is not None
-            for line in process.stdout:
-                events, residual = split_progress_events(line, PROGRESS_PREFIX)
-                for event in events:
-                    self.after(0, lambda e=event: self._on_patch_repair_progress(e))  # type: ignore
-                cleaned = clean_ansi_output(residual.rstrip("\n"))
-                if cleaned:
-                    output_callback(cleaned + "\n")
-            process.wait()
-        finally:
-            self._patch_repair_process = None
-
-        returncode = process.returncode
-        if returncode != 0:
-            raise RuntimeError("Patch repair exited with return code " + str(returncode))
-        output_callback("\nPatch repair completed.\n")
 
     def _on_patch_repair_progress(self, event: Dict[str, Any]) -> None:
         """Update the table and the summary from one structured progress event."""
@@ -649,11 +649,9 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
             )
 
     def _stop_patch_repair(self) -> None:
-        process = self._patch_repair_process
-        if process is not None:
-            # SIGINT rather than terminate(): the tool finishes the suggestion it is on
-            # and writes results.json, instead of leaving a half-written patch behind.
-            process.send_signal(signal.SIGINT)
+        job = self._patch_repair_job
+        if job is not None:
+            job.cancel()
         if self.patch_repair_stop_button is not None:
             self.patch_repair_stop_button.config(state="disabled")
         self.status_label.config(text="Stopping patch repair...", foreground=widgets.STATUS_STOP)
