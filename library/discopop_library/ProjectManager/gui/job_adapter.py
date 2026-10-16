@@ -12,20 +12,22 @@ A Tk (or later Qt / web) port replaces this adapter and the panels; the job runn
 """
 
 import queue
-from typing import Any, Callable
+from typing import Any, Callable, Generic, TypeVar
 
-from discopop_library.ProjectManager.services.jobs import JobEvent, is_terminal
+from discopop_library.ProjectManager.services.jobs import is_terminal
+
+E = TypeVar("E")
 
 POLL_INTERVAL_MS = 50
 
 
-class TkJobAdapter:
+class TkJobAdapter(Generic[E]):
     """Takes the events out of a job's queue from one ``after`` loop and passes them to ``handler``.
 
     ``handler`` always runs on the Tk main thread. The loop ends after the terminal event of the job.
     """
 
-    def __init__(self, widget: Any, events: "queue.Queue[JobEvent]", handler: Callable[[JobEvent], None]) -> None:
+    def __init__(self, widget: Any, events: "queue.Queue[E]", handler: Callable[[E], None]) -> None:
         self._widget = widget
         self._events = events
         self._handler = handler

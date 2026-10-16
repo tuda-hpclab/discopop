@@ -20,7 +20,7 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 
 class CancelPolicy(Enum):
@@ -66,9 +66,41 @@ class JobFailedToStart:
 JobEvent = Union[JobOutput, JobFinished, JobFailedToStart]
 
 
-def is_terminal(event: JobEvent) -> bool:
+def is_terminal(event: Any) -> bool:
     """Whether no further event follows ``event``."""
-    return isinstance(event, (JobFinished, JobFailedToStart))
+    return isinstance(event, (JobFinished, JobFailedToStart, WorkFinished))
+
+
+def _signal_process(process: "subprocess.Popen[str]", policy: CancelPolicy) -> None:
+    """Ask ``process`` to stop as ``policy`` says; a process that ended in the meantime is left alone."""
+    if process.poll() is not None:
+        return
+    try:
+        if policy is CancelPolicy.SIGINT:
+            process.send_signal(signal.SIGINT)
+        elif policy is CancelPolicy.SIGTERM_GROUP:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                process.terminate()
+        else:
+            process.terminate()
+    except OSError:
+        pass
+
+
+def _start_process(spec: JobSpec) -> "subprocess.Popen[str]":
+    env: Optional[Dict[str, str]] = dict(spec.env) if spec.env is not None else None
+    return subprocess.Popen(
+        spec.command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        cwd=spec.cwd,
+        env=env,
+        start_new_session=spec.new_session,
+    )
 
 
 class JobRunner:
@@ -105,36 +137,12 @@ class JobRunner:
             return self._cancel_requested
 
     def _signal(self, process: "subprocess.Popen[str]") -> None:
-        if process.poll() is not None:
-            return
-        policy = self._spec.cancel_policy
-        try:
-            if policy is CancelPolicy.SIGINT:
-                process.send_signal(signal.SIGINT)
-            elif policy is CancelPolicy.SIGTERM_GROUP:
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    process.terminate()
-            else:
-                process.terminate()
-        except OSError:
-            pass  # the process ended in the meantime
+        _signal_process(process, self._spec.cancel_policy)
 
     def _run(self) -> None:
         try:
-            env: Optional[Dict[str, str]] = dict(self._spec.env) if self._spec.env is not None else None
             try:
-                process = subprocess.Popen(
-                    self._spec.command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    cwd=self._spec.cwd,
-                    env=env,
-                    start_new_session=self._spec.new_session,
-                )
+                process = _start_process(self._spec)
             except OSError as e:
                 self._events.put(JobFailedToStart(str(e)))
                 return
@@ -154,3 +162,145 @@ class JobRunner:
             self._events.put(JobFinished(process.returncode, self.cancel_requested))
         except Exception as e:  # never leave the consumer waiting for a terminal event
             self._events.put(JobFailedToStart(str(e)))
+
+
+class StatusKind(Enum):
+    """The tone of a status line; the GUI maps it to a colour."""
+
+    BUSY = "busy"
+    IDLE = "idle"
+    OK = "ok"
+    FAIL = "fail"
+    STOP = "stop"
+
+
+@dataclass(frozen=True)
+class WorkOutput:
+    """Text for the console of the panel."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class WorkStatus:
+    """A new text for the status line."""
+
+    text: str
+    kind: StatusKind
+
+
+@dataclass(frozen=True)
+class WorkNotice:
+    """Something the user has to be told in a dialog once the work has been shown so far."""
+
+    title: str
+    message: str
+
+
+@dataclass(frozen=True)
+class WorkFinished:
+    """The last event of a piece of work: its return value, or the exception that ended it."""
+
+    result: Any
+    error: Optional[str]
+
+
+WorkEvent = Union[WorkOutput, WorkStatus, WorkNotice, WorkFinished]
+
+
+class WorkContext:
+    """What a piece of work running on a :class:`WorkRunner` can do; safe to use from the worker thread.
+
+    The work reports through ``output`` / ``status`` / ``notify`` and never touches a widget. It stops
+    when ``cancel_event`` is set. A subprocess it starts through ``register_process`` or ``run_command`` is
+    terminated by ``WorkRunner.cancel``.
+    """
+
+    def __init__(self, events: "queue.Queue[WorkEvent]", cancel_event: threading.Event) -> None:
+        self._events = events
+        self.cancel_event = cancel_event
+        self._lock = threading.Lock()
+        self._process: Optional["subprocess.Popen[Any]"] = None
+        self._policy = CancelPolicy.TERMINATE
+
+    def output(self, text: str) -> None:
+        self._events.put(WorkOutput(text))
+
+    def status(self, text: str, kind: StatusKind = StatusKind.BUSY) -> None:
+        self._events.put(WorkStatus(text, kind))
+
+    def notify(self, title: str, message: str) -> None:
+        self._events.put(WorkNotice(title, message))
+
+    def register_process(self, process: "subprocess.Popen[Any]", policy: CancelPolicy = CancelPolicy.TERMINATE) -> None:
+        """Make ``cancel`` stop ``process`` (a process started by a library function that reports it)."""
+        with self._lock:
+            self._process = process
+            self._policy = policy
+        if self.cancel_event.is_set():
+            _signal_process(process, policy)
+
+    def clear_process(self) -> None:
+        with self._lock:
+            self._process = None
+
+    def run_command(self, spec: JobSpec, on_line: Callable[[str], None]) -> int:
+        """Run ``spec`` to its end, passing every output line to ``on_line``; returns the return code.
+
+        Raises OSError when the command cannot be started.
+        """
+        process = _start_process(spec)
+        self.register_process(process, spec.cancel_policy)
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                on_line(line.rstrip("\n"))
+            process.wait()
+        finally:
+            self.clear_process()
+        return process.returncode
+
+    def terminate_running_process(self) -> None:
+        with self._lock:
+            process, policy = self._process, self._policy
+        if process is not None:
+            _signal_process(process, policy)
+
+
+class WorkRunner:
+    """Runs a function on a worker thread, once, and reports through the events of its :class:`WorkContext`.
+
+    The last event is a :class:`WorkFinished`; an exception of the work is reported there instead of being lost.
+    This replaces the ``threading.Thread`` + ``self.after(0, ...)`` idiom: the consumer of ``events`` is the only
+    one touching widgets.
+    """
+
+    def __init__(self, work: Callable[[WorkContext], Any], events: "queue.Queue[WorkEvent]") -> None:
+        self._work = work
+        self._events = events
+        self._cancel_event = threading.Event()
+        self._context = WorkContext(events, self._cancel_event)
+        self._started = False
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel_event.is_set()
+
+    def start(self) -> None:
+        if self._started:
+            raise RuntimeError("a WorkRunner runs its work only once")
+        self._started = True
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def cancel(self) -> None:
+        """Ask the work to stop: sets its cancel event and terminates the process it has registered."""
+        self._cancel_event.set()
+        self._context.terminate_running_process()
+
+    def _run(self) -> None:
+        try:
+            result = self._work(self._context)
+        except Exception as e:  # a crash of the work must not leave the consumer waiting
+            self._events.put(WorkFinished(None, str(e) or type(e).__name__))
+            return
+        self._events.put(WorkFinished(result, None))

@@ -10,7 +10,7 @@ import queue
 import sys
 import threading
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import pytest
 
@@ -22,6 +22,14 @@ from discopop_library.ProjectManager.services.jobs import (
     JobOutput,
     JobRunner,
     JobSpec,
+    StatusKind,
+    WorkContext,
+    WorkEvent,
+    WorkFinished,
+    WorkNotice,
+    WorkOutput,
+    WorkRunner,
+    WorkStatus,
     is_terminal,
 )
 
@@ -100,3 +108,81 @@ def test_a_runner_runs_only_once(tmp_path: Path) -> None:
     runner.start()
     with pytest.raises(RuntimeError):
         runner.start()
+
+
+# ---- WorkRunner ---------------------------------------------------------------------------------------------
+
+
+def _collect(events: "queue.Queue[WorkEvent]") -> List[WorkEvent]:
+    result: List[WorkEvent] = []
+    while True:
+        event = events.get(timeout=20)
+        result.append(event)
+        if isinstance(event, WorkFinished):
+            return result
+
+
+def test_work_reports_through_its_context_and_returns_a_result() -> None:
+    def work(ctx: WorkContext) -> int:
+        ctx.output("a\n")
+        ctx.status("busy", StatusKind.BUSY)
+        ctx.notify("Title", "Message")
+        return 7
+
+    events: "queue.Queue[WorkEvent]" = queue.Queue()
+    WorkRunner(work, events).start()
+    assert _collect(events) == [
+        WorkOutput("a\n"),
+        WorkStatus("busy", StatusKind.BUSY),
+        WorkNotice("Title", "Message"),
+        WorkFinished(7, None),
+    ]
+
+
+def test_an_exception_of_the_work_is_reported() -> None:
+    def work(ctx: WorkContext) -> None:
+        raise ValueError("boom")
+
+    events: "queue.Queue[WorkEvent]" = queue.Queue()
+    WorkRunner(work, events).start()
+    assert _collect(events) == [WorkFinished(None, "boom")]
+
+
+def test_cancel_sets_the_event_and_terminates_the_running_command(tmp_path: Path) -> None:
+    started = threading.Event()
+
+    def work(ctx: WorkContext) -> int:
+        spec = _python("import time; print('ready', flush=True); time.sleep(60)", tmp_path)
+        return ctx.run_command(spec, lambda line: started.set() if line == "ready" else None)
+
+    events: "queue.Queue[WorkEvent]" = queue.Queue()
+    runner = WorkRunner(work, events)
+    runner.start()
+    assert started.wait(20)
+    runner.cancel()
+    finished = _collect(events)[-1]
+    assert isinstance(finished, WorkFinished) and finished.error is None
+    assert finished.result != 0
+    assert runner.cancel_requested
+
+
+def test_a_process_registered_after_the_cancel_is_terminated_at_once(tmp_path: Path) -> None:
+    import subprocess
+
+    events: "queue.Queue[WorkEvent]" = queue.Queue()
+    registered = threading.Event()
+    release = threading.Event()
+
+    def work(ctx: WorkContext) -> Any:
+        release.wait(20)
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=tmp_path)
+        ctx.register_process(process)
+        registered.set()
+        return process.wait()
+
+    runner = WorkRunner(work, events)
+    runner.start()
+    runner.cancel()
+    release.set()
+    finished = _collect(events)[-1]
+    assert isinstance(finished, WorkFinished) and finished.result != 0
