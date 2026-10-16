@@ -36,6 +36,7 @@ from discopop_library.PatchRepair import llm_backends
 from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.PatchRepair.results import PROGRESS_PREFIX
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.services.patches import has_patches
 from discopop_library.ProjectManager.services.requests import PatchRepairRequest
 from discopop_library.ProjectManager.gui.mixins.helpers import clean_ansi_output, show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -495,11 +496,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
 
     def _patch_repair_prerequisites_met(self) -> bool:
         """Patches must exist: without them there is nothing to build and nothing to fix."""
-        patch_generator_dir = os.path.join(self.arguments.dot_dp, "patch_generator")
-        if not os.path.isdir(patch_generator_dir):
-            return False
-        has_patches = any(entry.isdigit() for entry in os.listdir(patch_generator_dir))
-        return has_patches and bool(getattr(self, "current_config", None))
+        return has_patches(self.arguments.dot_dp) and bool(getattr(self, "current_config", None))
 
     # -- running -----------------------------------------------------------------
 

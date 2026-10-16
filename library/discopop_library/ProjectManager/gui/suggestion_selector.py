@@ -34,25 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import caption_label
-
-
-def discover_suggestion_ids(dot_dp_path: str) -> List[str]:
-    """Return the available suggestion IDs, sorted numerically.
-
-    An ID is a subdirectory of ``<dot_dp>/patch_generator`` that contains at
-    least one ``.patch`` file -- the same rule the suggestion browser uses.
-    """
-    patch_gen_dir = os.path.join(dot_dp_path, "patch_generator")
-    ids: List[str] = []
-    if not os.path.isdir(patch_gen_dir):
-        return ids
-    for sid in sorted(os.listdir(patch_gen_dir), key=lambda x: int(x) if x.isdigit() else x):
-        sid_dir = os.path.join(patch_gen_dir, sid)
-        if not os.path.isdir(sid_dir):
-            continue
-        if any(f.endswith(".patch") for f in os.listdir(sid_dir)):
-            ids.append(sid)
-    return ids
+from discopop_library.ProjectManager.services.patches import discover_suggestion_ids
 
 
 def parse_id_ranges(spec: str, available: List[str]) -> Set[str]:
