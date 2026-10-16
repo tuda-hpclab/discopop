@@ -14,6 +14,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional, Any, Dict, List, Union
+from discopop_library.ProjectManager.services.derived_settings import derive_settings
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import (
     get_per_config_validation_compile_script_path,
@@ -272,25 +273,10 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             "CXXFLAGS": self.step_data["cxxflags"],
         }
 
-        dp_settings = json.loads(json.dumps(seq_settings))
-        dp_settings["CC"] = "discopop_cc"
-        dp_settings["CXX"] = "discopop_cxx"
-
-        hd_settings = json.loads(json.dumps(seq_settings))
-        hd_settings["CC"] = "discopop_hotspot_cc"
-        hd_settings["CXX"] = "discopop_hotspot_cxx"
-        hd_settings["CFLAGS"] = hd_settings["CFLAGS"] + " -fopenmp" if len(hd_settings["CFLAGS"]) != 0 else "-fopenmp"
-        hd_settings["CXXFLAGS"] = (
-            hd_settings["CXXFLAGS"] + " -fopenmp" if len(hd_settings["CXXFLAGS"]) != 0 else "-fopenmp"
-        )
-
-        par_settings = json.loads(json.dumps(seq_settings))
-        par_settings["CFLAGS"] = (
-            par_settings["CFLAGS"] + " -fopenmp" if len(par_settings["CFLAGS"]) != 0 else "-fopenmp"
-        )
-        par_settings["CXXFLAGS"] = (
-            par_settings["CXXFLAGS"] + " -fopenmp" if len(par_settings["CXXFLAGS"]) != 0 else "-fopenmp"
-        )
+        derived = derive_settings(seq_settings)
+        dp_settings = derived["dp"]
+        hd_settings = derived["hd"]
+        par_settings = derived["par"]
 
         self.step_data["derived_settings"] = {
             "dp_settings": dp_settings,
