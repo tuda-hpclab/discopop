@@ -8,7 +8,6 @@
 
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -16,12 +15,16 @@ import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote
 
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error, clean_ansi_output
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
+from discopop_library.ProjectManager.services.vscode import (
+    VSCODE_NOT_FOUND_MESSAGE,
+    find_code_executable,
+    open_project,
+)
 from discopop_library.ProjectManager.services.requests import ExplorerRequest
 from discopop_library.ProjectManager.gui.plots import hotspot_data
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
@@ -339,56 +342,16 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         )
 
     def _open_in_vscode(self) -> None:
-        # The DiscoPoP VSCode extension activates on a workspace that *contains* a
-        # .discopop directory (activation event "workspaceContains:**/.discopop")
-        # and then focuses its sidebar view. We therefore open the project root
-        # (the parent of the .discopop directory), not the .discopop dir itself.
-        dot_dp = os.path.abspath(self.arguments.dot_dp)
-        project_root = os.path.dirname(dot_dp)
-
-        code_executable = shutil.which("code")
+        code_executable = find_code_executable()
         if code_executable is None:
-            show_error(
-                self,
-                "VSCode Not Found",
-                "Could not find the 'code' command on your PATH.\n\n"
-                "Install Visual Studio Code and, from within VSCode, run "
-                "'Shell Command: Install \"code\" command in PATH' to enable this feature.",
-            )
+            show_error(self, "VSCode Not Found", VSCODE_NOT_FOUND_MESSAGE)
             return
 
         try:
-            subprocess.Popen(
-                [code_executable, project_root],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            open_project(code_executable, self.arguments.dot_dp)
         except OSError as e:
             show_error(self, "Failed to open VSCode", f"Could not launch VSCode:\n{e}")
             return
-
-        # Opening the folder alone only focuses the DiscoPoP sidebar on a *fresh*
-        # window (activation runs once). If the folder is already open, re-running
-        # `code` just refocuses the window without re-firing activation. Dispatching
-        # a URI to the extension's UriHandler focuses the sidebar on every
-        # invocation, so the button behaves consistently regardless of window state.
-        # The dotDiscopop/projectPath query tells the extension which configuration
-        # to select (creating a ViewOnly configuration for it if none exists).
-        focus_uri = (
-            "vscode://TUDarmstadt-LaboratoryforParallelProgramming.discopop/focus"
-            f"?dotDiscopop={quote(dot_dp, safe='')}&projectPath={quote(project_root, safe='')}"
-        )
-        try:
-            subprocess.Popen(
-                [code_executable, "--open-url", focus_uri],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError:
-            # Best-effort: the folder is already opening; only the auto-focus is lost.
-            pass
 
         self.status_label.config(text="Opening project in VSCode...", foreground=widgets.STATUS_BUSY)
         self.after(3000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
