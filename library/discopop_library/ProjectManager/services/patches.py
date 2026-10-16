@@ -9,13 +9,13 @@
 """Discovery of the patches the patch generator wrote below ``<dot_dp>/patch_generator``."""
 
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 PATCH_GENERATOR_DIRECTORY = "patch_generator"
 PATCH_SUFFIX = ".patch"
 
 
-def _suggestion_order(name: str) -> Tuple[int, int, str]:
+def suggestion_order(name: str) -> Tuple[int, int, str]:
     """Numeric ids first in numeric order, then other names alphabetically (never compares int with str)."""
     return (0, int(name), "") if name.isdigit() else (1, 0, name)
 
@@ -30,7 +30,7 @@ def discover_patches(dot_dp_path: str) -> Dict[str, List[str]]:
     patches: Dict[str, List[str]] = {}
     if not os.path.isdir(patch_generator_dir):
         return patches
-    for suggestion_id in sorted(os.listdir(patch_generator_dir), key=_suggestion_order):
+    for suggestion_id in sorted(os.listdir(patch_generator_dir), key=suggestion_order):
         suggestion_dir = os.path.join(patch_generator_dir, suggestion_id)
         if not os.path.isdir(suggestion_dir):
             continue
@@ -52,3 +52,7 @@ def count_patches(dot_dp_path: str) -> int:
 
 def has_patches(dot_dp_path: str) -> bool:
     return bool(discover_patches(dot_dp_path))
+
+
+def sort_suggestion_ids(ids: Iterable[str]) -> List[str]:
+    return sorted(ids, key=suggestion_order)

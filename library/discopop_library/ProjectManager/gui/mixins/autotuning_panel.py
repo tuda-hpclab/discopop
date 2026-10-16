@@ -6,7 +6,6 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import json
 import os
 import signal
 import subprocess
@@ -22,6 +21,11 @@ from discopop_library.ProjectManager.configurations.repetitions import (
     DEFAULT_TUNING_REPETITIONS,
     validate_repetitions,
 )
+from discopop_library.ProjectManager.services.autotuner_results import (
+    autotuner_results_exist,
+    read_autotuner_applied_suggestions,
+)
+from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.services.requests import AutotunerRequest
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
@@ -471,22 +475,11 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         if not hasattr(self, "autotuning_suggestions_label") or self.autotuning_suggestions_label is None:
             return
 
-        results_path = os.path.join(self.arguments.dot_dp, "auto_tuner", "results.json")
-        suggested_ids = []
-        autotuner_executed = os.path.exists(results_path)
-
+        autotuner_executed = autotuner_results_exist(self.arguments.dot_dp)
+        suggested_ids: List[str] = []
         if autotuner_executed:
-            try:
-                with open(results_path, "r") as f:
-                    results_data = json.load(f)
-                config_key = getattr(self, "current_config", None) or ""
-                config_results = results_data.get(config_key, {})
-                suggested_ids = sorted(
-                    [str(sid) for sid in config_results.get("applied_suggestions", [])],
-                    key=lambda x: int(x) if x.isdigit() else x,
-                )
-            except (json.JSONDecodeError, IOError):
-                pass
+            config_key = getattr(self, "current_config", None) or ""
+            suggested_ids = sort_suggestion_ids(read_autotuner_applied_suggestions(self.arguments.dot_dp, config_key))
 
         if suggested_ids:
             self.autotuning_suggestions_label.config(text=", ".join(suggested_ids), foreground="black")
