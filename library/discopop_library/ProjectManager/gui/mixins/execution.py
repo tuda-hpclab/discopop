@@ -7,7 +7,6 @@
 # directory for details.
 
 import copy
-import json
 import logging
 import os
 import subprocess
@@ -30,6 +29,7 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     resolve_execution_time_regex,
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script, run_validation_phase
+from discopop_library.ProjectManager.services.autotuner_results import read_autotuner_applied_suggestions
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import redirect_logging_to_text_area, show_warning
@@ -210,14 +210,8 @@ class ExecutionMixin(ConfigManagerMixinBase):
                 combined_ids += self.execute_suggestion_selector.get_selected_ids()
 
         if suggestions_mode == "autotuner":
-            results_path = os.path.join(args_copy.dot_dp, "auto_tuner", "results.json")
-            try:
-                with open(results_path, "r") as f:
-                    results_data = json.load(f)
-                autotuner_ids = [str(s) for s in results_data.get(current_config, {}).get("applied_suggestions", [])]
-                combined_ids += [sid for sid in autotuner_ids if sid not in combined_ids]
-            except (json.JSONDecodeError, IOError):
-                pass
+            autotuner_ids = read_autotuner_applied_suggestions(args_copy.dot_dp, current_config)
+            combined_ids += [sid for sid in autotuner_ids if sid not in combined_ids]
 
         args_copy.apply_suggestions = ",".join(combined_ids) if combined_ids else None
 
