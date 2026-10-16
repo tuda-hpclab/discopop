@@ -7,12 +7,12 @@
 # directory for details.
 
 import copy
-import os
 import subprocess
 import threading
 import tkinter as tk
 
 
+from discopop_library.ProjectManager.services.reports import ReportProblem, find_latest_report_pdf
 from discopop_library.ProjectManager.reports.full import generate_full_report
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import show_warning
@@ -45,20 +45,14 @@ class ReportMixin(ConfigManagerMixinBase):
         threading.Thread(target=thread_func, daemon=True).start()
 
     def _view_report(self) -> None:
-        reports_dir = os.path.join(self.arguments.project_dir, "reports")
-        if not os.path.exists(reports_dir):
-            show_warning(self, "No report", "No report found. Generate one first.")
-            return
-
-        report_dirs = sorted([d for d in os.listdir(reports_dir) if os.path.isdir(os.path.join(reports_dir, d))])
-        if not report_dirs:
-            show_warning(self, "No report", "No report found.")
-            return
-
-        latest_report_dir = os.path.join(reports_dir, report_dirs[-1])
-        report_path = os.path.join(latest_report_dir, "full_report.pdf")
-        if not os.path.exists(report_path):
-            show_warning(self, "No report", "No report PDF found.")
+        report_path, problem = find_latest_report_pdf(self.arguments.project_dir)
+        if report_path is None:
+            if problem == ReportProblem.NO_REPORTS_DIRECTORY:
+                show_warning(self, "No report", "No report found. Generate one first.")
+            elif problem == ReportProblem.NO_REPORT:
+                show_warning(self, "No report", "No report found.")
+            else:
+                show_warning(self, "No report", "No report PDF found.")
             return
 
         subprocess.Popen(["xdg-open", report_path])

@@ -30,6 +30,7 @@ from discopop_library.ProjectManager.configurations.execution_time import (
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script, run_validation_phase
 from discopop_library.ProjectManager.services.autotuner_results import read_autotuner_applied_suggestions
+from discopop_library.ProjectManager.services.modes import settings_path as mode_settings_path
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import redirect_logging_to_text_area, show_warning
@@ -235,10 +236,6 @@ class ExecutionMixin(ConfigManagerMixinBase):
                 )
 
             compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, current_config)
-            shared_seq_settings = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-            shared_dp_settings = os.path.join(self.arguments.project_config_dir, "dp_settings.json")
-            shared_hd_settings = os.path.join(self.arguments.project_config_dir, "hd_settings.json")
-            shared_par_settings = os.path.join(self.arguments.project_config_dir, "par_settings.json")
 
             for mode in selected_modes:
                 if self._execution_stop_event.is_set():
@@ -247,16 +244,10 @@ class ExecutionMixin(ConfigManagerMixinBase):
 
                 self.after(0, lambda m=mode: append_output(f"\n=== {m.upper()} mode ===\n"))  # type: ignore
 
-                if mode == "seq":
-                    settings_path = shared_seq_settings
-                elif mode == "dp":
-                    settings_path = shared_dp_settings
-                elif mode == "hd":
-                    settings_path = shared_hd_settings
-                elif mode == "par":
-                    settings_path = shared_par_settings
-                else:
+                resolved_settings_path = mode_settings_path(self.arguments.project_config_dir, mode)
+                if resolved_settings_path is None:
                     continue
+                settings_path = resolved_settings_path
 
                 if inplace:
                     project_copy_path = self.arguments.project_root
