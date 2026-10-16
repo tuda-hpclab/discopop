@@ -9,20 +9,18 @@
 import copy
 import os
 import json
-import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional, Any, Dict, List, Union
+from typing import Optional, List, Union
 from discopop_library.ProjectManager.services.derived_settings import derive_settings
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.compile_script import (
-    get_per_config_validation_compile_script_path,
+from discopop_library.ProjectManager.services.configurations import (
+    WizardData,
+    write_seq_settings,
+    write_shared_compile_script,
+    write_wizard_configuration,
 )
-from discopop_library.ProjectManager.utilities.initializeFiles import (
-    initialize_configuration_files,
-)
-from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import heading_label
 from discopop_library.ProjectManager.gui.wizard_steps import WizardStepsMixin
@@ -41,18 +39,7 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
 
         self.step_index = 0
         self.step_frames: List[ttk.Frame] = []
-        self.step_data: Dict[str, Any] = {
-            "compile_sh": "",
-            "cc": "",
-            "cxx": "",
-            "cflags": "",
-            "cxxflags": "",
-            "config_name": "default",
-            "execute_sh": "",
-            "validate_sh": "",
-            "validate_compile_sh": "",
-            "derived_settings": {},
-        }
+        self.step_data = WizardData()
         self._compile_sh_has_placeholder = False
         self._execute_sh_has_placeholder = False
 
@@ -131,8 +118,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
         elif self.step_index == 1:
             self._show_step(self.step_index + 1)
         elif self.step_index == 2:
-            self.step_data["compile_sh"] = self.compile_sh_text.get(1.0, tk.END)
-            compile_sh_content = self.step_data["compile_sh"]
+            self.step_data.compile_sh = self.compile_sh_text.get(1.0, tk.END)
+            compile_sh_content = self.step_data.compile_sh
             if "$CC" not in compile_sh_content and "$CXX" not in compile_sh_content:
                 if not ask_yes_no(
                     self,
@@ -145,10 +132,10 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             self._write_compile_sh()
             self._show_step(self.step_index + 1)
         elif self.step_index == 3:
-            self.step_data["cc"] = self.cc_entry.get()
-            self.step_data["cxx"] = self.cxx_entry.get()
-            self.step_data["cflags"] = self.cflags_entry.get()
-            self.step_data["cxxflags"] = self.cxxflags_entry.get()
+            self.step_data.cc = self.cc_entry.get()
+            self.step_data.cxx = self.cxx_entry.get()
+            self.step_data.cflags = self.cflags_entry.get()
+            self.step_data.cxxflags = self.cxxflags_entry.get()
             self._write_seq_settings()
             self._show_step(self.step_index + 1)
         elif self.step_index == 4:
@@ -162,8 +149,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             if not config_name:
                 show_error(self, "Invalid Configuration Name", "Configuration name cannot be empty.")
                 return
-            self.step_data["config_name"] = config_name
-            self.step_data["execute_sh"] = self.execute_sh_text.get(1.0, tk.END)
+            self.step_data.config_name = config_name
+            self.step_data.execute_sh = self.execute_sh_text.get(1.0, tk.END)
             self._show_step(self.step_index + 1)
         else:
             self._show_step(self.step_index + 1)
@@ -178,8 +165,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             self.destroy()
 
     def _on_finish(self) -> None:
-        self.step_data["validate_sh"] = self.validate_sh_text.get(1.0, tk.END)
-        self.step_data["validate_compile_sh"] = self.validate_compile_sh_text.get(1.0, tk.END)
+        self.step_data.validate_sh = self.validate_sh_text.get(1.0, tk.END)
+        self.step_data.validate_compile_sh = self.validate_compile_sh_text.get(1.0, tk.END)
 
         try:
             self._finish_wizard()
@@ -187,22 +174,10 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             show_error(self, "Error", f"Failed to create configuration: {e}")
 
     def _write_compile_sh(self) -> None:
-        compile_sh_path: str = os.path.join(self.arguments.project_config_dir, "compile.sh")
-        os.makedirs(self.arguments.project_config_dir, exist_ok=True)
-        with open(compile_sh_path, "w") as f:
-            f.write(str(self.step_data["compile_sh"]))
-        subprocess.run(["chmod", "+x", compile_sh_path], check=True)
+        write_shared_compile_script(self.arguments.project_config_dir, self.step_data)
 
     def _write_seq_settings(self) -> None:
-        seq_settings_path: str = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-        settings = {
-            "CC": str(self.step_data["cc"]),
-            "CXX": str(self.step_data["cxx"]),
-            "CFLAGS": str(self.step_data["cflags"]),
-            "CXXFLAGS": str(self.step_data["cxxflags"]),
-        }
-        with open(seq_settings_path, "w") as f:
-            json.dump(settings, f, indent=2)
+        write_seq_settings(self.arguments.project_config_dir, self.step_data)
 
     def _run_test_compilation(self) -> None:
         from discopop_library.ProjectManager.configurations.execution import execute_configuration
@@ -267,10 +242,10 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
 
     def _compute_and_display_derived_settings(self) -> None:
         seq_settings = {
-            "CC": self.step_data["cc"],
-            "CXX": self.step_data["cxx"],
-            "CFLAGS": self.step_data["cflags"],
-            "CXXFLAGS": self.step_data["cxxflags"],
+            "CC": self.step_data.cc,
+            "CXX": self.step_data.cxx,
+            "CFLAGS": self.step_data.cflags,
+            "CXXFLAGS": self.step_data.cxxflags,
         }
 
         derived = derive_settings(seq_settings)
@@ -278,7 +253,7 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
         hd_settings = derived["hd"]
         par_settings = derived["par"]
 
-        self.step_data["derived_settings"] = {
+        self.step_data.derived_settings = {
             "dp_settings": dp_settings,
             "hd_settings": hd_settings,
             "par_settings": par_settings,
@@ -321,46 +296,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             raise
 
     def _finish_wizard(self) -> None:
-        config_name: str = str(self.step_data["config_name"])
-        config_path: str = os.path.join(self.arguments.project_config_dir, config_name)
-
-        os.makedirs(config_path, exist_ok=True)
-
-        execute_sh_path: str = os.path.join(config_path, "execute.sh")
-        execute_sh_content: str = str(self.step_data["execute_sh"])
-        with open(execute_sh_path, "w") as f:
-            f.write(execute_sh_content)
-        subprocess.run(["chmod", "+x", execute_sh_path], check=True)
-
-        # validate.sh is optional: only create it if the user provided more than
-        # an empty script / bare shebang.
-        validate_sh_content: str = str(self.step_data["validate_sh"])
-        if self.__is_meaningful_script(validate_sh_content):
-            validate_sh_path: str = os.path.join(config_path, "validate.sh")
-            with open(validate_sh_path, "w") as f:
-                f.write(validate_sh_content)
-            subprocess.run(["chmod", "+x", validate_sh_path], check=True)
-
-            # compile_validate.sh is equally optional, and pointless without a
-            # validate.sh to run against its build -- hence the nesting.
-            validate_compile_sh_content: str = str(self.step_data["validate_compile_sh"])
-            if self.__is_meaningful_script(validate_compile_sh_content):
-                write_script_file(
-                    get_per_config_validation_compile_script_path(self.arguments.project_config_dir, config_name),
-                    validate_compile_sh_content,
-                )
-
-        initialize_configuration_files(self.arguments)
+        config_name = write_wizard_configuration(self.arguments, self.step_data)
 
         self.result = config_name
         self.grab_release()
         self.destroy()
-
-    @staticmethod
-    def __is_meaningful_script(content: str) -> bool:
-        """Whether the user actually filled in an optional script editor."""
-        return bool(
-            "\n".join(
-                line for line in content.splitlines() if line.strip() and not line.strip().startswith("#!")
-            ).strip()
-        )

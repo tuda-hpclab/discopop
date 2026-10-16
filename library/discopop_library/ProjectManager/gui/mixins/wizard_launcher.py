@@ -6,29 +6,15 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import os
-
-
 from discopop_library.ProjectManager.gui.ConfigurationWizard import ConfigurationWizard
-from discopop_library.ProjectManager.utilities.initializeFiles import initial_script_content
+from discopop_library.ProjectManager.services.configurations import has_real_configuration
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import show_message
 
 
 class WizardLauncherMixin(ConfigManagerMixinBase):
     def _maybe_open_wizard(self) -> None:
-        def _is_real_config(entry: os.DirEntry[str]) -> bool:
-            if not entry.is_dir():
-                return False
-            execute_sh = os.path.join(entry.path, "execute.sh")
-            if not os.path.exists(execute_sh):
-                return False
-            with open(execute_sh, "r") as f:
-                return f.read().strip() != initial_script_content.strip()
-
-        has_real_configs = os.path.exists(self.config_dir) and any(
-            _is_real_config(entry) for entry in os.scandir(self.config_dir)
-        )
+        has_real_configs = has_real_configuration(self.config_dir)
         if not has_real_configs:
             if self.was_initialized:
                 show_message(
