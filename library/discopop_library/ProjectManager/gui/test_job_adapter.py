@@ -45,3 +45,27 @@ def test_events_are_handled_in_order_and_polling_stops_after_the_terminal_event(
     widget.run_next()
     assert handled[-1] == JobFinished(0, False)
     assert widget.scheduled == []  # the loop ended
+
+
+def test_start_work_delivers_the_events_of_the_work_to_the_handler() -> None:
+    import time
+
+    from discopop_library.ProjectManager.gui.job_adapter import start_work
+    from discopop_library.ProjectManager.services.jobs import WorkContext, WorkFinished, WorkOutput
+
+    widget = _FakeWidget()
+    handled: List[object] = []
+
+    def work(ctx: WorkContext) -> int:
+        ctx.output("x")
+        return 5
+
+    start_work(widget, work, handled.append)
+    deadline = time.time() + 20
+    while not any(isinstance(e, WorkFinished) for e in handled):
+        assert time.time() < deadline
+        pending, widget.scheduled = widget.scheduled, []
+        for _delay, func in pending:
+            func()
+        time.sleep(0.01)
+    assert handled == [WorkOutput("x"), WorkFinished(5, None)]

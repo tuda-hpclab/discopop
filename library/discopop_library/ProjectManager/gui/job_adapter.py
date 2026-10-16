@@ -14,7 +14,7 @@ A Tk (or later Qt / web) port replaces this adapter and the panels; the job runn
 import queue
 from typing import Any, Callable, Generic, TypeVar
 
-from discopop_library.ProjectManager.services.jobs import is_terminal
+from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkRunner, is_terminal
 
 E = TypeVar("E")
 
@@ -48,3 +48,15 @@ class TkJobAdapter(Generic[E]):
                 break
         if not finished:
             self._widget.after(POLL_INTERVAL_MS, self._poll)
+
+
+def start_work(widget: Any, work: Callable[[WorkContext], Any], handler: Callable[[WorkEvent], None]) -> WorkRunner:
+    """Run ``work`` on a worker thread and pass its events to ``handler`` on the Tk main thread.
+
+    Safe to call before the main loop runs: the worker never calls into Tk, the polling ``after`` loop starts here.
+    """
+    events: "queue.Queue[WorkEvent]" = queue.Queue()
+    runner = WorkRunner(work, events)
+    TkJobAdapter(widget, events, handler).start()
+    runner.start()
+    return runner

@@ -10,13 +10,15 @@ import copy
 import os
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import (
     VALIDATION_COMPILE_SCRIPT_NAME,
     get_shared_compile_script_path,
     get_shared_validation_compile_script_path,
 )
+from discopop_library.ProjectManager.gui.job_adapter import start_work
+from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
 from discopop_library.ProjectManager.gui.mixins.helpers import (
     Tooltip,
     ask_yes_no,
@@ -438,8 +440,6 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
 
     def _test_compilation_from_editor(self) -> None:
         """Test compilation using current compile.sh and seq_settings.json"""
-        import threading
-
         if self.compilation_modified_files.get("compile.sh", False) or self.compilation_modified_files.get(
             "seq_settings.json", False
         ):
@@ -459,11 +459,13 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
         self.test_compilation_button.config(state="disabled", text="⟳ Testing...")
         self.status_label.config(text="Running compilation test...", foreground=widgets.STATUS_BUSY)
 
-        def thread_func() -> None:
+        args_copy = copy.copy(self.arguments)
+
+        def compile_once(_ctx: WorkContext) -> Optional[Tuple[int, float, str, str]]:
             from discopop_library.ProjectManager.configurations.execution import execute_configuration
 
-            result = execute_configuration(
-                copy.copy(self.arguments),
+            return execute_configuration(
+                args_copy,
                 self.arguments.project_root,
                 self.arguments.project_config_dir,
                 seq_settings_path,
@@ -472,14 +474,29 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
                 self.arguments.timeout_compilation,
             )
 
-            if result is None:
-                self.after(0, lambda: self.status_label.config(text="✗ Compilation test failed: settings not found", foreground=widgets.STATUS_FAIL))  # type: ignore  # noqa: E501
+        def handle(event: WorkEvent) -> None:
+            if not isinstance(event, WorkFinished):
+                return
+            result = event.result if event.error is None else None
+            if event.error is not None:
+                self.status_label.config(
+                    text=f"✗ Compilation test failed: {event.error}", foreground=widgets.STATUS_FAIL
+                )
+            elif result is None:
+                self.status_label.config(
+                    text="✗ Compilation test failed: settings not found", foreground=widgets.STATUS_FAIL
+                )
             else:
                 ret_code, elapsed, stdout, stderr = result
                 if ret_code == 0:
-                    self.after(0, lambda e=elapsed: self.status_label.config(text=f"✓ Compilation successful ({e:.2f}s)", foreground=widgets.STATUS_OK))  # type: ignore  # noqa: E501
+                    self.status_label.config(
+                        text=f"✓ Compilation successful ({elapsed:.2f}s)", foreground=widgets.STATUS_OK
+                    )
                 else:
-                    self.after(0, lambda rc=ret_code, e=elapsed: self.status_label.config(text=f"✗ Compilation failed (exit code: {rc}, {e:.2f}s)", foreground=widgets.STATUS_FAIL))  # type: ignore  # noqa: E501
+                    self.status_label.config(
+                        text=f"✗ Compilation failed (exit code: {ret_code}, {elapsed:.2f}s)",
+                        foreground=widgets.STATUS_FAIL,
+                    )
 
                 output_msg = "Compilation test output:\n\n"
                 if ret_code == 0:
@@ -491,11 +508,11 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
                 if stderr:
                     output_msg += f"\nstderr:\n{stderr}\n"
 
-                self.after(0, lambda msg=output_msg, rc=ret_code: self._show_test_compilation_result(msg, rc))  # type: ignore
+                self._show_test_compilation_result(output_msg, ret_code)
 
-            self.after(0, lambda: self.test_compilation_button.config(state="normal", text="Test Compilation"))  # type: ignore
+            self.test_compilation_button.config(state="normal", text="Test Compilation")
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        start_work(self, compile_once, handle)
 
     def _show_test_compilation_result(self, output: str, return_code: int) -> None:
         """Show test compilation result in a dialog"""

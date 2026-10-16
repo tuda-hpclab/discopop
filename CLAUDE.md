@@ -21,6 +21,7 @@ This document contains critical information about working with this codebase. Fo
 - Utilities for the pattern analysis as well as further tools are located in the folder `discopop_library`
 - The projects wiki page is defined in the folder`docs`
 - The code for the graphical user interface is located in the folder `GUI`
+- The ProjectManager GUI (`library/discopop_library/ProjectManager/gui`, Tk) keeps its logic in `ProjectManager/services` (must not import tkinter; checked by `services/test_tk_free.py`): panels read their widgets into frozen requests (`services/requests.py`) on the main thread, background work runs on `JobRunner` (one subprocess, typed events, per-job cancel policy) or `WorkRunner` (a function reporting through a `WorkContext`) and is delivered back to the main thread by `gui/job_adapter.py`; panels tell each other about changes through `ProjectState` events (`services/project_state.py`, wiring in `ConfigManagerApp._subscribe_panels_to_project_state`); there are no GUI tests with a display, the panel flows are tested headlessly with mock widgets (`gui/mixins/test_execution_flow.py`, `test_job_panels.py`)
 
 # Code Style
 - verify the type correctness of python code
