@@ -7,9 +7,7 @@
 # directory for details.
 
 import os
-import signal
-import subprocess
-import threading
+import queue
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -19,6 +17,16 @@ from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerM
 from discopop_library.ProjectManager.configurations.repetitions import (
     DEFAULT_TUNING_REPETITIONS,
     validate_repetitions,
+)
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.services.jobs import (
+    CancelPolicy,
+    JobEvent,
+    JobFailedToStart,
+    JobFinished,
+    JobOutput,
+    JobRunner,
+    JobSpec,
 )
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.autotuner_results import (
@@ -61,7 +69,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
     _autotuning_tab_tooltip: Optional[Any] = None
     _autotuning_tab_tooltip_timer: Optional[str] = None
     _autotuning_tab_tooltip_active_tab: Optional[int] = None
-    _autotuning_process: Optional["subprocess.Popen[str]"] = None
+    _autotuning_job: Optional[JobRunner] = None
     # Live-plot state (Live Plot sub-tab): matplotlib figure/canvas, the accumulated
     # progress model, and the value labels of the summary tile row.
     _autotuning_figure: Optional[Any] = None
@@ -618,23 +626,47 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
                 self.autotuning_output_text.see(tk.END)
                 self.autotuning_output_text.config(state="disabled")
 
-        def thread_safe_append(text: str) -> None:
-            self.after(0, lambda: append_output(text))  # type: ignore
-
-        # the worker thread must not read Tk variables or selectors
+        # the job's thread must not read Tk variables or selectors
         request = self._snapshot_autotuner_request()
+        dot_discopop = self.arguments.dot_dp
+        append_output("Starting autotuning...\n")
+        self._announce_autotuner_request(request, append_output)
 
-        def thread_func() -> None:
-            try:
-                thread_safe_append("Starting autotuning...\n")
-                self._invoke_autotuner(request, thread_safe_append)
-                self.after(0, lambda: self._on_autotuning_complete())  # type: ignore
-            except Exception as e:
-                thread_safe_append(f"\nError: {str(e)}\n")
-                self.after(0, lambda: self._on_autotuning_complete(error=True))  # type: ignore
+        events: "queue.Queue[JobEvent]" = queue.Queue()
+        # SIGINT (not SIGTERM/terminate()) so the autotuner's search loop takes the same KeyboardInterrupt path as
+        # a manual Ctrl+C, letting it finish gracefully and save the best solution found so far.
+        job = JobRunner(
+            JobSpec(autotuner_command(request, dot_discopop), cwd=dot_discopop, cancel_policy=CancelPolicy.SIGINT),
+            events,
+        )
+        self._autotuning_job = job
+        TkJobAdapter(self, events, lambda event: self._on_autotuning_job_event(event, append_output)).start()
+        job.start()
 
-        thread = threading.Thread(target=thread_func, daemon=True)
-        thread.start()
+    def _on_autotuning_job_event(self, event: JobEvent, output_callback: Callable[[str], None]) -> None:
+        """Handle one event of the autotuner job; runs on the Tk main thread."""
+        if isinstance(event, JobOutput):
+            # Structured progress events drive the live plot and are kept out of the console; everything else is
+            # echoed to the console as before. Events are extracted from anywhere in the line: stdout and stderr
+            # share one stream, so a progress bar redraw can leave its bar text in front of an event.
+            progress_events, residual = split_progress_events(event.line + "\n")
+            for progress_event in progress_events:
+                self._on_autotuning_progress(progress_event)
+            cleaned = clean_ansi_output(residual.rstrip("\n"))
+            if cleaned:
+                output_callback(cleaned + "\n")
+        elif isinstance(event, JobFinished):
+            self._autotuning_job = None
+            if event.returncode != 0:
+                output_callback(f"\nError: Autotuner exited with return code {event.returncode}\n")
+                self._on_autotuning_complete(error=True)
+            else:
+                output_callback("\nAutotuning completed.\n")
+                self._on_autotuning_complete()
+        elif isinstance(event, JobFailedToStart):
+            self._autotuning_job = None
+            output_callback(f"\nError: {event.error}\n")
+            self._on_autotuning_complete(error=True)
 
     def _snapshot_autotuner_request(self) -> AutotunerRequest:
         """Read the panel into an immutable request; call on the main thread only."""
@@ -687,28 +719,20 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             search_space_ids=search_space_ids,
         )
 
-    def _invoke_autotuner(self, request: AutotunerRequest, output_callback: Callable[[str], None]) -> None:
-        dot_discopop = self.arguments.dot_dp
-
-        hotspot_types = request.hotspot_types
-        threads_value = request.threads
-        repetitions_value = request.repetitions
-        algorithm_value = request.algorithm
-        log_level = request.log_level
+    def _announce_autotuner_request(self, request: AutotunerRequest, output_callback: Callable[[str], None]) -> None:
         if request.repetitions_warning is not None:
             output_callback(
                 "Ignoring the repetition count: " + request.repetitions_warning + ". Measuring each candidate once.\n"
             )
 
         output_callback("Configuration:\n")
-        output_callback(f"  Configuration: {self.current_config}\n")
-        output_callback(f"  Hotspot Types: {hotspot_types}\n")
-        output_callback(f"  Threads: {threads_value}\n")
-        output_callback(f"  Repetitions: {repetitions_value}\n")
-        output_callback(f"  Algorithm: {algorithm_value}\n")
-        output_callback(f"  Log Level: {log_level}\n\n")
+        output_callback(f"  Configuration: {request.configuration}\n")
+        output_callback(f"  Hotspot Types: {request.hotspot_types}\n")
+        output_callback(f"  Threads: {request.threads}\n")
+        output_callback(f"  Repetitions: {request.repetitions}\n")
+        output_callback(f"  Algorithm: {request.algorithm}\n")
+        output_callback(f"  Log Level: {request.log_level}\n\n")
 
-        cmd = autotuner_command(request, dot_discopop)
         if request.mode == "evaluate":
             if request.evaluate_ids:
                 output_callback("Evaluating specific combination: " + ", ".join(request.evaluate_ids) + "\n")
@@ -720,40 +744,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
                 + (", ".join(request.search_space_ids) or "(none)")
                 + "\n"
             )
-
         output_callback("Running autotuner...\n\n")
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=dot_discopop,
-        )
-        self._autotuning_process = process
-        try:
-            assert process.stdout is not None
-            for line in process.stdout:
-                # Structured progress events drive the live plot and are kept out of the
-                # console; everything else is echoed to the console as before. Events are
-                # extracted from anywhere in the line: stdout and stderr share one stream,
-                # so a progress bar redraw can leave its bar text in front of an event.
-                events, residual = split_progress_events(line)
-                for event in events:
-                    self.after(0, lambda e=event: self._on_autotuning_progress(e))  # type: ignore
-                cleaned = clean_ansi_output(residual.rstrip("\n"))
-                if cleaned:
-                    output_callback(cleaned + "\n")
-
-            process.wait()
-
-            if process.returncode != 0:
-                raise RuntimeError(f"Autotuner exited with return code {process.returncode}")
-
-            output_callback("\nAutotuning completed.\n")
-        finally:
-            self._autotuning_process = None
 
     def _on_autotuning_complete(self, error: bool = False) -> None:
         self.autotuning_running = False
@@ -790,12 +781,9 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             self.after(3000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
 
     def _stop_autotuning(self) -> None:
-        process = self._autotuning_process
-        if process is not None:
-            # Send SIGINT (not SIGTERM/terminate()) so the autotuner's search loop
-            # takes the same KeyboardInterrupt path as a manual Ctrl+C, letting it
-            # finish gracefully and save the best solution found so far.
-            process.send_signal(signal.SIGINT)
+        job = self._autotuning_job
+        if job is not None:
+            job.cancel()
         if self.autotuning_stop_button is not None:
             self.autotuning_stop_button.config(state="disabled")
         if hasattr(self, "_update_report_display"):
