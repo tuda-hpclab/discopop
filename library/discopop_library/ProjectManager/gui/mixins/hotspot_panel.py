@@ -50,6 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.vscode import (
     VSCODE_NOT_FOUND_MESSAGE,
     find_code_executable,
@@ -59,7 +60,6 @@ from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.detail_bar import DetailBar
 from discopop_library.ProjectManager.gui.mixins.helpers import (
     ask_yes_no,
-    clean_ansi_output,
     show_error,
     show_warning,
 )

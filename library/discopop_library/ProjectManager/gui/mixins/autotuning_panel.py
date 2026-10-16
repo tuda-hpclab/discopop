@@ -15,12 +15,13 @@ import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from discopop_library.ProjectManager.gui.mixins.helpers import show_error, Tooltip, clean_ansi_output
+from discopop_library.ProjectManager.gui.mixins.helpers import show_error, Tooltip
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.configurations.repetitions import (
     DEFAULT_TUNING_REPETITIONS,
     validate_repetitions,
 )
+from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.autotuner_results import (
     autotuner_results_exist,
     read_autotuner_applied_suggestions,

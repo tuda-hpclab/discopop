@@ -16,9 +16,10 @@ import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional
 
-from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error, clean_ansi_output
+from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
 from discopop_library.ProjectManager.services.vscode import (
     VSCODE_NOT_FOUND_MESSAGE,
