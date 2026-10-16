@@ -41,7 +41,6 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import threading
 import tkinter as tk
 from dataclasses import replace
@@ -50,6 +49,10 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services.commands import (
+    environment_with_interpreter_on_path,
+    hotspot_analyzer_command,
+)
 from discopop_library.ProjectManager.services.hotspot_build import (
     BUILD_CURRENT,
     BUILD_MISMATCH,
@@ -1171,10 +1174,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
             + (f" from configuration(s): {', '.join(configs)}\n" if configs else "\n")
         )
 
-        my_env = os.environ.copy()
-        venv_bin = os.path.dirname(sys.executable)
-        if venv_bin not in my_env.get("PATH", ""):
-            my_env["PATH"] = venv_bin + os.pathsep + my_env.get("PATH", "")
+        my_env = environment_with_interpreter_on_path()
         analyzer = shutil.which(HOTSPOT_ANALYZER, path=my_env["PATH"])
         if analyzer is None:
             self._hotspot_emit(f"\nAnalysis skipped: {HOTSPOT_ANALYZER} not found on PATH.\n")
@@ -1184,7 +1184,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         self._hotspot_emit(f"Running hotspot analysis over {len(runs)} accumulated run(s)...\n")
 
         self._hotspot_analysis_process = subprocess.Popen(
-            [analyzer, "--input-dir", hotspot_data.MERGED_DIRNAME],
+            hotspot_analyzer_command(analyzer, hotspot_data.MERGED_DIRNAME),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
