@@ -20,6 +20,7 @@ from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_err
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.services.text import clean_ansi_output
+from discopop_library.ProjectManager.services.commands import explorer_command
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
 from discopop_library.ProjectManager.services.vscode import (
     VSCODE_NOT_FOUND_MESSAGE,
@@ -540,23 +541,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             f"  Dependency data: {NO_STATES_DETECTION_MODE if ignore_states else DEFAULT_DETECTION_MODE}\n\n"
         )
 
-        cmd = [
-            sys.executable,
-            "-m",
-            "discopop_explorer",
-            #            "--path",
-            #            project_path,
-            "--enable-patterns",
-            enable_patterns,
-            "--log",
-            "WARNING",
-        ]
-
-        if jobs_value != "auto":
-            cmd.extend(["-j", jobs_value])
-
-        if ignore_states:
-            cmd.append("--ignore-dependency-states")
+        cmd = explorer_command(request)
 
         output_callback("Running pattern detection...\n\n")
 

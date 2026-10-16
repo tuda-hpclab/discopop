@@ -9,7 +9,6 @@
 import os
 import signal
 import subprocess
-import sys
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -26,6 +25,7 @@ from discopop_library.ProjectManager.services.autotuner_results import (
     autotuner_results_exist,
     read_autotuner_applied_suggestions,
 )
+from discopop_library.ProjectManager.services.commands import autotuner_command
 from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.services.requests import AutotunerRequest
@@ -708,44 +708,18 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         output_callback(f"  Algorithm: {algorithm_value}\n")
         output_callback(f"  Log Level: {log_level}\n\n")
 
-        cmd = [
-            sys.executable,
-            "-m",
-            "discopop_library.EmpiricalAutotuning",
-            "--dot-dp-path",
-            dot_discopop,
-            "-c",
-            request.configuration,
-            "-ht",
-            hotspot_types,
-            "-A",
-            algorithm_value,
-            "--log",
-            log_level,
-        ]
-
-        if threads_value != "auto":
-            cmd.extend(["-t", threads_value])
-
-        # Emitted only when it changes something, so a default tuning run is the
-        # command it was before this field existed.
-        if repetitions_value > 1:
-            cmd.extend(["-xr", str(repetitions_value)])
-
+        cmd = autotuner_command(request, dot_discopop)
         if request.mode == "evaluate":
-            evaluate_ids = request.evaluate_ids
-            if evaluate_ids:
-                cmd.extend(["-s", ",".join(evaluate_ids)])
-                output_callback("Evaluating specific combination: " + ", ".join(evaluate_ids) + "\n")
+            if request.evaluate_ids:
+                output_callback("Evaluating specific combination: " + ", ".join(request.evaluate_ids) + "\n")
             else:
                 output_callback("No suggestions selected to evaluate; running the search algorithm instead.\n")
-        else:
-            if request.search_space_ids is not None:
-                search_ids = request.search_space_ids
-                cmd.extend(["--search-space", ",".join(search_ids)])
-                output_callback(
-                    "Restricting search space to suggestion IDs: " + (", ".join(search_ids) or "(none)") + "\n"
-                )
+        elif request.search_space_ids is not None:
+            output_callback(
+                "Restricting search space to suggestion IDs: "
+                + (", ".join(request.search_space_ids) or "(none)")
+                + "\n"
+            )
 
         output_callback("Running autotuner...\n\n")
 

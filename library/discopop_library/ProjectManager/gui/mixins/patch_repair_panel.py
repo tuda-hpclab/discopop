@@ -26,7 +26,6 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -37,6 +36,7 @@ from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TY
 from discopop_library.PatchRepair.results import PROGRESS_PREFIX
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.services.text import clean_ansi_output
+from discopop_library.ProjectManager.services.commands import patch_repair_command
 from discopop_library.ProjectManager.services.patches import has_patches
 from discopop_library.ProjectManager.services.requests import PatchRepairRequest
 from discopop_library.ProjectManager.gui.mixins.helpers import show_error
@@ -574,35 +574,9 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         dot_discopop = self.arguments.dot_dp
         hotspot_types = request.hotspot_types
 
-        command = [
-            sys.executable,
-            "-m",
-            "discopop_library.PatchRepair",
-            "--dot-dp-path",
-            dot_discopop,
-            "-c",
-            request.configuration,
-            "-ht",
-            hotspot_types,
-            "--prompts",
-            str(request.prompts),
-            "--retries",
-            str(request.retries),
-            "--agent-timeout",
-            str(request.agent_timeout),
-            "--log",
-            request.log_level,
-        ]
-        if request.backend:
-            command += ["--backend", request.backend]
-        if request.model:
-            command += ["--model", request.model]
-        if request.dry_run:
-            command.append("--dry-run")
+        command = patch_repair_command(request, dot_discopop)
         if request.suggestion_ids is not None:
-            selected = request.suggestion_ids
-            command += ["-s", ",".join(selected)]
-            output_callback("Restricting to suggestion IDs: " + (", ".join(selected) or "(none)") + "\n")
+            output_callback("Restricting to suggestion IDs: " + (", ".join(request.suggestion_ids) or "(none)") + "\n")
 
         output_callback("Configuration:\n")
         output_callback("  Configuration: " + request.configuration + "\n")
