@@ -8,6 +8,7 @@
 
 import copy
 import os
+import subprocess
 import threading
 import tkinter as tk
 
@@ -60,7 +61,7 @@ class ReportMixin(ConfigManagerMixinBase):
             show_warning(self, "No report", "No report PDF found.")
             return
 
-        os.system(f"xdg-open {report_path}")
+        subprocess.Popen(["xdg-open", report_path])
 
     def _reset_execution_results(self) -> None:
         args_copy = copy.copy(self.arguments)

@@ -8,7 +8,6 @@
 
 import copy
 import os
-import subprocess
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Optional
@@ -351,12 +350,7 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
                     f.write(formatted_content)
 
                 if filename.endswith(".sh"):
-                    subprocess.run(
-                        f"chmod +x {file_path}",
-                        executable="/bin/bash",
-                        shell=True,
-                        capture_output=True,
-                    )
+                    os.chmod(file_path, os.stat(file_path).st_mode | 0o111)
 
                 self.compilation_modified_files[filename] = False
                 self.compilation_text_areas[filename].edit_modified(False)
