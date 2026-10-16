@@ -32,13 +32,14 @@ from discopop_library.ProjectManager.configurations.execution_time import (
 from discopop_library.ProjectManager.configurations.validation import has_validate_script, run_validation_phase
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
-from discopop_library.ProjectManager.gui.mixins.helpers import show_warning
+from discopop_library.ProjectManager.gui.mixins.helpers import redirect_logging_to_text_area, show_warning
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from typing import Any, Optional
 
 
 class ExecutionMixin(ConfigManagerMixinBase):
-    _execution_stop_event: threading.Event = threading.Event()
+    # created per application instance in ConfigManagerApp.__init__
+    _execution_stop_event: threading.Event
     _execution_process: Optional["subprocess.Popen[bytes]"] = None
     stop_execution_button: Optional[RoundedButton] = None
 
@@ -220,20 +221,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
 
         args_copy.apply_suggestions = ",".join(combined_ids) if combined_ids else None
 
-        logging.basicConfig(level=log_level, force=True)
-        root_logger = logging.getLogger()
-        root_logger.setLevel(log_level)
-
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-
-        from discopop_library.ProjectManager.gui.mixins.helpers import TextAreaHandler
-
-        text_handler = TextAreaHandler(self.output_text)
-        text_handler.setLevel(log_level)
-        formatter = logging.Formatter("[%(name)s] %(levelname)s: %(message)s")
-        text_handler.setFormatter(formatter)
-        root_logger.addHandler(text_handler)
+        restore_logging = redirect_logging_to_text_area(self.output_text, log_level)
 
         logger = logging.getLogger("Execute")
         logger.info(f"Starting execution of configuration: {current_config}")
@@ -495,7 +483,13 @@ class ExecutionMixin(ConfigManagerMixinBase):
             self.after(0, lambda: self._update_report_display())  # type: ignore
             self.after(0, lambda: self._update_pattern_detection_ui())  # type: ignore
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        def thread_func_restoring_logging() -> None:
+            try:
+                thread_func()
+            finally:
+                restore_logging()
+
+        threading.Thread(target=thread_func_restoring_logging, daemon=True).start()
 
     def _prepare_pattern_detection(self) -> None:
         self._prepare_inplace_run(
@@ -557,22 +551,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
         current_config = self.current_config
         config_path = os.path.join(self.config_dir, current_config)
 
-        import logging
-
-        logging.basicConfig(level="INFO", force=True)
-        root_logger = logging.getLogger()
-        root_logger.setLevel("INFO")
-
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-
-        from discopop_library.ProjectManager.gui.mixins.helpers import TextAreaHandler
-
-        text_handler = TextAreaHandler(self.output_text)
-        text_handler.setLevel("INFO")
-        formatter = logging.Formatter("[%(name)s] %(levelname)s: %(message)s")
-        text_handler.setFormatter(formatter)
-        root_logger.addHandler(text_handler)
+        restore_logging = redirect_logging_to_text_area(self.output_text, "INFO")
 
         logger = logging.getLogger(f"Prepare {status_noun.title()}")
         failure_status = f"{status_noun.capitalize()} preparation failed"
@@ -670,7 +649,13 @@ class ExecutionMixin(ConfigManagerMixinBase):
             self.after(0, lambda: self._update_report_display())  # type: ignore
             self.after(0, lambda: self._update_pattern_detection_ui())  # type: ignore
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        def thread_func_restoring_logging() -> None:
+            try:
+                thread_func()
+            finally:
+                restore_logging()
+
+        threading.Thread(target=thread_func_restoring_logging, daemon=True).start()
 
     def _stop_execution(self) -> None:
         self._execution_stop_event.set()

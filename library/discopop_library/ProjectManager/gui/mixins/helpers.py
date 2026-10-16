@@ -11,13 +11,17 @@ import re
 import tkinter as tk
 import tkinter.font
 from tkinter import scrolledtext, ttk
-from typing import Optional, Any, Union
+from typing import Any, Callable, Optional, Union
 
 from discopop_library.ProjectManager.gui import widgets
 
 
 class TextAreaHandler(logging.Handler):
-    """Custom logging handler that writes to a tkinter Text widget with color coding"""
+    """Custom logging handler that writes to a tkinter Text widget with color coding.
+
+    Log records may be emitted from any thread; the widget is only touched from the
+    Tk main loop (scheduled via ``after``).
+    """
 
     def __init__(self, text_area: scrolledtext.ScrolledText) -> None:
         super().__init__()
@@ -27,13 +31,45 @@ class TextAreaHandler(logging.Handler):
         try:
             msg = self.format(record)
             level_name = record.levelname
+            self.text_area.after(0, lambda: self._append(msg, level_name))
+        except Exception:
+            self.handleError(record)
 
+    def _append(self, msg: str, level_name: str) -> None:
+        try:
             self.text_area.config(state=tk.NORMAL)
             self.text_area.insert(tk.END, msg + "\n", level_name)
             self.text_area.see(tk.END)
             self.text_area.config(state="disabled")
-        except Exception:
-            self.handleError(record)
+        except tk.TclError:
+            # the widget was destroyed while the record was waiting
+            pass
+
+
+def redirect_logging_to_text_area(text_area: scrolledtext.ScrolledText, level: Union[int, str]) -> Callable[[], None]:
+    """Show the log records of the root logger in ``text_area``; return the function that undoes it.
+
+    While redirected, the text area is the only handler of the root logger. The previous handlers and
+    level are restored by the returned function, so nothing stays installed after the run.
+    """
+    root_logger = logging.getLogger()
+    saved_handlers = root_logger.handlers[:]
+    saved_level = root_logger.level
+    for handler in saved_handlers:
+        root_logger.removeHandler(handler)
+    root_logger.setLevel(level)
+    text_handler = TextAreaHandler(text_area)
+    text_handler.setLevel(level)
+    text_handler.setFormatter(logging.Formatter("[%(name)s] %(levelname)s: %(message)s"))
+    root_logger.addHandler(text_handler)
+
+    def restore() -> None:
+        root_logger.removeHandler(text_handler)
+        for handler in saved_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(saved_level)
+
+    return restore
 
 
 class Tooltip:
