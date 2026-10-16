@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ResultsChanged
 from discopop_library.ProjectManager.gui.mixins.helpers import show_error, Tooltip
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.configurations.repetitions import (
@@ -760,11 +761,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             self.autotuning_stop_button.config(state="disabled")
 
         if not error:
-            self._refresh_autotuning_suggestions_display()
-            if hasattr(self, "_refresh_suggestion_selection_display"):
-                self._refresh_suggestion_selection_display()
-            if hasattr(self, "_update_report_display"):
-                self._update_report_display()
+            self.project_state.publish(AutotuningFinished())
             not_applied = (
                 self._autotuning_progress_model.counts()[3] if self._autotuning_progress_model is not None else 0
             )
@@ -786,6 +783,5 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             job.cancel()
         if self.autotuning_stop_button is not None:
             self.autotuning_stop_button.config(state="disabled")
-        if hasattr(self, "_update_report_display"):
-            self._update_report_display()
+        self.project_state.publish(ResultsChanged())
         self.status_label.config(text="Stopping autotuning...", foreground=widgets.STATUS_STOP)

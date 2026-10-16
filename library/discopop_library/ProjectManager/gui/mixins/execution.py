@@ -28,6 +28,7 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     resolve_execution_time_regex,
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script, run_validation_phase
+from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
 from discopop_library.ProjectManager.services.jobs import (
     StatusKind,
@@ -492,7 +493,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
         else:
             self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE)
         self._refresh_config_list()
-        self._update_report_display()
+        self.project_state.publish(ResultsChanged())
         self._update_pattern_detection_ui()
 
     def _prepare_pattern_detection(self) -> None:
@@ -664,7 +665,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
                     self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE)
                 else:
                     self._set_status(failure_status, fg=widgets.STATUS_FAIL, reset_delay=3000)
-                self._update_report_display()
+                self.project_state.publish(ResultsChanged())
                 self._update_pattern_detection_ui()
 
         TkJobAdapter(self, events, on_event).start()

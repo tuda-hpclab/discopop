@@ -23,6 +23,7 @@ import pytest
 
 from discopop_library.ProjectManager.gui.mixins import execution as execution_module
 from discopop_library.ProjectManager.gui.mixins.execution import ExecutionMixin
+from discopop_library.ProjectManager.services.project_state import ProjectState, ResultsChanged
 
 
 class _Var:
@@ -52,6 +53,7 @@ class _FakeApp(ExecutionMixin):
             stop_execution_button=mock.MagicMock(),
             output_text=mock.MagicMock(),
             refresh_config_list=mock.MagicMock(),
+            update_report_display=mock.MagicMock(),
         )
         for widget in (self.m.status_label, self.m.run_button, self.m.generate_report_button, self.m.output_text):
             widget.config.side_effect = self._record_widget_use
@@ -83,13 +85,14 @@ class _FakeApp(ExecutionMixin):
             stop_execution_button=self.m.stop_execution_button,
             output_text=self.m.output_text,
             _refresh_config_list=self.m.refresh_config_list,
-            _update_report_display=mock.MagicMock(),
             _update_pattern_detection_ui=mock.MagicMock(),
             _update_execute_modes=mock.MagicMock(),
             _set_status=mock.MagicMock(),
         )
         for name, value in attributes.items():
             setattr(self, name, value)
+        self.project_state = ProjectState()
+        self.project_state.subscribe(ResultsChanged, lambda _e: self.m.update_report_display())
         self.config_dir = attributes["arguments"].project_config_dir
 
     def _record_widget_use(self, **_kwargs: Any) -> None:
@@ -147,6 +150,7 @@ def test_a_successful_run_is_reported_on_the_main_thread(app: _FakeApp) -> None:
     assert set(app.widget_threads) == {threading.get_ident()}
     app.m.status_label.config.assert_called_with(text="Ready", foreground=mock.ANY)
     app.m.refresh_config_list.assert_called_once()
+    app.m.update_report_display.assert_called_once()
     app.m.stop_execution_button.config.assert_called_with(state="disabled")
     assert app._execution_job is None
 

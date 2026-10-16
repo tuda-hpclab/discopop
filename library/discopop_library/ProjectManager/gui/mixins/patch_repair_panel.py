@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from discopop_library.PatchRepair import llm_backends
 from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.PatchRepair.results import PROGRESS_PREFIX
+from discopop_library.ProjectManager.services.project_state import AutotuningChanged, ResultsChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
 from discopop_library.ProjectManager.services.jobs import (
@@ -683,9 +684,8 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         self.after(6000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
 
         # a repaired patch changes what the tuner and the report show
-        for refresh in ("_refresh_autotuning_suggestions_display", "_update_report_display"):
-            if hasattr(self, refresh):
-                getattr(self, refresh)()
+        self.project_state.publish(AutotuningChanged())
+        self.project_state.publish(ResultsChanged())
 
     # -- results display ---------------------------------------------------------
 

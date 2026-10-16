@@ -12,6 +12,7 @@ from typing import Any, Optional, Dict
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.services.project_state import ProjectState
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from discopop_library.ProjectManager.gui.suggestion_selector import SuggestionSelector
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip
@@ -25,6 +26,7 @@ class ConfigManagerMixinBase:
     config_dir: str
     current_config: Optional[str]
     was_initialized: bool
+    project_state: ProjectState
 
     # UI elements - main layout
     paned: tk.PanedWindow

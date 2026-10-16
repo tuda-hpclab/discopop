@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services.project_state import HotspotsChanged
 from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
 from discopop_library.ProjectManager.services.jobs import (
     JobSpec,
@@ -1227,8 +1228,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
 
         self._refresh_hotspot_results()
         # the analyzer's output gates the Autotuning tab's hotspot types
-        if hasattr(self, "_update_autotuning_ui"):
-            self._update_autotuning_ui()
+        self.project_state.publish(HotspotsChanged())
 
         if cancelled:
             self._set_status("Hotspot measurement stopped", fg=widgets.STATUS_STOP, reset_delay=3000)

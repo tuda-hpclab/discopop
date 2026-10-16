@@ -14,6 +14,7 @@ import tkinter as tk
 
 from discopop_library.ProjectManager.services.reports import ReportProblem, find_latest_report_pdf
 from discopop_library.ProjectManager.reports.full import generate_full_report
+from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import show_warning
 
@@ -68,7 +69,7 @@ class ReportMixin(ConfigManagerMixinBase):
             reset_project(args_copy)
             self._set_status("Execution results reset successfully", fg="green")
             self._refresh_config_list()
-            self._update_report_display()
+            self.project_state.publish(ResultsChanged())
             self._update_pattern_detection_ui()
         except Exception as e:
             self._set_status(f"Error resetting execution results: {e}", fg="red")
@@ -84,7 +85,7 @@ class ReportMixin(ConfigManagerMixinBase):
             reset_project(args_copy)
             self._set_status("Project reset successfully", fg="green")
             self._refresh_config_list()
-            self._update_report_display()
+            self.project_state.publish(ResultsChanged())
             self._update_pattern_detection_ui()
         except Exception as e:
             self._set_status(f"Error resetting project: {e}", fg="red")

@@ -17,6 +17,7 @@ from discopop_library.ProjectManager.services.autotuner_results import (
     read_autotuner_applied_suggestions,
 )
 from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
+from discopop_library.ProjectManager.services.project_state import AutotuningChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import caption_label
 from discopop_library.ProjectManager.gui.suggestion_selector import SuggestionSelector
@@ -417,5 +418,4 @@ class ExecutePanelMixin(ConfigManagerMixinBase):
                     if self.suggestions_mode_var.get() == "autotuner":
                         self.suggestions_mode_var.set("none")
 
-        if hasattr(self, "_refresh_autotuning_suggestions_display"):
-            self._refresh_autotuning_suggestions_display()
+        self.project_state.publish(AutotuningChanged())
