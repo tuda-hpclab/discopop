@@ -139,7 +139,7 @@ class _AutotuningApp(_PanelFake, AutotuningPanelMixin):
 
 
 def test_autotuning_success_and_progress(tmp_path: Path) -> None:
-    app = _AutotuningApp()
+    app: Any = _AutotuningApp()
     request = AutotunerRequest("tiny", "yes", "auto", 1, "bad value", "0", "INFO", "search", (), None)
     _setup(
         app,
