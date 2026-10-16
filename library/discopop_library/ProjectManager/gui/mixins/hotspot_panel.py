@@ -50,6 +50,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services.hotspot_build import (
+    BUILD_CURRENT,
+    BUILD_MISMATCH,
+    BUILD_NONE,
+    BUILD_STALE,
+    hotspot_build_state,
+)
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.vscode import (
     VSCODE_NOT_FOUND_MESSAGE,
@@ -92,17 +99,6 @@ _PLOT_TYPES: Dict[str, Dict[str, Any]] = {
 _ADD_TAB_TEXT = "  ＋  "
 _DETAIL_BAR_WIDTH = 300
 _DETAIL_PLACEHOLDER = "Click a code region in a\nchart or the table to see\nits details here."
-
-# Build states, as reported by _hotspot_build_state.
-BUILD_NONE = "none"
-BUILD_CURRENT = "current"
-BUILD_STALE = "stale"
-BUILD_MISMATCH = "mismatch"
-
-# Source extensions considered when deciding whether a build went stale.
-_SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx")
-# Directories never worth walking for source mtimes.
-_PRUNED_DIRS = {".git", ".discopop", "build", "venv", "__pycache__", "node_modules", ".mypy_cache"}
 
 _REGION_COLUMNS: Tuple[Tuple[str, int], ...] = (
     ("Hotness", 90),
@@ -747,22 +743,6 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         keys = self._load_hotspot_region_keys()
         return hotspot_data.region_fingerprint(keys.values()) if keys else None
 
-    def _newest_source_mtime(self) -> Optional[float]:
-        """Newest mtime among the project's C/C++ sources, or ``None`` if none found."""
-        newest: Optional[float] = None
-        for root, dirnames, filenames in os.walk(self.arguments.project_root):
-            dirnames[:] = [d for d in dirnames if d not in _PRUNED_DIRS and not d.startswith(".")]
-            for filename in filenames:
-                if not filename.endswith(_SOURCE_SUFFIXES):
-                    continue
-                try:
-                    mtime = os.path.getmtime(os.path.join(root, filename))
-                except OSError:
-                    continue
-                if newest is None or mtime > newest:
-                    newest = mtime
-        return newest
-
     def _hotspot_compile_script_differs(self) -> bool:
         """Whether the selected configuration needs its own instrumented build."""
         current_config = self._hotspot_current_config()
@@ -773,36 +753,12 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         return os.path.abspath(expected) != os.path.abspath(log.compile_script)
 
     def _hotspot_build_state(self) -> Tuple[str, str]:
-        """Whether the current build can serve another run directly, and why not.
-
-        A non-current state only means a recompile is needed first; it no longer
-        implies losing anything, since runs from separate builds are combined by
-        source location. ``BUILD_MISMATCH`` is the one case that warrants a
-        warning: the region set changed under the accumulated runs, which for a
-        source edit means their line numbers may no longer refer to the same code.
-        """
-        dot_dp = self.arguments.dot_dp
-        cs_id = hotspot_data.cs_id_path(dot_dp)
-        if not os.path.exists(cs_id):
-            return (BUILD_NONE, "No instrumented build yet.")
-
-        try:
-            build_mtime = os.path.getmtime(cs_id)
-        except OSError:
-            return (BUILD_NONE, "No instrumented build yet.")
-        newest_source = self._newest_source_mtime()
-        if newest_source is not None and newest_source > build_mtime:
-            return (
-                BUILD_MISMATCH,
-                "Sources changed since the instrumented build was made.",
-            )
-
-        if self._hotspot_compile_script_differs():
-            return (
-                BUILD_STALE,
-                "This configuration uses a different compile.sh, so it will be instrumented separately.",
-            )
-        return (BUILD_CURRENT, "")
+        """Whether the current build can serve another run directly, and why not."""
+        return hotspot_build_state(
+            hotspot_data.cs_id_path(self.arguments.dot_dp),
+            self.arguments.project_root,
+            self._hotspot_compile_script_differs,
+        )
 
     def _update_hotspot_ui(self) -> None:
         if self.hotspot_config_label is None:
