@@ -7,7 +7,6 @@
 # directory for details.
 
 import logging
-import re
 import tkinter as tk
 import tkinter.font
 from tkinter import scrolledtext, ttk
@@ -211,21 +210,6 @@ def ask_yes_no(parent: Any, title: str, message: str) -> bool:  # type: ignore
     dialog.wait_window()
 
     return result[0]
-
-
-def clean_ansi_output(text: str) -> str:
-    """Remove ANSI escape codes and clean up carriage returns for display."""
-    ansi_escape = re.compile(r"\x1b\[[0-9;]*m|\x1b\[[A-Z]")
-    text = ansi_escape.sub("", text)
-    lines = text.split("\n")
-    cleaned_lines = []
-    for line in lines:
-        if "\r" in line:
-            parts = line.split("\r")
-            line = parts[-1] if parts[-1] else parts[-2] if len(parts) > 1 else ""
-        if line.strip():
-            cleaned_lines.append(line)
-    return "\n".join(cleaned_lines)
 
 
 def bind_tooltip_hover(widget: tk.Widget, tooltip: Tooltip, parent: Any, delay: int = 500) -> None:

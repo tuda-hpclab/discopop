@@ -26,8 +26,6 @@ suggestion is selected automatically without needing to know the full ID
 universe at save time.
 """
 
-import json
-import os
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -35,45 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import caption_label
 from discopop_library.ProjectManager.services.patches import discover_suggestion_ids
-
-
-def parse_id_ranges(spec: str, available: List[str]) -> Set[str]:
-    """Parse a ``1,3,5-8`` style spec into the set of matching available IDs.
-
-    Tokens that don't resolve to an available ID (bad syntax, out of range) are
-    silently ignored so a typo never raises. ``a-b`` with ``a > b`` is treated
-    as the same range as ``b-a``.
-    """
-    available_set = set(available)
-    result: Set[str] = set()
-    for raw in spec.split(","):
-        token = raw.strip()
-        if not token:
-            continue
-        if "-" in token:
-            lo_str, _, hi_str = token.partition("-")
-            try:
-                lo, hi = int(lo_str), int(hi_str)
-            except ValueError:
-                continue
-            if lo > hi:
-                lo, hi = hi, lo
-            for value in range(lo, hi + 1):
-                candidate = str(value)
-                if candidate in available_set:
-                    result.add(candidate)
-        else:
-            if token in available_set:
-                result.add(token)
-            else:
-                # tolerate leading zeros / non-canonical integer spelling
-                try:
-                    canonical = str(int(token))
-                except ValueError:
-                    continue
-                if canonical in available_set:
-                    result.add(canonical)
-    return result
+from discopop_library.ProjectManager.services.selections import load_deselected, parse_id_ranges, save_deselected
 
 
 class SuggestionSelector(ttk.Frame):
@@ -103,41 +63,11 @@ class SuggestionSelector(ttk.Frame):
 
     # ── persistence ──────────────────────────────────────────────────────────
 
-    def _selections_path(self) -> str:
-        return os.path.join(self._dot_dp_path, "project", "manager", "suggestion_selections.json")
-
-    def _load_all(self) -> Dict[str, Any]:
-        path = self._selections_path()
-        if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-            except (json.JSONDecodeError, IOError):
-                pass
-        return {}
-
     def _load_deselected(self) -> Set[str]:
-        entry = self._load_all().get(self._storage_key, {})
-        if isinstance(entry, dict):
-            return set(str(s) for s in entry.get("deselected", []))
-        return set()
+        return load_deselected(self._dot_dp_path, self._storage_key)
 
     def _persist(self) -> None:
-        deselected = sorted(
-            (sid for sid, var in self._vars.items() if not var.get()),
-            key=lambda x: int(x) if x.isdigit() else x,
-        )
-        data = self._load_all()
-        data[self._storage_key] = {"deselected": deselected}
-        path = self._selections_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        try:
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-        except IOError:
-            pass
+        save_deselected(self._dot_dp_path, self._storage_key, (sid for sid, var in self._vars.items() if not var.get()))
 
     # ── UI construction ──────────────────────────────────────────────────────
 
