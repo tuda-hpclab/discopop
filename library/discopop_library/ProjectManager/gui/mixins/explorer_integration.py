@@ -21,6 +21,7 @@ from urllib.parse import quote
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error, clean_ansi_output
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.services.patches import count_patches, has_patches
 from discopop_library.ProjectManager.services.requests import ExplorerRequest
 from discopop_library.ProjectManager.gui.plots import hotspot_data
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
@@ -302,13 +303,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             self.explorer_run_button.config(state="normal" if ready else "disabled")
 
         # Count suggestions the same way as in execute_panel.py for consistency
-        patch_gen_dir = os.path.join(self.arguments.dot_dp, "patch_generator")
-        total_suggestions = 0
-        if os.path.isdir(patch_gen_dir):
-            for sid in os.listdir(patch_gen_dir):
-                sid_dir = os.path.join(patch_gen_dir, sid)
-                if os.path.isdir(sid_dir):
-                    total_suggestions += sum(1 for f in os.listdir(sid_dir) if f.endswith(".patch"))
+        total_suggestions = count_patches(self.arguments.dot_dp)
 
         browse_ready = total_suggestions > 0
         if self.browse_suggestions_button is not None:
@@ -333,16 +328,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             self._update_patch_repair_ui()
 
     def _check_browse_suggestions_available(self) -> bool:
-        patch_gen_dir = os.path.join(self.arguments.dot_dp, "patch_generator")
-        if not os.path.isdir(patch_gen_dir):
-            return False
-        for entry in os.listdir(patch_gen_dir):
-            sid_dir = os.path.join(patch_gen_dir, entry)
-            if os.path.isdir(sid_dir):
-                patch_count = sum(1 for f in os.listdir(sid_dir) if f.endswith(".patch"))
-                if patch_count > 0:
-                    return True
-        return False
+        return has_patches(self.arguments.dot_dp)
 
     def _open_suggestion_browser(self) -> None:
         from discopop_library.ProjectManager.gui.suggestion_browser import SuggestionBrowserDialog
