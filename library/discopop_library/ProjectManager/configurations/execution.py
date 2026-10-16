@@ -237,10 +237,7 @@ def execute_configuration(
     which has to bound the whole process -- reads it from there rather than from
     the return value, whose shape many callers depend on.
     """
-    # Checked before anything about the process is changed -- in particular before
-    # the working directory is moved into the project copy below, which a raise
-    # from further down would leave behind in a directory that is about to be
-    # deleted.
+    # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
     if repetition_error is not None:
         raise ValueError("repetitions: " + repetition_error)
@@ -277,8 +274,9 @@ def execute_configuration(
     logger.debug("-> settings:\n" + str(settings))
 
     # prepare environment variables
-    home_dir = os.getcwd()
-    os.chdir(project_copy_root_path)
+    # The process-wide working directory is deliberately left alone: this function runs in
+    # worker threads, and os.chdir would change the directory of every other thread.
+    # The script is started with cwd=project_copy_root_path instead (see _run_once).
     my_env: Dict[str, str] = os.environ.copy()
     for key in settings:
         my_env[key] = settings[key]
@@ -418,8 +416,6 @@ def execute_configuration(
     )
     if measurement is not None:
         measurement.update(stored)
-
-    os.chdir(home_dir)
 
     return (
         representative.returncode,
