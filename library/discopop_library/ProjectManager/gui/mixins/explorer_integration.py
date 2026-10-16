@@ -21,6 +21,7 @@ from urllib.parse import quote
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error, clean_ansi_output
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.services.requests import ExplorerRequest
 from discopop_library.ProjectManager.gui.plots import hotspot_data
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from discopop_library.ProjectManager.gui.widgets import (
@@ -485,10 +486,13 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             self.after(50, lambda: self._run_pattern_detection_in_process(append_output))  # type: ignore
             return
 
+        # the worker thread must not read Tk variables
+        request = self._snapshot_explorer_request()
+
         def thread_func() -> None:
             try:
                 thread_safe_append("Starting pattern detection...\n")
-                self._invoke_explorer(thread_safe_append)
+                self._invoke_explorer(request, thread_safe_append)
                 self.after(0, lambda: self._on_pattern_detection_complete())  # type: ignore
             except Exception as e:
                 thread_safe_append(f"\nError: {str(e)}\n")
@@ -550,7 +554,19 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         ]
         return [f for f in required_files if not os.path.exists(f)]
 
-    def _invoke_explorer(self, output_callback: Callable[[str], None]) -> None:
+    def _snapshot_explorer_request(self) -> ExplorerRequest:
+        """Read the panel into an immutable request; call on the main thread only."""
+        assert self.pattern_types_vars is not None
+        assert self.jobs_var is not None
+
+        selected_patterns = [pattern for pattern, var in self.pattern_types_vars.items() if var.get()]
+        return ExplorerRequest(
+            enable_patterns=",".join(selected_patterns) if selected_patterns else "reduction,doall",
+            jobs=widgets.thread_value(self.jobs_var),
+            ignore_dependency_states=self._ignore_dependency_states(),
+        )
+
+    def _invoke_explorer(self, request: ExplorerRequest, output_callback: Callable[[str], None]) -> None:
         dot_discopop = self.arguments.dot_dp
         project_path = dot_discopop
 
@@ -563,13 +579,9 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
                 output_callback(f"  - {file_path}\n")
             raise RuntimeError("Missing required profiling data files")
 
-        assert self.pattern_types_vars is not None
-        assert self.jobs_var is not None
-
-        selected_patterns = [pattern for pattern, var in self.pattern_types_vars.items() if var.get()]
-        enable_patterns = ",".join(selected_patterns) if selected_patterns else "reduction,doall"
-        jobs_value = widgets.thread_value(self.jobs_var)
-        ignore_states = self._ignore_dependency_states()
+        enable_patterns = request.enable_patterns
+        jobs_value = request.jobs
+        ignore_states = request.ignore_dependency_states
 
         output_callback("Configuration:\n")
         output_callback(f"  Patterns: {enable_patterns}\n")
@@ -751,11 +763,12 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
 
     def _stop_pattern_detection(self) -> None:
         self._explorer_stopped = True
-        if self._explorer_process is not None:
+        process = self._explorer_process  # the worker resets the attribute when the process ends
+        if process is not None:
             try:
-                os.killpg(os.getpgid(self._explorer_process.pid), signal.SIGTERM)
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             except (ProcessLookupError, OSError):
-                self._explorer_process.terminate()
+                process.terminate()
         if self.explorer_stop_button is not None:
             self.explorer_stop_button.config(state="disabled")
         self.status_label.config(text="Stopping pattern detection...", foreground=widgets.STATUS_STOP)
