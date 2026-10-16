@@ -426,15 +426,29 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
                 self.patch_repair_model_combo["values"] = []
             return
 
-        version = module.version() or ""
-        self.patch_repair_backend_hint.config(
-            text=(version + " -- " if version else "") + str(getattr(module, "DESCRIPTION", "")).split("\n")[0],
-            foreground=widgets.STATUS_IDLE,
-        )
-        if self.patch_repair_model_combo is not None:
-            # Listing models runs the agent's own command, which can take a moment; a
-            # failure leaves the list empty and the field still typeable.
-            self.patch_repair_model_combo["values"] = module.list_models()
+        hint_label = self.patch_repair_backend_hint
+
+        def query_backend() -> None:
+            # version() and list_models() run the agent's own command, which can take a
+            # moment; they must not block the UI thread. A failure leaves the list empty
+            # and the field still typeable.
+            version = module.version() or ""
+            models = module.list_models()
+
+            def apply() -> None:
+                if self.patch_repair_backend_var is None or self.patch_repair_backend_var.get() != name:
+                    return  # another backend was selected in the meantime
+                hint_label.config(
+                    text=(version + " -- " if version else "") + str(getattr(module, "DESCRIPTION", "")).split("\n")[0],
+                    foreground=widgets.STATUS_IDLE,
+                )
+                if self.patch_repair_model_combo is not None:
+                    self.patch_repair_model_combo["values"] = models
+
+            self.after(0, apply)  # type: ignore
+
+        hint_label.config(text="Querying " + name + "...", foreground=widgets.STATUS_IDLE)
+        threading.Thread(target=query_backend, daemon=True).start()
 
     def _update_patch_repair_budget(self) -> None:
         """Show what the current dials cost, since that is what they are for."""
