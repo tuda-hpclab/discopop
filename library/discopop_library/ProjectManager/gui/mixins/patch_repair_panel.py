@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -35,7 +34,7 @@ from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TY
 from discopop_library.PatchRepair.results import PROGRESS_PREFIX
 from discopop_library.ProjectManager.services.project_state import AutotuningChanged, ResultsChanged
 from discopop_library.ProjectManager.gui import widgets
-from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter, start_work
 from discopop_library.ProjectManager.services.jobs import (
     CancelPolicy,
     JobEvent,
@@ -44,6 +43,9 @@ from discopop_library.ProjectManager.services.jobs import (
     JobOutput,
     JobRunner,
     JobSpec,
+    WorkContext,
+    WorkEvent,
+    WorkFinished,
 )
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.commands import patch_repair_command
@@ -441,27 +443,28 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
 
         hint_label = self.patch_repair_backend_hint
 
-        def query_backend() -> None:
+        def query_backend(_ctx: WorkContext) -> Tuple[str, List[str]]:
             # version() and list_models() run the agent's own command, which can take a
             # moment; they must not block the UI thread. A failure leaves the list empty
             # and the field still typeable.
-            version = module.version() or ""
-            models = module.list_models()
+            return module.version() or "", module.list_models()
 
-            def apply() -> None:
-                if self.patch_repair_backend_var is None or self.patch_repair_backend_var.get() != name:
-                    return  # another backend was selected in the meantime
-                hint_label.config(
-                    text=(version + " -- " if version else "") + str(getattr(module, "DESCRIPTION", "")).split("\n")[0],
-                    foreground=widgets.STATUS_IDLE,
-                )
-                if self.patch_repair_model_combo is not None:
-                    self.patch_repair_model_combo["values"] = models
-
-            self.after(0, apply)  # type: ignore
+        def apply(event: WorkEvent) -> None:
+            if not isinstance(event, WorkFinished):
+                return
+            if self.patch_repair_backend_var is None or self.patch_repair_backend_var.get() != name:
+                return  # another backend was selected in the meantime
+            version, models = event.result if event.error is None else ("", [])
+            hint_label.config(
+                text=(version + " -- " if version else "") + str(getattr(module, "DESCRIPTION", "")).split("\n")[0],
+                foreground=widgets.STATUS_IDLE,
+            )
+            if self.patch_repair_model_combo is not None:
+                self.patch_repair_model_combo["values"] = models
 
         hint_label.config(text="Querying " + name + "...", foreground=widgets.STATUS_IDLE)
-        threading.Thread(target=query_backend, daemon=True).start()
+        # this runs while the panel is being built, before the main loop: start_work is safe then
+        start_work(self, query_backend, apply)
 
     def _update_patch_repair_budget(self) -> None:
         """Show what the current dials cost, since that is what they are for."""

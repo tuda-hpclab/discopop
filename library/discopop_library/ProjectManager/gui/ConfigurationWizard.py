@@ -9,10 +9,9 @@
 import copy
 import os
 import json
-import threading
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional, List, Union
+from typing import Optional, List, Tuple, Union
 from discopop_library.ProjectManager.services.derived_settings import derive_settings
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services.configurations import (
@@ -21,6 +20,8 @@ from discopop_library.ProjectManager.services.configurations import (
     write_shared_compile_script,
     write_wizard_configuration,
 )
+from discopop_library.ProjectManager.gui.job_adapter import start_work
+from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import heading_label
 from discopop_library.ProjectManager.gui.wizard_steps import WizardStepsMixin
@@ -200,8 +201,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
 
         args_copy = copy.copy(self.arguments)
 
-        def thread_func() -> None:
-            result = execute_configuration(
+        def compile_once(_ctx: WorkContext) -> Optional[Tuple[int, float, str, str]]:
+            return execute_configuration(
                 args_copy,
                 args_copy.project_root,
                 args_copy.project_config_dir,
@@ -210,35 +211,35 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
                 1,
                 args_copy.timeout_compilation,
             )
-            if result is None:
-                self.after(0, lambda: append_output("Compilation failed: settings file not found.\n"))
-                self.after(0, lambda: self.test_status_label.config(text="✗ Failed", foreground=widgets.STATUS_FAIL))
+
+        def handle(event: WorkEvent) -> None:
+            if not isinstance(event, WorkFinished):
+                return
+            result = event.result if event.error is None else None
+            if event.error is not None:
+                append_output(f"Compilation failed: {event.error}\n")
+                self.test_status_label.config(text="✗ Failed", foreground=widgets.STATUS_FAIL)
+            elif result is None:
+                append_output("Compilation failed: settings file not found.\n")
+                self.test_status_label.config(text="✗ Failed", foreground=widgets.STATUS_FAIL)
             else:
                 ret_code, elapsed, stdout, stderr = result
                 if ret_code == 0:
-                    self.after(0, lambda e=elapsed: append_output(f"Compilation succeeded ({e:.2f}s)\n"))  # type: ignore[misc]
-                    self.after(0, lambda: self.test_status_label.config(text="✓ Success", foreground=widgets.STATUS_OK))
+                    append_output(f"Compilation succeeded ({elapsed:.2f}s)\n")
+                    self.test_status_label.config(text="✓ Success", foreground=widgets.STATUS_OK)
                 else:
-                    self.after(
-                        0,
-                        lambda rc=ret_code, e=elapsed: append_output(  # type: ignore[misc]
-                            f"Compilation failed (return code: {rc}, {e:.2f}s)\n"
-                        ),
-                    )
-                    self.after(
-                        0,
-                        lambda rc=ret_code: self.test_status_label.config(  # type: ignore[misc]
-                            text=f"✗ Failed (exit code: {rc})", foreground=widgets.STATUS_FAIL
-                        ),
+                    append_output(f"Compilation failed (return code: {ret_code}, {elapsed:.2f}s)\n")
+                    self.test_status_label.config(
+                        text=f"✗ Failed (exit code: {ret_code})", foreground=widgets.STATUS_FAIL
                     )
                 if stdout:
-                    self.after(0, lambda o=stdout: append_output(f"stdout:\n{o}\n"))  # type: ignore[misc]
+                    append_output(f"stdout:\n{stdout}\n")
                 if stderr:
-                    self.after(0, lambda e=stderr: append_output(f"stderr:\n{e}\n"))  # type: ignore[misc]
-            self.after(0, lambda: self.run_test_btn.config(state=tk.NORMAL))
-            self.after(0, lambda: self.next_btn.config(state=tk.NORMAL))
+                    append_output(f"stderr:\n{stderr}\n")
+            self.run_test_btn.config(state=tk.NORMAL)
+            self.next_btn.config(state=tk.NORMAL)
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        start_work(self, compile_once, handle)
 
     def _compute_and_display_derived_settings(self) -> None:
         seq_settings = {
