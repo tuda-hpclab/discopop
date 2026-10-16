@@ -16,7 +16,15 @@ from discopop_library.ProjectManager.services.requests import AutotunerRequest, 
 
 
 def explorer_command(request: ExplorerRequest, python: Optional[str] = None) -> List[str]:
-    command = [python or sys.executable, "-m", "discopop_explorer", "--enable-patterns", request.enable_patterns]
+    command = [
+        python or sys.executable,
+        "-m",
+        "discopop_explorer",
+        #            "--path",
+        #            project_path,
+        "--enable-patterns",
+        request.enable_patterns,
+    ]
     command += ["--log", "WARNING"]
     if request.jobs != "auto":
         command += ["-j", request.jobs]
