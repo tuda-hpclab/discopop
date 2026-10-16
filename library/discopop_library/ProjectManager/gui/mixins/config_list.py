@@ -13,6 +13,7 @@ from typing import Any, Literal, Optional
 from discopop_library.ProjectManager.services.modes import available_modes
 from discopop_library.ProjectManager.services.reports import find_latest_report_pdf
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
+from discopop_library.ProjectManager.services.project_state import ConfigChanged
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 
 
@@ -41,16 +42,7 @@ class ConfigListMixin(ConfigManagerMixinBase):
                     self.listbox.selection_set(0)
                     self.current_config = configs[0]
                 self._load_config()
-                self._update_autotuning_config_display()
-                if hasattr(self, "_refresh_autotuning_suggestions_display"):
-                    self._refresh_autotuning_suggestions_display()
-                if hasattr(self, "_refresh_suggestion_selection_display"):
-                    self._refresh_suggestion_selection_display()
-                if hasattr(self, "_update_hotspot_config_display"):
-                    self._update_hotspot_config_display()
-                # the Patch Repair tab names the selected configuration and refuses to
-                # run without one, so it has to learn about the selection as well
-                self._update_patch_repair_ui()
+                self.project_state.publish(ConfigChanged(self.current_config))
 
     def _on_config_selected(self, event: Optional[Any]) -> None:
         selection = self.listbox.curselection()
@@ -58,14 +50,7 @@ class ConfigListMixin(ConfigManagerMixinBase):
             return
         self.current_config = self.listbox.get(selection[0])
         self._load_config()
-        self._update_autotuning_config_display()
-        if hasattr(self, "_refresh_autotuning_suggestions_display"):
-            self._refresh_autotuning_suggestions_display()
-        if hasattr(self, "_refresh_suggestion_selection_display"):
-            self._refresh_suggestion_selection_display()
-        if hasattr(self, "_update_hotspot_config_display"):
-            self._update_hotspot_config_display()
-        self._update_patch_repair_ui()
+        self.project_state.publish(ConfigChanged(self.current_config))
 
         try:
             current_tab_index = self.right_tabs.index(self.right_tabs.select())

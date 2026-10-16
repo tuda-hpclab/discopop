@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional
 
+from discopop_library.ProjectManager.services.project_state import PatternsChanged
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
@@ -334,11 +335,8 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
 
         self._update_pattern_detection_tab_state(ready)
         self._update_autotuning_tab_state(ready and browse_ready)
-        if hasattr(self, "_update_autotuning_ui"):
-            self._update_autotuning_ui()
-        # freshly generated patches are what the Patch Repair tab works on
-        if hasattr(self, "_update_patch_repair_ui"):
-            self._update_patch_repair_ui()
+        # the Autotuning and Patch Repair tabs work on the freshly generated patches
+        self.project_state.publish(PatternsChanged())
 
     def _check_browse_suggestions_available(self) -> bool:
         return has_patches(self.arguments.dot_dp)
