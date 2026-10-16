@@ -14,7 +14,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from discopop_library.ProjectManager.gui.mixins.helpers import show_error, Tooltip, clean_ansi_output
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -23,6 +23,7 @@ from discopop_library.ProjectManager.configurations.repetitions import (
     validate_repetitions,
 )
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.services.requests import AutotunerRequest
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from discopop_library.ProjectManager.gui.suggestion_selector import SuggestionSelector
 from discopop_library.ProjectManager.gui.widgets import (
@@ -626,10 +627,13 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         def thread_safe_append(text: str) -> None:
             self.after(0, lambda: append_output(text))  # type: ignore
 
+        # the worker thread must not read Tk variables or selectors
+        request = self._snapshot_autotuner_request()
+
         def thread_func() -> None:
             try:
                 thread_safe_append("Starting autotuning...\n")
-                self._invoke_autotuner(thread_safe_append)
+                self._invoke_autotuner(request, thread_safe_append)
                 self.after(0, lambda: self._on_autotuning_complete())  # type: ignore
             except Exception as e:
                 thread_safe_append(f"\nError: {str(e)}\n")
@@ -638,13 +642,12 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         thread = threading.Thread(target=thread_func, daemon=True)
         thread.start()
 
-    def _invoke_autotuner(self, output_callback: Callable[[str], None]) -> None:
+    def _snapshot_autotuner_request(self) -> AutotunerRequest:
+        """Read the panel into an immutable request; call on the main thread only."""
         assert self.autotuning_threads_var is not None
         assert self.autotuning_hotspot_types_vars is not None
         assert self.autotuning_algorithm_var is not None
         assert self.autotuning_log_level_var is not None
-
-        dot_discopop = self.arguments.dot_dp
 
         selected_hotspot_types = [htype for htype, var in self.autotuning_hotspot_types_vars.items() if var.get()]
         hotspot_types = ",".join(selected_hotspot_types) if selected_hotspot_types else "yes,no,maybe"
@@ -654,6 +657,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         # an unusable value falls back to measuring each candidate once, which is
         # what the run would have done before the field existed.
         repetitions_value = DEFAULT_TUNING_REPETITIONS
+        repetitions_warning: Optional[str] = None
         if self.autotuning_repetitions_var is not None:
             typed = self.autotuning_repetitions_var.get().strip()
             try:
@@ -664,10 +668,43 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             if problem is None:
                 repetitions_value = parsed
             else:
-                output_callback("Ignoring the repetition count: " + problem + ". Measuring each candidate once.\n")
+                repetitions_warning = problem
         algorithm_description = self.autotuning_algorithm_var.get()
         algorithm_value = self.autotuning_algorithm_map.get(algorithm_description, "0")
-        log_level = self.autotuning_log_level_var.get()
+
+        mode = self.autotuning_suggestions_mode_var.get()
+        evaluate_ids: Tuple[str, ...] = ()
+        search_space_ids: Optional[Tuple[str, ...]] = None
+        if mode == "evaluate":
+            evaluate_ids = tuple(self.autotuner_evaluate_selector.get_selected_ids())
+        elif not self.autotuner_search_space_selector.is_all_selected():
+            search_space_ids = tuple(self.autotuner_search_space_selector.get_selected_ids())
+
+        return AutotunerRequest(
+            configuration=self.current_config or "tiny",
+            hotspot_types=hotspot_types,
+            threads=threads_value,
+            repetitions=repetitions_value,
+            repetitions_warning=repetitions_warning,
+            algorithm=algorithm_value,
+            log_level=self.autotuning_log_level_var.get(),
+            mode=mode,
+            evaluate_ids=evaluate_ids,
+            search_space_ids=search_space_ids,
+        )
+
+    def _invoke_autotuner(self, request: AutotunerRequest, output_callback: Callable[[str], None]) -> None:
+        dot_discopop = self.arguments.dot_dp
+
+        hotspot_types = request.hotspot_types
+        threads_value = request.threads
+        repetitions_value = request.repetitions
+        algorithm_value = request.algorithm
+        log_level = request.log_level
+        if request.repetitions_warning is not None:
+            output_callback(
+                "Ignoring the repetition count: " + request.repetitions_warning + ". Measuring each candidate once.\n"
+            )
 
         output_callback("Configuration:\n")
         output_callback(f"  Configuration: {self.current_config}\n")
@@ -684,7 +721,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             "--dot-dp-path",
             dot_discopop,
             "-c",
-            self.current_config or "tiny",
+            request.configuration,
             "-ht",
             hotspot_types,
             "-A",
@@ -701,17 +738,16 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         if repetitions_value > 1:
             cmd.extend(["-xr", str(repetitions_value)])
 
-        mode = self.autotuning_suggestions_mode_var.get()
-        if mode == "evaluate":
-            evaluate_ids = self.autotuner_evaluate_selector.get_selected_ids()
+        if request.mode == "evaluate":
+            evaluate_ids = request.evaluate_ids
             if evaluate_ids:
                 cmd.extend(["-s", ",".join(evaluate_ids)])
                 output_callback("Evaluating specific combination: " + ", ".join(evaluate_ids) + "\n")
             else:
                 output_callback("No suggestions selected to evaluate; running the search algorithm instead.\n")
         else:
-            if not self.autotuner_search_space_selector.is_all_selected():
-                search_ids = self.autotuner_search_space_selector.get_selected_ids()
+            if request.search_space_ids is not None:
+                search_ids = request.search_space_ids
                 cmd.extend(["--search-space", ",".join(search_ids)])
                 output_callback(
                     "Restricting search space to suggestion IDs: " + (", ".join(search_ids) or "(none)") + "\n"
@@ -719,7 +755,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
 
         output_callback("Running autotuner...\n\n")
 
-        self._autotuning_process = subprocess.Popen(
+        process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -727,27 +763,29 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             bufsize=1,
             cwd=dot_discopop,
         )
+        self._autotuning_process = process
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                # Structured progress events drive the live plot and are kept out of the
+                # console; everything else is echoed to the console as before. Events are
+                # extracted from anywhere in the line: stdout and stderr share one stream,
+                # so a progress bar redraw can leave its bar text in front of an event.
+                events, residual = split_progress_events(line)
+                for event in events:
+                    self.after(0, lambda e=event: self._on_autotuning_progress(e))  # type: ignore
+                cleaned = clean_ansi_output(residual.rstrip("\n"))
+                if cleaned:
+                    output_callback(cleaned + "\n")
 
-        assert self._autotuning_process.stdout is not None
-        for line in self._autotuning_process.stdout:
-            # Structured progress events drive the live plot and are kept out of the
-            # console; everything else is echoed to the console as before. Events are
-            # extracted from anywhere in the line: stdout and stderr share one stream,
-            # so a progress bar redraw can leave its bar text in front of an event.
-            events, residual = split_progress_events(line)
-            for event in events:
-                self.after(0, lambda e=event: self._on_autotuning_progress(e))  # type: ignore
-            cleaned = clean_ansi_output(residual.rstrip("\n"))
-            if cleaned:
-                output_callback(cleaned + "\n")
+            process.wait()
 
-        self._autotuning_process.wait()
+            if process.returncode != 0:
+                raise RuntimeError(f"Autotuner exited with return code {process.returncode}")
 
-        if self._autotuning_process.returncode != 0:
-            raise RuntimeError(f"Autotuner exited with return code {self._autotuning_process.returncode}")
-
-        output_callback("\nAutotuning completed.\n")
-        self._autotuning_process = None
+            output_callback("\nAutotuning completed.\n")
+        finally:
+            self._autotuning_process = None
 
     def _on_autotuning_complete(self, error: bool = False) -> None:
         self.autotuning_running = False
@@ -784,11 +822,12 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             self.after(3000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
 
     def _stop_autotuning(self) -> None:
-        if self._autotuning_process is not None:
+        process = self._autotuning_process
+        if process is not None:
             # Send SIGINT (not SIGTERM/terminate()) so the autotuner's search loop
             # takes the same KeyboardInterrupt path as a manual Ctrl+C, letting it
             # finish gracefully and save the best solution found so far.
-            self._autotuning_process.send_signal(signal.SIGINT)
+            process.send_signal(signal.SIGINT)
         if self.autotuning_stop_button is not None:
             self.autotuning_stop_button.config(state="disabled")
         if hasattr(self, "_update_report_display"):
