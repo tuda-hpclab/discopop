@@ -8,10 +8,8 @@
 
 import logging
 import os
-import signal
-import subprocess
+import queue
 import sys
-import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional
@@ -19,6 +17,16 @@ from typing import Any, Callable, Dict, List, Optional
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.services.jobs import (
+    CancelPolicy,
+    JobEvent,
+    JobFailedToStart,
+    JobFinished,
+    JobOutput,
+    JobRunner,
+    JobSpec,
+)
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.commands import explorer_command
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
@@ -71,7 +79,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
     _pattern_detection_tab_tooltip: Optional[Tooltip] = None
     _pattern_detection_tab_tooltip_timer: Optional[str] = None
     _pattern_detection_tab_tooltip_active_tab: Optional[int] = None
-    _explorer_process: Optional["subprocess.Popen[str]"] = None
+    _explorer_job: Optional[JobRunner] = None
     _explorer_stopped: bool = False
 
     def _build_pattern_detection_panel(self, parent: tk.Widget) -> None:
@@ -427,9 +435,6 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
                 self.explorer_output_text.see(tk.END)
                 self.explorer_output_text.config(state="disabled")
 
-        def thread_safe_append(text: str) -> None:
-            self.after(0, lambda: append_output(text))  # type: ignore
-
         if visualize:
             assert self.pattern_detection_output_tabs is not None
             self.pattern_detection_output_tabs.select(1)
@@ -437,20 +442,68 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             self.after(50, lambda: self._run_pattern_detection_in_process(append_output))  # type: ignore
             return
 
-        # the worker thread must not read Tk variables
+        # the job's thread must not read Tk variables
         request = self._snapshot_explorer_request()
+        self._start_explorer_job(request, append_output)
 
-        def thread_func() -> None:
-            try:
-                thread_safe_append("Starting pattern detection...\n")
-                self._invoke_explorer(request, thread_safe_append)
-                self.after(0, lambda: self._on_pattern_detection_complete())  # type: ignore
-            except Exception as e:
-                thread_safe_append(f"\nError: {str(e)}\n")
-                self.after(0, lambda: self._on_pattern_detection_complete(error=True))  # type: ignore
+    def _start_explorer_job(self, request: ExplorerRequest, output_callback: Callable[[str], None]) -> None:
+        dot_discopop = self.arguments.dot_dp
+        output_callback("Starting pattern detection...\n")
+        output_callback("Loading explorer configuration...\n")
 
-        thread = threading.Thread(target=thread_func, daemon=True)
-        thread.start()
+        missing_files = self._get_missing_required_explorer_files(dot_discopop)
+        if missing_files:
+            output_callback("\nMissing required files:\n")
+            for file_path in missing_files:
+                output_callback(f"  - {file_path}\n")
+            output_callback("\nError: Missing required profiling data files\n")
+            self._on_pattern_detection_complete(error=True)
+            return
+
+        output_callback("Configuration:\n")
+        output_callback(f"  Patterns: {request.enable_patterns}\n")
+        output_callback(f"  Threads: {request.jobs}\n")
+        output_callback(
+            "  Dependency data: "
+            + (NO_STATES_DETECTION_MODE if request.ignore_dependency_states else DEFAULT_DETECTION_MODE)
+            + "\n\n"
+        )
+        output_callback("Running pattern detection...\n\n")
+
+        events: "queue.Queue[JobEvent]" = queue.Queue()
+        # SIGTERM to the process group: the explorer may have started worker processes of its own
+        job = JobRunner(
+            JobSpec(
+                explorer_command(request),
+                cwd=dot_discopop,
+                cancel_policy=CancelPolicy.SIGTERM_GROUP,
+                new_session=True,
+            ),
+            events,
+        )
+        self._explorer_job = job
+        TkJobAdapter(self, events, lambda event: self._on_explorer_job_event(event, output_callback)).start()
+        job.start()
+
+    def _on_explorer_job_event(self, event: JobEvent, output_callback: Callable[[str], None]) -> None:
+        """Handle one event of the explorer job; runs on the Tk main thread."""
+        if isinstance(event, JobOutput):
+            cleaned = clean_ansi_output(event.line)
+            if cleaned:
+                output_callback(cleaned + "\n")
+        elif isinstance(event, JobFinished):
+            self._explorer_job = None
+            if event.returncode != 0:
+                output_callback(f"\nError: Explorer exited with return code {event.returncode}\n")
+                self._on_pattern_detection_complete(error=True)
+            else:
+                if not self._explorer_stopped:
+                    output_callback("\nPattern detection completed.\n")
+                self._on_pattern_detection_complete()
+        elif isinstance(event, JobFailedToStart):
+            self._explorer_job = None
+            output_callback(f"\nError: {event.error}\n")
+            self._on_pattern_detection_complete(error=True)
 
     def _run_pattern_detection_in_process(self, output_callback: Callable[[str], None]) -> None:
         output_callback("Starting pattern detection...\n")
@@ -517,61 +570,12 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             ignore_dependency_states=self._ignore_dependency_states(),
         )
 
-    def _invoke_explorer(self, request: ExplorerRequest, output_callback: Callable[[str], None]) -> None:
-        dot_discopop = self.arguments.dot_dp
-        project_path = dot_discopop
-
-        output_callback("Loading explorer configuration...\n")
-
-        missing_files = self._get_missing_required_explorer_files(project_path)
-        if missing_files:
-            output_callback("\nMissing required files:\n")
-            for file_path in missing_files:
-                output_callback(f"  - {file_path}\n")
-            raise RuntimeError("Missing required profiling data files")
-
-        enable_patterns = request.enable_patterns
-        jobs_value = request.jobs
-        ignore_states = request.ignore_dependency_states
-
-        output_callback("Configuration:\n")
-        output_callback(f"  Patterns: {enable_patterns}\n")
-        output_callback(f"  Threads: {jobs_value}\n")
-        output_callback(
-            f"  Dependency data: {NO_STATES_DETECTION_MODE if ignore_states else DEFAULT_DETECTION_MODE}\n\n"
-        )
-
-        cmd = explorer_command(request)
-
-        output_callback("Running pattern detection...\n\n")
-
-        self._explorer_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=project_path,
-            start_new_session=True,
-        )
-
-        assert self._explorer_process.stdout is not None
-        for line in self._explorer_process.stdout:
-            cleaned = clean_ansi_output(line.rstrip("\n"))
-            if cleaned:
-                output_callback(cleaned + "\n")
-
-        self._explorer_process.wait()
-        returncode = self._explorer_process.returncode
-        self._explorer_process = None
-
-        if returncode != 0:
-            raise RuntimeError(f"Explorer exited with return code {returncode}")
-
-        if not self._explorer_stopped:
-            output_callback("\nPattern detection completed.\n")
-
     def _invoke_explorer_in_process(self, output_callback: Callable[[str], None]) -> None:
+        """Run the explorer with ``--visualize`` in this process, on the Tk main thread.
+
+        Deliberately not a job of the JobRunner: the visualization builds matplotlib canvases inside Tk widgets,
+        which must happen on the main thread of the GUI process. The GUI is blocked while it runs.
+        """
         project_path = self.arguments.dot_dp
 
         output_callback("Loading explorer configuration...\n")
@@ -698,12 +702,9 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
 
     def _stop_pattern_detection(self) -> None:
         self._explorer_stopped = True
-        process = self._explorer_process  # the worker resets the attribute when the process ends
-        if process is not None:
-            try:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                process.terminate()
+        job = self._explorer_job
+        if job is not None:
+            job.cancel()
         if self.explorer_stop_button is not None:
             self.explorer_stop_button.config(state="disabled")
         self.status_label.config(text="Stopping pattern detection...", foreground=widgets.STATUS_STOP)
