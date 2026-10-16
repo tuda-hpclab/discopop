@@ -102,8 +102,9 @@ class _FakeApp(ExecutionMixin):
         deadline = time.time() + timeout
         while not until():
             assert time.time() < deadline, "timed out"
-            while self.queued:
-                self.queued.pop(0)()
+            pending, self.queued = self.queued, []  # callbacks that re-schedule themselves run once per round
+            for callback in pending:
+                callback()
             time.sleep(0.01)
 
 
