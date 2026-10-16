@@ -175,37 +175,13 @@ class ConfigManagerMixinBase:
         """Load configuration from disk."""
         ...
 
-    def _save_config(self) -> None:
-        """Save configuration to disk."""
-        ...
-
     def _refresh_config_list(self) -> None:
         """Refresh the configuration list display."""
-        ...
-
-    def _on_config_selected(self, event: Any) -> None:
-        """Handle configuration selection."""
         ...
 
     def _update_execute_modes(self) -> None:
         """Update execution mode availability."""
         ...
-
-    def _build_execute_panel(self, parent: tk.Widget) -> None:
-        """Build the execute panel UI."""
-        ...
-
-    def _build_report_panel(self, parent: tk.Widget) -> None:
-        """Build the report panel UI."""
-        ...
-
-    def _update_report_display(self) -> None:
-        """Update the report display."""
-        ...
-
-    def _validate_execution_inputs(self) -> bool:
-        """Validate execution input fields."""
-        return True
 
     def _run_execution(self) -> None:
         """Run the execution."""
@@ -213,18 +189,6 @@ class ConfigManagerMixinBase:
 
     def _prepare_pattern_detection(self) -> None:
         """Prepare for pattern detection with pre-configured parameters."""
-        ...
-
-    def _open_compilation_editor(self) -> None:
-        """Open the compilation editor."""
-        ...
-
-    def _update_derive_button_state(self) -> None:
-        """Update the derive button state."""
-        ...
-
-    def _new_config(self) -> None:
-        """Create a new configuration."""
         ...
 
     def _copy_config(self) -> None:
@@ -255,18 +219,6 @@ class ConfigManagerMixinBase:
         """Reset project data."""
         ...
 
-    def _maybe_open_wizard(self) -> None:
-        """Maybe open the configuration wizard."""
-        ...
-
-    def _handle_save_shortcut(self) -> None:
-        """Handle save shortcut."""
-        ...
-
-    def _start_modification_polling(self) -> None:
-        """Start polling for file modifications."""
-        ...
-
     def _check_modification(self, filename: str) -> None:
         """Check if a file has been modified."""
         ...
@@ -291,28 +243,12 @@ class ConfigManagerMixinBase:
         """Run a test compilation."""
         ...
 
-    def _on_config_right_click(self, event: Any) -> None:
-        """Handle right-click on configuration."""
-        ...
-
-    def _build_pattern_detection_panel(self, parent: tk.Widget) -> None:
-        """Build the pattern detection panel UI."""
-        ...
-
     def _update_pattern_detection_ui(self) -> None:
         """Update the pattern detection UI based on prerequisites."""
         ...
 
-    def _run_pattern_detection(self) -> None:
-        """Run the pattern detection."""
-        ...
-
     def _update_hotspot_hint(self) -> None:
         """Show or hide the 'no hotspot results' hint in the Pattern Detection tab."""
-        ...
-
-    def _update_pattern_detection_tab_state(self, enabled: bool) -> None:
-        """Update the pattern detection tab enabled/disabled state."""
         ...
 
     def _open_suggestion_browser(self) -> None:
@@ -321,48 +257,4 @@ class ConfigManagerMixinBase:
 
     def _refresh_suggestion_selection_display(self) -> None:
         """Refresh the suggestion selection count label in the Execute tab."""
-        ...
-
-    def _build_hotspot_panel(self, parent: tk.Widget) -> None:
-        """Build the hotspot detection panel UI."""
-        ...
-
-    def _update_hotspot_ui(self) -> None:
-        """Update the hotspot detection button states and status block."""
-        ...
-
-    def _refresh_hotspot_results(self) -> None:
-        """Reload Hotspots.json and the measurement run log, then refresh the views."""
-        ...
-
-    def _update_hotspot_config_display(self) -> None:
-        """Refresh the parts of the hotspot panel that depend on the selected config."""
-        ...
-
-    def _build_patch_repair_panel(self, parent: tk.Widget) -> None:
-        """Build the patch repair panel UI."""
-        ...
-
-    def _update_patch_repair_ui(self) -> None:
-        """Enable or disable the patch repair panel based on the available patches."""
-        ...
-
-    def _update_patch_repair_config_display(self) -> None:
-        """Update the configuration display label in the patch repair panel."""
-        ...
-
-    def _build_autotuning_panel(self, parent: tk.Widget) -> None:
-        """Build the autotuning panel UI."""
-        ...
-
-    def _update_autotuning_ui(self) -> None:
-        """Update the autotuning UI based on suggestion availability."""
-        ...
-
-    def _refresh_autotuning_suggestions_display(self) -> None:
-        """Refresh the selected suggestions display in the autotuning panel."""
-        ...
-
-    def _update_autotuning_config_display(self) -> None:
-        """Update the configuration display label in the autotuning panel."""
         ...
