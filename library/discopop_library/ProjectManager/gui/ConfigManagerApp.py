@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -72,7 +71,6 @@ class ConfigManagerApp(  # type: ignore
         self.minsize(1400, 800)
         self.arguments = arguments
         self.was_initialized = was_initialized
-        self._execution_stop_event = threading.Event()
 
         self.config_dir = arguments.project_config_dir
         self.tooltip: Optional[Tooltip] = None
