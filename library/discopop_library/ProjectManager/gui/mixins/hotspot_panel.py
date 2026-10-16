@@ -50,6 +50,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services.vscode import (
+    VSCODE_NOT_FOUND_MESSAGE,
+    find_code_executable,
+    open_file_at,
+)
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.detail_bar import DetailBar
 from discopop_library.ProjectManager.gui.mixins.helpers import (
@@ -539,15 +544,9 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
     def _open_hotspot_region_in_vscode(self, region: Optional[HotspotRegion]) -> None:
         if region is None:
             return
-        code_executable = shutil.which("code")
+        code_executable = find_code_executable()
         if code_executable is None:
-            show_error(
-                self,
-                "VSCode Not Found",
-                "Could not find the 'code' command on your PATH.\n\n"
-                "Install Visual Studio Code and, from within VSCode, run "
-                "'Shell Command: Install \"code\" command in PATH' to enable this feature.",
-            )
+            show_error(self, "VSCode Not Found", VSCODE_NOT_FOUND_MESSAGE)
             return
         if not os.path.exists(region.key.path):
             show_warning(
@@ -557,12 +556,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
             )
             return
         try:
-            subprocess.Popen(
-                [code_executable, "--goto", f"{region.key.path}:{region.key.line}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            open_file_at(code_executable, region.key.path, region.key.line)
         except OSError as e:
             show_error(self, "Failed to open VSCode", f"Could not launch VSCode:\n{e}")
 
