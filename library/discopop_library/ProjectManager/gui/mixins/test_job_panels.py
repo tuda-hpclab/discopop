@@ -13,6 +13,7 @@ checked is the wiring: output and progress events reach the handlers on the pump
 gets the right ``error`` flag, and stopping cancels the job.
 """
 
+import os
 import sys
 import threading
 import time
@@ -269,3 +270,16 @@ def test_pattern_detection_reports_missing_profiling_data(tmp_path: Path) -> Non
     app._on_pattern_detection_complete.assert_called_once_with(error=True)
     inserted = "".join(call.args[1] for call in app.explorer_output_text.insert.call_args_list)
     assert "/p/Data.xml" in inserted and "Missing required profiling data files" in inserted
+
+
+def test_the_pattern_detection_tooltip_names_the_missing_files(tmp_path: Path) -> None:
+    app = _ExplorerApp()
+    _setup(app, tmp_path)
+    (tmp_path / "FileMapping.txt").write_text("")
+
+    text = app._pattern_detection_tooltip_text()
+
+    assert "Prerequisites not met:" in text
+    for name in ("Data.xml", "dynamic_dependencies.txt", "loop_counter_output.txt", "reduction.txt"):
+        assert os.path.join("profiler", name) in text
+    assert "FileMapping.txt" not in text
