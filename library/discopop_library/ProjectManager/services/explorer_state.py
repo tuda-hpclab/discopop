@@ -13,6 +13,16 @@ import os
 from typing import List
 
 # the pattern lists of patterns.json that count as a suggestion
+# Selectable interpretations of the profiled dependency data, as (value, label) pairs.
+# "no_states" runs the explorer with --ignore-dependency-states, i.e. it discards the
+# callpath state markers the profiler recorded in dynamic_dependencies.txt.
+DETECTION_MODES = [
+    ("default", "default (full states)"),
+    ("no_states", "no_states (states ignored)"),
+]
+DEFAULT_DETECTION_MODE = "default"
+NO_STATES_DETECTION_MODE = "no_states"
+
 SUGGESTION_KEYS = ("optimizer_output", "merged_pattern", "task", "do_all", "reduction")
 
 
@@ -35,6 +45,17 @@ def missing_explorer_files(dot_dp: str) -> List[str]:
 def explorer_prerequisites_met(dot_dp: str) -> bool:
     """Whether a profiling run happened at all (the profiler directory exists); the files are checked on start."""
     return os.path.isdir(os.path.join(dot_dp, "profiler"))
+
+
+def pattern_detection_tooltip_text(dot_dp: str) -> str:
+    """Why the Pattern Detection tab is disabled, naming the profiling files that are missing."""
+    lines = ["Prerequisites not met:", "Profiling data not found."]
+    missing = missing_explorer_files(dot_dp)
+    if missing:
+        lines.append("Missing in " + dot_dp + ":")
+        lines.extend("  " + os.path.relpath(path, dot_dp) for path in missing)
+    lines.append("Execute a configuration in 'dp' mode with 'inplace' enabled first.")
+    return "\n".join(lines)
 
 
 def pattern_detection_executed(dot_dp: str) -> bool:

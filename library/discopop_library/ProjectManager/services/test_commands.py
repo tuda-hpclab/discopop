@@ -41,6 +41,8 @@ def test_explorer_command() -> None:
     assert plain == ["py", "-m", "discopop_explorer", "--enable-patterns", "doall", "--log", "WARNING"]
     full = explorer_command(ExplorerRequest("doall,reduction", "4", True), "py")
     assert full[-3:] == ["-j", "4", "--ignore-dependency-states"]
+    visualized = explorer_command(ExplorerRequest("doall", "auto", False, visualize=True), "py")
+    assert visualized == plain + ["--visualize"]
 
 
 def test_default_autotuner_command_has_no_optional_flags() -> None:

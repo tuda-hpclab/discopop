@@ -21,6 +21,8 @@ class ExplorerRequest:
     enable_patterns: str
     jobs: str
     ignore_dependency_states: bool
+    # open the explorer's own graph visualizer (``--visualize``); the Tk GUI runs a visualized run in-process instead
+    visualize: bool = False
 
 
 @dataclass(frozen=True)

@@ -30,6 +30,8 @@ def explorer_command(request: ExplorerRequest, python: Optional[str] = None) -> 
         command += ["-j", request.jobs]
     if request.ignore_dependency_states:
         command.append("--ignore-dependency-states")
+    if request.visualize:
+        command.append("--visualize")
     return command
 
 

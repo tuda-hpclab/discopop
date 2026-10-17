@@ -7,12 +7,14 @@
 # directory for details.
 
 import json
+import os
 from pathlib import Path
 
 from discopop_library.ProjectManager.services.explorer_state import (
     explorer_prerequisites_met,
     missing_explorer_files,
     pattern_detection_executed,
+    pattern_detection_tooltip_text,
     patterns_found,
 )
 
@@ -29,6 +31,13 @@ def test_profiling_files(tmp_path: Path) -> None:
         "loop_counter_output.txt",
         "reduction.txt",
     ]
+
+
+def test_tooltip_names_the_missing_files(tmp_path: Path) -> None:
+    (tmp_path / "FileMapping.txt").write_text("")
+    text = pattern_detection_tooltip_text(str(tmp_path))
+    assert text.startswith("Prerequisites not met:") and "FileMapping.txt" not in text
+    assert "  " + os.path.join("profiler", "Data.xml") in text and text.endswith("first.")
 
 
 def test_patterns(tmp_path: Path) -> None:
