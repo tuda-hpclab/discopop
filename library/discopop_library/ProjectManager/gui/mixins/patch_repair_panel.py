@@ -22,8 +22,6 @@ it, not by watching a number converge.
 
 from __future__ import annotations
 
-import json
-import os
 import queue
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -50,6 +48,7 @@ from discopop_library.ProjectManager.services.jobs import (
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 from discopop_library.ProjectManager.services.commands import patch_repair_command
 from discopop_library.ProjectManager.services.patches import has_patches
+from discopop_library.ProjectManager.services import patch_repair_view
 from discopop_library.ProjectManager.services.requests import PatchRepairRequest
 from discopop_library.ProjectManager.gui.mixins.helpers import show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -74,16 +73,12 @@ CAPTION_WRAP = 600
 # then clipped by the indent, which looks exactly like the bug the wrapping prevents.
 INDENTED_CAPTION_WRAP = 540
 
-# Status values as results.json records them, with the text and colour the table shows.
-STATUS_DISPLAY = {
-    "repaired": ("Repaired", widgets.STATUS_OK),
-    "ok": ("Compiles", widgets.STATUS_IDLE),
-    "failed": ("Not repaired", widgets.STATUS_FAIL),
-    "not_applied": ("Patch not applicable", widgets.STATUS_FAIL),
-    # Its own row rather than a failure: no model ever judged this suggestion, so the
-    # run says nothing about whether it could have been repaired.
-    "agent_unreachable": ("Agent unreachable", widgets.STATUS_STOP),
-    "skipped": ("Skipped", widgets.STATUS_IDLE),
+_TONE_COLORS = {
+    patch_repair_view.TONE_IDLE: widgets.STATUS_IDLE,
+    patch_repair_view.TONE_BUSY: widgets.STATUS_BUSY,
+    patch_repair_view.TONE_OK: widgets.STATUS_OK,
+    patch_repair_view.TONE_FAIL: widgets.STATUS_FAIL,
+    patch_repair_view.TONE_STOP: widgets.STATUS_STOP,
 }
 
 
@@ -456,7 +451,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
                 return  # another backend was selected in the meantime
             version, models = event.result if event.error is None else ("", [])
             hint_label.config(
-                text=(version + " -- " if version else "") + str(getattr(module, "DESCRIPTION", "")).split("\n")[0],
+                text=patch_repair_view.backend_description(version, str(getattr(module, "DESCRIPTION", ""))),
                 foreground=widgets.STATUS_IDLE,
             )
             if self.patch_repair_model_combo is not None:
@@ -472,16 +467,8 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
             return
         prompts = _as_int(self.patch_repair_prompts_var, 2)
         retries = _as_int(self.patch_repair_retries_var, 2)
-        total = prompts * (1 + retries)
         self.patch_repair_budget_label.config(
-            text="At most "
-            + str(prompts)
-            + " x (1 + "
-            + str(retries)
-            + ") = "
-            + str(total)
-            + " agent calls per suggestion.",
-            foreground=widgets.STATUS_IDLE,
+            text=patch_repair_view.budget_text(prompts, retries), foreground=widgets.STATUS_IDLE
         )
 
     def _update_patch_repair_config_display(self) -> None:
@@ -628,38 +615,12 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
 
     def _on_patch_repair_progress(self, event: Dict[str, Any]) -> None:
         """Update the table and the summary from one structured progress event."""
-        kind = str(event.get("event") or "")
-        if kind == "suggestion":
+        if str(event.get("event") or "") == "suggestion":
             suggestion_id = str(event.get("suggestion_id"))
             self._patch_repair_records[suggestion_id] = dict(event)
             self._refresh_patch_repair_table()
-        elif kind == "discovery":
-            failing = event.get("failing") or []
-            built = event.get("built") or []
-            self._set_patch_repair_summary(
-                str(len(built)) + " compile, " + str(len(failing)) + " do not — repairing " + str(len(failing)) + "...",
-                widgets.STATUS_BUSY,
-            )
-            if not event.get("reference_built", True):
-                self._set_patch_repair_summary(
-                    "The project does not build without any suggestion applied. Fix the build first.",
-                    widgets.STATUS_FAIL,
-                )
-        elif kind == "done":
-            repaired = int(event.get("repaired") or 0)
-            failed = int(event.get("failed") or 0)
-            colour = widgets.STATUS_OK if repaired and not failed else widgets.STATUS_IDLE
-            if failed and not repaired:
-                colour = widgets.STATUS_FAIL
-            self._set_patch_repair_summary(
-                str(repaired)
-                + " repaired, "
-                + str(failed)
-                + " not repaired, "
-                + str(event.get("considered") or 0)
-                + " considered.",
-                colour,
-            )
+        for text, tone in patch_repair_view.progress_summary(event):
+            self._set_patch_repair_summary(text, _TONE_COLORS[tone])
 
     def _stop_patch_repair(self) -> None:
         job = self._patch_repair_job
@@ -706,17 +667,9 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
     # -- results display ---------------------------------------------------------
 
     def _load_patch_repair_results_from_file(self) -> None:
-        path = os.path.join(self.arguments.dot_dp, "patch_repair", "results.json")
-        if not os.path.exists(path):
-            return
-        try:
-            with open(path, "r") as f:
-                document = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return
-        suggestions = document.get("suggestions")
-        if isinstance(suggestions, dict):
-            self._patch_repair_records = {str(k): dict(v) for k, v in suggestions.items()}
+        records = patch_repair_view.load_results(self.arguments.dot_dp)
+        if records is not None:
+            self._patch_repair_records = records
             self._refresh_patch_repair_table()
 
     def _refresh_patch_repair_table(self) -> None:
@@ -726,28 +679,10 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         previous = tree.selection()
         for row in tree.get_children():
             tree.delete(row)
-        for suggestion_id in sorted(self._patch_repair_records, key=_as_sort_key):
-            record = self._patch_repair_records[suggestion_id]
-            status = str(record.get("status") or "")
-            label, _colour = STATUS_DISPLAY.get(status, (status or "unknown", widgets.STATUS_IDLE))
-            changed = record.get("changed_files") or []
-            files = record.get("files") or []
-            tree.insert(
-                "",
-                tk.END,
-                iid=suggestion_id,
-                values=(
-                    suggestion_id,
-                    str(record.get("hotspot_type") or ""),
-                    label,
-                    (str(len(changed)) + " / " + str(len(files))) if files else "-",
-                    str(record.get("attempts") or 0),
-                    str(record.get("first_error") or ""),
-                ),
-                tags=(status,),
-            )
-        for status, (_label, colour) in STATUS_DISPLAY.items():
-            tree.tag_configure(status, foreground=colour)
+        for result in patch_repair_view.result_rows(self._patch_repair_records):
+            tree.insert("", tk.END, iid=result.suggestion_id, values=result.cells(), tags=(result.status,))
+        for status, (_label, tone) in patch_repair_view.STATUS_DISPLAY.items():
+            tree.tag_configure(status, foreground=_TONE_COLORS[tone])
         self._select_default_patch_repair_row(previous)
 
     def _select_default_patch_repair_row(self, previous: "tuple[str, ...]") -> None:
@@ -771,26 +706,12 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
                 self._on_patch_repair_row_selected()
                 return
         # a repaired patch is what the run was for, so show one if there is one
-        preferred = next(
-            (r for r in rows if str(self._patch_repair_records.get(r, {}).get("status")) == "repaired"), rows[0]
+        preferred = (
+            patch_repair_view.preferred_row(patch_repair_view.result_rows(self._patch_repair_records), None) or rows[0]
         )
         tree.selection_set(preferred)
         tree.see(preferred)
         self._on_patch_repair_row_selected()
-
-    def _patch_files_on_disk(self, suggestion_id: str) -> List[str]:
-        """File ids of the patches stored for a suggestion.
-
-        A suggestion that already compiled, or whose patches never applied, is recorded
-        without a file list, because no repair ever loaded its patch set. Its patches are
-        on disk nonetheless, and are still the thing worth reading.
-        """
-        directory = os.path.join(self.arguments.dot_dp, "patch_generator", suggestion_id)
-        try:
-            entries = os.listdir(directory)
-        except OSError:
-            return []
-        return sorted((e[: -len(".patch")] for e in entries if e.endswith(".patch")), key=_as_sort_key)
 
     def _on_patch_repair_row_selected(self) -> None:
         tree = self.patch_repair_tree
@@ -803,19 +724,9 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
             self._show_patch_repair_diff()
             return
         record = self._patch_repair_records.get(selection[0], {})
-        files = [str(f) for f in (record.get("files") or [])]
-        if not files:
-            files = self._patch_files_on_disk(selection[0])
-        changed = {str(f) for f in (record.get("changed_files") or [])}
-        # Mark the files a repair actually rewrote, so a multi-file set does not have to
-        # be inspected file by file to find the one that changed.
-        labels = [("file " + f + (" (changed)" if f in changed else "")) for f in files]
+        labels, preferred = patch_repair_view.file_labels(record, self.arguments.dot_dp, selection[0])
         self.patch_repair_file_combo["values"] = labels
-        if labels:
-            preferred = next((label for label in labels if "(changed)" in label), labels[0])
-            self.patch_repair_file_var.set(preferred)
-        else:
-            self.patch_repair_file_var.set("")
+        self.patch_repair_file_var.set(preferred)
         self._show_patch_repair_diff()
 
     def _show_patch_repair_diff(self) -> None:
@@ -823,33 +734,16 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         if tree is None or self.patch_repair_diff_original is None or self.patch_repair_diff_repaired is None:
             return
         selection = tree.selection()
-        if not selection:
-            message = (
-                "(select a suggestion in the Results tab)"
-                if self._patch_repair_records
-                else "(no results yet: run patch repair)"
-            )
-            self._set_patch_repair_diff_source("")
-            _fill_console(self.patch_repair_diff_original, message)
-            _fill_console(self.patch_repair_diff_repaired, message)
-            return
-        suggestion_id = selection[0]
-        self._set_patch_repair_diff_source("Suggestion " + suggestion_id)
         file_label = self.patch_repair_file_var.get() if self.patch_repair_file_var is not None else ""
-        file_id = file_label.replace("file ", "").replace(" (changed)", "").strip()
-        if not file_id:
-            message = "(no patch files found for suggestion " + suggestion_id + ")"
-            _fill_console(self.patch_repair_diff_original, message)
-            _fill_console(self.patch_repair_diff_repaired, message)
-            return
-
-        dot_dp = self.arguments.dot_dp
-        # The backup holds the patch as the generator produced it; it exists only for a
-        # suggestion a repair actually touched.
-        backup = os.path.join(dot_dp, "patch_repair", "backups", suggestion_id, file_id + ".patch")
-        current = os.path.join(dot_dp, "patch_generator", suggestion_id, file_id + ".patch")
-        _fill_console(self.patch_repair_diff_original, _read_or(backup, "(no backup: this patch was never modified)"))
-        _fill_console(self.patch_repair_diff_repaired, _read_or(current, "(no patch found)"))
+        source, original, repaired = patch_repair_view.diff_texts(
+            self.arguments.dot_dp,
+            selection[0] if selection else None,
+            patch_repair_view.file_id_of_label(file_label),
+            bool(self._patch_repair_records),
+        )
+        self._set_patch_repair_diff_source(source)
+        _fill_console(self.patch_repair_diff_original, original)
+        _fill_console(self.patch_repair_diff_repaired, repaired)
 
     def _set_patch_repair_diff_source(self, text: str) -> None:
         if self.patch_repair_diff_source_label is not None:
@@ -867,22 +761,6 @@ def _as_int(var: Optional[tk.StringVar], default: int) -> int:
         return int(str(var.get()).strip())
     except (TypeError, ValueError):
         return default
-
-
-def _as_sort_key(suggestion_id: str) -> "tuple[int, str]":
-    """Numeric order where possible, so 10 does not sort before 2."""
-    try:
-        return (int(suggestion_id), "")
-    except ValueError:
-        return (1 << 30, suggestion_id)
-
-
-def _read_or(path: str, fallback: str) -> str:
-    try:
-        with open(path, "r", newline="") as f:
-            return f.read()
-    except OSError:
-        return fallback
 
 
 def _fill_console(console: tk.Text, text: str) -> None:
