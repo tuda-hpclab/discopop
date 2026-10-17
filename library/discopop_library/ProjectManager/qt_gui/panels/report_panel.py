@@ -142,6 +142,7 @@ class ReportPanel(Panel):
     ) -> None:
         super().__init__(arguments, project_state, status, parent)
         self._append_output = append_output
+        self._execution_running = False
         self.plot_tabs: List[PlotTab] = []
         self._plot_counter = 0
 
@@ -213,7 +214,9 @@ class ReportPanel(Panel):
         self._fill_table(records)
         for tab in self.plot_tabs:
             self._render(tab)
-        self.generate_report_button.setEnabled(has_execution_results(self.arguments.project_dir))
+        self.generate_report_button.setEnabled(
+            not self._execution_running and has_execution_results(self.arguments.project_dir)
+        )
 
     def _fill_table(self, records: List[ExecutionRecord]) -> None:
         # the best (highest speedup) valid record per configuration is highlighted
@@ -369,6 +372,16 @@ class ReportPanel(Panel):
         self.notebook.setCurrentIndex(0)
 
     # ── the PDF report ───────────────────────────────────────────────────────
+
+    def set_execution_running(self, running: bool) -> None:
+        """No report while an execution writes the results it would read (the Execute tab calls this)."""
+        self._execution_running = running
+        if running:
+            self.generate_report_button.setEnabled(False)
+            self.view_report_button.setEnabled(False)
+        else:
+            self.update_display()
+            self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
 
     def _report_progress(self, text: str) -> None:
         if self._append_output is not None:

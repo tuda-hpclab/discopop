@@ -42,6 +42,7 @@ from discopop_library.ProjectManager.plots.data import parse_progress_jsonl, spl
 from discopop_library.ProjectManager.plots.hotspot_data import hotspots_available_for_explorer
 from discopop_library.ProjectManager.qt_gui import chart_embedding, dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_AUTOTUNING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.suggestion_browser import open_suggestion_browser
@@ -74,8 +75,6 @@ from discopop_library.ProjectManager.services.project_state import (
 from discopop_library.ProjectManager.services.requests import AutotunerRequest
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 
-# the name of the tab in the main window (``main_window.TAB_AUTOTUNING``; not imported, the window imports this module)
-TAB_AUTOTUNING = "Autotuning"
 TAB_DISABLED_TOOLTIP = "Prerequisites not met:\nPattern Detection needs to be executed first."
 
 SEARCH_MODE = "search"

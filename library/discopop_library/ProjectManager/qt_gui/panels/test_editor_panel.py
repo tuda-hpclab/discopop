@@ -380,3 +380,20 @@ def test_the_save_shortcut_saves_the_compilation_editor_when_it_is_in_front(
     monkeypatch.setattr(window, "isActiveWindow", lambda: True)
     panel.save_shortcut()
     assert saved == ["compilation"]
+
+
+def test_a_refresh_of_the_selection_keeps_the_cursor_and_reloads_what_changed_on_disk(panel: EditorPanel) -> None:
+    select(panel)
+    type_into(panel, "execute.sh", "#!/bin/bash\n./prog --big\n")
+    assert panel.save()
+    editor = panel.editors["execute.sh"]
+    cursor = editor.textCursor()
+    cursor.setPosition(12)
+    editor.setTextCursor(cursor)
+    # the configuration list republishes the selection after the save
+    select(panel)
+    assert editor.textCursor().position() == 12 and editor.document().isUndoAvailable()
+    # a file changed by someone else is shown
+    (config_dir(panel) / "execute.sh").write_text("#!/bin/bash\n./other\n")
+    select(panel)
+    assert editor.text() == "#!/bin/bash\n./other\n"

@@ -128,9 +128,13 @@ class ExecutePanel(Panel):
         status: StatusLine,
         tabs: Optional[TabHost] = None,
         parent: Optional[QWidget] = None,
+        *,
+        run_state_changed: Optional[Callable[[bool], None]] = None,
     ) -> None:
         super().__init__(arguments, project_state, status, parent)
         self.tabs = tabs
+        # told True when a run or preparation starts and False when it ended (the Report tab holds its report back)
+        self._run_state_changed = run_state_changed
         self._job: Optional[WorkRunner] = None
         self._browser: Optional[QWidget] = None
         self._autotuner_prefix_auto_value = ""
@@ -319,10 +323,14 @@ class ExecutePanel(Panel):
     # ── what the other panels read ───────────────────────────────────────────
 
     def timeouts(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        """The execution, compilation and validation timeouts in seconds; None where disabled (0)."""
+        """The execution, compilation and validation timeouts in seconds; 0 is disabled.
+
+        0 is passed on as 0, as the Tk GUI did: the script then still runs under ``timeout 0``, which forwards a
+        Stop to the program (without the wrapper only the shell would be terminated).
+        """
 
         def seconds(spin: QSpinBox) -> Optional[float]:
-            return float(spin.value()) if spin.value() > 0 else None
+            return float(spin.value())
 
         return (
             seconds(self.timeout_execution_spin),
@@ -535,6 +543,8 @@ class ExecutePanel(Panel):
         button.setText(button_text)
         self.status.set(status_text, widgets.STATUS_BUSY)
         self.console.clear()
+        if self._run_state_changed is not None:
+            self._run_state_changed(True)
 
     def _end_run(self) -> None:
         self._job = None
@@ -542,6 +552,8 @@ class ExecutePanel(Panel):
         self.prepare_pattern_detection_button.setText(PREPARE_TEXT)
         self.stop_execution_button.setEnabled(False)
         self._update_modes()
+        if self._run_state_changed is not None:
+            self._run_state_changed(False)
 
     def _on_execution_event(self, event: WorkEvent, restore_logging: Callable[[], None]) -> None:
         """Handle one event of the execution work; runs on the main thread."""

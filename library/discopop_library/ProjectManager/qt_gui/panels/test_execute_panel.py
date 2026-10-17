@@ -157,7 +157,7 @@ def test_the_timeouts_are_passed_on_and_zero_disables_them(panel: ExecutePanel) 
     assert panel.timeouts() == (3600.0, 3600.0, 3600.0)
     panel.timeout_execution_spin.setValue(0)
     panel.timeout_validation_spin.setValue(5)
-    assert panel.timeouts() == (None, 3600.0, 5.0)
+    assert panel.timeouts() == (0.0, 3600.0, 5.0)
 
 
 def test_the_defaults(panel: ExecutePanel) -> None:

@@ -16,7 +16,7 @@ from unittest import mock
 import pytest
 from pytestqt.qtbot import QtBot
 
-from discopop_library.ProjectManager.qt_gui import main_window, widgets
+from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.panels import autotuning_panel
 from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
@@ -96,10 +96,6 @@ def run_with(fixture: Fixture, qtbot: QtBot, code: str, finished: bool = True) -
         fixture.panel.run()
         if finished:
             qtbot.waitUntil(lambda: not fixture.panel.running, timeout=20000)
-
-
-def test_the_tab_name_is_the_one_of_the_main_window() -> None:
-    assert autotuning_panel.TAB_AUTOTUNING == main_window.TAB_AUTOTUNING
 
 
 def test_defaults(fixture: Fixture) -> None:
