@@ -37,7 +37,7 @@ from discopop_library.ProjectManager.services.vscode import (
     open_project,
 )
 from discopop_library.ProjectManager.services.requests import ExplorerRequest
-from discopop_library.ProjectManager.gui.plots import hotspot_data
+from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from discopop_library.ProjectManager.gui.widgets import (
     create_styled_output_console,

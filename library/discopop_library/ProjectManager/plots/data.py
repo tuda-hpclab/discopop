@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.EmpiricalAutotuning.output.progress import PROGRESS_PREFIX
-from discopop_library.ProjectManager.gui.plots import mode_style
+from discopop_library.ProjectManager.plots import mode_style
 
 _SETTINGS_SUFFIX = "_settings.json"
 

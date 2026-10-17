@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from discopop_library.ProjectManager.gui.plots.hotspot_data import (
+from discopop_library.ProjectManager.plots.hotspot_data import (
     HOTNESS_MAYBE,
     HOTNESS_NO,
     HOTNESS_YES,
@@ -416,7 +416,7 @@ def test_load_json_file(tmp_path: Path) -> None:
 
 
 def test_path_helpers_are_relative_to_dot_discopop() -> None:
-    from discopop_library.ProjectManager.gui.plots.hotspot_data import (
+    from discopop_library.ProjectManager.plots.hotspot_data import (
         cs_id_path,
         hotspots_json_path,
         private_dir,

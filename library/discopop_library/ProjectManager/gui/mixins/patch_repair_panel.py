@@ -53,7 +53,7 @@ from discopop_library.ProjectManager.services.patches import has_patches
 from discopop_library.ProjectManager.services.requests import PatchRepairRequest
 from discopop_library.ProjectManager.gui.mixins.helpers import show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
-from discopop_library.ProjectManager.gui.plots.data import split_progress_events
+from discopop_library.ProjectManager.plots.data import split_progress_events
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from discopop_library.ProjectManager.gui.suggestion_selector import SuggestionSelector
 from discopop_library.ProjectManager.gui.widgets import (

@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from discopop_library.ProjectManager.gui.plots import demangle, interaction, mode_style
-from discopop_library.ProjectManager.gui.plots.hotspot_data import (
+from discopop_library.ProjectManager.plots import demangle, interaction, mode_style
+from discopop_library.ProjectManager.plots.hotspot_data import (
     HOTNESS_MAYBE,
     HOTNESS_NO,
     HOTNESS_YES,

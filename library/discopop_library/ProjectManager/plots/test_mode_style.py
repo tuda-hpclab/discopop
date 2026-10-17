@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-from discopop_library.ProjectManager.gui.plots.mode_style import (
+from discopop_library.ProjectManager.plots.mode_style import (
     CONFIG_PALETTE,
     DEFAULT_MARKER,
     NOT_APPLIED_STATUS,

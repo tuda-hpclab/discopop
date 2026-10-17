@@ -45,10 +45,11 @@ from discopop_library.ProjectManager.gui.widgets import (
     heading_label,
     caption_label,
 )
-from discopop_library.ProjectManager.gui.plots import autotuning_chart, embedding, mode_style
-from discopop_library.ProjectManager.gui.plots.autotuning_chart import ProgressModel
-from discopop_library.ProjectManager.gui.plots.data import parse_progress_jsonl, split_progress_events
-from discopop_library.ProjectManager.gui.plots.hotspot_data import hotspots_available_for_explorer
+from discopop_library.ProjectManager.gui import chart_embedding as embedding
+from discopop_library.ProjectManager.plots import autotuning_chart, mode_style
+from discopop_library.ProjectManager.plots.autotuning_chart import ProgressModel
+from discopop_library.ProjectManager.plots.data import parse_progress_jsonl, split_progress_events
+from discopop_library.ProjectManager.plots.hotspot_data import hotspots_available_for_explorer
 
 logger_name = "AutotuningPanel"
 

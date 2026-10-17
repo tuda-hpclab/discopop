@@ -8,15 +8,15 @@
 
 from typing import List
 
-from discopop_library.ProjectManager.gui.plots import mode_style
-from discopop_library.ProjectManager.gui.plots.hotspot_charts import (
+from discopop_library.ProjectManager.plots import mode_style
+from discopop_library.ProjectManager.plots.hotspot_charts import (
     HOTNESS_COLORS,
     format_region_tooltip,
     hotness_color,
     kind_marker,
     top_regions,
 )
-from discopop_library.ProjectManager.gui.plots.hotspot_data import (
+from discopop_library.ProjectManager.plots.hotspot_data import (
     HOTNESS_MAYBE,
     HOTNESS_NO,
     HOTNESS_YES,

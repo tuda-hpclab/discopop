@@ -31,8 +31,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from discopop_library.ProjectManager.gui.plots import mode_style
-from discopop_library.ProjectManager.gui.plots.data import best_so_far
+from discopop_library.ProjectManager.plots import mode_style
+from discopop_library.ProjectManager.plots.data import best_so_far
 
 
 @dataclass

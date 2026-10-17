@@ -85,8 +85,9 @@ from discopop_library.ProjectManager.gui.mixins.helpers import (
     show_warning,
 )
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
-from discopop_library.ProjectManager.gui.plots import demangle, embedding, hotspot_charts, hotspot_data
-from discopop_library.ProjectManager.gui.plots.hotspot_data import (
+from discopop_library.ProjectManager.gui import chart_embedding as embedding
+from discopop_library.ProjectManager.plots import demangle, hotspot_charts, hotspot_data
+from discopop_library.ProjectManager.plots.hotspot_data import (
     HOTNESS_MAYBE,
     HOTNESS_NO,
     HOTNESS_ORDER,

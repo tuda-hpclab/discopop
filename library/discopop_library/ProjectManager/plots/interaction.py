@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from discopop_library.ProjectManager.gui.plots import mode_style
+from discopop_library.ProjectManager.plots import mode_style
 
 # Attribute under which artists carry their payload. Deliberately one shared
 # name, so the lookup below finds payloads regardless of which renderer drew them.
@@ -38,6 +38,9 @@ METADATA_KEY = "_discopop_record"
 HIT_RADIUS_PX = 12.0
 
 _INTERACTION_BOUND_KEY = "_discopop_interaction_bound"
+
+# Attribute of a canvas holding the function that shows / hides its hover tooltip.
+TOOLTIP_PRESENTER_KEY = "_discopop_tooltip_presenter"
 
 
 def attach(artist: Any, payload: Any) -> None:
@@ -127,6 +130,16 @@ def find_payload_at_event(figure: Any, event: Any) -> Optional[Any]:
     return None
 
 
+def install_tooltip_presenter(canvas: Any, presenter: Callable[[Optional[str]], None]) -> None:
+    """Say how ``canvas`` shows a hover tooltip.
+
+    ``presenter(text)`` shows ``text`` at the cursor, ``presenter(None)`` hides it.
+
+    Called by the toolkit that embeds the canvas (Tk or Qt); this module stays free of both.
+    """
+    setattr(canvas, TOOLTIP_PRESENTER_KEY, presenter)
+
+
 def setup_interaction(
     figure: Any,
     format_tooltip: Callable[[Any], str],
@@ -135,20 +148,22 @@ def setup_interaction(
     """Enable hover tooltips and click-to-select on ``figure``.
 
     Call after every render. A click that misses every artist is ignored, leaving
-    the previous selection displayed. Safe to call headless (silently skips).
+    the previous selection displayed. Safe to call headless: a canvas without a
+    tooltip presenter (see :func:`install_tooltip_presenter`) is silently skipped.
 
     A chart tab re-renders repeatedly while reusing one canvas, so the handlers
     -- which resolve artists via ``figure.axes`` at event time, not bind time --
     only need attaching once; a flag on the canvas prevents duplicate bindings
     from firing the callback several times per click.
     """
-    if not hasattr(figure.canvas, "mpl_connect") or not hasattr(figure.canvas, "get_tk_widget"):
+    presenter = getattr(figure.canvas, TOOLTIP_PRESENTER_KEY, None)
+    if not hasattr(figure.canvas, "mpl_connect") or presenter is None:
         return
     if getattr(figure.canvas, _INTERACTION_BOUND_KEY, False):
         return
     setattr(figure.canvas, _INTERACTION_BOUND_KEY, True)
 
-    _setup_hover_tooltips(figure, format_tooltip)
+    _setup_hover_tooltips(figure, format_tooltip, presenter)
 
     def on_click(event: Any) -> None:
         payload = find_payload_at_event(figure, event)
@@ -158,20 +173,19 @@ def setup_interaction(
     figure.canvas.mpl_connect("button_press_event", on_click)
 
 
-def _setup_hover_tooltips(figure: Any, format_tooltip: Callable[[Any], str]) -> None:
-    """Show a sticky label while the cursor rests on an artist with a payload."""
-    import tkinter as tk
-
-    tooltip_label: Optional[tk.Label] = None
+def _setup_hover_tooltips(
+    figure: Any, format_tooltip: Callable[[Any], str], presenter: Callable[[Optional[str]], None]
+) -> None:
+    """Show a sticky tooltip while the cursor rests on an artist with a payload."""
     last_payload: Optional[Any] = None
 
     def on_motion(event: Any) -> None:
-        nonlocal tooltip_label, last_payload
+        nonlocal last_payload
         payload = find_payload_at_event(figure, event)
 
         if payload is None:
-            if tooltip_label is not None:
-                tooltip_label.place_forget()
+            if last_payload is not None:
+                presenter(None)
             last_payload = None
             return
 
@@ -179,26 +193,6 @@ def _setup_hover_tooltips(figure: Any, format_tooltip: Callable[[Any], str]) -> 
         if last_payload is payload:
             return
         last_payload = payload
-
-        text = format_tooltip(payload)
-        widget = figure.canvas.get_tk_widget()
-        if tooltip_label is None:
-            tooltip_label = tk.Label(
-                widget,
-                text=text,
-                background="#fffacd",
-                relief=tk.SOLID,
-                borderwidth=1,
-                font=("TkDefaultFont", 9),
-                justify=tk.LEFT,
-                padx=4,
-                pady=2,
-            )
-        else:
-            tooltip_label.config(text=text)
-
-        x = widget.winfo_pointerx() - widget.winfo_rootx()
-        y = widget.winfo_pointery() - widget.winfo_rooty()
-        tooltip_label.place(x=x + 10, y=y + 10)
+        presenter(format_tooltip(payload))
 
     figure.canvas.mpl_connect("motion_notify_event", on_motion)

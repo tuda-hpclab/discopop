@@ -25,9 +25,9 @@ matplotlib.use("Agg")
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
-from discopop_library.ProjectManager.gui.plots import hotspot_charts, interaction, report_charts  # noqa: E402
-from discopop_library.ProjectManager.gui.plots.data import ExecutionRecord  # noqa: E402
-from discopop_library.ProjectManager.gui.plots.hotspot_data import (  # noqa: E402
+from discopop_library.ProjectManager.plots import hotspot_charts, interaction, report_charts  # noqa: E402
+from discopop_library.ProjectManager.plots.data import ExecutionRecord  # noqa: E402
+from discopop_library.ProjectManager.plots.hotspot_data import (  # noqa: E402
     HOTNESS_NO,
     HOTNESS_YES,
     KIND_LOOP,

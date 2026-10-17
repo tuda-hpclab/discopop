@@ -8,7 +8,7 @@
 
 from typing import Any, Dict
 
-from discopop_library.ProjectManager.gui.plots.data import (
+from discopop_library.ProjectManager.plots.data import (
     best_so_far,
     mode_of_setting,
     parse_execution_results,

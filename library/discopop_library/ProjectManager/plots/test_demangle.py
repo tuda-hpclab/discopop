@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 import pytest
 
-from discopop_library.ProjectManager.gui.plots import demangle
+from discopop_library.ProjectManager.plots import demangle
 
 
 @pytest.fixture(autouse=True)

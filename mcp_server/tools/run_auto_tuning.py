@@ -24,7 +24,7 @@ from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArgume
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.detailed_hotspot_loader import hotspots_json_path, load_detailed_hotspots
 from discopop_library.ProjectManager.configurations.validation import VALIDATE_SCRIPT_NAME
-from discopop_library.ProjectManager.gui.plots.data import parse_progress_jsonl
+from discopop_library.ProjectManager.plots.data import parse_progress_jsonl
 from mcp_server.tools.helpers import (
     APPLICATOR_OK_RETURNCODES,
     ToolContext,
