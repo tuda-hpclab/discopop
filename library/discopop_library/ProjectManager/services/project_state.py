@@ -27,6 +27,11 @@ class ConfigChanged:
 
 
 @dataclass(frozen=True)
+class ConfigurationsChanged:
+    """A configuration was created, copied, renamed or deleted, or the files of one changed."""
+
+
+@dataclass(frozen=True)
 class ResultsChanged:
     """Execution results or reports changed."""
 

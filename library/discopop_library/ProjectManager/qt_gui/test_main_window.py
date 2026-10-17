@@ -13,36 +13,9 @@ from typing import List
 import pytest
 from pytestqt.qtbot import QtBot
 
-from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui.main_window import TAB_ORDER, MainWindow
 from discopop_library.ProjectManager.qt_gui.panel import Panel
-
-
-def make_arguments(project_root: Path) -> ProjectManagerArguments:
-    """The arguments of ``discopop_project_manager --gui --gui-toolkit qt`` for a project in ``project_root``."""
-    (project_root / ".discopop" / "project" / "configs").mkdir(parents=True, exist_ok=True)
-    return ProjectManagerArguments(
-        log_level="WARNING",
-        write_log=False,
-        project_root=str(project_root),
-        full_execute=False,
-        list=False,
-        execute_configurations="",
-        execute_inplace=False,
-        skip_cleanup=False,
-        generate_report=False,
-        show_report=False,
-        initialize_directory=False,
-        apply_suggestions=None,
-        reset=False,
-        reset_execution_results=False,
-        gui=True,
-        label_prefix="",
-        timeout_execution=None,
-        timeout_compilation=None,
-        timeout_validation=None,
-        gui_toolkit="qt",
-    )
+from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 
 
 def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
