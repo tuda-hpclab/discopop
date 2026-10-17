@@ -24,6 +24,7 @@ from discopop_library.ProjectManager.configurations.repetitions import (
 )
 
 GUI_COMMAND = "discopop_gui"
+GUI_TOOLKITS = ("tk", "qt")
 
 GUI_MOVED_NOTICE = (
     "Note: 'discopop' used to open the graphical interface. It is now the command\n"
@@ -52,6 +53,8 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("--init", action="store_true", help="Initialize the .discopop directory in the specified "
     "project path")
     parser.add_argument("--gui", action="store_true", help="Open the graphical configuration manager")
+    parser.add_argument("--gui-toolkit", choices=GUI_TOOLKITS, default="tk", help="The toolkit the window of --gui "
+                        "is drawn with: tk (default) or qt (PySide6).")
     parser.add_argument("-x", "--execute", default="tiny", help="Comma separated list of configurations to be "
     "executed. Format: <config_name>[:<mode>][:<thread_count>] . Modes: dp,hd,seq,par. Default: tiny")
     parser.add_argument("-xf", "--execute-full", action="store_true", help="Execute all configurations for validation "
@@ -150,6 +153,7 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         timeout_validation=None if arguments.timeout_validation == 0 else float(arguments.timeout_validation),
         execution_time_regex=arguments.execution_time_regex,
         execution_repetitions=arguments.execution_repetitions,
+        gui_toolkit=arguments.gui_toolkit,
     )
 
 
