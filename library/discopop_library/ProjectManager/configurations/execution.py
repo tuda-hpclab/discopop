@@ -196,6 +196,15 @@ def _run_once(
     )
 
 
+def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) -> PATH:
+    """The path ``path`` below ``project_root`` has in the copy of the project; other paths are left alone."""
+    absolute_path = os.path.abspath(path)
+    absolute_root = os.path.abspath(project_root)
+    if os.path.commonpath([absolute_path, absolute_root]) != absolute_root:
+        return path
+    return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
+
+
 def execute_configuration(
     arguments: ProjectManagerArguments,
     project_copy_root_path: PATH,
@@ -250,9 +259,9 @@ def execute_configuration(
     settings_name = os.path.basename(settings_path)
     script_name = os.path.basename(script_path)
 
-    config_path = config_path.replace(arguments.project_root, project_copy_root_path)
-    settings_path = settings_path.replace(arguments.project_root, project_copy_root_path)
-    script_path = script_path.replace(arguments.project_root, project_copy_root_path)
+    config_path = _path_in_copy(config_path, arguments.project_root, project_copy_root_path)
+    settings_path = _path_in_copy(settings_path, arguments.project_root, project_copy_root_path)
+    script_path = _path_in_copy(script_path, arguments.project_root, project_copy_root_path)
     project_copy_dp_path = os.path.join(project_copy_root_path, ".discopop")
 
     # get applied suggestions
