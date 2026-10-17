@@ -635,9 +635,15 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
 
         events: "queue.Queue[JobEvent]" = queue.Queue()
         # SIGINT (not SIGTERM/terminate()) so the autotuner's search loop takes the same KeyboardInterrupt path as
-        # a manual Ctrl+C, letting it finish gracefully and save the best solution found so far.
+        # a manual Ctrl+C, letting it finish gracefully and save the best solution found so far. Sent to the process
+        # group as a terminal does, so the program it is measuring stops too instead of running on.
         job = JobRunner(
-            JobSpec(autotuner_command(request, dot_discopop), cwd=dot_discopop, cancel_policy=CancelPolicy.SIGINT),
+            JobSpec(
+                autotuner_command(request, dot_discopop),
+                cwd=dot_discopop,
+                cancel_policy=CancelPolicy.SIGINT_GROUP,
+                new_session=True,
+            ),
             events,
         )
         self._autotuning_job = job
@@ -658,7 +664,11 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
                 output_callback(cleaned + "\n")
         elif isinstance(event, JobFinished):
             self._autotuning_job = None
-            if event.returncode != 0:
+            if event.cancelled:
+                # the tuner keeps what it measured until the stop, whatever its exit code
+                output_callback("\nAutotuning stopped.\n")
+                self._on_autotuning_complete(stopped=True)
+            elif event.returncode != 0:
                 output_callback(f"\nError: Autotuner exited with return code {event.returncode}\n")
                 self._on_autotuning_complete(error=True)
             else:
@@ -747,7 +757,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
             )
         output_callback("Running autotuner...\n\n")
 
-    def _on_autotuning_complete(self, error: bool = False) -> None:
+    def _on_autotuning_complete(self, error: bool = False, stopped: bool = False) -> None:
         self.autotuning_running = False
 
         # progress.jsonl is the authoritative record of the finished run: rebuild the
@@ -760,7 +770,11 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         if self.autotuning_stop_button is not None:
             self.autotuning_stop_button.config(state="disabled")
 
-        if not error:
+        if stopped:
+            self.project_state.publish(AutotuningFinished())
+            self.status_label.config(text="Autotuning stopped", foreground=widgets.STATUS_IDLE)
+            self.after(3000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
+        elif not error:
             self.project_state.publish(AutotuningFinished())
             not_applied = (
                 self._autotuning_progress_model.counts()[3] if self._autotuning_progress_model is not None else 0

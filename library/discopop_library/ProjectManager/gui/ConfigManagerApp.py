@@ -407,6 +407,17 @@ class ConfigManagerApp(  # type: ignore
         state.subscribe(AutotuningFinished, lambda _e: self._refresh_suggestion_selection_display())
         state.subscribe(AutotuningFinished, lambda _e: self._update_report_display())
 
+    def _cancel_running_jobs(self) -> None:
+        """Stop the jobs the panels started; called once the window is closed.
+
+        Several of them run in a session of their own, which neither the closed window nor a Ctrl+C in the
+        terminal reaches.
+        """
+        for name in ("_execution_job", "_explorer_job", "_hotspot_job", "_autotuning_job", "_patch_repair_job"):
+            job = getattr(self, name, None)
+            if job is not None:
+                job.cancel()
+
     def _update_dot_dp_label(self, event: Optional["tk.Event[tk.Misc]"] = None) -> None:
         """Truncate the .discopop path label to at most half the bottom bar's width.
 
@@ -581,4 +592,7 @@ def run_gui(arguments: ProjectManagerArguments) -> None:
     # caller that is not a person -- a script, a CI job, an agent -- cannot tell
     # apart from a hang. Name what it is waiting for.
     print("Opening the DiscoPoP Project Manager. Close the window to continue.", file=sys.stderr)
-    app.mainloop()
+    try:
+        app.mainloop()
+    finally:
+        app._cancel_running_jobs()

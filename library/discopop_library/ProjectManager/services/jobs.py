@@ -26,8 +26,11 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 class CancelPolicy(Enum):
     """How a running job is asked to stop."""
 
-    # like Ctrl+C: the tool finishes gracefully and saves what it has (autotuner, patch repair)
+    # like Ctrl+C: the tool finishes gracefully and saves what it has
     SIGINT = "sigint"
+    # SIGINT to the whole process group, as Ctrl+C in a terminal sends it: the programs the tool started stop as well
+    # (autotuner, patch repair); the job is started in a new session
+    SIGINT_GROUP = "sigint_group"
     # SIGTERM to the whole process group; the job is started in a new session (explorer)
     SIGTERM_GROUP = "sigterm_group"
     # Popen.terminate()
@@ -40,7 +43,7 @@ class JobSpec:
     cwd: str
     cancel_policy: CancelPolicy = CancelPolicy.TERMINATE
     env: Optional[Mapping[str, str]] = None
-    # start the process in a new session (required for SIGTERM_GROUP)
+    # start the process in a new session (required for SIGINT_GROUP and SIGTERM_GROUP)
     new_session: bool = False
 
 
@@ -78,6 +81,11 @@ def _signal_process(process: "subprocess.Popen[str]", policy: CancelPolicy) -> N
     try:
         if policy is CancelPolicy.SIGINT:
             process.send_signal(signal.SIGINT)
+        elif policy is CancelPolicy.SIGINT_GROUP:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGINT)
+            except (ProcessLookupError, OSError):
+                process.send_signal(signal.SIGINT)
         elif policy is CancelPolicy.SIGTERM_GROUP:
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGTERM)

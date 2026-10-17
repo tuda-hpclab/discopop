@@ -6,9 +6,12 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
+import os
 import queue
+import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, List
 
@@ -67,7 +70,12 @@ def test_a_missing_executable_is_reported(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "policy,new_session",
-    [(CancelPolicy.SIGINT, False), (CancelPolicy.SIGTERM_GROUP, True), (CancelPolicy.TERMINATE, False)],
+    [
+        (CancelPolicy.SIGINT, False),
+        (CancelPolicy.SIGINT_GROUP, True),
+        (CancelPolicy.SIGTERM_GROUP, True),
+        (CancelPolicy.TERMINATE, False),
+    ],
 )
 def test_cancelling_a_running_job(tmp_path: Path, policy: CancelPolicy, new_session: bool) -> None:
     code = "import time; print('ready', flush=True); time.sleep(60)"
@@ -82,6 +90,46 @@ def test_cancelling_a_running_job(tmp_path: Path, policy: CancelPolicy, new_sess
     assert isinstance(last, JobFinished)
     assert last.cancelled
     assert last.returncode != 0
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_a_sigint_to_the_group_stops_what_the_job_started(tmp_path: Path) -> None:
+    # like the autotuner running a measured program: the grandchild has to stop as well, as on Ctrl+C in a terminal
+    code = (
+        "import subprocess, time\n"
+        "child = subprocess.Popen(['sleep', '60'])\n"
+        "print(child.pid, flush=True)\n"
+        "try:\n"
+        "    child.wait()\n"
+        "except KeyboardInterrupt:\n"
+        "    pass\n"
+    )
+    events: "queue.Queue[JobEvent]" = queue.Queue()
+    runner = JobRunner(_python(code, tmp_path, cancel_policy=CancelPolicy.SIGINT_GROUP, new_session=True), events)
+    runner.start()
+    first = events.get(timeout=20)
+    assert isinstance(first, JobOutput)
+    grandchild = int(first.line)
+    try:
+        runner.cancel()
+        last = events.get(timeout=20)
+        while not is_terminal(last):
+            last = events.get(timeout=20)
+        assert isinstance(last, JobFinished) and last.cancelled
+        deadline = time.time() + 10
+        while _alive(grandchild) and time.time() < deadline:
+            time.sleep(0.05)
+        assert not _alive(grandchild)
+    finally:
+        if _alive(grandchild):
+            os.kill(grandchild, signal.SIGKILL)
 
 
 def test_a_cancel_before_the_process_exists_still_stops_it(tmp_path: Path) -> None:

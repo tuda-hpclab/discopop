@@ -552,9 +552,15 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         events: "queue.Queue[JobEvent]" = queue.Queue()
         # A subprocess, never in-process: the tool drives the autotuner and an external agent, and its console
         # output would otherwise fight the Tk main loop. SIGINT rather than terminate(): the tool finishes the
-        # suggestion it is on and writes results.json, instead of leaving a half-written patch behind.
+        # suggestion it is on and writes results.json, instead of leaving a half-written patch behind. Sent to the
+        # process group as a terminal does, so the autotuner and the program it measures stop too.
         job = JobRunner(
-            JobSpec(patch_repair_command(request, dot_discopop), cwd=dot_discopop, cancel_policy=CancelPolicy.SIGINT),
+            JobSpec(
+                patch_repair_command(request, dot_discopop),
+                cwd=dot_discopop,
+                cancel_policy=CancelPolicy.SIGINT_GROUP,
+                new_session=True,
+            ),
             events,
         )
         self._patch_repair_job = job
@@ -584,7 +590,10 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
                 output_callback(cleaned + "\n")
         elif isinstance(event, JobFinished):
             self._patch_repair_job = None
-            if event.returncode != 0:
+            if event.cancelled:
+                output_callback("\nPatch repair stopped.\n")
+                self._on_patch_repair_complete(stopped=True)
+            elif event.returncode != 0:
                 output_callback("\nError: Patch repair exited with return code " + str(event.returncode) + "\n")
                 self._on_patch_repair_complete(error=True)
             else:
@@ -660,7 +669,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
             self.patch_repair_stop_button.config(state="disabled")
         self.status_label.config(text="Stopping patch repair...", foreground=widgets.STATUS_STOP)
 
-    def _on_patch_repair_complete(self, error: bool = False) -> None:
+    def _on_patch_repair_complete(self, error: bool = False, stopped: bool = False) -> None:
         self.patch_repair_running = False
         # results.json is the authoritative record: rebuild from it so the table is
         # complete even if a live event was missed.
@@ -673,6 +682,10 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
 
         if error:
             self.status_label.config(text="Patch repair failed", foreground=widgets.STATUS_FAIL)
+            self.after(4000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
+            return
+        if stopped:
+            self.status_label.config(text="Patch repair stopped", foreground=widgets.STATUS_IDLE)
             self.after(4000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
             return
 
