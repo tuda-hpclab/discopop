@@ -44,7 +44,7 @@ std::string DiscoPoP::GetOrInsertVarNameStatic(std::string var_name, IRBuilder<>
   }
 
   std::string v_name = var_name;
-  std::map<std::string, Value*>::iterator pair = var_names_.find(var_name);
+  const std::map<std::string, Value*>::iterator pair = var_names_.find(var_name);
   if (pair == var_names_.end()) {
     val_name = builder.CreateGlobalStringPtr(StringRef(var_name.c_str()), ".str");
 
@@ -72,7 +72,7 @@ Value* DiscoPoP::GetOrInsertVarNameDynamic(std::string var_name, IRBuilder<>& bu
   }
 
   Value* v_name = nullptr;
-  std::map<std::string, Value*>::iterator pair = var_names_.find(var_name);
+  const std::map<std::string, Value*>::iterator pair = var_names_.find(var_name);
   if (pair == var_names_.end()) {
     v_name = builder.CreateGlobalStringPtr(StringRef(var_name.c_str()), ".str");
     var_names_[var_name] = v_name;
@@ -84,9 +84,9 @@ Value* DiscoPoP::GetOrInsertVarNameDynamic(std::string var_name, IRBuilder<>& bu
 
 std::string DiscoPoP::DetermineVariableNameStatic(Instruction* i,
                                                   bool& is_global_variable /*=defaultIsGlobalVariableValue*/,
-                                                  bool disable_metadata_map, std::string prefix) {
+                                                  bool disable_metadata_map, const std::string& prefix) {
   assert(i && "Instruction cannot be NULL \n");
-  int index = isa<StoreInst>(i) ? 1 : 0;
+  const int index = isa<StoreInst>(i) ? 1 : 0;
   Value* operand = i->getOperand(index);
 
   IRBuilder<> builder(i);
@@ -125,10 +125,10 @@ std::string DiscoPoP::DetermineVariableNameStatic(Instruction* i,
           ConstantInt* idx_ptr = cast<ConstantInt>(gep->getOperand(2));
           std::uint64_t member_idx = *(idx_ptr->getValue().getRawData());
           if (!(cast<StructType>(struct_type))->isLiteral()) {
-            std::string str_name(struct_type->getStructName().data());
-            std::map<std::string, MDNode*>::iterator it = structs_.find(str_name);
+            const std::string str_name(struct_type->getStructName().data());
+            const std::map<std::string, MDNode*>::iterator it = structs_.find(str_name);
             if (it != structs_.end()) {
-              std::string ret = FindStructMemberNameStatic(it->second, member_idx, builder);
+              const std::string ret = FindStructMemberNameStatic(it->second, member_idx, builder);
               if (ret.size() > 0) {
                 std::string ret_val = ret;
                 if (true_var_names_from_metadata_map_.find(ret_val) == true_var_names_from_metadata_map_.end() ||
@@ -176,9 +176,9 @@ std::string DiscoPoP::DetermineVariableNameStatic(Instruction* i,
   return "";  // getOrInsertVarName("*", builder);
 }
 
-Value* DiscoPoP::DetermineVariableNameDynamic(Instruction* const i, std::string prefix) {
+Value* DiscoPoP::DetermineVariableNameDynamic(Instruction* const i, const std::string& prefix) {
   assert(i && "Instruction cannot be NULL \n");
-  int index = isa<StoreInst>(i) ? 1 : 0;
+  const int index = isa<StoreInst>(i) ? 1 : 0;
   Value* operand = i->getOperand(index);
 
   IRBuilder<> builder(i);
@@ -210,8 +210,8 @@ Value* DiscoPoP::DetermineVariableNameDynamic(Instruction* const i, std::string 
 
           StructType* s_ty = cast<StructType>(struct_type);
           if (!s_ty->isLiteral()) {
-            std::string str_name(struct_type->getStructName().data());
-            std::map<std::string, MDNode*>::iterator it = structs_.find(str_name);
+            const std::string str_name(struct_type->getStructName().data());
+            const std::map<std::string, MDNode*>::iterator it = structs_.find(str_name);
             if (it != structs_.end()) {
               Value* ret = FindStructMemberName(it->second, member_idx, builder);
               if (ret) {
@@ -254,8 +254,8 @@ void DiscoPoP::GetTrueVarNamesFromMetadata(Region* top_region, Node* /*root*/,
       auto dbg_record_range = inst.getDbgRecordRange();
       auto dbg_variable_range = filterDbgVars(dbg_record_range);
       for (DbgVariableRecord& dvr : dbg_variable_range) {
-        std::string ir_var_name = dvr.getValue()->getName().str();
-        std::string src_var_name = dvr.getVariable()->getName().str();
+        const std::string ir_var_name = dvr.getValue()->getName().str();
+        const std::string src_var_name = dvr.getVariable()->getName().str();
         // add to trueVarNamesFromMetadataMap
         // overwrite entry if already existing
         if (true_var_names_from_metadata_map->find(ir_var_name) == true_var_names_from_metadata_map->end()) {

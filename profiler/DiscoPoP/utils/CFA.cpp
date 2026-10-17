@@ -79,7 +79,7 @@ void DiscoPoP::CFA(Function& f, LoopInfo& li, const std::map<Loop*, std::string>
           // Changed TerminatorInst to Instruction
           Instruction* ti = (*ei)->getTerminator();
           assert(ti != NULL && "Exit block is not well formed!");
-          unsigned int num_succ = ti->getNumSuccessors();
+          const unsigned int num_succ = ti->getNumSuccessors();
           for (unsigned int i = 0; i < num_succ; ++i) {
             BasicBlock* succ = ti->getSuccessor(i);
             exit_type = succ->getName().split('.').first;
@@ -107,7 +107,7 @@ void DiscoPoP::CFA(Function& f, LoopInfo& li, const std::map<Loop*, std::string>
       }
 
       // Check if entry block and exit block(s) have valid LID.
-      bool has_valid_entry = SanityCheck(tmp_bb);
+      const bool has_valid_entry = SanityCheck(tmp_bb);
       bool has_valid_exit = false;
       for (SmallVectorImpl<BasicBlock*>::iterator ei = real_exit_blocks.begin(), end = real_exit_blocks.end();
            ei != end; ++ei) {

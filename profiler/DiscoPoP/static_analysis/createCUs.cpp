@@ -177,7 +177,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
           // get size of data written into memory by this store instruction
           Value* operand = instruction->getOperand(1);
           Type* ty = operand->getType();
-          unsigned u = dl->getTypeSizeInBits(ty);
+          const unsigned u = dl->getTypeSizeInBits(ty);
           cu->write_data_size += u;
           var_name = DetermineVariableNameStatic(&*instruction, is_global_var, false, "");
           var_type = DetermineVariableType(&*instruction);
@@ -188,7 +188,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
         } else if (isa<LoadInst>(instruction)) {
           // get size of data read from memory by this load instruction
           Type* ty = instruction->getType();
-          unsigned u = dl->getTypeSizeInBits(ty);
+          const unsigned u = dl->getTypeSizeInBits(ty);
           cu->read_data_size += u;
           var_name = DetermineVariableNameStatic(&*instruction, is_global_var, false, "");
           if (suspicious_variables.count(var_name)) {
@@ -256,7 +256,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
 
           // get the name of the called function and check if a FileIO function
           // is called
-          std::set<std::string> io_functions{
+          const std::set<std::string> io_functions{
               "fopen",       "fopen_s",      "freopen",    "freopen_s",      "fclose",    "fflush",     "setbuf",
               "setvbuf",     "fwide",        "fread",      "fwrite",         "fgetc",     "getc",       "fgets",
               "fputc",       "putc",         "fputs",      "getchar",        "gets",      "gets_s",     "putchar",
@@ -304,7 +304,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
     // check for call instructions in current basic block
     for (BasicBlock::iterator instruction = (*bb)->begin(); instruction != (*bb)->end(); ++instruction) {
       // Note: Don't create nodes for library functions (c++/llvm).
-      LID lid = dputil::GetLid(&*instruction, file_id);
+      LID const lid = dputil::GetLid(&*instruction, file_id);
       if (lid > 0) {
         if (isa<CallInst>(instruction) || isa<InvokeInst>(instruction)) {
           Function* f = nullptr;
@@ -361,7 +361,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
               std::string type_str;
               raw_string_ostream rso(type_str);
               (it->getType())->print(rso);
-              Variable v(std::string(it->getName()), rso.str(), lid, true, true);
+              const Variable v(std::string(it->getName()), rso.str(), lid, true, true);
               n->arguments_list.push_back(v);
             }
           } else {  // get name of the indirect function which is called
@@ -377,14 +377,14 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
 
           // if (isRecursive(*f, CGWP->getCallGraph())) {
           if (IsRecursive(*f, cg)) {
-            LID lid = dputil::GetLid(&*instruction, file_id);
+            LID const lid = dputil::GetLid(&*instruction, file_id);
             n->recursive_function_call = n->name + " " + dputil::DecodeLid(lid) + ",";
           }
 
-          std::vector<CU*> bb_cus_vector = bb_id_to_cu_ids_map[bb->getName().str()];
+          const std::vector<CU*> bb_cus_vector = bb_id_to_cu_ids_map[bb->getName().str()];
           // locate the CU where this function call belongs
           for (auto i : bb_cus_vector) {
-            LID lid = dputil::GetLid(&*instruction, file_id);
+            LID const lid = dputil::GetLid(&*instruction, file_id);
             if (lid >= i->start_line && lid <= i->end_line) {
               i->instructions_line_numbers.insert(lid);
               i->children_nodes.push_back(n);

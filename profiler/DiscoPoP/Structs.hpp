@@ -15,6 +15,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "llvm/Analysis/LoopInfo.h"
@@ -49,7 +50,11 @@ struct Variable {
         write_access(other.write_access) {}
 
   Variable(std::string n, std::string t, std::string d, bool read_access, bool write_access)
-      : name(n), type(t), def_line(d), read_access(read_access), write_access(write_access) {}
+      : name(std::move(n)),
+        type(std::move(t)),
+        def_line(std::move(d)),
+        read_access(read_access),
+        write_access(write_access) {}
 
   // We have a set of this struct. The set doesn't know how to order the
   // elements.

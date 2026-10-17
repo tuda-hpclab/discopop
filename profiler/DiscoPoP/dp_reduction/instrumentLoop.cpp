@@ -70,7 +70,7 @@ void dp_reduction::ReductionInstrumenter::InstrumentLoop(Function& f, int file_i
   loop_info.file_id = file_id;
   loop_info.first_body_instr = &(*basic_blocks[1]->begin());
 
-  std::string loop_end_line = dp_reduction::CFA(f, loop, file_id);
+  const std::string loop_end_line = dp_reduction::CFA(f, loop, file_id);
   loop_info.end_line = loop_end_line;
   loop_info.function_name = std::string((basic_blocks[1]->getParent()->getName()));
   loop_info.loop_id = services_.get_loop_id(loop);
@@ -113,8 +113,8 @@ void dp_reduction::ReductionInstrumenter::InstrumentLoop(Function& f, int file_i
             (opcode == llvm::Instruction::Store) ? &store_instructions : &load_instructions;
         if (!map_ptr->insert(std::make_pair(operand, instr)).second) {
           if ((*map_ptr)[operand]) {
-            llvm::DebugLoc new_loc = instr->getDebugLoc();
-            llvm::DebugLoc old_loc = (*map_ptr)[operand]->getDebugLoc();
+            const llvm::DebugLoc new_loc = instr->getDebugLoc();
+            const llvm::DebugLoc old_loc = (*map_ptr)[operand]->getDebugLoc();
 
             if (!dp_reduction::LocExists(new_loc) || !dp_reduction::LocExists(old_loc)) {
               (*map_ptr)[operand] = nullptr;
@@ -139,8 +139,8 @@ void dp_reduction::ReductionInstrumenter::InstrumentLoop(Function& f, int file_i
 
     auto it2 = store_instructions.find(it->first);
     if (it2 != store_instructions.end() && it2->second) {
-      llvm::DebugLoc load_loc = it->second->getDebugLoc();
-      llvm::DebugLoc store_loc = it2->second->getDebugLoc();
+      const llvm::DebugLoc load_loc = it->second->getDebugLoc();
+      const llvm::DebugLoc store_loc = it2->second->getDebugLoc();
       if (!dp_reduction::LocExists(load_loc) || !dp_reduction::LocExists(store_loc)) {
         continue;
       }
@@ -183,10 +183,10 @@ void dp_reduction::ReductionInstrumenter::InstrumentLoop(Function& f, int file_i
 
   // now check if the variables are part of a reduction operation
   for (auto candidate : candidates) {
-    int index = isa<StoreInst>(candidate.load_inst) ? 1 : 0;
+    const int index = isa<StoreInst>(candidate.load_inst) ? 1 : 0;
     std::string var_name_load = "LOAD";
     std::string var_type_load = "SCALAR";
-    llvm::DebugLoc loc = (candidate.load_inst)->getDebugLoc();
+    const llvm::DebugLoc loc = (candidate.load_inst)->getDebugLoc();
 
     var_name_load = services_.get_variable_name(candidate.load_inst);
     var_type_load = dp_reduction::DetermineVariableType(candidate.load_inst);
@@ -231,7 +231,7 @@ void dp_reduction::ReductionInstrumenter::InstrumentLoop(Function& f, int file_i
           // Then, we traverse the whole function to check if the reduction
           // operation is > or <
           BasicBlock* bb = (candidate.load_inst)->getParent();
-          std::string bb_name = bb->getName().str();
+          const std::string bb_name = bb->getName().str();
 
           // Ignore loops. Only look for conditional blocks
           if (bb_name.find("if") != std::string::npos || bb_name.find("for") != std::string::npos) {

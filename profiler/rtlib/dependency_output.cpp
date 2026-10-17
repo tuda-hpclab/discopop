@@ -36,8 +36,9 @@ void GenerateStringDepMap() {
       //  unpack dline.first (lid) to instructionID and callpathStateID
       std::uint32_t dline_first_inst_id = (dline.first & 0xFFFFFFFF);
       std::uint32_t dline_first_callpath_state_id = ((dline.first & 0xFFFFFFFF00000000) >> 32);
-      std::string unpacked_lid = std::to_string(dline_first_inst_id) + "@" +
-                                 std::to_string(dline_first_callpath_state_id);  // use instructionID instead of lineID
+      const std::string unpacked_lid =
+          std::to_string(dline_first_inst_id) + "@" +
+          std::to_string(dline_first_callpath_state_id);  // use instructionID instead of lineID
       std::unordered_set<std::string> line_deps;
       for (auto& d : dline.second) {
         std::string dep = "";
@@ -87,9 +88,9 @@ void OutputDeps() {
   const auto timer = Timer(timers, TimerRegion::kOutputDeps);
 #endif
 
-  for (auto pair : *out_put_deps) {
+  for (const auto& pair : *out_put_deps) {
     *out << pair.first << " NOM ";
-    for (auto dep : pair.second) {
+    for (const auto& dep : pair.second) {
       *out << ' ' << dep;
     }
     *out << std::endl;

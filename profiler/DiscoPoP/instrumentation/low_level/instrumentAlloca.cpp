@@ -24,7 +24,7 @@ using llvm::Value;
 
 // Instrumentation function inserters.
 void DiscoPoP::InstrumentAlloca(AllocaInst* to_instrument) {
-  LID lid = dputil::GetLid(to_instrument, file_id);
+  LID const lid = dputil::GetLid(to_instrument, file_id);
   if (lid == 0) {
     return;
   }

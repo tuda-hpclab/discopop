@@ -269,7 +269,7 @@ void DiscoPoP::RunOnBasicBlock(BasicBlock& bb) {
           continue;
         }
       }
-      LID lid = dputil::GetLid(&*bi, file_id);
+      LID const lid = dputil::GetLid(&*bi, file_id);
       if (lid > 0) {  // calls on non-user code are not instrumented
         IRBuilder<> irb_call(&*bi);
         // the call site as a location, which the runtime reports for BGN func, and the instruction
@@ -294,7 +294,7 @@ void DiscoPoP::RunOnBasicBlock(BasicBlock& bb) {
       }
     } else if (isa<ReturnInst>(bi)) {
       // return
-      LID lid = dputil::GetLid(&*bi, file_id);
+      LID const lid = dputil::GetLid(&*bi, file_id);
       assert((lid > 0) && "Returning on LID = 0!");
 
       Function* parent = bb.getParent();

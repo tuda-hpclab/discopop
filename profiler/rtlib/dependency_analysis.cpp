@@ -71,7 +71,7 @@ void AnalyzeSingleAccess(dp::AbstractShadow* smem, dp::AccessInfo& access) {
       return;
     }
     // End HA
-    SigElement last_write = smem->TestInWrite(access.addr);
+    const SigElement last_write = smem->TestInWrite(access.addr);
     // Every read, not only the ones that turn out to be RAWs: a read that found no earlier write
     // is still the read a later write has to come after, and leaving it out of the shadow made
     // that WAR depend on whether the read happened to open a chunk.
@@ -82,11 +82,11 @@ void AnalyzeSingleAccess(dp::AbstractShadow* smem, dp::AccessInfo& access) {
     }
 
   } else {
-    SigElement last_write = smem->InsertToWrite(access.addr, access.lid);
+    const SigElement last_write = smem->InsertToWrite(access.addr, access.lid);
     if (access.skip) {
       return;
     }
-    SigElement last_read = smem->TestInRead(access.addr);
+    const SigElement last_read = smem->TestInRead(access.addr);
     if (last_write == 0 || last_write == 1) {
       // INIT
       AddDep(kInit, access.lid, 0, access.var, access.aa_var, access.addr);

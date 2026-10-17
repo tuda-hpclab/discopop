@@ -33,9 +33,9 @@ llvm::Instruction* dp_reduction::GetReductionInstr(llvm::Instruction* store_inst
     *load_instr = dp_reduction::GetLoadInstr(store_dst, reduction_instr, reduction_operations);
     // { *, / } > { +, - } > { & } > { ^ } > { | }
     if (reduction_operations.size() > 1) {
-      int order = dp_reduction::GetOpOrder(reduction_operations[0]);
+      const int order = dp_reduction::GetOpOrder(reduction_operations[0]);
       for (size_t i = 1; i != reduction_operations.size(); ++i) {
-        int order_i = dp_reduction::GetOpOrder(reduction_operations[i]);
+        const int order_i = dp_reduction::GetOpOrder(reduction_operations[i]);
         if (order_i > order) {
           *load_instr = nullptr;
           return nullptr;

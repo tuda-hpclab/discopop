@@ -29,7 +29,7 @@ std::string DiscoPoP::DetermineVariableDefLine(Instruction* i) {
   std::string var_name = DetermineVariableNameStatic(&*i, is_global, true, "");
   var_name = (var_name.find(".addr") == var_name.npos) ? var_name : var_name.erase(var_name.find(".addr"), 5);
 
-  std::string var_type = DetermineVariableType(&*i);
+  const std::string var_type = DetermineVariableType(&*i);
   //  std::cout << "\tvarName: " << varName << "\n";
   //  std::cout << "\tvarType: " << varType << "\n";
 
@@ -47,8 +47,8 @@ std::string DiscoPoP::DetermineVariableDefLine(Instruction* i) {
     auto dbg_record_range = current_inst->getDbgRecordRange();
     auto dbg_variable_range = filterDbgVars(dbg_record_range);
     for (DbgVariableRecord& dvr : dbg_variable_range) {
-      std::string ir_var_name = dvr.getValue()->getName().str();
-      std::string src_var_name = dvr.getVariable()->getName().str();
+      const std::string ir_var_name = dvr.getValue()->getName().str();
+      const std::string src_var_name = dvr.getVariable()->getName().str();
       //      std::cout << "\t\t-> DbgRecord: IRVarName: " << IRVarName << "\n";
       //      std::cout << "\t\t\t-> VarType: " << DVR.getVariable()->getType()->getName().str() << "\n";
       //      std::cout << "\t\t\t-> SRCVarName: " << SRCVarName << "\n";

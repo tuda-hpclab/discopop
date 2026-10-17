@@ -62,7 +62,7 @@ class LoopManager {
     while (!loop_stack_.empty() && (loop_stack_.Top().func_level == function_level)) {
       // No way to get the real end line of loop. Use the line where
       // function returns instead.
-      LoopRecords::iterator loop = loops_.find(loop_stack_.Top().begin);
+      const LoopRecords::iterator loop = loops_.find(loop_stack_.Top().begin);
       assert(loop != loops_.end() && "A loop ends without its entry being recorded.");
 
       if (loop->second->end == 0) {
@@ -83,7 +83,7 @@ class LoopManager {
   LID UpdateLid(LID lid) { return loop_stack_.UpdateLid(lid); }
 
   void ExitLoop(const LID lid) {
-    LoopRecords::iterator loop = loops_.find(loop_stack_.Top().begin);
+    const LoopRecords::iterator loop = loops_.find(loop_stack_.Top().begin);
     assert(loop != loops_.end() && "A loop ends without its entry being recorded.");
     if (loop->second->end == 0) {
       loop->second->end = lid;

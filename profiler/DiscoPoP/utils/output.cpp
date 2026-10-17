@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 
 #include "llvm/IR/Metadata.h"
@@ -39,7 +40,7 @@ class CUGraphWriter {
   void PrintTree(Node* node, bool is_root);
 
  private:
-  std::string GetLineNumbersString(std::set<LID> line_numbers);
+  std::string GetLineNumbersString(const std::set<LID>& line_numbers);
 
   std::string GetChildrenNodesString(Node* node);
 
@@ -98,10 +99,10 @@ void cu_output::WriteCuGraph(Node* root, const std::map<std::string, std::string
   out_original_variables.close();
 }
 
-std::string CUGraphWriter::GetLineNumbersString(std::set<LID> line_numbers) {
+std::string CUGraphWriter::GetLineNumbersString(const std::set<LID>& line_numbers) {
   std::string line = "";
   for (auto li : line_numbers) {
-    std::string temp = ',' + dputil::DecodeLid(li);
+    const std::string temp = ',' + dputil::DecodeLid(li);
     if (temp != ",*") {
       if (line == "") {
         line = dputil::DecodeLid(li);
@@ -157,7 +158,7 @@ void CUGraphWriter::PrintNode(Node* root, bool /*is_root*/) {
     out_cus_ << "\t\t<childrenNodes>" << GetChildrenNodesString(root) << "</childrenNodes>" << "\n";
     if (root->type == NodeTypes::kFunc || root->type == NodeTypes::kDummy) {
       out_cus_ << "\t\t<funcArguments>" << "\n";
-      for (auto ai : root->arguments_list) {
+      for (const auto& ai : root->arguments_list) {
         out_cus_ << "\t\t\t<arg type=\"" << XmlEscape(ai.type) << "\""
                  << " defLine=\"" << XmlEscape(ai.def_line) << "\""
                  << " accessMode=\"" << (ai.read_access ? "R" : "") << (ai.write_access ? "W" : "") << "\">"
@@ -189,13 +190,13 @@ void CUGraphWriter::PrintNode(Node* root, bool /*is_root*/) {
       out_cus_ << "\t\t<returnInstructions count=\"" << (cu->return_instructions).size() << "\">"
                << GetLineNumbersString(cu->return_instructions) << "</returnInstructions>" << "\n";
       out_cus_ << "\t\t<successors>" << "\n";
-      for (auto suc_cu_i : cu->successor_cus) {
+      for (const auto& suc_cu_i : cu->successor_cus) {
         out_cus_ << "\t\t\t<CU>" << suc_cu_i << "</CU>" << "\n";
       }
       out_cus_ << "\t\t</successors>" << "\n";
 
       out_cus_ << "\t\t<localVariables>" << "\n";
-      for (auto lvi : cu->local_variable_names) {
+      for (const auto& lvi : cu->local_variable_names) {
         out_cus_ << "\t\t\t<local type=\"" << XmlEscape(lvi.type) << "\""
                  << " defLine=\"" << XmlEscape(lvi.def_line) << "\""
                  << " accessMode=\"" << (lvi.read_access ? "R" : "") << (lvi.write_access ? "W" : "") << "\">"
@@ -204,7 +205,7 @@ void CUGraphWriter::PrintNode(Node* root, bool /*is_root*/) {
       out_cus_ << "\t\t</localVariables>" << "\n";
 
       out_cus_ << "\t\t<globalVariables>" << "\n";
-      for (auto gvi : cu->global_variable_names) {
+      for (const auto& gvi : cu->global_variable_names) {
         out_cus_ << "\t\t\t<global type=\"" << XmlEscape(gvi.type) << "\""
                  << " defLine=\"" << XmlEscape(gvi.def_line) << "\""
                  << " accessMode=\"" << (gvi.read_access ? "R" : "") << (gvi.write_access ? "W" : "") << "\">"
@@ -213,7 +214,7 @@ void CUGraphWriter::PrintNode(Node* root, bool /*is_root*/) {
       out_cus_ << "\t\t</globalVariables>" << "\n";
 
       out_cus_ << "\t\t<callsNode>" << "\n";
-      for (auto i : (cu->call_line_to_function_map)) {
+      for (const auto& i : (cu->call_line_to_function_map)) {
         int idx = 0;  // for correctly accessing callLineToCallInstructionMap's value
         for (auto ii : i.second) {
           // get call instruction id

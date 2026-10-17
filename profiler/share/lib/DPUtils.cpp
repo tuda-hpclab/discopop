@@ -65,10 +65,10 @@ llvm::cl::opt<bool> dp_memory_profiling_skip_function_arguments(
 
 namespace dputil {
 
-std::int32_t GetFileId(std::string /*file_mapping*/, std::string full_path_name) {
+std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& full_path_name) {
   // prepare environment variables
   if (FileMappingPath().length() == 0) {
-    char const* tmp = std::getenv("DOT_DISCOPOP");
+    const char* tmp = std::getenv("DOT_DISCOPOP");
     if (tmp == nullptr) {
       // DOT_DISCOPOP needs to be initialized
       setenv("DOT_DISCOPOP", ".discopop", 1);
@@ -78,7 +78,7 @@ std::int32_t GetFileId(std::string /*file_mapping*/, std::string full_path_name)
   }
 
   // check if path in DP_PROJECT_ROOT_DIR
-  std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  const std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
   if (full_path_name.find(dp_project_dir) == std::string::npos) {  // function defined outside project
     return 0;
   }
@@ -95,12 +95,12 @@ std::int32_t GetFileId(std::string /*file_mapping*/, std::string full_path_name)
     if (file_mapping_file) {
       std::string tp;
       while (std::getline(file_mapping_file, tp)) {
-        std::size_t tab = tp.find("\t");
+        const std::size_t tab = tp.find("\t");
         if (tab == std::string::npos) {
           continue;
         }
         std::int32_t id = std::stoi(tp.substr(0, tab));
-        std::string file_name = tp.substr(tab + 1);
+        const std::string file_name = tp.substr(tab + 1);
         file_id_cache[file_name] = id;
         if (id >= next_file_id) {
           next_file_id = id + 1;
@@ -193,7 +193,7 @@ std::int64_t EncodeLid(std::int32_t file_id, std::int64_t line) {
 std::int64_t GetLid(Instruction* bi, std::int32_t& file_id) {
   // prepare environment variables
   if (FileMappingPath().length() == 0) {
-    char const* tmp = std::getenv("DOT_DISCOPOP");
+    const char* tmp = std::getenv("DOT_DISCOPOP");
     if (tmp == nullptr) {
       // DOT_DISCOPOP needs to be initialized
       setenv("DOT_DISCOPOP", ".discopop", 1);
@@ -228,7 +228,7 @@ std::int64_t GetLid(Instruction* bi, std::int32_t& file_id) {
     dir = loc->getDirectory();
 
     if (file.str().substr(0, 2) == "./") {
-      std::string sub = file.str().substr(0, 2);
+      const std::string sub = file.str().substr(0, 2);
       file = file.substr(2, file.size() - 1);
     }
 
@@ -254,7 +254,7 @@ std::int64_t GetLid(Instruction* bi, std::int32_t& file_id) {
 void DetermineFileId(Function& f, std::int32_t& file_id) {
   // prepare environment variables
   if (FileMappingPath().length() == 0) {
-    char const* tmp = std::getenv("DOT_DISCOPOP");
+    const char* tmp = std::getenv("DOT_DISCOPOP");
     if (tmp == nullptr) {
       // DOT_DISCOPOP needs to be initialized
       setenv("DOT_DISCOPOP", ".discopop", 1);
@@ -305,10 +305,10 @@ void DetermineFileId(Function& f, std::int32_t& file_id) {
 
 std::string GetExeDir() {
   char buff[1024];
-  ssize_t len = ::readlink("/proc/self/exe", buff, sizeof(buff) - 1);
+  const ssize_t len = ::readlink("/proc/self/exe", buff, sizeof(buff) - 1);
   if (len != -1) {
     buff[len] = '\0';
-    std::string full_path = std::string(buff);
+    const std::string full_path = std::string(buff);
     return full_path.substr(0, full_path.find_last_of('/'));
   }
   return "";
@@ -316,7 +316,7 @@ std::string GetExeDir() {
 
 VariableNameFinder::VariableNameFinder(Module& /*M*/) {}
 
-std::string VariableNameFinder::GetVarName(Value const* v) {
+std::string VariableNameFinder::GetVarName(const Value* v) {
   if (const Instruction* i = dyn_cast<Instruction>(v)) {
     if (auto gepi = dyn_cast<GetElementPtrInst>(i)) {
       // an element (of an array, of a struct) is named like the object it belongs to

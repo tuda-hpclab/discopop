@@ -25,8 +25,8 @@ llvm::Value* dp_reduction::GetVarRec(llvm::Value* val) {
 
     // struct member reductions are not supported by OpenMP
     llvm::Value* points_to = dp_reduction::PointsToVar(elem_ptr_instr);
-    llvm::AllocaInst* a_instr = llvm::dyn_cast<llvm::AllocaInst>(points_to);
-    llvm::Type* type = (a_instr) ? a_instr->getAllocatedType() : points_to->getType();
+    const llvm::AllocaInst* a_instr = llvm::dyn_cast<llvm::AllocaInst>(points_to);
+    const llvm::Type* type = (a_instr) ? a_instr->getAllocatedType() : points_to->getType();
     if (type->isStructTy()) {
       return nullptr;
     }
@@ -34,7 +34,7 @@ llvm::Value* dp_reduction::GetVarRec(llvm::Value* val) {
     return dp_reduction::GetVarRec(elem_ptr_instr->getPointerOperand());
   }
   if (llvm::isa<llvm::LoadInst>(val)) {
-    llvm::LoadInst* load_instr = llvm::cast<llvm::LoadInst>(val);
+    const llvm::LoadInst* load_instr = llvm::cast<llvm::LoadInst>(val);
     return dp_reduction::GetVarRec(load_instr->getOperand(0));
   }
 
@@ -43,6 +43,6 @@ llvm::Value* dp_reduction::GetVarRec(llvm::Value* val) {
 
 // Get the value that is stored or loaded by a store / load instruction.
 llvm::Value* dp_reduction::GetVar(llvm::Instruction* instr) {
-  unsigned index = (llvm::isa<llvm::LoadInst>(instr)) ? 0 : 1;
+  const unsigned index = (llvm::isa<llvm::LoadInst>(instr)) ? 0 : 1;
   return dp_reduction::GetVarRec(instr->getOperand(index));
 }
