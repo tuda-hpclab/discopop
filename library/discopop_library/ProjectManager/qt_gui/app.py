@@ -55,6 +55,7 @@ def run_qt_gui(arguments: ProjectManagerArguments) -> None:
 
     window = MainWindow(arguments, was_initialized=was_initialized)
     window.show()
+    QTimer.singleShot(100, window.after_show)
 
     # A Ctrl+C in the terminal closes the window like the close button does (the jobs are cancelled). Python
     # handles a signal only when the interpreter runs, so a timer hands control back to it while Qt waits.

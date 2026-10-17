@@ -147,7 +147,6 @@ def test_the_algorithm_hint_follows_the_hotspot_results(fixture: Fixture) -> Non
 def test_the_evaluate_mode_swaps_the_selectors_and_disables_the_algorithm(fixture: Fixture, qtbot: QtBot) -> None:
     panel = fixture.panel
     panel.show()
-    qtbot.waitExposed(panel)
     assert panel.search_space_container.isVisible() and not panel.evaluate_container.isVisible()
     assert panel.algorithm_combo.isEnabled()
     panel.evaluate_mode_radio.click()
