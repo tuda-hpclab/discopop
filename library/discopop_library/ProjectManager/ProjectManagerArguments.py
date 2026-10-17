@@ -66,6 +66,9 @@ class ProjectManagerArguments(GeneralArguments):
                 + self.project_root
             )
             self.project_root = str(Path(self.project_root).parent.absolute())
+        # The derived paths and the paths callers build from them are moved into the copy of the project by
+        # replacing this prefix (see configurations/execution.py), which a relative root like "." cannot be.
+        self.project_root = os.path.abspath(self.project_root)
         self.dot_dp = os.path.join(self.project_root, ".discopop")
 
         self.project_dir = os.path.join(self.dot_dp, "project")

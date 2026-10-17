@@ -7,11 +7,9 @@
 # directory for details.
 
 import copy
-import json
 import logging
 import os
-import subprocess
-import threading
+import queue
 import tkinter as tk
 
 
@@ -30,20 +28,37 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     resolve_execution_time_regex,
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script, run_validation_phase
+from discopop_library.ProjectManager.services.project_state import ResultsChanged
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.services.jobs import (
+    StatusKind,
+    WorkContext,
+    WorkEvent,
+    WorkFinished,
+    WorkOutput,
+    WorkRunner,
+    WorkStatus,
+)
+from discopop_library.ProjectManager.services.autotuner_results import read_autotuner_applied_suggestions
+from discopop_library.ProjectManager.services.modes import settings_path as mode_settings_path
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
-from discopop_library.ProjectManager.gui.mixins.helpers import show_warning
+from discopop_library.ProjectManager.gui.mixins.helpers import redirect_logging_to_text_area, show_warning
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+_STATUS_COLORS = {
+    StatusKind.BUSY: widgets.STATUS_BUSY,
+    StatusKind.IDLE: widgets.STATUS_IDLE,
+    StatusKind.OK: widgets.STATUS_OK,
+    StatusKind.FAIL: widgets.STATUS_FAIL,
+    StatusKind.STOP: widgets.STATUS_STOP,
+}
 
 
 class ExecutionMixin(ConfigManagerMixinBase):
-    _execution_stop_event: threading.Event = threading.Event()
-    _execution_process: Optional["subprocess.Popen[bytes]"] = None
+    _execution_job: Optional[WorkRunner] = None
     stop_execution_button: Optional[RoundedButton] = None
-
-    def _register_execution_process(self, p: "subprocess.Popen[bytes]") -> None:
-        self._execution_process = p
 
     def _validate_execution_inputs(self) -> bool:
         cpu_count = os.cpu_count() or 4
@@ -155,7 +170,6 @@ class ExecutionMixin(ConfigManagerMixinBase):
             ):
                 return
 
-        self._execution_stop_event.clear()
         if self.stop_execution_button is not None:
             self.stop_execution_button.config(state="normal")
 
@@ -209,31 +223,12 @@ class ExecutionMixin(ConfigManagerMixinBase):
                 combined_ids += self.execute_suggestion_selector.get_selected_ids()
 
         if suggestions_mode == "autotuner":
-            results_path = os.path.join(args_copy.dot_dp, "auto_tuner", "results.json")
-            try:
-                with open(results_path, "r") as f:
-                    results_data = json.load(f)
-                autotuner_ids = [str(s) for s in results_data.get(current_config, {}).get("applied_suggestions", [])]
-                combined_ids += [sid for sid in autotuner_ids if sid not in combined_ids]
-            except (json.JSONDecodeError, IOError):
-                pass
+            autotuner_ids = read_autotuner_applied_suggestions(args_copy.dot_dp, current_config)
+            combined_ids += [sid for sid in autotuner_ids if sid not in combined_ids]
 
         args_copy.apply_suggestions = ",".join(combined_ids) if combined_ids else None
 
-        logging.basicConfig(level=log_level, force=True)
-        root_logger = logging.getLogger()
-        root_logger.setLevel(log_level)
-
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-
-        from discopop_library.ProjectManager.gui.mixins.helpers import TextAreaHandler
-
-        text_handler = TextAreaHandler(self.output_text)
-        text_handler.setLevel(log_level)
-        formatter = logging.Formatter("[%(name)s] %(levelname)s: %(message)s")
-        text_handler.setFormatter(formatter)
-        root_logger.addHandler(text_handler)
+        restore_logging = redirect_logging_to_text_area(self.output_text, log_level)
 
         logger = logging.getLogger("Execute")
         logger.info(f"Starting execution of configuration: {current_config}")
@@ -241,49 +236,36 @@ class ExecutionMixin(ConfigManagerMixinBase):
         # modes whose run was skipped because their patches could not be applied
         application_failures: list[tuple[str, Any]] = []
 
-        def thread_func() -> None:
+        def work(ctx: WorkContext) -> list[tuple[str, Any]]:
             if inplace:
                 # the project root's .discopop survives between runs; a result recorded
                 # by an earlier apply must not be attributed to this run
                 clear_application_result(patch_applicator_dir_of(self.arguments.project_root))
             if inplace and args_copy.apply_suggestions:
-                self.after(  # type: ignore
-                    0,
-                    lambda: append_output("Note: Apply suggestions is ignored in inplace mode.\n"),
-                )
+                ctx.output("Note: Apply suggestions is ignored in inplace mode.\n")
 
             compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, current_config)
-            shared_seq_settings = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-            shared_dp_settings = os.path.join(self.arguments.project_config_dir, "dp_settings.json")
-            shared_hd_settings = os.path.join(self.arguments.project_config_dir, "hd_settings.json")
-            shared_par_settings = os.path.join(self.arguments.project_config_dir, "par_settings.json")
 
             for mode in selected_modes:
-                if self._execution_stop_event.is_set():
-                    self.after(0, lambda: append_output("Execution stopped by user.\n"))  # type: ignore
+                if ctx.cancel_event.is_set():
+                    ctx.output("Execution stopped by user.\n")
                     break
 
-                self.after(0, lambda m=mode: append_output(f"\n=== {m.upper()} mode ===\n"))  # type: ignore
+                ctx.output(f"\n=== {mode.upper()} mode ===\n")
 
-                if mode == "seq":
-                    settings_path = shared_seq_settings
-                elif mode == "dp":
-                    settings_path = shared_dp_settings
-                elif mode == "hd":
-                    settings_path = shared_hd_settings
-                elif mode == "par":
-                    settings_path = shared_par_settings
-                else:
+                resolved_settings_path = mode_settings_path(self.arguments.project_config_dir, mode)
+                if resolved_settings_path is None:
                     continue
+                settings_path = resolved_settings_path
 
                 if inplace:
                     project_copy_path = self.arguments.project_root
                 else:
-                    self.after(0, lambda: append_output("Copying project...\n"))  # type: ignore
+                    ctx.output("Copying project...\n")
                     try:
                         project_copy_path = copy_configuration(args_copy, config_path, settings_path)
                     except Exception as e:
-                        self.after(0, lambda e_msg=str(e): append_output(f"Error copying project: {e_msg}\n"))  # type: ignore
+                        ctx.output(f"Error copying project: {e}\n")
                         continue
 
                     # A failed patch application leaves the copy holding the ORIGINAL
@@ -294,15 +276,12 @@ class ExecutionMixin(ConfigManagerMixinBase):
                     if application_result is not None and application_result.failure:
                         summary = application_result.summary()
                         failed_ids = ", ".join(application_result.unapplied)
-                        self.after(  # type: ignore
-                            0,
-                            lambda s=summary, ids=failed_ids: append_output(
-                                "\n⚠ SUGGESTION APPLICATION FAILED for: "
-                                + ids
-                                + "\n  "
-                                + s
-                                + "\n  Skipping this run: executing the copy would measure the UNMODIFIED code.\n"
-                            ),
+                        ctx.output(
+                            "\n⚠ SUGGESTION APPLICATION FAILED for: "
+                            + failed_ids
+                            + "\n  "
+                            + summary
+                            + "\n  Skipping this run: executing the copy would measure the UNMODIFIED code.\n"
                         )
                         try:
                             record_skipped_execution(
@@ -315,7 +294,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
                                 application_result,
                             )
                         except Exception as e:
-                            self.after(0, lambda e_msg=str(e): append_output(f"Error recording skipped run: {e_msg}\n"))  # type: ignore
+                            ctx.output(f"Error recording skipped run: {e}\n")
                         application_failures.append((mode, application_result))
                         if not skip_cleanup:
                             try:
@@ -324,8 +303,8 @@ class ExecutionMixin(ConfigManagerMixinBase):
                                 pass
                         continue
 
-                self.after(0, lambda: self.status_label.config(text="⏳ Compiling...", foreground=widgets.STATUS_BUSY))  # type: ignore
-                self.after(0, lambda: append_output("Compiling...\n"))  # type: ignore
+                ctx.status("⏳ Compiling...", StatusKind.BUSY)
+                ctx.output("Compiling...\n")
                 compile_result = execute_configuration(
                     args_copy,
                     project_copy_path,
@@ -334,13 +313,13 @@ class ExecutionMixin(ConfigManagerMixinBase):
                     compile_sh,
                     1 if mode == "seq" else thread_count,
                     args_copy.timeout_compilation,
-                    process_started_callback=self._register_execution_process,
+                    process_started_callback=ctx.register_process,
                 )
-                self._execution_process = None
+                ctx.clear_process()
 
                 if compile_result is None or compile_result[0] != 0:
                     ret_code = compile_result[0] if compile_result else "None"
-                    self.after(0, lambda rc=ret_code: append_output(f"Compilation failed (return code: {rc})\n"))  # type: ignore
+                    ctx.output(f"Compilation failed (return code: {ret_code})\n")
                     if not inplace and not skip_cleanup:
                         try:
                             delete_configuration(args_copy, project_copy_path)
@@ -349,18 +328,18 @@ class ExecutionMixin(ConfigManagerMixinBase):
                     continue
 
                 ret_code, elapsed, stdout, stderr = compile_result
-                self.after(0, lambda e=elapsed: append_output(f"Compilation succeeded ({e:.2f}s)\n"))  # type: ignore
+                ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
                 if stdout:
-                    self.after(0, lambda o=stdout: append_output(f"stdout: {o}\n"))  # type: ignore
+                    ctx.output(f"stdout: {stdout}\n")
                 if stderr:
-                    self.after(0, lambda e=stderr: append_output(f"stderr: {e}\n"))  # type: ignore
+                    ctx.output(f"stderr: {stderr}\n")
 
-                if self._execution_stop_event.is_set():
-                    self.after(0, lambda: append_output("Execution stopped by user.\n"))  # type: ignore
+                if ctx.cancel_event.is_set():
+                    ctx.output("Execution stopped by user.\n")
                     break
 
-                self.after(0, lambda: self.status_label.config(text="⏳ Executing...", foreground=widgets.STATUS_BUSY))  # type: ignore
-                self.after(0, lambda: append_output("Executing...\n"))  # type: ignore
+                ctx.status("⏳ Executing...", StatusKind.BUSY)
+                ctx.output("Executing...\n")
                 execute_result = execute_configuration(
                     args_copy,
                     project_copy_path,
@@ -369,34 +348,34 @@ class ExecutionMixin(ConfigManagerMixinBase):
                     os.path.join(config_path, "execute.sh"),
                     1 if mode == "seq" else thread_count,
                     args_copy.timeout_execution,
-                    process_started_callback=self._register_execution_process,
+                    process_started_callback=ctx.register_process,
                     execution_time_regex=execution_time_regex,
                     # Which modes are repeated is decided in one place, shared with
                     # the command line, so the two cannot drift apart.
                     repetitions=repetitions_for_mode(mode, args_copy.execution_repetitions),
-                    should_abort=self._execution_stop_event.is_set,
+                    should_abort=ctx.cancel_event.is_set,
                 )
-                self._execution_process = None
+                ctx.clear_process()
 
                 if execute_result is None or execute_result[0] != 0:
                     ret_code = execute_result[0] if execute_result else "None"
-                    self.after(0, lambda rc=ret_code: append_output(f"Execution failed (return code: {rc})\n"))  # type: ignore
+                    ctx.output(f"Execution failed (return code: {ret_code})\n")
                 else:
                     ret_code, elapsed, stdout, stderr = execute_result
                     described = self._describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
-                    self.after(0, lambda d=described: append_output(f"Execution succeeded ({d})\n"))  # type: ignore
+                    ctx.output(f"Execution succeeded ({described})\n")
                     if stdout:
-                        self.after(0, lambda o=stdout: append_output(f"stdout: {o}\n"))  # type: ignore
+                        ctx.output(f"stdout: {stdout}\n")
                     if stderr:
-                        self.after(0, lambda e=stderr: append_output(f"stderr: {e}\n"))  # type: ignore
+                        ctx.output(f"stderr: {stderr}\n")
 
                     # optional output validation (auto-run when validate.sh exists),
                     # applied only to the "real" runs (seq/par) — matching the CLI.
                     if mode in ("seq", "par") and has_validate_script(config_path):
 
                         def report_step(status: str, message: str) -> None:
-                            self.after(0, lambda: self.status_label.config(text=status, foreground=widgets.STATUS_BUSY))  # type: ignore
-                            self.after(0, lambda: append_output(message))  # type: ignore
+                            ctx.status(status, StatusKind.BUSY)
+                            ctx.output(message)
 
                         validation = run_validation_phase(
                             args_copy,
@@ -406,43 +385,43 @@ class ExecutionMixin(ConfigManagerMixinBase):
                             1 if mode == "seq" else thread_count,
                             timeout_compilation=args_copy.timeout_compilation,
                             timeout_validation=args_copy.timeout_validation,
-                            process_started_callback=self._register_execution_process,
+                            process_started_callback=ctx.register_process,
                             on_compile_start=lambda _script: report_step(
                                 "⏳ Compiling for validation...", "Compiling for validation...\n"
                             ),
                             on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
-                            should_abort=self._execution_stop_event.is_set,
+                            should_abort=ctx.cancel_event.is_set,
                         )
-                        self._execution_process = None
+                        ctx.clear_process()
 
                         if validation.compile_required:
                             if validation.compile_successful:
                                 assert validation.compile_result is not None
                                 _, c_elapsed, c_stdout, c_stderr = validation.compile_result
-                                self.after(0, lambda e=c_elapsed: append_output(f"Validation build succeeded ({e:.2f}s)\n"))  # type: ignore  # noqa: E501
+                                ctx.output(f"Validation build succeeded ({c_elapsed:.2f}s)\n")
                                 if c_stdout:
-                                    self.after(0, lambda o=c_stdout: append_output(f"stdout: {o}\n"))  # type: ignore
+                                    ctx.output(f"stdout: {c_stdout}\n")
                                 if c_stderr:
-                                    self.after(0, lambda e=c_stderr: append_output(f"stderr: {e}\n"))  # type: ignore
+                                    ctx.output(f"stderr: {c_stderr}\n")
                             else:
                                 c_rc = validation.compile_result[0] if validation.compile_result else "None"
-                                self.after(0, lambda rc=c_rc: append_output(f"Validation build FAILED (return code: {rc})\n"))  # type: ignore  # noqa: E501
+                                ctx.output(f"Validation build FAILED (return code: {c_rc})\n")
 
                         if validation.aborted:
-                            self.after(0, lambda: append_output("Execution stopped by user.\n"))  # type: ignore
+                            ctx.output("Execution stopped by user.\n")
                         elif validation.compile_required and not validation.compile_successful:
-                            self.after(0, lambda: append_output("Validation skipped: its build failed.\n"))  # type: ignore
+                            ctx.output("Validation skipped: its build failed.\n")
                         elif not validation.validate_successful:
                             v_rc = validation.validate_result[0] if validation.validate_result else "None"
-                            self.after(0, lambda rc=v_rc: append_output(f"Validation FAILED (return code: {rc})\n"))  # type: ignore
+                            ctx.output(f"Validation FAILED (return code: {v_rc})\n")
                         else:
                             assert validation.validate_result is not None
                             _, v_elapsed, v_stdout, v_stderr = validation.validate_result
-                            self.after(0, lambda e=v_elapsed: append_output(f"Validation succeeded ({e:.2f}s)\n"))  # type: ignore
+                            ctx.output(f"Validation succeeded ({v_elapsed:.2f}s)\n")
                             if v_stdout:
-                                self.after(0, lambda o=v_stdout: append_output(f"stdout: {o}\n"))  # type: ignore
+                                ctx.output(f"stdout: {v_stdout}\n")
                             if v_stderr:
-                                self.after(0, lambda e=v_stderr: append_output(f"stderr: {e}\n"))  # type: ignore
+                                ctx.output(f"stderr: {v_stderr}\n")
 
                 if not inplace and not skip_cleanup:
                     try:
@@ -450,52 +429,72 @@ class ExecutionMixin(ConfigManagerMixinBase):
                     except Exception:
                         pass
 
-            if application_failures:
-                modes_str = ", ".join(mode for mode, _res in application_failures)
-                details = "\n\n".join(mode + ": " + res.summary() for mode, res in application_failures)
-                self.after(  # type: ignore
-                    0,
-                    lambda: append_output(
-                        "\n⚠ "
-                        + str(len(application_failures))
-                        + " run(s) were SKIPPED because their suggestions could not be applied ("
-                        + modes_str
-                        + ").\n  They appear as '⚠ not applied' in the Report tab.\n"
-                    ),
-                )
-                self.after(  # type: ignore
-                    0,
-                    lambda: show_warning(
-                        self,
-                        "Suggestion Application Failed",
-                        "The selected parallelization suggestions could not be applied.\n\n"
-                        + details
-                        + "\n\nThe affected runs were skipped, because executing them would have "
-                        "measured the unmodified sequential code. They are recorded as "
-                        "'not applied' in the Report tab so they can be told apart from a "
-                        "parallel run without a speedup.",
-                    ),
-                )
+            return application_failures
 
-            self.after(0, lambda: append_output("\n=== Execution complete ===\n"))  # type: ignore
-            self.after(0, lambda: self.run_button.config(state=tk.NORMAL, text="Run"))  # type: ignore
-            self.after(0, lambda: self.stop_execution_button.config(state="disabled") if self.stop_execution_button else None)  # type: ignore  # noqa: E501
-            self.after(0, lambda: self.generate_report_button.config(state=tk.NORMAL))  # type: ignore
-            self.after(0, lambda: self.inplace_var.set(False))  # type: ignore
-            if application_failures:
-                self.after(  # type: ignore
-                    0,
-                    lambda: self.status_label.config(
-                        text="⚠ Suggestion application failed", foreground=widgets.STATUS_FAIL
-                    ),
-                )
+        events: "queue.Queue[WorkEvent]" = queue.Queue()
+        job = WorkRunner(work, events)
+        self._execution_job = job
+        TkJobAdapter(
+            self, events, lambda event: self._on_execution_event(event, append_output, restore_logging)
+        ).start()
+        job.start()
+
+    def _on_execution_event(
+        self, event: WorkEvent, append_output: Callable[[str], None], restore_logging: Callable[[], None]
+    ) -> None:
+        """Handle one event of the execution work; runs on the Tk main thread."""
+        if isinstance(event, WorkOutput):
+            append_output(event.text)
+        elif isinstance(event, WorkStatus):
+            self.status_label.config(text=event.text, foreground=_STATUS_COLORS[event.kind])
+        elif isinstance(event, WorkFinished):
+            self._execution_job = None
+            restore_logging()
+            application_failures: list[tuple[str, Any]] = []
+            if event.error is not None:  # a crash of the work must not leave the buttons disabled
+                logging.getLogger("Execute").error("execution failed: %s", event.error)
+                append_output(f"\nError: {event.error}\n")
             else:
-                self.after(0, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
-            self.after(0, lambda: self._refresh_config_list())  # type: ignore
-            self.after(0, lambda: self._update_report_display())  # type: ignore
-            self.after(0, lambda: self._update_pattern_detection_ui())  # type: ignore
+                application_failures = event.result
+            self._finish_execution(application_failures, append_output)
 
-        threading.Thread(target=thread_func, daemon=True).start()
+    def _finish_execution(
+        self, application_failures: list[tuple[str, Any]], append_output: Callable[[str], None]
+    ) -> None:
+        if application_failures:
+            modes_str = ", ".join(mode for mode, _res in application_failures)
+            details = "\n\n".join(mode + ": " + res.summary() for mode, res in application_failures)
+            append_output(
+                "\n⚠ "
+                + str(len(application_failures))
+                + " run(s) were SKIPPED because their suggestions could not be applied ("
+                + modes_str
+                + ").\n  They appear as '⚠ not applied' in the Report tab.\n"
+            )
+            show_warning(
+                self,
+                "Suggestion Application Failed",
+                "The selected parallelization suggestions could not be applied.\n\n"
+                + details
+                + "\n\nThe affected runs were skipped, because executing them would have "
+                "measured the unmodified sequential code. They are recorded as "
+                "'not applied' in the Report tab so they can be told apart from a "
+                "parallel run without a speedup.",
+            )
+
+        append_output("\n=== Execution complete ===\n")
+        self.run_button.config(state=tk.NORMAL, text="Run")
+        if self.stop_execution_button is not None:
+            self.stop_execution_button.config(state="disabled")
+        self.generate_report_button.config(state=tk.NORMAL)
+        self.inplace_var.set(False)
+        if application_failures:
+            self.status_label.config(text="⚠ Suggestion application failed", foreground=widgets.STATUS_FAIL)
+        else:
+            self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE)
+        self._refresh_config_list()
+        self.project_state.publish(ResultsChanged())
+        self._update_pattern_detection_ui()
 
     def _prepare_pattern_detection(self) -> None:
         self._prepare_inplace_run(
@@ -519,7 +518,6 @@ class ExecutionMixin(ConfigManagerMixinBase):
             show_warning(self, "No Configuration Selected", "Please select a configuration first.")
             return
 
-        self._execution_stop_event.clear()
         if self.stop_execution_button is not None:
             self.stop_execution_button.config(state="normal")
 
@@ -540,10 +538,6 @@ class ExecutionMixin(ConfigManagerMixinBase):
             self.output_text.see(tk.END)
             self.output_text.config(state="disabled")
 
-        def emit(text: str) -> None:
-            """Schedule ``text`` for display; safe to call from the worker thread."""
-            self.after(0, lambda t=text: append_output(t))  # type: ignore
-
         args_copy = copy.copy(self.arguments)
         args_copy.execute_inplace = True
         args_copy.skip_cleanup = False
@@ -557,37 +551,22 @@ class ExecutionMixin(ConfigManagerMixinBase):
         current_config = self.current_config
         config_path = os.path.join(self.config_dir, current_config)
 
-        import logging
-
-        logging.basicConfig(level="INFO", force=True)
-        root_logger = logging.getLogger()
-        root_logger.setLevel("INFO")
-
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-
-        from discopop_library.ProjectManager.gui.mixins.helpers import TextAreaHandler
-
-        text_handler = TextAreaHandler(self.output_text)
-        text_handler.setLevel("INFO")
-        formatter = logging.Formatter("[%(name)s] %(levelname)s: %(message)s")
-        text_handler.setFormatter(formatter)
-        root_logger.addHandler(text_handler)
+        restore_logging = redirect_logging_to_text_area(self.output_text, "INFO")
 
         logger = logging.getLogger(f"Prepare {status_noun.title()}")
         failure_status = f"{status_noun.capitalize()} preparation failed"
 
-        def thread_func() -> None:
+        def work(ctx: WorkContext) -> bool:
             logger.info(f"Starting {status_noun} preparation for: {current_config}")
-            emit(f"Compiling in '{mode}' mode with inplace execution...\n\n")
+            ctx.output(f"Compiling in '{mode}' mode with inplace execution...\n\n")
             # this always runs inplace; see the note in _run_execution
             clear_application_result(patch_applicator_dir_of(self.arguments.project_root))
 
             compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, current_config)
             shared_settings = os.path.join(self.arguments.project_config_dir, settings_filename)
 
-            self.after(0, lambda: self.status_label.config(text="⏳ Compiling...", foreground=widgets.STATUS_BUSY))  # type: ignore
-            emit("Compiling...\n")
+            ctx.status("⏳ Compiling...", StatusKind.BUSY)
+            ctx.output("Compiling...\n")
 
             compile_result = execute_configuration(
                 args_copy,
@@ -597,27 +576,27 @@ class ExecutionMixin(ConfigManagerMixinBase):
                 compile_sh,
                 1,
                 args_copy.timeout_compilation,
-                process_started_callback=self._register_execution_process,
+                process_started_callback=ctx.register_process,
             )
-            self._execution_process = None
+            ctx.clear_process()
 
             success = False
             if compile_result is None or compile_result[0] != 0:
                 ret_code = compile_result[0] if compile_result else "None"
-                emit(f"Compilation failed (return code: {ret_code})\n")
+                ctx.output(f"Compilation failed (return code: {ret_code})\n")
             else:
                 ret_code, elapsed, stdout, stderr = compile_result
-                emit(f"Compilation succeeded ({elapsed:.2f}s)\n")
+                ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
                 if stdout:
-                    emit(f"stdout: {stdout}\n")
+                    ctx.output(f"stdout: {stdout}\n")
                 if stderr:
-                    emit(f"stderr: {stderr}\n")
+                    ctx.output(f"stderr: {stderr}\n")
 
-                if self._execution_stop_event.is_set():
-                    emit(f"{status_noun.capitalize()} preparation stopped by user.\n")
+                if ctx.cancel_event.is_set():
+                    ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
                 else:
-                    self.after(0, lambda: self.status_label.config(text="⏳ Executing...", foreground=widgets.STATUS_BUSY))  # type: ignore  # noqa: E501
-                    emit("Executing...\n")
+                    ctx.status("⏳ Executing...", StatusKind.BUSY)
+                    ctx.output("Executing...\n")
 
                     execute_result = execute_configuration(
                         args_copy,
@@ -627,19 +606,19 @@ class ExecutionMixin(ConfigManagerMixinBase):
                         os.path.join(config_path, "execute.sh"),
                         1,
                         args_copy.timeout_execution,
-                        process_started_callback=self._register_execution_process,
+                        process_started_callback=ctx.register_process,
                         execution_time_regex=resolve_execution_time_regex(
                             config_path, self.arguments.execution_time_regex
                         ),
                     )
-                    self._execution_process = None
+                    ctx.clear_process()
 
                     if execute_result is None or execute_result[0] != 0:
                         ret_code = execute_result[0] if execute_result else "None"
-                        emit(f"Execution failed (return code: {ret_code})\n")
+                        ctx.output(f"Execution failed (return code: {ret_code})\n")
                     else:
                         ret_code, elapsed, stdout, stderr = execute_result
-                        emit(
+                        ctx.output(
                             "Execution succeeded ("
                             + self._describe_execution_time(
                                 elapsed,
@@ -650,32 +629,52 @@ class ExecutionMixin(ConfigManagerMixinBase):
                             + ")\n"
                         )
                         if stdout:
-                            emit(f"stdout: {stdout}\n")
+                            ctx.output(f"stdout: {stdout}\n")
                         if stderr:
-                            emit(f"stderr: {stderr}\n")
+                            ctx.output(f"stderr: {stderr}\n")
                         success = True
 
-            if not self._execution_stop_event.is_set():
+            if not ctx.cancel_event.is_set():
                 outcome = "complete" if success else "failed"
-                emit(f"\n=== {status_noun.capitalize()} preparation {outcome} ===\n")
-            self.after(0, lambda: button.config(state=tk.NORMAL, text=button_label))  # type: ignore
-            self.after(0, lambda: self._update_execute_modes())  # type: ignore
-            self.after(0, lambda: self.stop_execution_button.config(state="disabled") if self.stop_execution_button else None)  # type: ignore  # noqa: E501
-            self.after(0, lambda: self.run_button.config(state=tk.NORMAL))  # type: ignore
-            self.after(0, lambda: self.generate_report_button.config(state=tk.NORMAL))  # type: ignore
-            if success or self._execution_stop_event.is_set():
-                self.after(0, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
-            else:
-                self.after(0, lambda: self._set_status(failure_status, fg=widgets.STATUS_FAIL, reset_delay=3000))  # type: ignore
-            self.after(0, lambda: self._update_report_display())  # type: ignore
-            self.after(0, lambda: self._update_pattern_detection_ui())  # type: ignore
+                ctx.output(f"\n=== {status_noun.capitalize()} preparation {outcome} ===\n")
+            return success
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        events: "queue.Queue[WorkEvent]" = queue.Queue()
+        job = WorkRunner(work, events)
+        self._execution_job = job
+
+        def on_event(event: WorkEvent) -> None:
+            if isinstance(event, WorkOutput):
+                append_output(event.text)
+            elif isinstance(event, WorkStatus):
+                self.status_label.config(text=event.text, foreground=_STATUS_COLORS[event.kind])
+            elif isinstance(event, WorkFinished):
+                self._execution_job = None
+                restore_logging()
+                if event.error is not None:  # a crash of the work must not leave the buttons disabled
+                    logger.error("preparation failed: %s", event.error)
+                    append_output(f"\nError: {event.error}\n")
+                success = event.error is None and bool(event.result)
+                button.config(state=tk.NORMAL, text=button_label)
+                self._update_execute_modes()
+                if self.stop_execution_button is not None:
+                    self.stop_execution_button.config(state="disabled")
+                self.run_button.config(state=tk.NORMAL)
+                self.generate_report_button.config(state=tk.NORMAL)
+                if success or job.cancel_requested:
+                    self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE)
+                else:
+                    self._set_status(failure_status, fg=widgets.STATUS_FAIL, reset_delay=3000)
+                self.project_state.publish(ResultsChanged())
+                self._update_pattern_detection_ui()
+
+        TkJobAdapter(self, events, on_event).start()
+        job.start()
 
     def _stop_execution(self) -> None:
-        self._execution_stop_event.set()
-        if self._execution_process is not None:
-            self._execution_process.terminate()
+        job = self._execution_job
+        if job is not None:
+            job.cancel()
         if self.run_button is not None:
             self.run_button.config(state="normal", text="Run")
         if self.prepare_pattern_detection_button is not None:

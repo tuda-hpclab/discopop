@@ -10,7 +10,10 @@ import os
 import tkinter as tk
 from typing import Any, Literal, Optional
 
+from discopop_library.ProjectManager.services.modes import available_modes
+from discopop_library.ProjectManager.services.reports import find_latest_report_pdf, has_execution_results
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
+from discopop_library.ProjectManager.services.project_state import ConfigChanged
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 
 
@@ -39,16 +42,7 @@ class ConfigListMixin(ConfigManagerMixinBase):
                     self.listbox.selection_set(0)
                     self.current_config = configs[0]
                 self._load_config()
-                self._update_autotuning_config_display()
-                if hasattr(self, "_refresh_autotuning_suggestions_display"):
-                    self._refresh_autotuning_suggestions_display()
-                if hasattr(self, "_refresh_suggestion_selection_display"):
-                    self._refresh_suggestion_selection_display()
-                if hasattr(self, "_update_hotspot_config_display"):
-                    self._update_hotspot_config_display()
-                # the Patch Repair tab names the selected configuration and refuses to
-                # run without one, so it has to learn about the selection as well
-                self._update_patch_repair_ui()
+                self.project_state.publish(ConfigChanged(self.current_config))
 
     def _on_config_selected(self, event: Optional[Any]) -> None:
         selection = self.listbox.curselection()
@@ -56,14 +50,7 @@ class ConfigListMixin(ConfigManagerMixinBase):
             return
         self.current_config = self.listbox.get(selection[0])
         self._load_config()
-        self._update_autotuning_config_display()
-        if hasattr(self, "_refresh_autotuning_suggestions_display"):
-            self._refresh_autotuning_suggestions_display()
-        if hasattr(self, "_refresh_suggestion_selection_display"):
-            self._refresh_suggestion_selection_display()
-        if hasattr(self, "_update_hotspot_config_display"):
-            self._update_hotspot_config_display()
-        self._update_patch_repair_ui()
+        self.project_state.publish(ConfigChanged(self.current_config))
 
         try:
             current_tab_index = self.right_tabs.index(self.right_tabs.select())
@@ -109,30 +96,10 @@ class ConfigListMixin(ConfigManagerMixinBase):
 
         config_path = os.path.join(self.config_dir, self.current_config)
         compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, self.current_config)
-        shared_seq_settings = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-        shared_dp_settings = os.path.join(self.arguments.project_config_dir, "dp_settings.json")
-        shared_hd_settings = os.path.join(self.arguments.project_config_dir, "hd_settings.json")
-        shared_par_settings = os.path.join(self.arguments.project_config_dir, "par_settings.json")
         execute_sh = os.path.join(config_path, "execute.sh")
 
-        for mode, settings_file in [
-            ("seq", "seq_settings.json"),
-            ("dp", "dp_settings.json"),
-            ("hd", "hd_settings.json"),
-            ("par", "par_settings.json"),
-        ]:
-            if mode == "seq":
-                settings_path = shared_seq_settings
-            elif mode == "dp":
-                settings_path = shared_dp_settings
-            elif mode == "hd":
-                settings_path = shared_hd_settings
-            elif mode == "par":
-                settings_path = shared_par_settings
-            else:
-                settings_path = ""
-
-            exists = os.path.exists(settings_path) and os.path.exists(compile_sh) and os.path.exists(execute_sh)
+        modes_available = available_modes(self.arguments.project_config_dir, compile_sh, execute_sh)
+        for mode, exists in modes_available.items():
             state: Literal["normal", "disabled"] = "normal" if exists else "disabled"
             self.mode_checkbuttons[mode].config(state=state)
             if not exists:
@@ -142,13 +109,9 @@ class ConfigListMixin(ConfigManagerMixinBase):
         if hasattr(self, "prepare_pattern_detection_button"):
             self.prepare_pattern_detection_button.config(state="normal")
 
-        reports_dir = os.path.join(self.arguments.project_dir, "reports")
-        report_exists = False
-        if os.path.exists(reports_dir):
-            report_dirs = sorted([d for d in os.listdir(reports_dir) if os.path.isdir(os.path.join(reports_dir, d))])
-            if report_dirs:
-                latest_report_dir = os.path.join(reports_dir, report_dirs[-1])
-                report_path = os.path.join(latest_report_dir, "full_report.pdf")
-                report_exists = os.path.exists(report_path)
-
+        # a report covers the runs of every configuration, including those of earlier sessions
+        self.generate_report_button.config(
+            state="normal" if has_execution_results(self.arguments.project_dir) else "disabled"
+        )
+        report_exists = find_latest_report_pdf(self.arguments.project_dir)[0] is not None
         self.view_report_button.config(state="normal" if report_exists else "disabled")

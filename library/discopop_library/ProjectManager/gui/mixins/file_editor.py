@@ -26,6 +26,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     resolve_compile_script_path,
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script
+from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import ask_yes_no, show_error, show_warning
@@ -71,7 +72,7 @@ class FileEditorMixin(ConfigManagerMixinBase):
         self._load_execution_time_settings()
         self.right_tabs.tab(self.editor_tab_index, text="Editor")
         self._update_execute_modes()
-        self._update_report_display()
+        self.project_state.publish(ResultsChanged())
 
     def _set_sub_tab_modified(self, filename: str, modified: bool) -> None:
         tab_index = self.editor_sub_tab_index.get(filename)

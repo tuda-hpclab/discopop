@@ -21,6 +21,16 @@ from discopop_library.ProjectManager.utilities.initializeFiles import (
     initialize_configuration_files,
 )
 from discopop_library.ProjectManager.configurations.execution_time import DEFAULT_EXECUTION_TIME_REGEX
+from discopop_library.ProjectManager.services.jobs import let_children_receive_sigint
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningChanged,
+    AutotuningFinished,
+    ConfigChanged,
+    HotspotsChanged,
+    PatternsChanged,
+    ProjectState,
+    ResultsChanged,
+)
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import heading_label
 from discopop_library.ProjectManager.gui.mixins.helpers import (
@@ -71,6 +81,8 @@ class ConfigManagerApp(  # type: ignore
         self.minsize(1400, 800)
         self.arguments = arguments
         self.was_initialized = was_initialized
+        self.project_state = ProjectState()
+        self._subscribe_panels_to_project_state()
 
         self.config_dir = arguments.project_config_dir
         self.tooltip: Optional[Tooltip] = None
@@ -353,7 +365,6 @@ class ConfigManagerApp(  # type: ignore
         # Build execute panel
         self._build_execute_panel(execute_frame)
 
-        self.current_config: Optional[str] = None
         self.compilation_editor_open = False
         self.compilation_text_areas: dict[str, tk.Text] = {}
         self.compilation_modified_files: dict[str, bool] = {}
@@ -368,6 +379,47 @@ class ConfigManagerApp(  # type: ignore
         self._refresh_config_list()
         self.after(100, self._maybe_open_wizard)
         self._start_modification_polling()
+
+    @property  # type: ignore[override]
+    def current_config(self) -> Optional[str]:
+        return self.project_state.current_config
+
+    @current_config.setter
+    def current_config(self, value: Optional[str]) -> None:
+        self.project_state.current_config = value
+
+    def _subscribe_panels_to_project_state(self) -> None:
+        """Say which panel reacts to which change; the order of the subscriptions is the order of the updates."""
+        state = self.project_state
+        # a selected configuration is shown by the tabs that work on it (the Patch Repair tab refuses to run without)
+        state.subscribe(ConfigChanged, lambda _e: self._update_autotuning_config_display())
+        state.subscribe(ConfigChanged, lambda _e: self._refresh_autotuning_suggestions_display())
+        state.subscribe(ConfigChanged, lambda _e: self._refresh_suggestion_selection_display())
+        state.subscribe(ConfigChanged, lambda _e: self._update_hotspot_config_display())
+        state.subscribe(ConfigChanged, lambda _e: self._update_patch_repair_ui())
+        state.subscribe(ResultsChanged, lambda _e: self._update_report_display())
+        # freshly generated patches are what the Autotuning and Patch Repair tabs work on
+        state.subscribe(PatternsChanged, lambda _e: self._update_autotuning_ui())
+        state.subscribe(PatternsChanged, lambda _e: self._update_patch_repair_ui())
+        # the hotspot results gate the hotspot types of the Autotuning tab
+        state.subscribe(HotspotsChanged, lambda _e: self._update_autotuning_ui())
+        # ... and whether the default algorithm of the Autotuning tab can run at all
+        state.subscribe(HotspotsChanged, lambda _e: self._update_algorithm_hint())
+        state.subscribe(AutotuningChanged, lambda _e: self._refresh_autotuning_suggestions_display())
+        state.subscribe(AutotuningFinished, lambda _e: self._refresh_autotuning_suggestions_display())
+        state.subscribe(AutotuningFinished, lambda _e: self._refresh_suggestion_selection_display())
+        state.subscribe(AutotuningFinished, lambda _e: self._update_report_display())
+
+    def _cancel_running_jobs(self) -> None:
+        """Stop the jobs the panels started; called once the window is closed.
+
+        Several of them run in a session of their own, which neither the closed window nor a Ctrl+C in the
+        terminal reaches.
+        """
+        for name in ("_execution_job", "_explorer_job", "_hotspot_job", "_autotuning_job", "_patch_repair_job"):
+            job = getattr(self, name, None)
+            if job is not None:
+                job.cancel()
 
     def _update_dot_dp_label(self, event: Optional["tk.Event[tk.Misc]"] = None) -> None:
         """Truncate the .discopop path label to at most half the bottom bar's width.
@@ -519,6 +571,8 @@ class ConfigManagerApp(  # type: ignore
 
 
 def run_gui(arguments: ProjectManagerArguments) -> None:
+    # Stop sends SIGINT to the autotuner and patch repair jobs
+    let_children_receive_sigint()
     was_initialized = False
     if not os.path.exists(arguments.project_config_dir):
         try:
@@ -543,4 +597,7 @@ def run_gui(arguments: ProjectManagerArguments) -> None:
     # caller that is not a person -- a script, a CI job, an agent -- cannot tell
     # apart from a hang. Name what it is waiting for.
     print("Opening the DiscoPoP Project Manager. Close the window to continue.", file=sys.stderr)
-    app.mainloop()
+    try:
+        app.mainloop()
+    finally:
+        app._cancel_running_jobs()

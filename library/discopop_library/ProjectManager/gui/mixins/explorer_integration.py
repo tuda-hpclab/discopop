@@ -8,19 +8,35 @@
 
 import logging
 import os
-import shutil
-import signal
-import subprocess
+import queue
 import sys
-import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import quote
 
-from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error, clean_ansi_output
+from discopop_library.ProjectManager.services.project_state import PatternsChanged
+from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.gui.job_adapter import TkJobAdapter
+from discopop_library.ProjectManager.services.jobs import (
+    CancelPolicy,
+    JobEvent,
+    JobFailedToStart,
+    JobFinished,
+    JobOutput,
+    JobRunner,
+    JobSpec,
+)
+from discopop_library.ProjectManager.services.text import clean_ansi_output
+from discopop_library.ProjectManager.services.commands import explorer_command
+from discopop_library.ProjectManager.services.patches import count_patches, has_patches
+from discopop_library.ProjectManager.services.vscode import (
+    VSCODE_NOT_FOUND_MESSAGE,
+    find_code_executable,
+    open_project,
+)
+from discopop_library.ProjectManager.services.requests import ExplorerRequest
 from discopop_library.ProjectManager.gui.plots import hotspot_data
 from discopop_library.ProjectManager.gui.rounded_button import RoundedButton
 from discopop_library.ProjectManager.gui.widgets import (
@@ -64,7 +80,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
     _pattern_detection_tab_tooltip: Optional[Tooltip] = None
     _pattern_detection_tab_tooltip_timer: Optional[str] = None
     _pattern_detection_tab_tooltip_active_tab: Optional[int] = None
-    _explorer_process: Optional["subprocess.Popen[str]"] = None
+    _explorer_job: Optional[JobRunner] = None
     _explorer_stopped: bool = False
 
     def _build_pattern_detection_panel(self, parent: tk.Widget) -> None:
@@ -250,13 +266,19 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         else:
             self.hotspot_hint_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
 
+    def _pattern_detection_tooltip_text(self) -> str:
+        """Why the Pattern Detection tab is disabled, naming the profiling files that are missing."""
+        dot_dp = self.arguments.dot_dp
+        lines = ["Prerequisites not met:", "Profiling data not found."]
+        missing = self._get_missing_required_explorer_files(dot_dp)
+        if missing:
+            lines.append("Missing in " + dot_dp + ":")
+            lines.extend("  " + os.path.relpath(path, dot_dp) for path in missing)
+        lines.append("Execute a configuration in 'dp' mode with 'inplace' enabled first.")
+        return "\n".join(lines)
+
     def _setup_pattern_detection_tab_tooltip(self) -> None:
-        tooltip_text = (
-            "Prerequisites not met:\n"
-            "Profiling data not found.\n"
-            "Execute a configuration in 'dp' mode with 'inplace' enabled first."
-        )
-        self._pattern_detection_tab_tooltip = Tooltip(self.right_tabs, tooltip_text)
+        self._pattern_detection_tab_tooltip = Tooltip(self.right_tabs, self._pattern_detection_tooltip_text())
 
         def on_motion(event: Any) -> None:
             try:
@@ -274,6 +296,8 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
                 if not self._check_explorer_prerequisites():
                     self._pattern_detection_tab_tooltip_active_tab = tab_under_cursor
                     assert self._pattern_detection_tab_tooltip is not None
+                    # the files can appear or vanish while the window is open
+                    self._pattern_detection_tab_tooltip.text = self._pattern_detection_tooltip_text()
                     self._pattern_detection_tab_tooltip_timer = self.after(  # type: ignore
                         500, self._pattern_detection_tab_tooltip.showtip, event.x_root, event.y_root + 20
                     )
@@ -301,13 +325,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             self.explorer_run_button.config(state="normal" if ready else "disabled")
 
         # Count suggestions the same way as in execute_panel.py for consistency
-        patch_gen_dir = os.path.join(self.arguments.dot_dp, "patch_generator")
-        total_suggestions = 0
-        if os.path.isdir(patch_gen_dir):
-            for sid in os.listdir(patch_gen_dir):
-                sid_dir = os.path.join(patch_gen_dir, sid)
-                if os.path.isdir(sid_dir):
-                    total_suggestions += sum(1 for f in os.listdir(sid_dir) if f.endswith(".patch"))
+        total_suggestions = count_patches(self.arguments.dot_dp)
 
         browse_ready = total_suggestions > 0
         if self.browse_suggestions_button is not None:
@@ -325,23 +343,11 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
 
         self._update_pattern_detection_tab_state(ready)
         self._update_autotuning_tab_state(ready and browse_ready)
-        if hasattr(self, "_update_autotuning_ui"):
-            self._update_autotuning_ui()
-        # freshly generated patches are what the Patch Repair tab works on
-        if hasattr(self, "_update_patch_repair_ui"):
-            self._update_patch_repair_ui()
+        # the Autotuning and Patch Repair tabs work on the freshly generated patches
+        self.project_state.publish(PatternsChanged())
 
     def _check_browse_suggestions_available(self) -> bool:
-        patch_gen_dir = os.path.join(self.arguments.dot_dp, "patch_generator")
-        if not os.path.isdir(patch_gen_dir):
-            return False
-        for entry in os.listdir(patch_gen_dir):
-            sid_dir = os.path.join(patch_gen_dir, entry)
-            if os.path.isdir(sid_dir):
-                patch_count = sum(1 for f in os.listdir(sid_dir) if f.endswith(".patch"))
-                if patch_count > 0:
-                    return True
-        return False
+        return has_patches(self.arguments.dot_dp)
 
     def _open_suggestion_browser(self) -> None:
         from discopop_library.ProjectManager.gui.suggestion_browser import SuggestionBrowserDialog
@@ -352,56 +358,16 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         )
 
     def _open_in_vscode(self) -> None:
-        # The DiscoPoP VSCode extension activates on a workspace that *contains* a
-        # .discopop directory (activation event "workspaceContains:**/.discopop")
-        # and then focuses its sidebar view. We therefore open the project root
-        # (the parent of the .discopop directory), not the .discopop dir itself.
-        dot_dp = os.path.abspath(self.arguments.dot_dp)
-        project_root = os.path.dirname(dot_dp)
-
-        code_executable = shutil.which("code")
+        code_executable = find_code_executable()
         if code_executable is None:
-            show_error(
-                self,
-                "VSCode Not Found",
-                "Could not find the 'code' command on your PATH.\n\n"
-                "Install Visual Studio Code and, from within VSCode, run "
-                "'Shell Command: Install \"code\" command in PATH' to enable this feature.",
-            )
+            show_error(self, "VSCode Not Found", VSCODE_NOT_FOUND_MESSAGE)
             return
 
         try:
-            subprocess.Popen(
-                [code_executable, project_root],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            open_project(code_executable, self.arguments.dot_dp)
         except OSError as e:
             show_error(self, "Failed to open VSCode", f"Could not launch VSCode:\n{e}")
             return
-
-        # Opening the folder alone only focuses the DiscoPoP sidebar on a *fresh*
-        # window (activation runs once). If the folder is already open, re-running
-        # `code` just refocuses the window without re-firing activation. Dispatching
-        # a URI to the extension's UriHandler focuses the sidebar on every
-        # invocation, so the button behaves consistently regardless of window state.
-        # The dotDiscopop/projectPath query tells the extension which configuration
-        # to select (creating a ViewOnly configuration for it if none exists).
-        focus_uri = (
-            "vscode://TUDarmstadt-LaboratoryforParallelProgramming.discopop/focus"
-            f"?dotDiscopop={quote(dot_dp, safe='')}&projectPath={quote(project_root, safe='')}"
-        )
-        try:
-            subprocess.Popen(
-                [code_executable, "--open-url", focus_uri],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError:
-            # Best-effort: the folder is already opening; only the auto-focus is lost.
-            pass
 
         self.status_label.config(text="Opening project in VSCode...", foreground=widgets.STATUS_BUSY)
         self.after(3000, lambda: self.status_label.config(text="Ready", foreground=widgets.STATUS_IDLE))  # type: ignore
@@ -475,9 +441,6 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
                 self.explorer_output_text.see(tk.END)
                 self.explorer_output_text.config(state="disabled")
 
-        def thread_safe_append(text: str) -> None:
-            self.after(0, lambda: append_output(text))  # type: ignore
-
         if visualize:
             assert self.pattern_detection_output_tabs is not None
             self.pattern_detection_output_tabs.select(1)
@@ -485,17 +448,68 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             self.after(50, lambda: self._run_pattern_detection_in_process(append_output))  # type: ignore
             return
 
-        def thread_func() -> None:
-            try:
-                thread_safe_append("Starting pattern detection...\n")
-                self._invoke_explorer(thread_safe_append)
-                self.after(0, lambda: self._on_pattern_detection_complete())  # type: ignore
-            except Exception as e:
-                thread_safe_append(f"\nError: {str(e)}\n")
-                self.after(0, lambda: self._on_pattern_detection_complete(error=True))  # type: ignore
+        # the job's thread must not read Tk variables
+        request = self._snapshot_explorer_request()
+        self._start_explorer_job(request, append_output)
 
-        thread = threading.Thread(target=thread_func, daemon=True)
-        thread.start()
+    def _start_explorer_job(self, request: ExplorerRequest, output_callback: Callable[[str], None]) -> None:
+        dot_discopop = self.arguments.dot_dp
+        output_callback("Starting pattern detection...\n")
+        output_callback("Loading explorer configuration...\n")
+
+        missing_files = self._get_missing_required_explorer_files(dot_discopop)
+        if missing_files:
+            output_callback("\nMissing required files:\n")
+            for file_path in missing_files:
+                output_callback(f"  - {file_path}\n")
+            output_callback("\nError: Missing required profiling data files\n")
+            self._on_pattern_detection_complete(error=True)
+            return
+
+        output_callback("Configuration:\n")
+        output_callback(f"  Patterns: {request.enable_patterns}\n")
+        output_callback(f"  Threads: {request.jobs}\n")
+        output_callback(
+            "  Dependency data: "
+            + (NO_STATES_DETECTION_MODE if request.ignore_dependency_states else DEFAULT_DETECTION_MODE)
+            + "\n\n"
+        )
+        output_callback("Running pattern detection...\n\n")
+
+        events: "queue.Queue[JobEvent]" = queue.Queue()
+        # SIGTERM to the process group: the explorer may have started worker processes of its own
+        job = JobRunner(
+            JobSpec(
+                explorer_command(request),
+                cwd=dot_discopop,
+                cancel_policy=CancelPolicy.SIGTERM_GROUP,
+                new_session=True,
+            ),
+            events,
+        )
+        self._explorer_job = job
+        TkJobAdapter(self, events, lambda event: self._on_explorer_job_event(event, output_callback)).start()
+        job.start()
+
+    def _on_explorer_job_event(self, event: JobEvent, output_callback: Callable[[str], None]) -> None:
+        """Handle one event of the explorer job; runs on the Tk main thread."""
+        if isinstance(event, JobOutput):
+            cleaned = clean_ansi_output(event.line)
+            if cleaned:
+                output_callback(cleaned + "\n")
+        elif isinstance(event, JobFinished):
+            self._explorer_job = None
+            if event.returncode != 0:
+                output_callback(f"\nError: Explorer exited with return code {event.returncode}\n")
+                self._on_pattern_detection_complete(error=True)
+            else:
+                if not self._explorer_stopped:
+                    output_callback("\nPattern detection completed.\n")
+                self._on_pattern_detection_complete()
+        elif isinstance(event, JobFailedToStart):
+            self._explorer_job = None
+            output_callback(f"\nError: {event.error}\n")
+            self._on_pattern_detection_complete(error=True)
 
     def _run_pattern_detection_in_process(self, output_callback: Callable[[str], None]) -> None:
         output_callback("Starting pattern detection...\n")
@@ -550,81 +564,24 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         ]
         return [f for f in required_files if not os.path.exists(f)]
 
-    def _invoke_explorer(self, output_callback: Callable[[str], None]) -> None:
-        dot_discopop = self.arguments.dot_dp
-        project_path = dot_discopop
-
-        output_callback("Loading explorer configuration...\n")
-
-        missing_files = self._get_missing_required_explorer_files(project_path)
-        if missing_files:
-            output_callback("\nMissing required files:\n")
-            for file_path in missing_files:
-                output_callback(f"  - {file_path}\n")
-            raise RuntimeError("Missing required profiling data files")
-
+    def _snapshot_explorer_request(self) -> ExplorerRequest:
+        """Read the panel into an immutable request; call on the main thread only."""
         assert self.pattern_types_vars is not None
         assert self.jobs_var is not None
 
         selected_patterns = [pattern for pattern, var in self.pattern_types_vars.items() if var.get()]
-        enable_patterns = ",".join(selected_patterns) if selected_patterns else "reduction,doall"
-        jobs_value = widgets.thread_value(self.jobs_var)
-        ignore_states = self._ignore_dependency_states()
-
-        output_callback("Configuration:\n")
-        output_callback(f"  Patterns: {enable_patterns}\n")
-        output_callback(f"  Threads: {jobs_value}\n")
-        output_callback(
-            f"  Dependency data: {NO_STATES_DETECTION_MODE if ignore_states else DEFAULT_DETECTION_MODE}\n\n"
+        return ExplorerRequest(
+            enable_patterns=",".join(selected_patterns) if selected_patterns else "reduction,doall",
+            jobs=widgets.thread_value(self.jobs_var),
+            ignore_dependency_states=self._ignore_dependency_states(),
         )
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "discopop_explorer",
-            #            "--path",
-            #            project_path,
-            "--enable-patterns",
-            enable_patterns,
-            "--log",
-            "WARNING",
-        ]
-
-        if jobs_value != "auto":
-            cmd.extend(["-j", jobs_value])
-
-        if ignore_states:
-            cmd.append("--ignore-dependency-states")
-
-        output_callback("Running pattern detection...\n\n")
-
-        self._explorer_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=project_path,
-            start_new_session=True,
-        )
-
-        assert self._explorer_process.stdout is not None
-        for line in self._explorer_process.stdout:
-            cleaned = clean_ansi_output(line.rstrip("\n"))
-            if cleaned:
-                output_callback(cleaned + "\n")
-
-        self._explorer_process.wait()
-        returncode = self._explorer_process.returncode
-        self._explorer_process = None
-
-        if returncode != 0:
-            raise RuntimeError(f"Explorer exited with return code {returncode}")
-
-        if not self._explorer_stopped:
-            output_callback("\nPattern detection completed.\n")
 
     def _invoke_explorer_in_process(self, output_callback: Callable[[str], None]) -> None:
+        """Run the explorer with ``--visualize`` in this process, on the Tk main thread.
+
+        Deliberately not a job of the JobRunner: the visualization builds matplotlib canvases inside Tk widgets,
+        which must happen on the main thread of the GUI process. The GUI is blocked while it runs.
+        """
         project_path = self.arguments.dot_dp
 
         output_callback("Loading explorer configuration...\n")
@@ -751,11 +708,9 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
 
     def _stop_pattern_detection(self) -> None:
         self._explorer_stopped = True
-        if self._explorer_process is not None:
-            try:
-                os.killpg(os.getpgid(self._explorer_process.pid), signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                self._explorer_process.terminate()
+        job = self._explorer_job
+        if job is not None:
+            job.cancel()
         if self.explorer_stop_button is not None:
             self.explorer_stop_button.config(state="disabled")
         self.status_label.config(text="Stopping pattern detection...", foreground=widgets.STATUS_STOP)

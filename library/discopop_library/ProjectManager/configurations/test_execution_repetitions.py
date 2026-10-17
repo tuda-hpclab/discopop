@@ -191,12 +191,7 @@ def test_an_unusable_repetition_count_is_rejected(tmp_path: Path) -> None:
 
 
 def test_a_rejected_count_leaves_the_working_directory_alone(tmp_path: Path) -> None:
-    """The refusal must come before the process is moved into the project copy.
-
-    ``execute_configuration`` chdirs into the copy and back out again at the end.
-    Raising in between would strand the caller in a directory that its own cleanup
-    is about to delete, and every later relative path would resolve against it.
-    """
+    """A refused request must not change the working directory of the process."""
     arguments, config_path, settings_path, script_path = _project(tmp_path, "echo 'Total time: 1.0'\n")
     before = os.getcwd()
     with pytest.raises(ValueError):
@@ -211,6 +206,22 @@ def test_a_rejected_count_leaves_the_working_directory_alone(tmp_path: Path) -> 
             repetitions=0,
         )
     assert os.getcwd() == before
+
+
+def test_a_run_does_not_change_the_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The script runs in the project copy via ``cwd=``; the process keeps its directory.
+
+    ``os.chdir`` changes the directory of every thread, so concurrent runs from
+    worker threads used to race.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    arguments, config_path, settings_path, script_path = _project(tmp_path, "pwd -P\necho 'Total time: 1.0'\n")
+    result = execute_configuration(arguments, arguments.project_root, config_path, settings_path, script_path, 1, None)
+    assert result is not None
+    assert os.getcwd() == str(elsewhere.resolve())
+    assert result[2].splitlines()[0] == os.path.realpath(arguments.project_root)
 
 
 def test_an_even_repetition_count_reports_the_lower_middle_run(tmp_path: Path) -> None:
