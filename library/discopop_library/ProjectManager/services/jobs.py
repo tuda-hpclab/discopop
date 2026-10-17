@@ -97,6 +97,16 @@ def _signal_process(process: "subprocess.Popen[str]", policy: CancelPolicy) -> N
         pass
 
 
+def let_children_receive_sigint() -> None:
+    """Undo an ignored SIGINT this process was started with; call from the main thread before starting jobs.
+
+    A shell that runs a program in the background starts it with SIGINT ignored, and the jobs would inherit that:
+    the SIGINT of their Stop would never arrive. A handled signal is reset to its default in a started program.
+    """
+    if signal.getsignal(signal.SIGINT) == signal.SIG_IGN:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
 def _start_process(spec: JobSpec) -> "subprocess.Popen[str]":
     env: Optional[Dict[str, str]] = dict(spec.env) if spec.env is not None else None
     return subprocess.Popen(

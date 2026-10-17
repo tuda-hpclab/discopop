@@ -9,6 +9,7 @@
 import os
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -234,3 +235,33 @@ def test_a_process_registered_after_the_cancel_is_terminated_at_once(tmp_path: P
     release.set()
     finished = _collect(events)[-1]
     assert isinstance(finished, WorkFinished) and finished.result != 0
+
+
+_IGNORING_PARENT = """
+import signal, subprocess, sys
+from discopop_library.ProjectManager.services.jobs import let_children_receive_sigint
+if sys.argv[1] == "fixed":
+    let_children_receive_sigint()
+child = subprocess.Popen(["sleep", "30"])
+child.send_signal(signal.SIGINT)
+try:
+    print(child.wait(timeout=5))
+except subprocess.TimeoutExpired:
+    child.kill()
+    print("ignored")
+"""
+
+
+@pytest.mark.parametrize("variant,expected", [("unfixed", "ignored"), ("fixed", str(-signal.SIGINT))])
+def test_a_gui_started_with_sigint_ignored_can_still_stop_its_jobs(variant: str, expected: str) -> None:
+    # a shell running the GUI in the background starts it with SIGINT ignored, which its children would inherit
+    result = subprocess.run(
+        [sys.executable, "-c", _IGNORING_PARENT, variant],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN),
+        # the checkout, not an installed copy
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[3])},
+    )
+    assert result.stdout.strip() == expected, result.stderr

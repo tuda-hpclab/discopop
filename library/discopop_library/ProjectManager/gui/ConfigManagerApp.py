@@ -21,6 +21,7 @@ from discopop_library.ProjectManager.utilities.initializeFiles import (
     initialize_configuration_files,
 )
 from discopop_library.ProjectManager.configurations.execution_time import DEFAULT_EXECUTION_TIME_REGEX
+from discopop_library.ProjectManager.services.jobs import let_children_receive_sigint
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
     AutotuningFinished,
@@ -570,6 +571,8 @@ class ConfigManagerApp(  # type: ignore
 
 
 def run_gui(arguments: ProjectManagerArguments) -> None:
+    # Stop sends SIGINT to the autotuner and patch repair jobs
+    let_children_receive_sigint()
     was_initialized = False
     if not os.path.exists(arguments.project_config_dir):
         try:
