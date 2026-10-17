@@ -84,3 +84,11 @@ def test_the_selected_configuration_lives_in_the_project_state() -> None:
     ConfigManagerApp.current_config.fset(app, "tiny")  # type: ignore[attr-defined]
     assert app.project_state.current_config == "tiny"
     assert ConfigManagerApp.current_config.fget(app) == "tiny"  # type: ignore[attr-defined]
+
+
+def test_closing_the_window_cancels_the_running_jobs() -> None:
+    app = mock.MagicMock()
+    app._explorer_job = None
+    ConfigManagerApp._cancel_running_jobs(app)
+    for name in ("_execution_job", "_hotspot_job", "_autotuning_job", "_patch_repair_job"):
+        getattr(app, name).cancel.assert_called_once_with()

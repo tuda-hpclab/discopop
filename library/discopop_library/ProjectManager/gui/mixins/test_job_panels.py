@@ -24,6 +24,7 @@ from discopop_library.ProjectManager.gui.mixins import autotuning_panel, explore
 from discopop_library.ProjectManager.gui.mixins.autotuning_panel import AutotuningPanelMixin
 from discopop_library.ProjectManager.gui.mixins.explorer_integration import ExplorerIntegrationMixin
 from discopop_library.ProjectManager.gui.mixins.patch_repair_panel import PatchRepairPanelMixin
+from discopop_library.ProjectManager.services.jobs import CancelPolicy
 from discopop_library.ProjectManager.services.requests import AutotunerRequest, ExplorerRequest, PatchRepairRequest
 
 
@@ -128,7 +129,9 @@ def test_patch_repair_stop(tmp_path: Path) -> None:
         _pump(app, ready.is_set)
         app._stop_patch_repair()
         _pump(app, lambda: app._on_patch_repair_complete.called)
-    assert app._on_patch_repair_complete.call_args.kwargs == {"error": True}  # SIGINT ends the program abnormally
+    # a stop is no failure, even though SIGINT ends this program abnormally
+    assert app._on_patch_repair_complete.call_args.kwargs == {"stopped": True}
+    assert app._patch_repair_job is None
 
 
 # ---- autotuning ----------------------------------------------------------------------------------------------
@@ -163,6 +166,63 @@ def test_autotuning_success_and_progress(tmp_path: Path) -> None:
     inserted = "".join(call.args[1] for call in app.autotuning_output_text.insert.call_args_list)
     assert "Ignoring the repetition count: bad value" in inserted
     assert "working" in inserted and "Autotuning completed." in inserted
+
+
+def _autotuning_app(tmp_path: Path) -> Any:
+    app: Any = _AutotuningApp()
+    request = AutotunerRequest("tiny", "yes", "auto", 1, None, "0", "INFO", "search", (), None)
+    _setup(
+        app,
+        tmp_path,
+        autotuning_running=False,
+        autotuning_run_button=mock.MagicMock(),
+        autotuning_stop_button=mock.MagicMock(),
+        autotuning_output_text=mock.MagicMock(),
+        _redraw_autotuning_plot=mock.MagicMock(),
+        _update_autotuning_tiles=mock.MagicMock(),
+        _on_autotuning_complete=mock.MagicMock(),
+        _on_autotuning_progress=mock.MagicMock(),
+        _snapshot_autotuner_request=lambda: request,
+        project_state=mock.MagicMock(),
+    )
+    return app
+
+
+def test_autotuning_stop(tmp_path: Path) -> None:
+    app = _autotuning_app(tmp_path)
+    ready = threading.Event()
+    # finishes gracefully on SIGINT, as the autotuner does
+    code = "import time\nprint('ready', flush=True)\ntry:\n    time.sleep(60)\nexcept KeyboardInterrupt:\n    pass\n"
+    original = app._on_autotuning_job_event
+
+    def watching(event: Any, output_callback: Callable[[str], None]) -> None:
+        if getattr(event, "line", None) == "ready":
+            ready.set()
+        original(event, output_callback)
+
+    app._on_autotuning_job_event = watching
+    with mock.patch.object(autotuning_panel, "autotuner_command", lambda *_a, **_k: _program(code)):
+        app._run_autotuning()
+        _pump(app, ready.is_set)
+        app._stop_autotuning()
+        _pump(app, lambda: app._on_autotuning_complete.called)
+    app._on_autotuning_complete.assert_called_once_with(stopped=True)
+    inserted = "".join(call.args[1] for call in app.autotuning_output_text.insert.call_args_list)
+    assert "Autotuning stopped." in inserted and "Error" not in inserted
+
+
+def test_the_autotuner_and_patch_repair_are_stopped_with_their_process_group(tmp_path: Path) -> None:
+    started: List[Any] = []
+
+    def recording_runner(spec: Any, _events: Any) -> Any:
+        started.append(spec)
+        return mock.MagicMock()
+
+    with mock.patch.object(autotuning_panel, "JobRunner", recording_runner):
+        _autotuning_app(tmp_path)._run_autotuning()
+    with mock.patch.object(patch_repair_panel, "JobRunner", recording_runner):
+        _patch_repair_app(tmp_path, [])._run_patch_repair()
+    assert [(spec.cancel_policy, spec.new_session) for spec in started] == [(CancelPolicy.SIGINT_GROUP, True)] * 2
 
 
 # ---- pattern detection ---------------------------------------------------------------------------------------
