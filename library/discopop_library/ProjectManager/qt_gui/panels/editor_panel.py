@@ -13,7 +13,7 @@ Ported from ``gui/mixins/file_editor.py`` and the Editor part of ``gui/ConfigMan
 """
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -33,6 +33,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 )
 from discopop_library.ProjectManager.configurations.execution_time import (
     DEFAULT_EXECUTION_TIME_REGEX,
+    EXECUTION_TIME_SETTINGS_FILE,
     extract_execution_time,
     read_execution_time_settings,
     validate_execution_time_regex,
@@ -42,6 +43,7 @@ from discopop_library.ProjectManager.configurations.validation import has_valida
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.compilation_editor import CompilationEditor
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services.editor_files import (
@@ -115,6 +117,8 @@ class EditorPanel(Panel):
         self.execution_time_modified = False
         self._loading = False
         self._loaded_config: Optional[str] = None
+        # the files of the loaded configuration as they were on disk when loaded or saved
+        self._loaded_state: Tuple[Tuple[str, Optional[str]], ...] = ()
         self._compilation_editor: Optional[CompilationEditor] = None
 
         self.editors: Dict[str, widgets.ScriptEditor] = {name: widgets.ScriptEditor() for name in FILES}
@@ -266,8 +270,9 @@ class EditorPanel(Panel):
         config = self.project_state.current_config
         if config is None:
             self._clear()
-        elif config == self._loaded_config and self.has_unsaved_changes():
-            # the selection was only refreshed (e.g. after an override was added): keep what is being edited
+        elif config == self._loaded_config and (self.has_unsaved_changes() or self._disk_state() == self._loaded_state):
+            # the selection was only refreshed (after a save, a run, an override added): keep what is being edited,
+            # and do not reload what is shown anyway (a reload moves the cursor to the start and clears the undo)
             return
         else:
             self.load()
@@ -305,7 +310,22 @@ class EditorPanel(Panel):
         self._load_validation_compile_override()
         self._load_execution_time_settings()
         self._refresh_marks()
+        self._loaded_state = self._disk_state()
         self.project_state.publish(ResultsChanged())
+
+    def _disk_state(self) -> Tuple[Tuple[str, Optional[str]], ...]:
+        """The content of every file the tab shows (None: does not exist), to tell whether a reload would change it."""
+        paths = [self._file_path(name) for name in self.editors]
+        config_path = os.path.join(self.arguments.project_config_dir, self.project_state.current_config or "")
+        paths.append(os.path.join(config_path, EXECUTION_TIME_SETTINGS_FILE))
+        state: List[Tuple[str, Optional[str]]] = []
+        for path in paths:
+            try:
+                with open(path, "r") as f:
+                    state.append((path, f.read()))
+            except OSError:
+                state.append((path, None))
+        return tuple(state)
 
     def _load_file(self, name: str) -> bool:
         """Fill the editor of ``name`` from its file; False (and a read-only placeholder) if it does not exist."""
@@ -369,8 +389,6 @@ class EditorPanel(Panel):
             label = self.sub_tab_labels[name]
             self.notebook.setTabText(index, f"{label} *" if modified else label)
         # imported here: the main window imports the panels, so a module level import would be circular
-        from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR
-
         self.tabs.set_tab_title(TAB_EDITOR, "Editor *" if self.has_unsaved_changes() else "Editor")
 
     # ── add / remove the optional files ─────────────────────────────────────
@@ -496,6 +514,7 @@ class EditorPanel(Panel):
         for script_name in ("compile.sh", "compile_validate.sh"):
             if script_name in saved_files:
                 self._validate_compile_script(os.path.join(config_path, script_name))
+        self._loaded_state = self._disk_state()
         self.project_state.publish(ConfigurationsChanged())
         return True
 
@@ -525,8 +544,6 @@ class EditorPanel(Panel):
 
     def save_shortcut(self) -> None:
         """Ctrl+S: saves what the window in front shows (the compilation editor, or the Editor tab)."""
-        from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR
-
         editor = self._compilation_editor
         if editor is not None and editor.isVisible() and editor.isActiveWindow():
             editor.save()

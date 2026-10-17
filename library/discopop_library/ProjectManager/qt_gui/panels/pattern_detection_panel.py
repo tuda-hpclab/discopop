@@ -22,9 +22,9 @@ from PySide6.QtWidgets import QButtonGroup, QCheckBox, QGroupBox, QRadioButton, 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.plots import hotspot_data
 
-# the window imports this module, so its TAB_* names are read when used, not at import
-from discopop_library.ProjectManager.qt_gui import dialogs, main_window, suggestion_browser, widgets
+from discopop_library.ProjectManager.qt_gui import dialogs, suggestion_browser, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_HOTSPOT, TAB_PATTERN_DETECTION
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services import explorer_state
@@ -151,7 +151,7 @@ class PatternDetectionPanel(Panel):
             "filtering it enables can speed up this step significantly."
         )
         self.goto_hotspot_button = widgets.create_button(
-            "Go to Hotspot Detection", lambda: self.tabs.show_tab(main_window.TAB_HOTSPOT)
+            "Go to Hotspot Detection", lambda: self.tabs.show_tab(TAB_HOTSPOT)
         )
         return widgets.group_box(
             "Hotspot Information", widgets.vbox(warning, explanation, widgets.hbox(self.goto_hotspot_button, None))
@@ -221,7 +221,7 @@ class PatternDetectionPanel(Panel):
         self.no_suggestions_label.setVisible(none_found and not self.explorer_running)
 
         self.tabs.set_tab_enabled(
-            main_window.TAB_PATTERN_DETECTION,
+            TAB_PATTERN_DETECTION,
             ready,
             "" if ready else explorer_state.pattern_detection_tooltip_text(dot_dp),
         )

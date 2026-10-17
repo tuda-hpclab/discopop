@@ -25,7 +25,7 @@ from discopop_library.ProjectManager.qt_gui.main_window import (
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services.project_state import ResultsChanged
+from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ResultsChanged
 
 
 def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
@@ -128,3 +128,16 @@ def test_a_fresh_project_opens_the_wizard_after_showing(
     wizard = window.config_list._wizard  # type: ignore[attr-defined]
     assert wizard is not None and wizard.isVisible()
     wizard.done(0)
+
+
+def test_the_report_follows_the_autotuner_and_waits_for_executions(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    refreshed: List[bool] = []
+    window.report_panel.update_display = lambda: refreshed.append(True)  # type: ignore[method-assign]
+    window.project_state.publish(AutotuningFinished())
+    assert refreshed == [True]
+
+    window.report_panel.generate_report_button.setEnabled(True)
+    window.execute_panel._begin_run(window.execute_panel.run_button, "running", "running")
+    assert not window.report_panel.generate_report_button.isEnabled()

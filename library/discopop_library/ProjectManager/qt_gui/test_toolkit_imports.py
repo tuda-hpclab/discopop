@@ -68,3 +68,12 @@ def test_the_command_line_loads_no_toolkit() -> None:
         "import discopop_library.ProjectManager.__main__\nimport discopop_library.ProjectManager.ProjectManager\n"
     )
     assert "tkinter" not in imported and "PySide6" not in imported
+
+
+def test_every_qt_module_can_be_imported_first() -> None:
+    # an import cycle (a panel importing the main window, which imports the panels) only shows when the panel is
+    # the first module imported
+    import discopop_library.ProjectManager.qt_gui.panels as panels
+
+    for module in _modules(qt_gui) + _modules(panels):
+        _imported_after(f"import {module}\n")

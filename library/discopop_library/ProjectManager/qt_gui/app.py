@@ -13,6 +13,7 @@ import signal
 import sys
 from typing import Any
 
+import matplotlib
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -38,6 +39,9 @@ def create_application() -> QApplication:
 
 
 def run_qt_gui(arguments: ProjectManagerArguments) -> None:
+    # pyplot (the PDF report draws with it, on a worker thread) must not open Qt figures; the embedded charts use
+    # FigureCanvasQTAgg directly and do not depend on this
+    matplotlib.use("Agg")
     # Stop sends SIGINT to the autotuner and patch repair jobs
     let_children_receive_sigint()
     app = create_application()

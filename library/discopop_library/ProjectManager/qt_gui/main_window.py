@@ -43,7 +43,12 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_PATTERN_DETECTION as TAB_PATTERN_DETECTION,
     TAB_REPORT as TAB_REPORT,
 )
-from discopop_library.ProjectManager.services.project_state import ConfigurationsChanged, ProjectState, ResultsChanged
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningFinished,
+    ConfigurationsChanged,
+    ProjectState,
+    ResultsChanged,
+)
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
 
@@ -103,7 +108,13 @@ class MainWindow(QMainWindow):
     def _build_panels(self) -> None:
         """Create the panels and wire them: the events each one reacts to beyond its own, and the callbacks."""
         args, state, status = self.arguments, self.project_state, self.status
-        self.execute_panel = ExecutePanel(args, state, status, self)
+        self.execute_panel = ExecutePanel(
+            args,
+            state,
+            status,
+            self,
+            run_state_changed=lambda running: self.report_panel.set_execution_running(running),
+        )
         self.editor_panel = EditorPanel(args, state, status, self)
         self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
         self.hotspot_panel = HotspotPanel(args, state, status, self.execute_panel.timeouts)
@@ -133,6 +144,8 @@ class MainWindow(QMainWindow):
         ):
             self.add_tab(name, panel)
 
+        # the autotuner records its measurements as execution results
+        state.subscribe(AutotuningFinished, lambda _event: self.report_panel.update_display())
         # a profiling run (results) or a new configuration can make the Autotuning tab usable
         state.subscribe(ResultsChanged, lambda _event: self.autotuning_panel.update_tab_state())
         state.subscribe(ConfigurationsChanged, lambda _event: self.autotuning_panel.update_tab_state())

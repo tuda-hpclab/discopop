@@ -12,7 +12,6 @@ import json
 import os
 from typing import List
 
-# the pattern lists of patterns.json that count as a suggestion
 # Selectable interpretations of the profiled dependency data, as (value, label) pairs.
 # "no_states" runs the explorer with --ignore-dependency-states, i.e. it discards the
 # callpath state markers the profiler recorded in dynamic_dependencies.txt.
@@ -23,6 +22,7 @@ DETECTION_MODES = [
 DEFAULT_DETECTION_MODE = "default"
 NO_STATES_DETECTION_MODE = "no_states"
 
+# the pattern lists of patterns.json that count as a suggestion
 SUGGESTION_KEYS = ("optimizer_output", "merged_pattern", "task", "do_all", "reduction")
 
 

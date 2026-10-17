@@ -334,6 +334,10 @@ class CompilationEditor(QWidget):
         start_work(self, compile_once, handle)
 
     def _show_result(self, output: str, return_code: int) -> None:
+        # the result windows closed meanwhile are deleted, the open ones stay until this window closes
+        for closed in [result for result in self._results if not result.isVisible()]:
+            self._results.remove(closed)
+            closed.deleteLater()
         result = CompilationTestResult(output, return_code, self)
         self._results.append(result)
         result.show()

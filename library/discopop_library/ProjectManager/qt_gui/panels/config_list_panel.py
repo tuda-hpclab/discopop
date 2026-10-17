@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem, Q
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR, TAB_EXECUTE, TAB_REPORT
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.wizard import ConfigurationWizard
@@ -150,8 +151,6 @@ class ConfigListPanel(Panel):
         self.project_state.current_config = name
         self.project_state.publish(ConfigChanged(name))
         # Execute and Report show the results of all configurations: back to the Editor of the selected one
-        from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_REPORT
-
         if self._tabs.current_tab() in (TAB_EXECUTE, TAB_REPORT):
             self._tabs.show_tab(TAB_EDITOR)
         return True
@@ -312,8 +311,6 @@ class ConfigListPanel(Panel):
             self.project_state.current_config = result
         self.project_state.publish(ConfigurationsChanged())
         if result and result in self.names():
-            from discopop_library.ProjectManager.qt_gui.main_window import TAB_EXECUTE
-
             self._tabs.show_tab(TAB_EXECUTE)
         wizard.deleteLater()
 
