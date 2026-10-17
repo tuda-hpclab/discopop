@@ -13,15 +13,22 @@ few callbacks one panel offers another. The panels do not know each other.
 """
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent, QIcon, QResizeEvent
+from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import QLabel, QMainWindow, QSplitter, QTabWidget, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.panel import Panel
+from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
+from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
+from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
+from discopop_library.ProjectManager.qt_gui.panels.execute_panel import ExecutePanel
+from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotPanel
+from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
+from discopop_library.ProjectManager.qt_gui.panels.pattern_detection_panel import PatternDetectionPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
@@ -36,7 +43,7 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_PATTERN_DETECTION as TAB_PATTERN_DETECTION,
     TAB_REPORT as TAB_REPORT,
 )
-from discopop_library.ProjectManager.services.project_state import ProjectState
+from discopop_library.ProjectManager.services.project_state import ConfigurationsChanged, ProjectState, ResultsChanged
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
 
@@ -58,15 +65,6 @@ class ElidedPathLabel(QLabel):
     def _elide(self) -> None:
         width = self.width() if self.width() > 1 else 10_000
         self.setText(self.fontMetrics().elidedText(self._path, Qt.TextElideMode.ElideLeft, width))
-
-
-def placeholder(text: str) -> QWidget:
-    """Stands in for a panel that is not available in the Qt GUI yet."""
-    label = QLabel(text)
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setWordWrap(True)
-    widgets.set_label_color(label, widgets.STATUS_IDLE)
-    return label
 
 
 class MainWindow(QMainWindow):
@@ -92,6 +90,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.splitter)
         self.tabs = QTabWidget()
         self._tab_widgets: Dict[str, QWidget] = {}
+        self._pending_tab_state: Dict[str, Tuple[bool, str]] = {}
+        self._pending_tab_titles: Dict[str, str] = {}
 
         self._build_panels()
         self.splitter.setStretchFactor(0, 0)
@@ -101,17 +101,54 @@ class MainWindow(QMainWindow):
     # --- assembly ---
 
     def _build_panels(self) -> None:
-        self.config_list: QWidget = placeholder("The configuration list follows in phase P1 of the port.")
+        """Create the panels and wire them: the events each one reacts to beyond its own, and the callbacks."""
+        args, state, status = self.arguments, self.project_state, self.status
+        self.execute_panel = ExecutePanel(args, state, status, self)
+        self.editor_panel = EditorPanel(args, state, status, self)
+        self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
+        self.hotspot_panel = HotspotPanel(args, state, status, self.execute_panel.timeouts)
+        self.pattern_detection_panel = PatternDetectionPanel(args, state, status, self)
+        self.patch_repair_panel = PatchRepairPanel(args, state, status)
+        self.autotuning_panel = AutotuningPanel(args, state, status, self)
+        self.config_list = ConfigListPanel(
+            args,
+            state,
+            status,
+            confirm_leave_config=self.editor_panel.confirm_leave,
+            open_compilation_editor=self.editor_panel.open_compilation_editor,
+            tabs=self,
+        )
+        self.panels.append(self.config_list)
+
         self.splitter.addWidget(self.config_list)
         self.splitter.addWidget(self.tabs)
-        for name in TAB_ORDER:
-            self.add_tab(name, placeholder(f"The {name} tab is not available in the Qt GUI yet."))
+        for name, panel in (
+            (TAB_EDITOR, self.editor_panel),
+            (TAB_EXECUTE, self.execute_panel),
+            (TAB_REPORT, self.report_panel),
+            (TAB_HOTSPOT, self.hotspot_panel),
+            (TAB_PATTERN_DETECTION, self.pattern_detection_panel),
+            (TAB_PATCH_REPAIR, self.patch_repair_panel),
+            (TAB_AUTOTUNING, self.autotuning_panel),
+        ):
+            self.add_tab(name, panel)
 
-        self.report_panel = ReportPanel(self.arguments, self.project_state, self.status)
-        self.add_tab(TAB_REPORT, self.report_panel)
+        # a profiling run (results) or a new configuration can make the Autotuning tab usable
+        state.subscribe(ResultsChanged, lambda _event: self.autotuning_panel.update_tab_state())
+        state.subscribe(ConfigurationsChanged, lambda _event: self.autotuning_panel.update_tab_state())
+        self.autotuning_panel.update_tab_state()
+        self.pattern_detection_panel.refresh()
+        QShortcut(QKeySequence.StandardKey.Save, self, self.editor_panel.save_shortcut)
+
+    def after_show(self) -> None:
+        """Called once the window is visible: the wizard of a fresh project opens on top of it."""
+        self.config_list.maybe_open_wizard(self.was_initialized)
 
     def add_tab(self, name: str, widget: QWidget) -> None:
-        """Put ``widget`` at the place of tab ``name`` (replacing what is there) and register it if it is a panel."""
+        """Put ``widget`` at the place of tab ``name`` (replacing what is there) and register it if it is a panel.
+
+        A state set before the tab existed (enabled, tooltip, title) is applied to it.
+        """
         if name in self._tab_widgets:
             index = self.tabs.indexOf(self._tab_widgets[name])
             self.tabs.removeTab(index)
@@ -121,6 +158,10 @@ class MainWindow(QMainWindow):
         self._tab_widgets[name] = widget
         if isinstance(widget, Panel):
             self.panels.append(widget)
+        if name in self._pending_tab_state:
+            self.set_tab_enabled(name, *self._pending_tab_state.pop(name))
+        if name in self._pending_tab_titles:
+            self.set_tab_title(name, self._pending_tab_titles.pop(name))
 
     def tab(self, name: str) -> QWidget:
         return self._tab_widgets[name]
@@ -133,9 +174,16 @@ class MainWindow(QMainWindow):
         return next((name for name, widget in self._tab_widgets.items() if widget is current), "")
 
     def set_tab_title(self, name: str, title: str) -> None:
+        if name not in self._tab_widgets:
+            self._pending_tab_titles[name] = title
+            return
         self.tabs.setTabText(self.tabs.indexOf(self._tab_widgets[name]), title)
 
     def set_tab_enabled(self, name: str, enabled: bool, tooltip: str = "") -> None:
+        if name not in self._tab_widgets:
+            # a panel decides about its tab in its constructor, before the window added it
+            self._pending_tab_state[name] = (enabled, tooltip)
+            return
         index = self.tabs.indexOf(self._tab_widgets[name])
         self.tabs.setTabEnabled(index, enabled)
         self.tabs.setTabToolTip(index, tooltip)

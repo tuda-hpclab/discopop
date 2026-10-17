@@ -95,6 +95,7 @@ def delete_leftover_widgets(qapp: QApplication) -> Iterator[None]:
     """
     yield
     for widget in QApplication.topLevelWidgets():
-        widget.close()
+        # hidden, not closed: a close handler asking a question would fail outside the test
+        widget.hide()
         widget.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
