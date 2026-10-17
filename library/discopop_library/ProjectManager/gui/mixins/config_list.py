@@ -10,6 +10,7 @@ import os
 import tkinter as tk
 from typing import Any, Literal, Optional
 
+from discopop_library.ProjectManager.services.configurations import list_configurations
 from discopop_library.ProjectManager.services.modes import available_modes
 from discopop_library.ProjectManager.services.reports import find_latest_report_pdf, has_execution_results
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
@@ -26,9 +27,7 @@ class ConfigListMixin(ConfigManagerMixinBase):
 
         self.listbox.delete(0, tk.END)
         if os.path.exists(self.config_dir):
-            configs = sorted(
-                [d for d in os.listdir(self.config_dir) if os.path.isdir(os.path.join(self.config_dir, d))]
-            )
+            configs = list_configurations(self.config_dir)
 
             for config in configs:
                 self.listbox.insert(tk.END, config)

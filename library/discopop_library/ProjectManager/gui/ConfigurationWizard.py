@@ -6,13 +6,10 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import copy
-import os
 import json
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional, List, Tuple, Union
-from discopop_library.ProjectManager.services.derived_settings import derive_settings
+from typing import Optional, List, Union
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services.configurations import (
     WizardData,
@@ -21,7 +18,14 @@ from discopop_library.ProjectManager.services.configurations import (
     write_wizard_configuration,
 )
 from discopop_library.ProjectManager.gui.job_adapter import start_work
-from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
+from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
+from discopop_library.ProjectManager.services.wizard import (
+    TEST_OK,
+    compilation_work,
+    compute_derived_settings,
+    describe_test_compilation,
+    save_derived_settings,
+)
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import heading_label
 from discopop_library.ProjectManager.gui.wizard_steps import WizardStepsMixin
@@ -181,11 +185,6 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
         write_seq_settings(self.arguments.project_config_dir, self.step_data)
 
     def _run_test_compilation(self) -> None:
-        from discopop_library.ProjectManager.configurations.execution import execute_configuration
-
-        compile_sh_path = os.path.join(self.arguments.project_config_dir, "compile.sh")
-        seq_settings_path = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-
         self.test_output_text.config(state=tk.NORMAL)
         self.test_output_text.delete(1.0, tk.END)
         self.test_output_text.config(state=tk.DISABLED)
@@ -199,101 +198,37 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             self.test_output_text.see(tk.END)
             self.test_output_text.config(state=tk.DISABLED)
 
-        args_copy = copy.copy(self.arguments)
-
-        def compile_once(_ctx: WorkContext) -> Optional[Tuple[int, float, str, str]]:
-            return execute_configuration(
-                args_copy,
-                args_copy.project_root,
-                args_copy.project_config_dir,
-                seq_settings_path,
-                compile_sh_path,
-                1,
-                args_copy.timeout_compilation,
-                # a test compilation is no run of a configuration
-                store_result=False,
-            )
-
         def handle(event: WorkEvent) -> None:
             if not isinstance(event, WorkFinished):
                 return
-            result = event.result if event.error is None else None
-            if event.error is not None:
-                append_output(f"Compilation failed: {event.error}\n")
-                self.test_status_label.config(text="✗ Failed", foreground=widgets.STATUS_FAIL)
-            elif result is None:
-                append_output("Compilation failed: settings file not found.\n")
-                self.test_status_label.config(text="✗ Failed", foreground=widgets.STATUS_FAIL)
-            else:
-                ret_code, elapsed, stdout, stderr = result
-                if ret_code == 0:
-                    append_output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-                    self.test_status_label.config(text="✓ Success", foreground=widgets.STATUS_OK)
-                else:
-                    append_output(f"Compilation failed (return code: {ret_code}, {elapsed:.2f}s)\n")
-                    self.test_status_label.config(
-                        text=f"✗ Failed (exit code: {ret_code})", foreground=widgets.STATUS_FAIL
-                    )
-                if stdout:
-                    append_output(f"stdout:\n{stdout}\n")
-                if stderr:
-                    append_output(f"stderr:\n{stderr}\n")
+            outcome = describe_test_compilation(event)
+            color = widgets.STATUS_OK if outcome.kind == TEST_OK else widgets.STATUS_FAIL
+            self.test_status_label.config(text=outcome.status, foreground=color)
+            for line in outcome.output:
+                append_output(line)
             self.run_test_btn.config(state=tk.NORMAL)
             self.next_btn.config(state=tk.NORMAL)
 
-        start_work(self, compile_once, handle)
+        start_work(self, compilation_work(self.arguments), handle)
 
     def _compute_and_display_derived_settings(self) -> None:
-        seq_settings = {
-            "CC": self.step_data.cc,
-            "CXX": self.step_data.cxx,
-            "CFLAGS": self.step_data.cflags,
-            "CXXFLAGS": self.step_data.cxxflags,
-        }
-
-        derived = derive_settings(seq_settings)
-        dp_settings = derived["dp"]
-        hd_settings = derived["hd"]
-        par_settings = derived["par"]
-
-        self.step_data.derived_settings = {
-            "dp_settings": dp_settings,
-            "hd_settings": hd_settings,
-            "par_settings": par_settings,
-        }
-
-        self.dp_settings_text.delete(1.0, tk.END)
-        self.dp_settings_text.insert(1.0, json.dumps(dp_settings, indent=2))
-
-        self.hd_settings_text.delete(1.0, tk.END)
-        self.hd_settings_text.insert(1.0, json.dumps(hd_settings, indent=2))
-
-        self.par_settings_text.delete(1.0, tk.END)
-        self.par_settings_text.insert(1.0, json.dumps(par_settings, indent=2))
+        derived = compute_derived_settings(self.step_data)
+        for text_widget, key in (
+            (self.dp_settings_text, "dp_settings"),
+            (self.hd_settings_text, "hd_settings"),
+            (self.par_settings_text, "par_settings"),
+        ):
+            text_widget.delete(1.0, tk.END)
+            text_widget.insert(1.0, json.dumps(derived[key], indent=2))
 
     def _save_derived_settings(self) -> None:
         try:
-            dp_content: str = self.dp_settings_text.get(1.0, tk.END).strip()
-            hd_content: str = self.hd_settings_text.get(1.0, tk.END).strip()
-            par_content: str = self.par_settings_text.get(1.0, tk.END).strip()
-
-            dp_settings = json.loads(dp_content)
-            hd_settings = json.loads(hd_content)
-            par_settings = json.loads(par_content)
-
-            dp_path: str = os.path.join(self.arguments.project_config_dir, "dp_settings.json")
-            hd_path: str = os.path.join(self.arguments.project_config_dir, "hd_settings.json")
-            par_path: str = os.path.join(self.arguments.project_config_dir, "par_settings.json")
-
-            with open(dp_path, "w") as f:
-                json.dump(dp_settings, f, indent=2)
-
-            with open(hd_path, "w") as f:
-                json.dump(hd_settings, f, indent=2)
-
-            with open(par_path, "w") as f:
-                json.dump(par_settings, f, indent=2)
-
+            save_derived_settings(
+                self.arguments.project_config_dir,
+                self.dp_settings_text.get(1.0, tk.END),
+                self.hd_settings_text.get(1.0, tk.END),
+                self.par_settings_text.get(1.0, tk.END),
+            )
         except json.JSONDecodeError as e:
             show_error(self, "Invalid JSON", f"One of the derived settings contains invalid JSON: {e}")
             raise

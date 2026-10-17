@@ -16,7 +16,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, List
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import get_per_config_validation_compile_script_path
@@ -61,6 +61,13 @@ def _checked_new_name(config_dir: str, name: str, current: str = "") -> str:
     if os.path.exists(os.path.join(config_dir, name)):
         raise AlreadyExistsError(name)
     return name
+
+
+def list_configurations(config_dir: str) -> List[str]:
+    """The names of the configurations (the directories of ``config_dir``), sorted."""
+    if not os.path.exists(config_dir):
+        return []
+    return sorted(d for d in os.listdir(config_dir) if os.path.isdir(os.path.join(config_dir, d)))
 
 
 def create_configuration(arguments: ProjectManagerArguments, name: str) -> str:
