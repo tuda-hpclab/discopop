@@ -266,13 +266,19 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         else:
             self.hotspot_hint_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
 
+    def _pattern_detection_tooltip_text(self) -> str:
+        """Why the Pattern Detection tab is disabled, naming the profiling files that are missing."""
+        dot_dp = self.arguments.dot_dp
+        lines = ["Prerequisites not met:", "Profiling data not found."]
+        missing = self._get_missing_required_explorer_files(dot_dp)
+        if missing:
+            lines.append("Missing in " + dot_dp + ":")
+            lines.extend("  " + os.path.relpath(path, dot_dp) for path in missing)
+        lines.append("Execute a configuration in 'dp' mode with 'inplace' enabled first.")
+        return "\n".join(lines)
+
     def _setup_pattern_detection_tab_tooltip(self) -> None:
-        tooltip_text = (
-            "Prerequisites not met:\n"
-            "Profiling data not found.\n"
-            "Execute a configuration in 'dp' mode with 'inplace' enabled first."
-        )
-        self._pattern_detection_tab_tooltip = Tooltip(self.right_tabs, tooltip_text)
+        self._pattern_detection_tab_tooltip = Tooltip(self.right_tabs, self._pattern_detection_tooltip_text())
 
         def on_motion(event: Any) -> None:
             try:
@@ -290,6 +296,8 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
                 if not self._check_explorer_prerequisites():
                     self._pattern_detection_tab_tooltip_active_tab = tab_under_cursor
                     assert self._pattern_detection_tab_tooltip is not None
+                    # the files can appear or vanish while the window is open
+                    self._pattern_detection_tab_tooltip.text = self._pattern_detection_tooltip_text()
                     self._pattern_detection_tab_tooltip_timer = self.after(  # type: ignore
                         500, self._pattern_detection_tab_tooltip.showtip, event.x_root, event.y_root + 20
                     )
