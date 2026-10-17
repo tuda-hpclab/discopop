@@ -24,20 +24,21 @@ from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
+
+# re-exported: the names were defined here first
+from discopop_library.ProjectManager.qt_gui.tabs import (
+    TAB_AUTOTUNING as TAB_AUTOTUNING,
+    TAB_EDITOR as TAB_EDITOR,
+    TAB_EXECUTE as TAB_EXECUTE,
+    TAB_HOTSPOT as TAB_HOTSPOT,
+    TAB_ORDER as TAB_ORDER,
+    TAB_PATCH_REPAIR as TAB_PATCH_REPAIR,
+    TAB_PATTERN_DETECTION as TAB_PATTERN_DETECTION,
+    TAB_REPORT as TAB_REPORT,
+)
 from discopop_library.ProjectManager.services.project_state import ProjectState
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
-
-TAB_EDITOR = "Editor"
-TAB_EXECUTE = "Execute"
-TAB_REPORT = "Report"
-TAB_HOTSPOT = "Hotspot Detection"
-TAB_PATTERN_DETECTION = "Pattern Detection"
-TAB_PATCH_REPAIR = "Patch Repair"
-TAB_AUTOTUNING = "Autotuning"
-# the order of the tabs: hotspots are measured before, and feed into, pattern detection and the autotuner; patch
-# repair sits between them, a suggestion that does not build is one the tuner can only record as a failure
-TAB_ORDER = (TAB_EDITOR, TAB_EXECUTE, TAB_REPORT, TAB_HOTSPOT, TAB_PATTERN_DETECTION, TAB_PATCH_REPAIR, TAB_AUTOTUNING)
 
 
 class ElidedPathLabel(QLabel):
