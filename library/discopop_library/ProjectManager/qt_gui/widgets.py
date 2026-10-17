@@ -96,14 +96,22 @@ CONSOLE_TAG_COLORS: Dict[str, str] = {
 
 def _button_rules() -> str:
     rules = [
-        "QPushButton { padding: 5px 14px; border-radius: 6px; }",
+        # the default look: a light, framed button (a border radius without a border would draw a bare label)
+        "QPushButton { padding: 5px 14px; border-radius: 6px; border: 1px solid #b8b8b8;"
+        " background-color: #f4f4f4; }",
+        "QPushButton:hover { background-color: #e6e6e6; }",
+        "QPushButton:pressed { background-color: #d8d8d8; }",
+        "QPushButton:disabled { color: #9a9a9a; background-color: #ececec; border-color: #d0d0d0; }",
     ]
     for variant, (color, hover) in _VARIANT_COLORS.items():
         rules.append(
-            f"QPushButton#{variant} {{ background-color: {color}; color: white; border: none; font-weight: bold; }}"
+            f"QPushButton#{variant} {{ background-color: {color}; color: white; border: 1px solid {color};"
+            " font-weight: bold; }"
         )
         rules.append(f"QPushButton#{variant}:hover {{ background-color: {hover}; }}")
-        rules.append(f"QPushButton#{variant}:disabled {{ background-color: #d0d0d0; color: #7a7a7a; }}")
+        rules.append(
+            f"QPushButton#{variant}:disabled {{ background-color: #d0d0d0; color: #7a7a7a; border-color: #d0d0d0; }}"
+        )
     return "\n".join(rules)
 
 
@@ -234,7 +242,8 @@ def _fill(
 
 def group_box(title: str, layout: QLayout) -> QGroupBox:
     """A titled frame around ``layout`` (the ttk.LabelFrame of the Tk GUI)."""
-    box = QGroupBox(title)
+    # "&" marks a keyboard mnemonic in a Qt title; the titles are plain text
+    box = QGroupBox(title.replace("&", "&&"))
     box.setLayout(layout)
     return box
 
