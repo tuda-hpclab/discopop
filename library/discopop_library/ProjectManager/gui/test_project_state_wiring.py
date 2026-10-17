@@ -30,6 +30,7 @@ UPDATES = (
     "_update_patch_repair_ui",
     "_update_report_display",
     "_update_autotuning_ui",
+    "_update_algorithm_hint",
 )
 
 
@@ -65,7 +66,7 @@ def test_the_other_events() -> None:
     assert calls == ["_update_autotuning_ui", "_update_patch_repair_ui"]
     calls.clear()
     state.publish(HotspotsChanged())
-    assert calls == ["_update_autotuning_ui"]
+    assert calls == ["_update_autotuning_ui", "_update_algorithm_hint"]
     calls.clear()
     state.publish(AutotuningChanged())
     assert calls == ["_refresh_autotuning_suggestions_display"]

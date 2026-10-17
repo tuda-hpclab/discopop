@@ -1273,6 +1273,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         self._delete_hotspot_dir()
         self._clear_hotspot_output()
         self._refresh_hotspot_results()
+        self.project_state.publish(HotspotsChanged())
         self._set_status("Hotspot measurements cleared", reset_delay=3000)
 
 
