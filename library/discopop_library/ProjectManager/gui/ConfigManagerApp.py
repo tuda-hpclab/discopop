@@ -402,6 +402,8 @@ class ConfigManagerApp(  # type: ignore
         state.subscribe(PatternsChanged, lambda _e: self._update_patch_repair_ui())
         # the hotspot results gate the hotspot types of the Autotuning tab
         state.subscribe(HotspotsChanged, lambda _e: self._update_autotuning_ui())
+        # ... and whether the default algorithm of the Autotuning tab can run at all
+        state.subscribe(HotspotsChanged, lambda _e: self._update_algorithm_hint())
         state.subscribe(AutotuningChanged, lambda _e: self._refresh_autotuning_suggestions_display())
         state.subscribe(AutotuningFinished, lambda _e: self._refresh_autotuning_suggestions_display())
         state.subscribe(AutotuningFinished, lambda _e: self._refresh_suggestion_selection_display())

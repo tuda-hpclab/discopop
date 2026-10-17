@@ -13,7 +13,11 @@ from discopop_library.ProjectManager.services.modes import (
     selected_modes_in_order,
     settings_path,
 )
-from discopop_library.ProjectManager.services.reports import ReportProblem, find_latest_report_pdf
+from discopop_library.ProjectManager.services.reports import (
+    ReportProblem,
+    find_latest_report_pdf,
+    has_execution_results,
+)
 
 
 def test_settings_path(tmp_path: Path) -> None:
@@ -50,3 +54,14 @@ def test_latest_report(tmp_path: Path) -> None:
     pdf = tmp_path / "reports" / "2" / "full_report.pdf"
     pdf.write_text("")
     assert find_latest_report_pdf(str(tmp_path)) == (str(pdf), None)
+
+
+def test_execution_results(tmp_path: Path) -> None:
+    results = tmp_path / "execution_results.json"
+    assert not has_execution_results(str(tmp_path))
+    results.write_text("not json")
+    assert not has_execution_results(str(tmp_path))
+    results.write_text('{"tiny": {"execute.sh": {"seq_settings.json": []}}}')
+    assert not has_execution_results(str(tmp_path))
+    results.write_text('{"tiny": {"execute.sh": {"seq_settings.json": [{"code": 0, "time": 1.5}]}}}')
+    assert has_execution_results(str(tmp_path))

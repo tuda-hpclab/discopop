@@ -11,7 +11,7 @@ import tkinter as tk
 from typing import Any, Literal, Optional
 
 from discopop_library.ProjectManager.services.modes import available_modes
-from discopop_library.ProjectManager.services.reports import find_latest_report_pdf
+from discopop_library.ProjectManager.services.reports import find_latest_report_pdf, has_execution_results
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.services.project_state import ConfigChanged
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -109,5 +109,9 @@ class ConfigListMixin(ConfigManagerMixinBase):
         if hasattr(self, "prepare_pattern_detection_button"):
             self.prepare_pattern_detection_button.config(state="normal")
 
+        # a report covers the runs of every configuration, including those of earlier sessions
+        self.generate_report_button.config(
+            state="normal" if has_execution_results(self.arguments.project_dir) else "disabled"
+        )
         report_exists = find_latest_report_pdf(self.arguments.project_dir)[0] is not None
         self.view_report_button.config(state="normal" if report_exists else "disabled")
