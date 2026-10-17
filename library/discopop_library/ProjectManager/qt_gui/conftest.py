@@ -11,6 +11,8 @@
 The platform plugin is chosen when the QApplication is created, so it is set here, before pytest-qt creates it;
 ``QT_QPA_PLATFORM=xcb`` in the environment runs the tests on a real display instead.
 
+Windows a test leaves open are deleted after it (see ``delete_leftover_widgets``).
+
 A modal dialog would block a test (offscreen it is not even visible). Every function of ``qt_gui/dialogs.py`` is
 replaced by a recorder: messages are recorded, questions are answered from ``dialog_answers`` and fail the test
 when it has no answer. Any other modal ``exec()`` fails the test as well.
@@ -24,7 +26,8 @@ from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Tuple
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
-from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from discopop_library.ProjectManager.qt_gui import dialogs  # noqa: E402
 
@@ -81,3 +84,17 @@ def dialog_answers(monkeypatch: pytest.MonkeyPatch) -> Iterator[DialogRecorder]:
     monkeypatch.setattr(QDialog, "exec", _no_modal_exec)
     monkeypatch.setattr(QMessageBox, "exec", _no_modal_exec)
     yield recorder
+
+
+@pytest.fixture(autouse=True)
+def delete_leftover_widgets(qapp: QApplication) -> Iterator[None]:
+    """Delete the windows a test left behind, while the application still exists.
+
+    A widget without a parent that only Python holds is otherwise destroyed at interpreter exit, after the
+    QApplication, which corrupts the heap ("pure virtual method called", "malloc_consolidate()") at random.
+    """
+    yield
+    for widget in QApplication.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

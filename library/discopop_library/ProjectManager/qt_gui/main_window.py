@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QSplitter, QTabWidget, QWidge
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.panel import Panel
+from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services.project_state import ProjectState
 
@@ -102,6 +103,9 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.tabs)
         for name in TAB_ORDER:
             self.add_tab(name, placeholder(f"The {name} tab is not available in the Qt GUI yet."))
+
+        self.report_panel = ReportPanel(self.arguments, self.project_state, self.status)
+        self.add_tab(TAB_REPORT, self.report_panel)
 
     def add_tab(self, name: str, widget: QWidget) -> None:
         """Put ``widget`` at the place of tab ``name`` (replacing what is there) and register it if it is a panel."""
