@@ -218,6 +218,7 @@ def execute_configuration(
     measurement: Optional[Dict[str, Any]] = None,
     repetitions: int = SINGLE_MEASUREMENT,
     should_abort: Optional[Callable[[], bool]] = None,
+    store_result: bool = True,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -245,6 +246,10 @@ def execute_configuration(
     the autotuner derives its per-candidate timeout from ``wall_clock_time``,
     which has to bound the whole process -- reads it from there rather than from
     the return value, whose shape many callers depend on.
+
+    ``store_result=False`` runs the script without recording it in
+    ``execution_results.json`` (and leaves ``measurement`` alone): a test
+    compilation of the GUI belongs to no configuration and measures nothing.
     """
     # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
@@ -393,6 +398,14 @@ def execute_configuration(
             + " of "
             + str([outcome.time for outcome in usable])
             + ")"
+        )
+
+    if not store_result:
+        return (
+            representative.returncode,
+            representative.time,
+            representative.stdout,
+            representative.stderr,
         )
 
     # save execution results

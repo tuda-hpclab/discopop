@@ -472,6 +472,8 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
                 compile_sh_path,
                 1,
                 self.arguments.timeout_compilation,
+                # a test compilation is no run of a configuration
+                store_result=False,
             )
 
         def handle(event: WorkEvent) -> None:
