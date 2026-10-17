@@ -452,7 +452,7 @@ class ConfigManagerApp(  # type: ignore
         and would otherwise garbage-collect the image, silently dropping the
         icon. A missing/unreadable file must not crash the GUI, hence the guard.
         """
-        icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.png")
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.png")
         try:
             self._window_icon = tk.PhotoImage(file=icon_path)
             self.iconphoto(True, self._window_icon)
