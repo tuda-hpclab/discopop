@@ -7,13 +7,18 @@
 # directory for details.
 
 import logging
-import os
 import queue
 import sys
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional
 
+from discopop_library.ProjectManager.services import explorer_state
+from discopop_library.ProjectManager.services.explorer_state import (
+    DEFAULT_DETECTION_MODE,
+    DETECTION_MODES,
+    NO_STATES_DETECTION_MODE,
+)
 from discopop_library.ProjectManager.services.project_state import PatternsChanged
 from discopop_library.ProjectManager.gui.mixins.helpers import Tooltip, show_error
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -47,16 +52,6 @@ from discopop_library.ProjectManager.gui.widgets import (
 )
 
 logger = logging.getLogger("ExplorerIntegration")
-
-# Selectable interpretations of the profiled dependency data, as (value, label) pairs.
-# "no_states" runs the explorer with --ignore-dependency-states, i.e. it discards the
-# callpath state markers the profiler recorded in dynamic_dependencies.txt.
-DETECTION_MODES = [
-    ("default", "default (full states)"),
-    ("no_states", "no_states (states ignored)"),
-]
-DEFAULT_DETECTION_MODE = "default"
-NO_STATES_DETECTION_MODE = "no_states"
 
 
 class ExplorerIntegrationMixin(ConfigManagerMixinBase):
@@ -268,14 +263,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
 
     def _pattern_detection_tooltip_text(self) -> str:
         """Why the Pattern Detection tab is disabled, naming the profiling files that are missing."""
-        dot_dp = self.arguments.dot_dp
-        lines = ["Prerequisites not met:", "Profiling data not found."]
-        missing = self._get_missing_required_explorer_files(dot_dp)
-        if missing:
-            lines.append("Missing in " + dot_dp + ":")
-            lines.extend("  " + os.path.relpath(path, dot_dp) for path in missing)
-        lines.append("Execute a configuration in 'dp' mode with 'inplace' enabled first.")
-        return "\n".join(lines)
+        return explorer_state.pattern_detection_tooltip_text(self.arguments.dot_dp)
 
     def _setup_pattern_detection_tab_tooltip(self) -> None:
         self._pattern_detection_tab_tooltip = Tooltip(self.right_tabs, self._pattern_detection_tooltip_text())
@@ -377,28 +365,13 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         return self.detection_mode_var is not None and self.detection_mode_var.get() == NO_STATES_DETECTION_MODE
 
     def _check_explorer_prerequisites(self) -> bool:
-        profiler_dir = os.path.join(self.arguments.dot_dp, "profiler")
-        return os.path.isdir(profiler_dir)
+        return explorer_state.explorer_prerequisites_met(self.arguments.dot_dp)
 
     def _check_patterns_found(self) -> bool:
-        import json
-
-        patterns_file = os.path.join(self.arguments.dot_dp, "explorer", "patterns.json")
-        if not os.path.exists(patterns_file):
-            return False
-        try:
-            with open(patterns_file, "r") as f:
-                data = json.load(f)
-            patterns = data.get("patterns", {})
-            return any(
-                patterns.get(key, []) for key in ["optimizer_output", "merged_pattern", "task", "do_all", "reduction"]
-            )
-        except (json.JSONDecodeError, IOError):
-            return False
+        return explorer_state.patterns_found(self.arguments.dot_dp)
 
     def _check_pattern_detection_executed(self) -> bool:
-        explorer_dir = os.path.join(self.arguments.dot_dp, "explorer")
-        return os.path.isdir(explorer_dir)
+        return explorer_state.pattern_detection_executed(self.arguments.dot_dp)
 
     def _run_pattern_detection(self) -> None:
         if not self._check_explorer_prerequisites():
@@ -555,14 +528,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
                     pass
 
     def _get_missing_required_explorer_files(self, project_path: str) -> List[str]:
-        required_files = [
-            os.path.join(project_path, "profiler", "Data.xml"),
-            os.path.join(project_path, "profiler", "dynamic_dependencies.txt"),
-            os.path.join(project_path, "profiler", "loop_counter_output.txt"),
-            os.path.join(project_path, "profiler", "reduction.txt"),
-            os.path.join(project_path, "FileMapping.txt"),
-        ]
-        return [f for f in required_files if not os.path.exists(f)]
+        return explorer_state.missing_explorer_files(project_path)
 
     def _snapshot_explorer_request(self) -> ExplorerRequest:
         """Read the panel into an immutable request; call on the main thread only."""
