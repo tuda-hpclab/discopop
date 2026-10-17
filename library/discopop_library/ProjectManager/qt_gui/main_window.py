@@ -69,6 +69,8 @@ def placeholder(text: str) -> QWidget:
 
 
 class MainWindow(QMainWindow):
+    """The window; it is the :class:`TabHost` of the panels."""
+
     def __init__(self, arguments: ProjectManagerArguments, was_initialized: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("DiscoPoP Project Manager")
@@ -124,6 +126,13 @@ class MainWindow(QMainWindow):
 
     def show_tab(self, name: str) -> None:
         self.tabs.setCurrentWidget(self._tab_widgets[name])
+
+    def current_tab(self) -> str:
+        current = self.tabs.currentWidget()
+        return next((name for name, widget in self._tab_widgets.items() if widget is current), "")
+
+    def set_tab_title(self, name: str, title: str) -> None:
+        self.tabs.setTabText(self.tabs.indexOf(self._tab_widgets[name]), title)
 
     def set_tab_enabled(self, name: str, enabled: bool, tooltip: str = "") -> None:
         index = self.tabs.indexOf(self._tab_widgets[name])

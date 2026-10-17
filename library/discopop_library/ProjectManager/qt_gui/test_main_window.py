@@ -49,3 +49,14 @@ def test_the_toolkit_is_chosen_on_the_command_line(monkeypatch: pytest.MonkeyPat
     assert parse_args().gui_toolkit == "tk"
     monkeypatch.setattr(sys, "argv", ["discopop_project_manager", "--gui", "--gui-toolkit", "qt", "-p", str(tmp_path)])
     assert parse_args().gui_toolkit == "qt"
+
+
+def test_tab_host(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window.show_tab(TAB_ORDER[2])
+    assert window.current_tab() == TAB_ORDER[2]
+    window.set_tab_title(TAB_ORDER[0], "Editor *")
+    assert window.tabs.tabText(0) == "Editor *" and window.current_tab() == TAB_ORDER[2]
+    window.set_tab_enabled(TAB_ORDER[4], False, "no profiling data")
+    assert not window.tabs.isTabEnabled(4) and window.tabs.tabToolTip(4) == "no profiling data"
