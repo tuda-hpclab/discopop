@@ -6,8 +6,8 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-from discopop_library.ProjectManager.gui.plots.data import ExecutionRecord
-from discopop_library.ProjectManager.gui.plots.report_charts import (
+from discopop_library.ProjectManager.plots.data import ExecutionRecord
+from discopop_library.ProjectManager.plots.report_charts import (
     best_of,
     metric_value,
     more_is_better,

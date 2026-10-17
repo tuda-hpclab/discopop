@@ -8,7 +8,7 @@
 
 from typing import Any, Dict, List
 
-from discopop_library.ProjectManager.gui.plots.autotuning_chart import ProgressModel
+from discopop_library.ProjectManager.plots.autotuning_chart import ProgressModel
 
 
 def _greedy_events() -> List[Dict[str, Any]]:

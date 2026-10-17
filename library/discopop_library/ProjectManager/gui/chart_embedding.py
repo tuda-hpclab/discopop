@@ -16,7 +16,9 @@ headless environment without a display or a Tk build.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
+
+from discopop_library.ProjectManager.plots import interaction
 
 
 def create_canvas(
@@ -46,7 +48,39 @@ def create_canvas(
         nav.update()
         nav.pack(side=tk.BOTTOM, fill=tk.X)
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    interaction.install_tooltip_presenter(canvas, _tooltip_presenter(canvas.get_tk_widget()))
     return figure, canvas, nav
+
+
+def _tooltip_presenter(widget: tk.Widget) -> Callable[[Optional[str]], None]:
+    """A sticky label placed next to the cursor inside ``widget``; ``None`` hides it."""
+    tooltip_label: Optional[tk.Label] = None
+
+    def present(text: Optional[str]) -> None:
+        nonlocal tooltip_label
+        if text is None:
+            if tooltip_label is not None:
+                tooltip_label.place_forget()
+            return
+        if tooltip_label is None:
+            tooltip_label = tk.Label(
+                widget,
+                text=text,
+                background="#fffacd",
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=("TkDefaultFont", 9),
+                justify=tk.LEFT,
+                padx=4,
+                pady=2,
+            )
+        else:
+            tooltip_label.config(text=text)
+        x = widget.winfo_pointerx() - widget.winfo_rootx()
+        y = widget.winfo_pointery() - widget.winfo_rooty()
+        tooltip_label.place(x=x + 10, y=y + 10)
+
+    return present
 
 
 def redraw(canvas: Any) -> None:

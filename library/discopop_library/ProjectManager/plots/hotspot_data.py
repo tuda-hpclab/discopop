@@ -9,7 +9,7 @@
 """Pure data-reduction helpers for the Hotspot Detection tab.
 
 Everything here is free of Tk and matplotlib so it can be unit-tested directly,
-mirroring :mod:`discopop_library.ProjectManager.gui.plots.data`.
+mirroring :mod:`discopop_library.ProjectManager.plots.data`.
 
 Three artefacts of the hotspot detection tooling are read:
 

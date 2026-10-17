@@ -15,7 +15,7 @@ want to *rank* regions rather than only classify them need those fields, so this
 module parses the same file into a dataclass without losing anything.
 
 The loader is deliberately independent of
-``ProjectManager.gui.plots.hotspot_data``, which keys regions by ``RegionKey``
+``ProjectManager.plots.hotspot_data``, which keys regions by ``RegionKey``
 resolved against ``hotspot_detection/merged/cs_id.txt``; that coupling would drag
 the GUI's merge bookkeeping into every consumer.
 """

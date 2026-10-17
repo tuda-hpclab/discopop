@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from discopop_library.ProjectManager.gui.plots import interaction, mode_style
-from discopop_library.ProjectManager.gui.plots.data import ExecutionRecord, pareto_frontier
+from discopop_library.ProjectManager.plots import interaction, mode_style
+from discopop_library.ProjectManager.plots.data import ExecutionRecord, pareto_frontier
 
 # metric key -> (axis label, "more is better")
 METRICS: Dict[str, Tuple[str, bool]] = {
