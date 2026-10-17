@@ -552,7 +552,9 @@ class HotspotPanel(Panel):
         if isinstance(event, WorkOutput):
             self.output.append_text(event.text)
         elif isinstance(event, WorkStatus):
-            self.status.set(event.text, _STATUS_COLORS[event.kind])
+            # after Stop, a late progress status would hide "Stopping ..."
+            if self._job is None or not self._job.cancel_requested:
+                self.status.set(event.text, _STATUS_COLORS[event.kind])
         elif isinstance(event, WorkFinished):
             if event.error is not None:  # a crash of the work must not leave the UI stuck
                 self.output.append_text(f"\nError: {event.error}\n")

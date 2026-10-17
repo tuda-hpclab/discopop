@@ -311,7 +311,10 @@ class PatternDetectionPanel(Panel):
                 self.console.append_text(cleaned + "\n")
         elif isinstance(event, JobFinished):
             self._explorer_job = None
-            if event.returncode != 0:
+            if event.cancelled or self._explorer_stopped:
+                self.console.append_text("\nPattern detection stopped.\n")
+                self._on_complete(stopped=True)
+            elif event.returncode != 0:
                 self.console.append_text(f"\nError: Explorer exited with return code {event.returncode}\n")
                 self._on_complete(error=True)
             else:
@@ -323,14 +326,16 @@ class PatternDetectionPanel(Panel):
             self.console.append_text(f"\nError: {event.error}\n")
             self._on_complete(error=True)
 
-    def _on_complete(self, error: bool = False) -> None:
+    def _on_complete(self, error: bool = False, stopped: bool = False) -> None:
         self.explorer_running = False
         self.run_button.setText(_RUN_TEXT)
         self.stop_button.setEnabled(False)
         self.refresh()
         # the Autotuning and Patch Repair tabs work on the freshly generated patches
         self.project_state.publish(PatternsChanged())
-        if error:
+        if stopped:
+            self.status.set("Pattern detection stopped", widgets.STATUS_STOP, reset_ms=3000)
+        elif error:
             self.status.set("Pattern detection failed", widgets.STATUS_FAIL, reset_ms=3000)
         else:
             self.status.set("Pattern detection completed successfully", widgets.STATUS_OK, reset_ms=3000)

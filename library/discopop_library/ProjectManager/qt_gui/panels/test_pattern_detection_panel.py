@@ -200,7 +200,9 @@ def test_stop_ends_the_run(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
         assert not panel.stop_button.isEnabled() and panel.status.text() == "Stopping pattern detection..."
         assert panel.status.color == widgets.STATUS_STOP
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
-    assert "Pattern detection completed." not in panel.console.text()
+    # a stop is not a failure
+    assert "Pattern detection completed." not in panel.console.text() and "Error:" not in panel.console.text()
+    assert "Pattern detection stopped." in panel.console.text() and panel.status.text() == "Pattern detection stopped"
 
 
 def test_a_failing_explorer_is_reported(qtbot: QtBot, panel: PatternDetectionPanel) -> None:

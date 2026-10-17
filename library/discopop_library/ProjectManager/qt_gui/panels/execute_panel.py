@@ -560,7 +560,8 @@ class ExecutePanel(Panel):
         if isinstance(event, WorkOutput):
             self._append_output(event.text)
         elif isinstance(event, WorkStatus):
-            self.status.set(event.text, _STATUS_COLORS[event.kind])
+            if not self._stop_requested():
+                self.status.set(event.text, _STATUS_COLORS[event.kind])
         elif isinstance(event, WorkFinished):
             restore_logging()
             failures: List[Tuple[str, Any]] = []
@@ -655,6 +656,10 @@ class ExecutePanel(Panel):
                 self.project_state.publish(ResultsChanged())
 
         self._job = start_work(self, lambda ctx: run_preparation(arguments, request, ctx), handle)
+
+    def _stop_requested(self) -> bool:
+        """Whether Stop was pressed; a progress status the work sends afterwards would hide "Stopping ..."."""
+        return self._job is not None and self._job.cancel_requested
 
     def _stop_execution(self) -> None:
         job = self._job
