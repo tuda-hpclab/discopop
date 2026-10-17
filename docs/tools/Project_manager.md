@@ -252,6 +252,7 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `-p`, `--project PATH` | current directory | Root of the project. It must be possible to copy it and build the copy. |
 | `--init` | | Initialize `.discopop` (see above). |
 | `--gui` | | Open the [graphical interface](GUI.md); needs a display. |
+| `--gui-toolkit {tk,qt}` | `tk` | The toolkit of the `--gui` window: the Tk version or the new Qt (PySide6) version. |
 | `-x`, `--execute LIST` | `tiny` | Comma separated `<configuration>[:<mode>][:<threads>]`. |
 | `-xf`, `--execute-full` | | Execute all configurations. |
 | `-a`, `--apply-suggestions IDS` | | Suggestion ids to apply before the execution, or `auto` / `prm`. |
