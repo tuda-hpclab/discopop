@@ -21,7 +21,7 @@ from unittest import mock
 
 import pytest
 
-from discopop_library.ProjectManager.gui.mixins import execution as execution_module
+from discopop_library.ProjectManager.services import execution_run as execution_module
 from discopop_library.ProjectManager.gui.mixins.execution import ExecutionMixin
 from discopop_library.ProjectManager.services.project_state import ProjectState, ResultsChanged
 

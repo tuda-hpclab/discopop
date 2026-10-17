@@ -13,7 +13,6 @@ from typing import Any, Optional
 
 
 from discopop_library.ProjectManager.configurations.execution_time import (
-    EXECUTION_TIME_DISABLED,
     extract_execution_time,
     read_execution_time_settings,
     validate_execution_time_regex,
@@ -26,6 +25,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     resolve_compile_script_path,
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script
+from discopop_library.ProjectManager.services.execution_run import execution_time_summary
 from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -116,17 +116,7 @@ class FileEditorMixin(ConfigManagerMixinBase):
 
     def _update_execution_time_summary(self) -> None:
         """Mirror the stored setting into the Execute tab, where runs are started."""
-        override = self.arguments.execution_time_regex
-        if override is not None:
-            text = (
-                "from the console output (forced by --execution-time-regex)"
-                if override != EXECUTION_TIME_DISABLED
-                else "wall clock of execute.sh (forced by --execution-time-regex)"
-            )
-        elif self.execution_time_enabled_var.get():
-            text = "from the console output (see Editor -> execute.sh)"
-        else:
-            text = "wall clock of execute.sh"
+        text = execution_time_summary(self.arguments.execution_time_regex, self.execution_time_enabled_var.get())
         self.execution_time_summary_label.config(text=text)
 
     def _arm_execution_time_tracking(self) -> None:
