@@ -30,11 +30,11 @@ from discopop_library.ProjectManager.services.editor_files import (
     COMPILE_SCRIPT_WARNING_TITLE,
     VALIDATE_SCRIPT_PLACEHOLDER,
     VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER,
-    execution_time_summary,
     format_json_content,
     last_recorded_execution_output,
     uses_compiler_variables,
 )
+from discopop_library.ProjectManager.services.execution_run import execution_time_summary
 from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase

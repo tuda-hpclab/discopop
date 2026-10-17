@@ -20,7 +20,6 @@ from typing import Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import VALIDATION_COMPILE_SCRIPT_NAME
-from discopop_library.ProjectManager.configurations.execution_time import EXECUTION_TIME_DISABLED
 
 # the shared files of the compilation editor, in the order of its tabs
 COMPILATION_FILES = [
@@ -102,23 +101,6 @@ def format_json_content(content: str) -> str:
 def uses_compiler_variables(script: str) -> bool:
     """Whether a compile script mentions ``CC`` or ``CXX``, as the framework needs to substitute its compilers."""
     return "CC" in script or "CXX" in script
-
-
-def execution_time_summary(override: Optional[str], enabled: bool) -> str:
-    """One line on where the execution time of a run comes from (the Execute tab shows it).
-
-    ``override`` is ``--execution-time-regex`` (``EXECUTION_TIME_DISABLED`` forces the wall clock), ``enabled`` the
-    stored setting of the configuration.
-    """
-    if override is not None:
-        return (
-            "from the console output (forced by --execution-time-regex)"
-            if override != EXECUTION_TIME_DISABLED
-            else "wall clock of execute.sh (forced by --execution-time-regex)"
-        )
-    if enabled:
-        return "from the console output (see Editor -> execute.sh)"
-    return "wall clock of execute.sh"
 
 
 def last_recorded_execution_output(project_dir: str, config: Optional[str]) -> Optional[Tuple[str, str]]:
