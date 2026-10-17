@@ -6,7 +6,6 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import json
 import os
 import tkinter as tk
 from typing import Any, Optional
@@ -25,7 +24,17 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     resolve_compile_script_path,
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script
-from discopop_library.ProjectManager.services.execution_run import execution_time_summary
+from discopop_library.ProjectManager.services.editor_files import (
+    COMPILE_OVERRIDE_PLACEHOLDER,
+    COMPILE_SCRIPT_WARNING,
+    COMPILE_SCRIPT_WARNING_TITLE,
+    VALIDATE_SCRIPT_PLACEHOLDER,
+    VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER,
+    execution_time_summary,
+    format_json_content,
+    last_recorded_execution_output,
+    uses_compiler_variables,
+)
 from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
@@ -35,11 +44,7 @@ from discopop_library.ProjectManager.utilities.scriptFiles import write_script_f
 
 class FileEditorMixin(ConfigManagerMixinBase):
     def _format_json_content(self, content: str) -> str:
-        try:
-            parsed = json.loads(content)
-            return json.dumps(parsed, indent=2)
-        except (json.JSONDecodeError, ValueError):
-            return content
+        return format_json_content(content)
 
     def _load_config(self) -> None:
         if not self.current_config:
@@ -199,31 +204,7 @@ class FileEditorMixin(ConfigManagerMixinBase):
 
     def _last_recorded_execution_output(self) -> Optional[tuple[str, str]]:
         """stdout and stderr of the most recent recorded execute.sh run, if any."""
-        if not self.current_config:
-            return None
-        results_path = os.path.join(self.arguments.project_dir, "execution_results.json")
-        if not os.path.exists(results_path):
-            return None
-        try:
-            with open(results_path, "r") as f:
-                results = json.load(f)
-            entries = results.get(self.current_config, {}).get("execute.sh", {})
-        except (OSError, json.JSONDecodeError, AttributeError):
-            return None
-
-        # A pattern is written for the program as the measured runs execute it, so
-        # prefer their output over that of the instrumented profiling runs.
-        preferred = ["seq_settings.json", "par_settings.json"]
-        ordered = preferred + [name for name in entries if name not in preferred]
-        for settings_name in ordered:
-            for entry in reversed(entries.get(settings_name, [])):
-                if not entry.get("executed", True):
-                    continue
-                stdout = str(entry.get("stdout", ""))
-                stderr = str(entry.get("stderr", ""))
-                if stdout or stderr:
-                    return stdout, stderr
-        return None
+        return last_recorded_execution_output(self.arguments.project_dir, self.current_config)
 
     def _load_compile_override(self) -> None:
         if not self.current_config:
@@ -243,12 +224,7 @@ class FileEditorMixin(ConfigManagerMixinBase):
             except Exception as e:
                 text_area.insert("1.0", f"Error loading file: {e}")
         else:
-            text_area.insert(
-                "1.0",
-                "# This configuration has no compile.sh override.\n"
-                "# The shared compile.sh is used to compile it instead.\n"
-                "# Click 'Add Override' above to create one for this configuration only.\n",
-            )
+            text_area.insert("1.0", COMPILE_OVERRIDE_PLACEHOLDER)
             text_area.config(state=tk.DISABLED)
 
         self.modified_files["compile.sh"] = False
@@ -314,15 +290,7 @@ class FileEditorMixin(ConfigManagerMixinBase):
             except Exception as e:
                 text_area.insert("1.0", f"Error loading file: {e}")
         else:
-            text_area.insert(
-                "1.0",
-                "# This configuration has no validate.sh.\n"
-                "# execute.sh alone determines correctness (its exit code).\n"
-                "# Click 'Add validate.sh' above to separate output validation from\n"
-                "# the timed execute.sh run: validate.sh re-runs the code and validates\n"
-                "# its output; a run then counts as correct only if BOTH execute.sh and\n"
-                "# validate.sh exit 0.\n",
-            )
+            text_area.insert("1.0", VALIDATE_SCRIPT_PLACEHOLDER)
             text_area.config(state=tk.DISABLED)
 
         self.modified_files["validate.sh"] = False
@@ -386,15 +354,7 @@ class FileEditorMixin(ConfigManagerMixinBase):
             except Exception as e:
                 text_area.insert("1.0", f"Error loading file: {e}")
         else:
-            text_area.insert(
-                "1.0",
-                "# This configuration has no compile_validate.sh override.\n"
-                "# validate.sh runs against the build produced by the compile script that\n"
-                "# execute.sh also uses.\n"
-                "# Click 'Add Override' above to build separately for validation: the override\n"
-                "# is compiled after the timed execute.sh run and before validate.sh, so it\n"
-                "# never affects the measured runtime. It is ignored while no validate.sh exists.\n",
-            )
+            text_area.insert("1.0", VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER)
             text_area.config(state=tk.DISABLED)
 
         # An override without a validate.sh has no effect; say so in the tab label
@@ -459,14 +419,8 @@ class FileEditorMixin(ConfigManagerMixinBase):
             with open(file_path, "r") as f:
                 content = f.read()
 
-            if "CC" not in content and "CXX" not in content:
-                show_warning(
-                    self,
-                    "Compilation Script Warning",
-                    "The compilation script does not use CC or CXX environment variables.\n\n"
-                    "The compilation script should make use of CC or CXX for compatibility "
-                    "with the DiscoPoP framework.",
-                )
+            if not uses_compiler_variables(content):
+                show_warning(self, COMPILE_SCRIPT_WARNING_TITLE, COMPILE_SCRIPT_WARNING)
         except Exception as e:
             self._set_status(f"Error validating compile.sh: {e}", fg="red")
 
