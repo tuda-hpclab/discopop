@@ -15,7 +15,7 @@ editors and the thread selector, so components of the same kind look the same in
 import logging
 from typing import Callable, Dict, Iterable, Optional, Union
 
-from PySide6.QtCore import QObject, QRegularExpression, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QRect, QRegularExpression, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -33,7 +33,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QPlainTextEdit,
+    QProxyStyle,
     QPushButton,
+    QStyle,
+    QStyleOption,
     QVBoxLayout,
     QWidget,
 )
@@ -116,6 +119,26 @@ def _button_rules() -> str:
 
 
 APP_STYLE_SHEET = _button_rules()
+
+# how much taller than the font a tab title may draw (see TabTextRoomStyle)
+TAB_TEXT_EXTRA_PX = 2
+
+
+class TabTextRoomStyle(QProxyStyle):
+    """The application style, with room for the underscores of tab titles.
+
+    Fusion clips a tab's title to the height of its font, and the underscore of some fonts (Ubuntu, the default on
+    Ubuntu desktops) lies below that: "compile_validate.sh" read as "compile validate.sh".
+    """
+
+    def subElementRect(  # noqa: N802 (Qt's name)
+        self, element: QStyle.SubElement, option: QStyleOption, widget: Optional[QWidget] = None
+    ) -> QRect:
+        # the stubs of QProxyStyle (widget required) and QCommonStyle (optional) disagree; Qt passes None as well
+        rect = super().subElementRect(element, option, widget)  # type: ignore[arg-type]
+        if element == QStyle.SubElement.SE_TabBarTabText:
+            rect.adjust(0, -TAB_TEXT_EXTRA_PX, 0, TAB_TEXT_EXTRA_PX)
+        return rect
 
 
 def monospace_font(point_size: int = 11) -> QFont:
