@@ -25,7 +25,7 @@ from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import heading_label
 from discopop_library.ProjectManager.gui.wizard_steps import WizardStepsMixin
-from discopop_library.ProjectManager.gui.mixins.helpers import ask_yes_no, show_error
+from discopop_library.ProjectManager.gui.mixins.helpers import ask_yes_no, grab_when_viewable, show_error
 
 
 class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
@@ -46,7 +46,7 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
 
         self._setup_ui()
         self._show_step(0)
-        self.grab_set()
+        grab_when_viewable(self)
         self.transient(parent)  # type: ignore[arg-type]
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
