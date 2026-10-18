@@ -36,6 +36,8 @@ ERROR: this command opens a graphical window, but no display is available (neith
 
 and exits with code 1. On such a machine, use the [project manager](Project_manager.md) or the [MCP server](MCP_server.md).
 
+On a remote machine, e.g. an HPC login node, the GUI works over X forwarding (`ssh -X`). The Qt version responds noticeably faster there than the Tk version: it draws the window locally and sends the changed pixels, while Tk needs many round trips to the X server. If the Qt version reports that it cannot load the platform plugin "xcb", the remote machine lacks X libraries (usually `libxcb-cursor0`); `QT_DEBUG_PLUGINS=1` names the missing one.
+
 {: .note }
 Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the command line project manager.
 
