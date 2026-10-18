@@ -10,7 +10,7 @@ import logging
 import threading
 
 from pytestqt.qtbot import QtBot
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionTab, QTabWidget, QWidget
 
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.status import READY, StatusLine
@@ -94,3 +94,17 @@ def test_status_line_falls_back_to_ready(qtbot: QtBot) -> None:
     status.set("Working", widgets.STATUS_BUSY, reset_ms=50)
     assert status.text() == "Working" and status.color == widgets.STATUS_BUSY
     qtbot.waitUntil(lambda: status.text() == READY, timeout=2000)
+
+
+def test_tab_titles_get_room_below_the_font(qtbot: QtBot) -> None:
+    tabs = QTabWidget()
+    qtbot.addWidget(tabs)
+    tabs.addTab(QWidget(), "compile_validate.sh")
+    tabs.show()
+    option = QStyleOptionTab()
+    tabs.tabBar().initStyleOption(option, 0)
+    base = tabs.style().subElementRect(QStyle.SubElement.SE_TabBarTabText, option, tabs.tabBar())
+    roomy = widgets.TabTextRoomStyle(tabs.style().name())
+    assert roomy.subElementRect(QStyle.SubElement.SE_TabBarTabText, option, tabs.tabBar()).height() == (
+        base.height() + 2 * widgets.TAB_TEXT_EXTRA_PX
+    )
