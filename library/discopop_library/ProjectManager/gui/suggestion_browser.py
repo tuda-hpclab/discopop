@@ -12,6 +12,7 @@ from tkinter import ttk
 from typing import Any, Dict, List, Optional, Tuple
 
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.gui.mixins.helpers import grab_when_viewable
 from discopop_library.ProjectManager.services.patches import discover_patches
 from discopop_library.ProjectManager.gui.widgets import (
     heading_label,
@@ -108,7 +109,7 @@ class SuggestionBrowserDialog:
         self.dialog.after(10, lambda: main_paned.sash_place(0, 500, 0))  # type: ignore[misc]
 
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
+        grab_when_viewable(self.dialog)
 
     def _build_left_panel(self, parent: tk.Widget) -> None:
         heading_label(parent, f"Suggestions ({len(self._patches)})").pack(anchor=tk.W, padx=5, pady=(5, 2))

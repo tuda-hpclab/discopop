@@ -105,6 +105,28 @@ class Tooltip:
             self.tipwindow = None
 
 
+GRAB_RETRY_MS = 20
+GRAB_ATTEMPTS = 100
+
+
+def grab_when_viewable(window: tk.Misc, attempts: int = GRAB_ATTEMPTS) -> None:
+    """Make ``window`` modal (``grab_set``) as soon as the window manager has mapped it.
+
+    A grab of a window that is not viewable yet fails ("grab failed: window not viewable"); how long the mapping
+    takes depends on the window manager, so the grab is retried for about two seconds before it is given up.
+    """
+    try:
+        window.grab_set()
+    except tk.TclError:
+        if attempts <= 1:
+            return
+        try:
+            window.after(GRAB_RETRY_MS, lambda: grab_when_viewable(window, attempts - 1))
+        except tk.TclError:
+            # the window was destroyed meanwhile
+            pass
+
+
 def show_message(parent: Any, title: str, message: str) -> None:  # type: ignore
     """Display a message dialog with normal (non-bold) text."""
     dialog = tk.Toplevel(parent)  # type: ignore
@@ -142,7 +164,7 @@ def show_message(parent: Any, title: str, message: str) -> None:  # type: ignore
 
     dialog.transient(parent)  # type: ignore
     dialog.deiconify()
-    dialog.grab_set()  # type: ignore
+    grab_when_viewable(dialog)
     dialog.wait_window()  # type: ignore
 
 
@@ -206,7 +228,7 @@ def ask_yes_no(parent: Any, title: str, message: str) -> bool:  # type: ignore
 
     dialog.transient(parent)  # type: ignore
     dialog.deiconify()
-    dialog.grab_set()  # type: ignore
+    grab_when_viewable(dialog)
     dialog.wait_window()
 
     return result[0]
