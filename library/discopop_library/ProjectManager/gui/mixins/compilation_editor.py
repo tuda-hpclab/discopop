@@ -6,18 +6,28 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import copy
 import os
-import subprocess
 import tkinter as tk
 from tkinter import ttk
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from discopop_library.ProjectManager.configurations.compile_script import (
     VALIDATION_COMPILE_SCRIPT_NAME,
     get_shared_compile_script_path,
     get_shared_validation_compile_script_path,
 )
+from discopop_library.ProjectManager.gui.job_adapter import start_work
+from discopop_library.ProjectManager.services.editor_files import (
+    COMPILATION_FILES,
+    DERIVE_TOOLTIP_SUFFIX,
+    DERIVED_FILES,
+    OPTIONAL_FILE_PLACEHOLDERS,
+    OPTIONAL_FILES,
+    TAB_TOOLTIPS,
+    describe_compilation_test,
+    run_test_compilation,
+)
+from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
 from discopop_library.ProjectManager.gui.mixins.helpers import (
     Tooltip,
     ask_yes_no,
@@ -33,33 +43,6 @@ from discopop_library.ProjectManager.gui.widgets import (
     create_script_editor,
 )
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
-
-BASE_FILES = ["compile.sh", "execute.sh", "seq_settings.json"]
-DERIVED_FILES = ["dp_settings.json", "hd_settings.json", "par_settings.json"]
-# Shared scripts that are absent by default and created on demand.
-OPTIONAL_FILES = [VALIDATION_COMPILE_SCRIPT_NAME]
-
-OPTIONAL_FILE_PLACEHOLDERS = {
-    VALIDATION_COMPILE_SCRIPT_NAME: (
-        "# This project has no shared compile_validate.sh.\n"
-        "# validate.sh runs against the build produced by compile.sh.\n"
-        "# Click 'Add' above to build separately for validation: the script is compiled\n"
-        "# after the timed execute.sh run and before validate.sh, so it never affects the\n"
-        "# measured runtime. It applies to every configuration that does not define its own\n"
-        "# compile_validate.sh override, and is ignored for configurations without a\n"
-        "# validate.sh.\n"
-    )
-}
-
-TAB_TOOLTIPS = {
-    "compile.sh": "Compilation instructions",
-    VALIDATION_COMPILE_SCRIPT_NAME: "Optional: separate compilation instructions for validate.sh runs",
-    "execute.sh": "Execution instructions",
-    "seq_settings.json": "Settings for sequential execution",
-    "dp_settings.json": "Settings for DiscoPoP instrumented execution",
-    "hd_settings.json": "Settings for DiscoPoP hotspot detection instrumented execution",
-    "par_settings.json": "Settings for the execution of the parallelized source code",
-}
 
 
 class CompilationEditorMixin(ConfigManagerMixinBase):
@@ -155,16 +138,7 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
 
         self.compilation_notebook = ttk.Notebook(comp_content_frame)
 
-        compilation_files = [
-            "compile.sh",
-            VALIDATION_COMPILE_SCRIPT_NAME,
-            "seq_settings.json",
-            "dp_settings.json",
-            "hd_settings.json",
-            "par_settings.json",
-        ]
-
-        for filename in compilation_files:
+        for filename in COMPILATION_FILES:
             frame = ttk.Frame(self.compilation_notebook)
             self.compilation_notebook.add(frame, text=filename)
             self.compilation_tabs[filename] = self.compilation_notebook.index(frame)
@@ -173,7 +147,7 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
             if filename in DERIVED_FILES:
                 file_path = os.path.join(self.arguments.project_config_dir, filename)
                 if not os.path.exists(file_path):
-                    tooltip_text += "\n\nUse 'Derive Settings' to generate this file from seq_settings.json"
+                    tooltip_text += DERIVE_TOOLTIP_SUFFIX
 
             if tooltip_text:
                 tab_index = self.compilation_tabs[filename]
@@ -351,12 +325,7 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
                     f.write(formatted_content)
 
                 if filename.endswith(".sh"):
-                    subprocess.run(
-                        f"chmod +x {file_path}",
-                        executable="/bin/bash",
-                        shell=True,
-                        capture_output=True,
-                    )
+                    os.chmod(file_path, os.stat(file_path).st_mode | 0o111)
 
                 self.compilation_modified_files[filename] = False
                 self.compilation_text_areas[filename].edit_modified(False)
@@ -444,8 +413,6 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
 
     def _test_compilation_from_editor(self) -> None:
         """Test compilation using current compile.sh and seq_settings.json"""
-        import threading
-
         if self.compilation_modified_files.get("compile.sh", False) or self.compilation_modified_files.get(
             "seq_settings.json", False
         ):
@@ -465,43 +432,42 @@ class CompilationEditorMixin(ConfigManagerMixinBase):
         self.test_compilation_button.config(state="disabled", text="⟳ Testing...")
         self.status_label.config(text="Running compilation test...", foreground=widgets.STATUS_BUSY)
 
-        def thread_func() -> None:
-            from discopop_library.ProjectManager.configurations.execution import execute_configuration
+        arguments = self.arguments
 
-            result = execute_configuration(
-                copy.copy(self.arguments),
-                self.arguments.project_root,
-                self.arguments.project_config_dir,
-                seq_settings_path,
-                compile_sh_path,
-                1,
-                self.arguments.timeout_compilation,
-            )
+        def compile_once(_ctx: WorkContext) -> Optional[Tuple[int, float, str, str]]:
+            return run_test_compilation(arguments)
 
-            if result is None:
-                self.after(0, lambda: self.status_label.config(text="✗ Compilation test failed: settings not found", foreground=widgets.STATUS_FAIL))  # type: ignore  # noqa: E501
+        def handle(event: WorkEvent) -> None:
+            if not isinstance(event, WorkFinished):
+                return
+            result = event.result if event.error is None else None
+            if event.error is not None:
+                self.status_label.config(
+                    text=f"✗ Compilation test failed: {event.error}", foreground=widgets.STATUS_FAIL
+                )
+            elif result is None:
+                self.status_label.config(
+                    text="✗ Compilation test failed: settings not found", foreground=widgets.STATUS_FAIL
+                )
             else:
                 ret_code, elapsed, stdout, stderr = result
                 if ret_code == 0:
-                    self.after(0, lambda e=elapsed: self.status_label.config(text=f"✓ Compilation successful ({e:.2f}s)", foreground=widgets.STATUS_OK))  # type: ignore  # noqa: E501
+                    self.status_label.config(
+                        text=f"✓ Compilation successful ({elapsed:.2f}s)", foreground=widgets.STATUS_OK
+                    )
                 else:
-                    self.after(0, lambda rc=ret_code, e=elapsed: self.status_label.config(text=f"✗ Compilation failed (exit code: {rc}, {e:.2f}s)", foreground=widgets.STATUS_FAIL))  # type: ignore  # noqa: E501
+                    self.status_label.config(
+                        text=f"✗ Compilation failed (exit code: {ret_code}, {elapsed:.2f}s)",
+                        foreground=widgets.STATUS_FAIL,
+                    )
 
-                output_msg = "Compilation test output:\n\n"
-                if ret_code == 0:
-                    output_msg += f"Success ({elapsed:.2f}s)\n"
-                else:
-                    output_msg += f"Failed with exit code {ret_code} ({elapsed:.2f}s)\n"
-                if stdout:
-                    output_msg += f"\nstdout:\n{stdout}\n"
-                if stderr:
-                    output_msg += f"\nstderr:\n{stderr}\n"
+                output_msg = describe_compilation_test(ret_code, elapsed, stdout, stderr)
 
-                self.after(0, lambda msg=output_msg, rc=ret_code: self._show_test_compilation_result(msg, rc))  # type: ignore
+                self._show_test_compilation_result(output_msg, ret_code)
 
-            self.after(0, lambda: self.test_compilation_button.config(state="normal", text="Test Compilation"))  # type: ignore
+            self.test_compilation_button.config(state="normal", text="Test Compilation")
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        start_work(self, compile_once, handle)
 
     def _show_test_compilation_result(self, output: str, return_code: int) -> None:
         """Show test compilation result in a dialog"""

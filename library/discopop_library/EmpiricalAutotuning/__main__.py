@@ -143,11 +143,21 @@ def parse_args() -> AutotunerArguments:
     )
 
 
+# the exit status of a process ended by Ctrl+C (128 + SIGINT), as a shell reports it
+INTERRUPTED_EXIT_CODE = 130
+
+
 def main() -> None:
     arguments = parse_args()
     setup_logger(arguments)
     arguments.log()
-    run(arguments)
+    try:
+        run(arguments)
+    except KeyboardInterrupt:
+        # The search loops end on Ctrl+C (or the GUI's Stop) and keep what they measured; an interrupt outside them,
+        # e.g. during the baseline measurement, has nothing to keep and is no error worth a traceback.
+        print("Autotuning interrupted.", file=sys.stderr)
+        sys.exit(INTERRUPTED_EXIT_CODE)
 
 
 if __name__ == "__main__":

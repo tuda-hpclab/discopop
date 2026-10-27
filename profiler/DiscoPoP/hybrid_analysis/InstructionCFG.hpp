@@ -44,7 +44,7 @@ class InstructionCFG : public Graph<llvm::Instruction*> {
  public:
   InstructionCFG(dputil::VariableNameFinder* vnf, llvm::Function& f);
 
-  InstructionNode<llvm::Instruction*>* GetEntry() { return entry_; }
+  InstructionNode<llvm::Instruction*>* GetEntry() const { return entry_; }
 
   InstructionNode<llvm::Instruction*>* GetExit() { return exit_; }
 
@@ -54,5 +54,5 @@ class InstructionCFG : public Graph<llvm::Instruction*> {
 
   void HighlightInstructionNode(llvm::Instruction* instr);
 
-  void DumpToDot(const std::string target_path);
+  void DumpToDot(const std::string& target_path);
 };

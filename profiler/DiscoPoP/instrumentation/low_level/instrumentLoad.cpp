@@ -29,7 +29,7 @@ using llvm::Twine;
 using llvm::Value;
 
 void DiscoPoP::InstrumentLoad(LoadInst* to_instrument, std::int32_t llvm_ir_instruction_id) {
-  LID lid = dputil::GetLid(to_instrument, file_id);
+  LID const lid = dputil::GetLid(to_instrument, file_id);
   if (lid == 0) {
     return;
   }

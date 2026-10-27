@@ -26,7 +26,7 @@ using llvm::Value;
 
 void DiscoPoP::InstrumentRealloc(CallBase* to_instrument) {
   // add instrumentation for calls to realloc
-  LID lid = dputil::GetLid(to_instrument, file_id);
+  LID const lid = dputil::GetLid(to_instrument, file_id);
   if (lid == 0) {
     return;
   }

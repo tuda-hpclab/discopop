@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-from typing import Callable, List
+from typing import Any, Callable, Dict, List
 import tkinter as tk
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk  # type: ignore
@@ -22,6 +22,17 @@ from discopop_gui.Exceptions.VisualizerNotDefined import VisualizerNotDefined
 class Plottable:
     def __init__(self, visualizer: Base | None = None) -> None:
         self._visualizer = visualizer
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # The visualizer holds the Tk widgets it draws on; a pickled or dumped graph (detection_result_dump.json)
+        # must not carry them, the copy is not plottable.
+        state = self.__dict__.copy()
+        state["_visualizer"] = None
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("_visualizer", None)
 
     def plottable(self) -> bool:
         if self._visualizer is None:

@@ -27,12 +27,12 @@ bool DiscoPoP::DoInitialization(Module& m) {
   }
 
   // prepare environment variables
-  char const* tmp = std::getenv("DOT_DISCOPOP");
+  const char* tmp = std::getenv("DOT_DISCOPOP");
   if (tmp == nullptr) {
     // DOT_DISCOPOP needs to be initialized
     setenv("DOT_DISCOPOP", ".discopop", 1);
   }
-  std::string tmp_str(std::getenv("DOT_DISCOPOP"));
+  const std::string tmp_str(std::getenv("DOT_DISCOPOP"));
   setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
 
   // prepare .discopop directory if not present
@@ -41,7 +41,7 @@ bool DiscoPoP::DoInitialization(Module& m) {
     mkdir(std::getenv("DOT_DISCOPOP"), 0777);
 
     // check if HOME/.discopop_config directory in user folder exists
-    std::string user_home_dp_dir = (dputil::GetEnvOrDefault("HOME", "") + std::string("/.discopop_config"));
+    const std::string user_home_dp_dir = (dputil::GetEnvOrDefault("HOME", "") + std::string("/.discopop_config"));
     struct stat st_dp_user;
     if (stat(user_home_dp_dir.c_str(), &st_dp_user) == -1) {
       // create .discopop_config folder in user directory to save overview of project .discopop folders
@@ -70,7 +70,7 @@ bool DiscoPoP::DoInitialization(Module& m) {
   }
 
   // prepare target directory if not present
-  char const* tmp2 = std::getenv("DP_PROJECT_ROOT_DIR");
+  const char* tmp2 = std::getenv("DP_PROJECT_ROOT_DIR");
   if (tmp2 == nullptr) {
     // DP_PROJECT_ROOT_DIR needs to be initialized
     std::cerr << "\nWARNING: No value for DP_PROJECT_ROOT_DIR found. \n";
@@ -122,7 +122,7 @@ bool DiscoPoP::DoInitialization(Module& m) {
 
     for (Module::global_iterator i = this_module_->global_begin(); i != this_module_->global_end(); i++) {
       Value* global_variable = dyn_cast<Value>(i);
-      std::string glo = std::string(global_variable->getName());
+      const std::string glo = std::string(global_variable->getName());
       if (glo.find(".") == glo.npos) {
         program_global_variables_set_.insert(glo);
         // originalVariablesSet.insert(glo);

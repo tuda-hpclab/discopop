@@ -7,17 +7,20 @@
 # directory for details.
 
 import logging
-import re
 import tkinter as tk
 import tkinter.font
 from tkinter import scrolledtext, ttk
-from typing import Optional, Any, Union
+from typing import Any, Callable, Optional, Union
 
 from discopop_library.ProjectManager.gui import widgets
 
 
 class TextAreaHandler(logging.Handler):
-    """Custom logging handler that writes to a tkinter Text widget with color coding"""
+    """Custom logging handler that writes to a tkinter Text widget with color coding.
+
+    Log records may be emitted from any thread; the widget is only touched from the
+    Tk main loop (scheduled via ``after``).
+    """
 
     def __init__(self, text_area: scrolledtext.ScrolledText) -> None:
         super().__init__()
@@ -27,13 +30,45 @@ class TextAreaHandler(logging.Handler):
         try:
             msg = self.format(record)
             level_name = record.levelname
+            self.text_area.after(0, lambda: self._append(msg, level_name))
+        except Exception:
+            self.handleError(record)
 
+    def _append(self, msg: str, level_name: str) -> None:
+        try:
             self.text_area.config(state=tk.NORMAL)
             self.text_area.insert(tk.END, msg + "\n", level_name)
             self.text_area.see(tk.END)
             self.text_area.config(state="disabled")
-        except Exception:
-            self.handleError(record)
+        except tk.TclError:
+            # the widget was destroyed while the record was waiting
+            pass
+
+
+def redirect_logging_to_text_area(text_area: scrolledtext.ScrolledText, level: Union[int, str]) -> Callable[[], None]:
+    """Show the log records of the root logger in ``text_area``; return the function that undoes it.
+
+    While redirected, the text area is the only handler of the root logger. The previous handlers and
+    level are restored by the returned function, so nothing stays installed after the run.
+    """
+    root_logger = logging.getLogger()
+    saved_handlers = root_logger.handlers[:]
+    saved_level = root_logger.level
+    for handler in saved_handlers:
+        root_logger.removeHandler(handler)
+    root_logger.setLevel(level)
+    text_handler = TextAreaHandler(text_area)
+    text_handler.setLevel(level)
+    text_handler.setFormatter(logging.Formatter("[%(name)s] %(levelname)s: %(message)s"))
+    root_logger.addHandler(text_handler)
+
+    def restore() -> None:
+        root_logger.removeHandler(text_handler)
+        for handler in saved_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(saved_level)
+
+    return restore
 
 
 class Tooltip:
@@ -68,6 +103,28 @@ class Tooltip:
         if self.tipwindow:
             self.tipwindow.destroy()
             self.tipwindow = None
+
+
+GRAB_RETRY_MS = 20
+GRAB_ATTEMPTS = 100
+
+
+def grab_when_viewable(window: tk.Misc, attempts: int = GRAB_ATTEMPTS) -> None:
+    """Make ``window`` modal (``grab_set``) as soon as the window manager has mapped it.
+
+    A grab of a window that is not viewable yet fails ("grab failed: window not viewable"); how long the mapping
+    takes depends on the window manager, so the grab is retried for about two seconds before it is given up.
+    """
+    try:
+        window.grab_set()
+    except tk.TclError:
+        if attempts <= 1:
+            return
+        try:
+            window.after(GRAB_RETRY_MS, lambda: grab_when_viewable(window, attempts - 1))
+        except tk.TclError:
+            # the window was destroyed meanwhile
+            pass
 
 
 def show_message(parent: Any, title: str, message: str) -> None:  # type: ignore
@@ -107,7 +164,7 @@ def show_message(parent: Any, title: str, message: str) -> None:  # type: ignore
 
     dialog.transient(parent)  # type: ignore
     dialog.deiconify()
-    dialog.grab_set()  # type: ignore
+    grab_when_viewable(dialog)
     dialog.wait_window()  # type: ignore
 
 
@@ -171,25 +228,10 @@ def ask_yes_no(parent: Any, title: str, message: str) -> bool:  # type: ignore
 
     dialog.transient(parent)  # type: ignore
     dialog.deiconify()
-    dialog.grab_set()  # type: ignore
+    grab_when_viewable(dialog)
     dialog.wait_window()
 
     return result[0]
-
-
-def clean_ansi_output(text: str) -> str:
-    """Remove ANSI escape codes and clean up carriage returns for display."""
-    ansi_escape = re.compile(r"\x1b\[[0-9;]*m|\x1b\[[A-Z]")
-    text = ansi_escape.sub("", text)
-    lines = text.split("\n")
-    cleaned_lines = []
-    for line in lines:
-        if "\r" in line:
-            parts = line.split("\r")
-            line = parts[-1] if parts[-1] else parts[-2] if len(parts) > 1 else ""
-        if line.strip():
-            cleaned_lines.append(line)
-    return "\n".join(cleaned_lines)
 
 
 def bind_tooltip_hover(widget: tk.Widget, tooltip: Tooltip, parent: Any, delay: int = 500) -> None:

@@ -6,26 +6,30 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import copy
-import os
 import json
-import subprocess
-import threading
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional, Any, Dict, List, Union
+from typing import Optional, List, Union
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.compile_script import (
-    get_per_config_validation_compile_script_path,
+from discopop_library.ProjectManager.services.configurations import (
+    WizardData,
+    write_seq_settings,
+    write_shared_compile_script,
+    write_wizard_configuration,
 )
-from discopop_library.ProjectManager.utilities.initializeFiles import (
-    initialize_configuration_files,
+from discopop_library.ProjectManager.gui.job_adapter import start_work
+from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
+from discopop_library.ProjectManager.services.wizard import (
+    TEST_OK,
+    compilation_work,
+    compute_derived_settings,
+    describe_test_compilation,
+    save_derived_settings,
 )
-from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import heading_label
 from discopop_library.ProjectManager.gui.wizard_steps import WizardStepsMixin
-from discopop_library.ProjectManager.gui.mixins.helpers import ask_yes_no, show_error
+from discopop_library.ProjectManager.gui.mixins.helpers import ask_yes_no, grab_when_viewable, show_error
 
 
 class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
@@ -40,24 +44,13 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
 
         self.step_index = 0
         self.step_frames: List[ttk.Frame] = []
-        self.step_data: Dict[str, Any] = {
-            "compile_sh": "",
-            "cc": "",
-            "cxx": "",
-            "cflags": "",
-            "cxxflags": "",
-            "config_name": "default",
-            "execute_sh": "",
-            "validate_sh": "",
-            "validate_compile_sh": "",
-            "derived_settings": {},
-        }
+        self.step_data = WizardData()
         self._compile_sh_has_placeholder = False
         self._execute_sh_has_placeholder = False
 
         self._setup_ui()
         self._show_step(0)
-        self.grab_set()
+        grab_when_viewable(self)
         self.transient(parent)  # type: ignore[arg-type]
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
@@ -130,8 +123,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
         elif self.step_index == 1:
             self._show_step(self.step_index + 1)
         elif self.step_index == 2:
-            self.step_data["compile_sh"] = self.compile_sh_text.get(1.0, tk.END)
-            compile_sh_content = self.step_data["compile_sh"]
+            self.step_data.compile_sh = self.compile_sh_text.get(1.0, tk.END)
+            compile_sh_content = self.step_data.compile_sh
             if "$CC" not in compile_sh_content and "$CXX" not in compile_sh_content:
                 if not ask_yes_no(
                     self,
@@ -144,10 +137,10 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             self._write_compile_sh()
             self._show_step(self.step_index + 1)
         elif self.step_index == 3:
-            self.step_data["cc"] = self.cc_entry.get()
-            self.step_data["cxx"] = self.cxx_entry.get()
-            self.step_data["cflags"] = self.cflags_entry.get()
-            self.step_data["cxxflags"] = self.cxxflags_entry.get()
+            self.step_data.cc = self.cc_entry.get()
+            self.step_data.cxx = self.cxx_entry.get()
+            self.step_data.cflags = self.cflags_entry.get()
+            self.step_data.cxxflags = self.cxxflags_entry.get()
             self._write_seq_settings()
             self._show_step(self.step_index + 1)
         elif self.step_index == 4:
@@ -161,8 +154,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             if not config_name:
                 show_error(self, "Invalid Configuration Name", "Configuration name cannot be empty.")
                 return
-            self.step_data["config_name"] = config_name
-            self.step_data["execute_sh"] = self.execute_sh_text.get(1.0, tk.END)
+            self.step_data.config_name = config_name
+            self.step_data.execute_sh = self.execute_sh_text.get(1.0, tk.END)
             self._show_step(self.step_index + 1)
         else:
             self._show_step(self.step_index + 1)
@@ -177,8 +170,8 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             self.destroy()
 
     def _on_finish(self) -> None:
-        self.step_data["validate_sh"] = self.validate_sh_text.get(1.0, tk.END)
-        self.step_data["validate_compile_sh"] = self.validate_compile_sh_text.get(1.0, tk.END)
+        self.step_data.validate_sh = self.validate_sh_text.get(1.0, tk.END)
+        self.step_data.validate_compile_sh = self.validate_compile_sh_text.get(1.0, tk.END)
 
         try:
             self._finish_wizard()
@@ -186,29 +179,12 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             show_error(self, "Error", f"Failed to create configuration: {e}")
 
     def _write_compile_sh(self) -> None:
-        compile_sh_path: str = os.path.join(self.arguments.project_config_dir, "compile.sh")
-        os.makedirs(self.arguments.project_config_dir, exist_ok=True)
-        with open(compile_sh_path, "w") as f:
-            f.write(str(self.step_data["compile_sh"]))
-        subprocess.run(["chmod", "+x", compile_sh_path], check=True)
+        write_shared_compile_script(self.arguments.project_config_dir, self.step_data)
 
     def _write_seq_settings(self) -> None:
-        seq_settings_path: str = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-        settings = {
-            "CC": str(self.step_data["cc"]),
-            "CXX": str(self.step_data["cxx"]),
-            "CFLAGS": str(self.step_data["cflags"]),
-            "CXXFLAGS": str(self.step_data["cxxflags"]),
-        }
-        with open(seq_settings_path, "w") as f:
-            json.dump(settings, f, indent=2)
+        write_seq_settings(self.arguments.project_config_dir, self.step_data)
 
     def _run_test_compilation(self) -> None:
-        from discopop_library.ProjectManager.configurations.execution import execute_configuration
-
-        compile_sh_path = os.path.join(self.arguments.project_config_dir, "compile.sh")
-        seq_settings_path = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-
         self.test_output_text.config(state=tk.NORMAL)
         self.test_output_text.delete(1.0, tk.END)
         self.test_output_text.config(state=tk.DISABLED)
@@ -222,159 +198,44 @@ class ConfigurationWizard(WizardStepsMixin, tk.Toplevel):  # type: ignore
             self.test_output_text.see(tk.END)
             self.test_output_text.config(state=tk.DISABLED)
 
-        args_copy = copy.copy(self.arguments)
+        def handle(event: WorkEvent) -> None:
+            if not isinstance(event, WorkFinished):
+                return
+            outcome = describe_test_compilation(event)
+            color = widgets.STATUS_OK if outcome.kind == TEST_OK else widgets.STATUS_FAIL
+            self.test_status_label.config(text=outcome.status, foreground=color)
+            for line in outcome.output:
+                append_output(line)
+            self.run_test_btn.config(state=tk.NORMAL)
+            self.next_btn.config(state=tk.NORMAL)
 
-        def thread_func() -> None:
-            result = execute_configuration(
-                args_copy,
-                args_copy.project_root,
-                args_copy.project_config_dir,
-                seq_settings_path,
-                compile_sh_path,
-                1,
-                args_copy.timeout_compilation,
-            )
-            if result is None:
-                self.after(0, lambda: append_output("Compilation failed: settings file not found.\n"))
-                self.after(0, lambda: self.test_status_label.config(text="✗ Failed", foreground=widgets.STATUS_FAIL))
-            else:
-                ret_code, elapsed, stdout, stderr = result
-                if ret_code == 0:
-                    self.after(0, lambda e=elapsed: append_output(f"Compilation succeeded ({e:.2f}s)\n"))  # type: ignore[misc]
-                    self.after(0, lambda: self.test_status_label.config(text="✓ Success", foreground=widgets.STATUS_OK))
-                else:
-                    self.after(
-                        0,
-                        lambda rc=ret_code, e=elapsed: append_output(  # type: ignore[misc]
-                            f"Compilation failed (return code: {rc}, {e:.2f}s)\n"
-                        ),
-                    )
-                    self.after(
-                        0,
-                        lambda rc=ret_code: self.test_status_label.config(  # type: ignore[misc]
-                            text=f"✗ Failed (exit code: {rc})", foreground=widgets.STATUS_FAIL
-                        ),
-                    )
-                if stdout:
-                    self.after(0, lambda o=stdout: append_output(f"stdout:\n{o}\n"))  # type: ignore[misc]
-                if stderr:
-                    self.after(0, lambda e=stderr: append_output(f"stderr:\n{e}\n"))  # type: ignore[misc]
-            self.after(0, lambda: self.run_test_btn.config(state=tk.NORMAL))
-            self.after(0, lambda: self.next_btn.config(state=tk.NORMAL))
-
-        threading.Thread(target=thread_func, daemon=True).start()
+        start_work(self, compilation_work(self.arguments), handle)
 
     def _compute_and_display_derived_settings(self) -> None:
-        seq_settings = {
-            "CC": self.step_data["cc"],
-            "CXX": self.step_data["cxx"],
-            "CFLAGS": self.step_data["cflags"],
-            "CXXFLAGS": self.step_data["cxxflags"],
-        }
-
-        dp_settings = json.loads(json.dumps(seq_settings))
-        dp_settings["CC"] = "discopop_cc"
-        dp_settings["CXX"] = "discopop_cxx"
-
-        hd_settings = json.loads(json.dumps(seq_settings))
-        hd_settings["CC"] = "discopop_hotspot_cc"
-        hd_settings["CXX"] = "discopop_hotspot_cxx"
-        hd_settings["CFLAGS"] = hd_settings["CFLAGS"] + " -fopenmp" if len(hd_settings["CFLAGS"]) != 0 else "-fopenmp"
-        hd_settings["CXXFLAGS"] = (
-            hd_settings["CXXFLAGS"] + " -fopenmp" if len(hd_settings["CXXFLAGS"]) != 0 else "-fopenmp"
-        )
-
-        par_settings = json.loads(json.dumps(seq_settings))
-        par_settings["CFLAGS"] = (
-            par_settings["CFLAGS"] + " -fopenmp" if len(par_settings["CFLAGS"]) != 0 else "-fopenmp"
-        )
-        par_settings["CXXFLAGS"] = (
-            par_settings["CXXFLAGS"] + " -fopenmp" if len(par_settings["CXXFLAGS"]) != 0 else "-fopenmp"
-        )
-
-        self.step_data["derived_settings"] = {
-            "dp_settings": dp_settings,
-            "hd_settings": hd_settings,
-            "par_settings": par_settings,
-        }
-
-        self.dp_settings_text.delete(1.0, tk.END)
-        self.dp_settings_text.insert(1.0, json.dumps(dp_settings, indent=2))
-
-        self.hd_settings_text.delete(1.0, tk.END)
-        self.hd_settings_text.insert(1.0, json.dumps(hd_settings, indent=2))
-
-        self.par_settings_text.delete(1.0, tk.END)
-        self.par_settings_text.insert(1.0, json.dumps(par_settings, indent=2))
+        derived = compute_derived_settings(self.step_data)
+        for text_widget, key in (
+            (self.dp_settings_text, "dp_settings"),
+            (self.hd_settings_text, "hd_settings"),
+            (self.par_settings_text, "par_settings"),
+        ):
+            text_widget.delete(1.0, tk.END)
+            text_widget.insert(1.0, json.dumps(derived[key], indent=2))
 
     def _save_derived_settings(self) -> None:
         try:
-            dp_content: str = self.dp_settings_text.get(1.0, tk.END).strip()
-            hd_content: str = self.hd_settings_text.get(1.0, tk.END).strip()
-            par_content: str = self.par_settings_text.get(1.0, tk.END).strip()
-
-            dp_settings = json.loads(dp_content)
-            hd_settings = json.loads(hd_content)
-            par_settings = json.loads(par_content)
-
-            dp_path: str = os.path.join(self.arguments.project_config_dir, "dp_settings.json")
-            hd_path: str = os.path.join(self.arguments.project_config_dir, "hd_settings.json")
-            par_path: str = os.path.join(self.arguments.project_config_dir, "par_settings.json")
-
-            with open(dp_path, "w") as f:
-                json.dump(dp_settings, f, indent=2)
-
-            with open(hd_path, "w") as f:
-                json.dump(hd_settings, f, indent=2)
-
-            with open(par_path, "w") as f:
-                json.dump(par_settings, f, indent=2)
-
+            save_derived_settings(
+                self.arguments.project_config_dir,
+                self.dp_settings_text.get(1.0, tk.END),
+                self.hd_settings_text.get(1.0, tk.END),
+                self.par_settings_text.get(1.0, tk.END),
+            )
         except json.JSONDecodeError as e:
             show_error(self, "Invalid JSON", f"One of the derived settings contains invalid JSON: {e}")
             raise
 
     def _finish_wizard(self) -> None:
-        config_name: str = str(self.step_data["config_name"])
-        config_path: str = os.path.join(self.arguments.project_config_dir, config_name)
-
-        os.makedirs(config_path, exist_ok=True)
-
-        execute_sh_path: str = os.path.join(config_path, "execute.sh")
-        execute_sh_content: str = str(self.step_data["execute_sh"])
-        with open(execute_sh_path, "w") as f:
-            f.write(execute_sh_content)
-        subprocess.run(["chmod", "+x", execute_sh_path], check=True)
-
-        # validate.sh is optional: only create it if the user provided more than
-        # an empty script / bare shebang.
-        validate_sh_content: str = str(self.step_data["validate_sh"])
-        if self.__is_meaningful_script(validate_sh_content):
-            validate_sh_path: str = os.path.join(config_path, "validate.sh")
-            with open(validate_sh_path, "w") as f:
-                f.write(validate_sh_content)
-            subprocess.run(["chmod", "+x", validate_sh_path], check=True)
-
-            # compile_validate.sh is equally optional, and pointless without a
-            # validate.sh to run against its build -- hence the nesting.
-            validate_compile_sh_content: str = str(self.step_data["validate_compile_sh"])
-            if self.__is_meaningful_script(validate_compile_sh_content):
-                write_script_file(
-                    get_per_config_validation_compile_script_path(self.arguments.project_config_dir, config_name),
-                    validate_compile_sh_content,
-                )
-
-        initialize_configuration_files(self.arguments)
+        config_name = write_wizard_configuration(self.arguments, self.step_data)
 
         self.result = config_name
         self.grab_release()
         self.destroy()
-
-    @staticmethod
-    def __is_meaningful_script(content: str) -> bool:
-        """Whether the user actually filled in an optional script editor."""
-        return bool(
-            "\n".join(
-                line for line in content.splitlines() if line.strip() and not line.strip().startswith("#!")
-            ).strip()
-        )

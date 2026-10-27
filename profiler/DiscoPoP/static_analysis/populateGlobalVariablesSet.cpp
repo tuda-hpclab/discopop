@@ -32,7 +32,7 @@ void DiscoPoP::PopulateGlobalVariablesSet(Region* top_region, std::set<std::stri
     for (BasicBlock::iterator instruction = (*bb)->begin(); instruction != (*bb)->end(); ++instruction) {
       if (isa<LoadInst>(instruction) || isa<StoreInst>(instruction) || isa<CallInst>(instruction)) {
         // NOTE: changed 'instruction' to '&*instruction'
-        std::string var_name = DetermineVariableNameStatic(&*instruction, is_global_variable, false, "");
+        const std::string var_name = DetermineVariableNameStatic(&*instruction, is_global_variable, false, "");
 
         if (is_global_variable) {  // add it if it is a global variable in the
                                    // program

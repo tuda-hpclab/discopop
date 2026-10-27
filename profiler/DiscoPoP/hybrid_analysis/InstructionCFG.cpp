@@ -65,7 +65,7 @@ InstructionCFG::InstructionCFG(dputil::VariableNameFinder* vnf, Function& f) : v
 void InstructionCFG::FindAndAddFirstRelevantInstructionInSuccessorBlocks(
     BasicBlock* bb, Instruction* previous_instruction, std::set<std::pair<BasicBlock*, Instruction*>>* visited) {
   // Check for and break out of cycles
-  std::pair<BasicBlock*, Instruction*> tmp_pair = std::make_pair(bb, previous_instruction);
+  const std::pair<BasicBlock*, Instruction*> tmp_pair = std::make_pair(bb, previous_instruction);
   const bool already_visited = visited->find(tmp_pair) != visited->end();
   if (already_visited) {
     return;
@@ -94,7 +94,7 @@ void InstructionCFG::FindAndAddFirstRelevantInstructionInSuccessorBlocks(
 
 void InstructionCFG::HighlightInstructionNode(Instruction* instr) { highlighted_instruction_nodes_.insert(instr); }
 
-void InstructionCFG::DumpToDot(const std::string target_path) {
+void InstructionCFG::DumpToDot(const std::string& target_path) {
   // Write the graph to a DOT file
   std::ofstream dot_stream;
   dot_stream.open(target_path);
