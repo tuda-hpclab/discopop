@@ -27,7 +27,7 @@ using llvm::Value;
 std::string DiscoPoP::DetermineVariableType(Instruction* i) {
   std::string s = "";
   std::string type_str;
-  int index = isa<StoreInst>(i) ? 1 : 0;
+  const int index = isa<StoreInst>(i) ? 1 : 0;
   raw_string_ostream rso(type_str);
   (*((i->getOperand(index))->getType())).print(rso);
 

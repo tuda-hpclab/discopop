@@ -53,7 +53,7 @@ void ProcessEnumeratePathsStack(
       std::tuple<StaticCallPathTreeNode*, InstructionId, StaticCallPathTreeNode*> new_current_tuple;
       bool fetched_element = false;
       {
-        std::lock_guard<std::mutex> lg(*new_stack_mtx);
+        const std::lock_guard<std::mutex> lg(*new_stack_mtx);
         if (!new_stack->empty()) {
           new_current_tuple = new_stack->top();
           new_stack->pop();
@@ -89,7 +89,7 @@ void ProcessEnumeratePathsStack(
         ancestor_by_base.emplace(current->base_node, current);
       }
 
-      for (auto succ_pair : new_current_path->base_node->successors) {
+      for (const auto& succ_pair : new_current_path->base_node->successors) {
         std::int32_t trigger_instruction_id = succ_pair.first;
         for (auto succ : succ_pair.second) {
           // check for cycles: succ already present on the path -> cycle
@@ -107,7 +107,7 @@ void ProcessEnumeratePathsStack(
       }
       // push prepared elements to stack
       {
-        std::lock_guard<std::mutex> lg(*new_stack_mtx);
+        const std::lock_guard<std::mutex> lg(*new_stack_mtx);
         for (auto elem : new_elements_buffer) {
           new_stack->push(elem);
         }
@@ -121,7 +121,7 @@ void ProcessEnumeratePathsStack(
 
   // register nodes added by the thread for later use
   {
-    std::lock_guard<std::mutex> lg(call_path_tree->all_nodes_mtx);
+    const std::lock_guard<std::mutex> lg(call_path_tree->all_nodes_mtx);
     for (auto elem : nodes_added_by_thread) {
       call_path_tree->RegisterNodeInAllNodes(elem);
     }
@@ -196,7 +196,7 @@ void SaveInitialPath(StaticCallPathTree* call_path_tree_ptr) {
   std::ofstream file = profiler_files::Open("initial_stateID.txt");
 
   // find candidates for initial path
-  std::vector<StaticCallPathTreeNode*> candidates = call_path_tree_ptr->root->successors;
+  const std::vector<StaticCallPathTreeNode*> candidates = call_path_tree_ptr->root->successors;
 
   // write file
   for (auto candidate : candidates) {
@@ -246,7 +246,8 @@ void SaveEnumeratedPaths(StaticCallPathTree* call_path_tree_ptr) {
     }
 
     // new format: <NodeID> <ParentID> <Label>
-    std::string path_buffer = std::to_string(path->path_id) + " " + std::to_string(parent_id) + " " + node_label + "\n";
+    const std::string path_buffer =
+        std::to_string(path->path_id) + " " + std::to_string(parent_id) + " " + node_label + "\n";
     global_buffer += path_buffer;
   }
   state_id_to_callpath_file << global_buffer;
@@ -268,8 +269,9 @@ void SavePathStateTransitions(StaticCallPathTree* call_path_tree_ptr) {
       if (transition_pair.first == 1) {
         continue;
       }
-      std::string transition_buffer = "" + std::to_string(path->path_id) + " " + std::to_string(transition_pair.first) +
-                                      " " + std::to_string(transition_pair.second) + "\n";
+      const std::string transition_buffer = "" + std::to_string(path->path_id) + " " +
+                                            std::to_string(transition_pair.first) + " " +
+                                            std::to_string(transition_pair.second) + "\n";
       global_buffer += transition_buffer;
     }
   }
@@ -299,9 +301,9 @@ void SavePathStateTransitions(StaticCallPathTree* call_path_tree_ptr) {
         if (transition_pair.first == 1) {
           continue;
         }
-        std::string transition_buffer = "  " + std::to_string(path->path_id) + " -> " +
-                                        std::to_string(transition_pair.second) +
-                                        " [label = " + std::to_string(transition_pair.first) + "];\n";
+        const std::string transition_buffer = "  " + std::to_string(path->path_id) + " -> " +
+                                              std::to_string(transition_pair.second) +
+                                              " [label = " + std::to_string(transition_pair.first) + "];\n";
         global_buffer += transition_buffer;
       }
     }
@@ -366,7 +368,7 @@ void AddFunctionExitEdgesToTransitions(StaticCallPathTree* call_path_tree_ptr) {
   for (auto path : call_path_tree_ptr->all_nodes) {
     // rfind first call instruction
 
-    StaticCallPathTreeNode* last_call_prefix = nullptr;
+    const StaticCallPathTreeNode* last_call_prefix = nullptr;
     auto current = path;
     while (current->base_node != nullptr) {
       if (current->base_node->GetType() == true) {

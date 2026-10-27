@@ -19,8 +19,9 @@ from discopop_library.ProjectManager.gui.mixins.helpers import ask_yes_no
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.detail_bar import DetailBar
 from discopop_library.ProjectManager.gui.widgets import danger_button
-from discopop_library.ProjectManager.gui.plots import embedding, mode_style, report_charts
-from discopop_library.ProjectManager.gui.plots.data import ExecutionRecord, parse_execution_results
+from discopop_library.ProjectManager.gui import chart_embedding as embedding
+from discopop_library.ProjectManager.plots import mode_style, report_charts
+from discopop_library.ProjectManager.plots.data import ExecutionRecord, parse_execution_results
 
 # Chart types offered by the "+" tab. Each entry: default state + a title stem.
 _PLOT_TYPES: Dict[str, Dict[str, Any]] = {

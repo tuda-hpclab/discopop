@@ -63,17 +63,17 @@ CallStateGraph::CallStateGraph() {
     if (pos == std::string::npos) {
       continue;
     }
-    std::string source_callstate_id_str = line.substr(0, pos);
+    const std::string source_callstate_id_str = line.substr(0, pos);
     line = line.substr(pos + 1);
     // get trigger instruction
     pos = line.find(' ');
     if (pos == std::string::npos) {
       continue;
     }
-    std::string trigger_instruction_id_str = line.substr(0, pos);
+    const std::string trigger_instruction_id_str = line.substr(0, pos);
     line = line.substr(pos + 1);
     // get target id
-    std::string target_callstate_id_str = line;
+    const std::string target_callstate_id_str = line;
     // register transition in CallStateGraph
     std::int32_t source_callstate_id = 0;
     std::int32_t trigger_instruction_id = 0;
@@ -97,12 +97,12 @@ CallStateGraph::CallStateGraph() {
     if (line.empty() || line[0] == '#') {
       continue;
     }
-    std::size_t pos = line.find(' ');
+    const std::size_t pos = line.find(' ');
     if (pos == std::string::npos) {
       continue;
     }
-    std::string source_callstate_id_str = line.substr(0, pos);
-    std::string target_callstate_id_str = line.substr(pos + 1);
+    const std::string source_callstate_id_str = line.substr(0, pos);
+    const std::string target_callstate_id_str = line.substr(pos + 1);
     std::int32_t source_callstate_id = 0;
     std::int32_t target_callstate_id = 0;
     if (!ParseId(source_callstate_id_str, source_callstate_id) ||

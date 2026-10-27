@@ -10,13 +10,14 @@
 # new releases arrive as Dependabot pull requests (.github/dependabot.yml), whose CI run shows any new findings.
 # install them together with the DiscoPoP packages, so that pip resolves both in a single step:
 #   venv/bin/pip install -r requirements-dev.txt . ./profiler ./library
-black==26.10.0
+black==26.10.1
 clang-format==22.1.8
 clang-tidy==22.1.8
 cpplint==2.0.2
 data-science-types==0.2.23
 mypy==2.4.0
 pytest==9.1.1
+pytest-qt==4.5.0
 pytest-xdist==3.8.0
-ruff==0.17.0
+ruff==0.17.1
 types-jsonschema==4.26.0.20261006

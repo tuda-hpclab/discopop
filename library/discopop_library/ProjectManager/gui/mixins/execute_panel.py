@@ -6,13 +6,18 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import json
 import os
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
 from discopop_library.ProjectManager.configurations.repetitions import DEFAULT_MEASURED_REPETITIONS
+from discopop_library.ProjectManager.services.autotuner_results import (
+    autotuner_results_exist,
+    read_autotuner_applied_suggestions,
+)
+from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
+from discopop_library.ProjectManager.services.project_state import AutotuningChanged
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import caption_label
 from discopop_library.ProjectManager.gui.suggestion_selector import SuggestionSelector
@@ -389,20 +394,13 @@ class ExecutePanelMixin(ConfigManagerMixinBase):
             self.execute_suggestion_selector.set_enabled(total > 0 and self.suggestions_mode_var.get() == "manual")
 
         if hasattr(self, "autotuner_suggestions_info_label"):
-            results_path = os.path.join(self.arguments.dot_dp, "auto_tuner", "results.json")
             config_key = getattr(self, "current_config", None) or ""
+            autotuner_executed = autotuner_results_exist(self.arguments.dot_dp)
             autotuner_ids: list[str] = []
-            autotuner_executed = os.path.exists(results_path)
             if autotuner_executed and config_key:
-                try:
-                    with open(results_path, "r") as f:
-                        results_data = json.load(f)
-                    autotuner_ids = sorted(
-                        [str(s) for s in results_data.get(config_key, {}).get("applied_suggestions", [])],
-                        key=lambda x: int(x) if x.isdigit() else x,
-                    )
-                except (json.JSONDecodeError, IOError):
-                    pass
+                autotuner_ids = sort_suggestion_ids(
+                    read_autotuner_applied_suggestions(self.arguments.dot_dp, config_key)
+                )
             if autotuner_ids:
                 self.autotuner_suggestions_info_label.config(
                     text="Suggestion IDs: " + ", ".join(autotuner_ids), foreground="black"
@@ -420,5 +418,4 @@ class ExecutePanelMixin(ConfigManagerMixinBase):
                     if self.suggestions_mode_var.get() == "autotuner":
                         self.suggestions_mode_var.set("none")
 
-        if hasattr(self, "_refresh_autotuning_suggestions_display"):
-            self._refresh_autotuning_suggestions_display()
+        self.project_state.publish(AutotuningChanged())

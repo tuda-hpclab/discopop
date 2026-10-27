@@ -159,7 +159,7 @@ void MergeBbDeps(const std::vector<const char*>& dep_strings, const ReportedBBSe
     const std::string sink_state = "@" + std::to_string(execution.sink_state);
     const std::string source_state = "@" + std::to_string(execution.source_state);
     for (const HandedOverDep& dep : deps->second) {
-      std::string source = dep.source == "*" ? dep.source : dep.source + source_state;
+      const std::string source = dep.source == "*" ? dep.source : dep.source + source_state;
       out[dep.sink + sink_state].insert(dep.type + " " + source + dep.rest);
     }
   }

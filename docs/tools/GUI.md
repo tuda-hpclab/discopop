@@ -23,10 +23,11 @@ discopop_gui
 | `discopop_gui` | Opens the GUI for the project in the current directory |
 | `discopop_gui -p <dir>` | Opens the GUI for the project in `<dir>` |
 | `discopop_project_manager --gui` | Same as `discopop_gui` |
+| `discopop_gui --gui-toolkit qt` | Opens the new Qt version of the GUI (see below) |
 
 `discopop_gui` accepts the arguments of `discopop_project_manager`, but only `-p/--project` and the logging options matter for the GUI. A `.discopop` directory is created in the project if it does not exist yet; you do not need `--init`.
 
-The GUI needs `tkinter` (Debian/Ubuntu: `python3-tk`) and a display. Without a display (`$DISPLAY` and `$WAYLAND_DISPLAY` unset), the command prints
+The GUI is being moved from Tk to Qt (PySide6). Both versions have the same tabs and do the same; the Tk version is the default until the move is complete, `--gui-toolkit qt` selects the Qt version. The Tk version needs `tkinter` (Debian/Ubuntu: `python3-tk`), the Qt version comes with its Python package (`PySide6-Essentials`, a dependency of DiscoPoP); both need a display. Without a display (`$DISPLAY` and `$WAYLAND_DISPLAY` unset), the command prints
 
 ```text
 ERROR: this command opens a graphical window, but no display is available (neither $DISPLAY nor $WAYLAND_DISPLAY is set).
@@ -34,6 +35,8 @@ ERROR: this command opens a graphical window, but no display is available (neith
 ```
 
 and exits with code 1. On such a machine, use the [project manager](Project_manager.md) or the [MCP server](MCP_server.md).
+
+On a remote machine, e.g. an HPC login node, the GUI works over X forwarding (`ssh -X`). The Qt version responds noticeably faster there than the Tk version: it draws the window locally and sends the changed pixels, while Tk needs many round trips to the X server. If the Qt version reports that it cannot load the platform plugin "xcb", the remote machine lacks X libraries (usually `libxcb-cursor0`); `QT_DEBUG_PLUGINS=1` names the missing one.
 
 {: .note }
 Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the command line project manager.
@@ -148,7 +151,7 @@ The tab runs `discopop_explorer` in the `.discopop` directory. It needs the prof
 | Pattern Types | `reduction` and `doall` (default); `task` is experimental |
 | Dependency Data | `default (full states)` or `no_states (states ignored)`, i.e. `--ignore-dependency-states` |
 | Threads | Worker processes of the Explorer (`-j`); `auto` = unlimited |
-| Show graph visualization | Runs the Explorer inside the GUI process and shows its graphs in the *Graph Visualization* tab. The window is unresponsive while it runs. |
+| Show graph visualization | Tk version: runs the Explorer inside the GUI process and shows its graphs in the *Graph Visualization* tab; the window is unresponsive while it runs. Qt version: runs `discopop_explorer --visualize`, which shows the graphs in a window of its own (needs the package `discopop-gui`); the GUI stays responsive and *Stop* works. |
 
 If no hotspot results exist, a hint offers to go to the *Hotspot Detection* tab: the Explorer restricts its analysis to the hot parts of the program when `Hotspots.json` exists.
 
@@ -182,7 +185,7 @@ The *Live Plot* tab shows every measured configuration while the tuner runs, the
 |---|---|
 | Editor, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
 | Hotspot Detection | The `hd` mode of the project manager, then `discopop_hotspot_analyzer` |
-| Pattern Detection | `discopop_explorer` (subprocess; in process with graph visualization) |
+| Pattern Detection | `discopop_explorer` (subprocess; in the Tk version in process with graph visualization) |
 | Patch Repair | `python -m discopop_library.PatchRepair` (`discopop_patch_repair`) as a subprocess |
 | Autotuning | `python -m discopop_library.EmpiricalAutotuning` (`discopop_auto_tuner`) as a subprocess |
 

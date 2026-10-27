@@ -13,16 +13,25 @@ Checks: >
   -*,
   google-*,
   -google-readability-todo,
+  cppcoreguidelines-pro-type-const-cast,
   cppcoreguidelines-pro-type-cstyle-cast,
+  misc-const-correctness,
   modernize-use-default-member-init,
   modernize-use-nullptr,
   modernize-use-override,
   modernize-use-using,
+  performance-for-range-copy,
+  performance-unnecessary-value-param,
+  readability-avoid-const-params-in-decls,
   readability-braces-around-statements,
   readability-else-after-return,
-  readability-identifier-naming
+  readability-identifier-naming,
+  readability-make-member-function-const,
+  readability-non-const-parameter
 HeaderFilterRegex: '.*/profiler/(DiscoPoP|rtlib|share)/.*'
 CheckOptions:
+  # pointers that are never reassigned are not required to be `T* const` (their pointee is checked)
+  misc-const-correctness.WarnPointersAsValues: false
   # https://google.github.io/styleguide/cppguide.html#Naming
   readability-identifier-naming.NamespaceCase: lower_case
   readability-identifier-naming.ClassCase: CamelCase

@@ -66,7 +66,7 @@ class Signature {
   std::int32_t inserted_elem_;
   std::int32_t conflict_elem_;
 
-  std::uint32_t Hash(std::int64_t value) { return static_cast<std::uint32_t>((value >> 8) + value) % num_slot_; }
+  std::uint32_t Hash(std::int64_t value) const { return static_cast<std::uint32_t>((value >> 8) + value) % num_slot_; }
 };
 
 }  // namespace dp

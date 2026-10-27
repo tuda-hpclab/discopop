@@ -69,7 +69,7 @@ std::string dp_reduction::CFA(Function& f, llvm::Loop* l, int file_id) {
           // Changed TerminatorInst to Instruction
           Instruction* ti = (*ei)->getTerminator();
           assert(ti != NULL && "Exit block is not well formed!");
-          unsigned int num_succ = ti->getNumSuccessors();
+          const unsigned int num_succ = ti->getNumSuccessors();
           for (unsigned int i = 0; i < num_succ; ++i) {
             BasicBlock* succ = ti->getSuccessor(i);
             exit_type = succ->getName().split('.').first;
@@ -99,7 +99,7 @@ std::string dp_reduction::CFA(Function& f, llvm::Loop* l, int file_id) {
         for (SmallVectorImpl<BasicBlock*>::iterator ei = real_exit_blocks.begin(), end = real_exit_blocks.end();
              ei != end; ++ei) {
           BasicBlock* current_bb = *ei;
-          std::vector<Value*> args;
+          const std::vector<Value*> args;
           LID lid = 0;
 
           for (BasicBlock::iterator bi = current_bb->begin(), ei = current_bb->end(); bi != ei; ++bi) {

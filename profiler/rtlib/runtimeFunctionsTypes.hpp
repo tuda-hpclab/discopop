@@ -59,7 +59,7 @@ enum DepTypeModifier {
 };
 
 struct AccessInfo {
-  AccessInfo(bool is_read, LID lid, char* var, std::int64_t aa_var, ADDR addr, bool skip = false)
+  AccessInfo(bool is_read, LID lid, const char* var, std::int64_t aa_var, ADDR addr, bool skip = false)
       : is_read(is_read), skip(skip), lid(lid), var(var), aa_var(aa_var), addr(addr) {}
 
   AccessInfo() : is_read(false), skip(false), lid(0), var(""), aa_var(0), addr(0) {}
@@ -104,7 +104,7 @@ struct EqDep {
 class DepHasher {
  public:
   size_t operator()(
-      Dep const& key) const {  // the parameter type should be the same as the type of key of unordered_map
+      const Dep& key) const {  // the parameter type should be the same as the type of key of unordered_map
     size_t hash = 0;
     hash += std::hash<int64_t>{}(key.dep_on);
     hash += std::hash<int>{}(static_cast<int>(key.type));
@@ -157,7 +157,7 @@ class ReportedBBRecorder {
 
   inline void Record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
     const std::uint64_t states = (static_cast<std::uint64_t>(source_state) << 32) | sink_state;
-    std::size_t mask = slots_.size() - 1;
+    const std::size_t mask = slots_.size() - 1;
     for (std::size_t pos = SlotOf(bb_index, states) & mask;; pos = (pos + 1) & mask) {
       Slot& slot = slots_[pos];
       if (!slot.used) {
@@ -230,7 +230,7 @@ class FirstAccessQueueChunk {
  public:
   explicit FirstAccessQueueChunk(std::size_t chunk_size) : buffer_size_(chunk_size) { buffer_.resize(chunk_size); }
 
-  inline bool IsFull() { return element_count_ == buffer_size_; }
+  inline bool IsFull() const { return element_count_ == buffer_size_; }
 
   inline AccessInfo& GetNextAccessInfoBuffer() { return buffer_[element_count_++]; }
 
@@ -240,7 +240,7 @@ class FirstAccessQueueChunk {
 
   inline std::vector<AccessInfo>* GetBuffer() { return &buffer_; }
 
-  inline std::size_t GetElementCount() { return element_count_; }
+  inline std::size_t GetElementCount() const { return element_count_; }
 
   std::promise<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
   std::promise<AbstractShadow*> exit_boundary_smem;
@@ -381,6 +381,7 @@ class FirstAccessQueueChunkBuffer {
     }
 
     if (chunk_required) {
+      // NOLINTNEXTLINE(misc-const-correctness): the queue stores pointers to mutable chunks
       FirstAccessQueueChunk* new_chunk = new FirstAccessQueueChunk(chunk_size);
       const std::lock_guard<std::mutex> lock(internal_mtx_);
       internal_queue_.push(new_chunk);

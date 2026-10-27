@@ -128,7 +128,7 @@ LID dp_reduction::GetLid(Instruction* bi, std::int32_t& /*file_id*/) {
   if (lno == 0) {
     return 0;
   }
-  LID lid = lno;
+  LID const lid = lno;
   return lid;
 }
 
@@ -148,7 +148,7 @@ bool dp_reduction::SanityCheck(BasicBlock* bb, int file_id) {
 // (mainly used to support -- as reduction operation, might be implemented as
 // 'add -1')
 char dp_reduction::GetCharForOpcode(llvm::Instruction* instr) {
-  unsigned opcode = instr->getOpcode();
+  const unsigned opcode = instr->getOpcode();
   if (opcode == llvm::Instruction::Call) {
     // check for calls to relevant arithmetic intrinsic functions (fma, fmuladd)
     // full list of arithmetic intrinsics:
