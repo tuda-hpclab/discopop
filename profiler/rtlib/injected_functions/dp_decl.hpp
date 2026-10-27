@@ -21,11 +21,11 @@ extern "C" {
 
 #ifdef SKIP_DUP_INSTR
 // hybrid analysis
-void __dp_decl(LID lid, ADDR addr, char* var, ADDR lastaddr, int64_t count);
+void __dp_decl(LID lid, ADDR addr, const char* var, ADDR lastaddr, int64_t count);
 // End HA
 #else
 // hybrid analysis
-void __dp_decl(LID lid, ADDR addr, char* var);
+void __dp_decl(LID lid, ADDR addr, const char* var);
 // End HA
 #endif
 }

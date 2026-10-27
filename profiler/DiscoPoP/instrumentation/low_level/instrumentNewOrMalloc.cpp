@@ -27,7 +27,7 @@ using llvm::Value;
 
 void DiscoPoP::InstrumentNewOrMalloc(CallBase* to_instrument) {
   // add instrumentation for new instructions or calls to malloc
-  LID lid = dputil::GetLid(to_instrument, file_id);
+  LID const lid = dputil::GetLid(to_instrument, file_id);
   if (lid == 0) {
     return;
   }

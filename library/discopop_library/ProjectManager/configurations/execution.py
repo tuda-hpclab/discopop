@@ -196,6 +196,15 @@ def _run_once(
     )
 
 
+def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) -> PATH:
+    """The path ``path`` below ``project_root`` has in the copy of the project; other paths are left alone."""
+    absolute_path = os.path.abspath(path)
+    absolute_root = os.path.abspath(project_root)
+    if os.path.commonpath([absolute_path, absolute_root]) != absolute_root:
+        return path
+    return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
+
+
 def execute_configuration(
     arguments: ProjectManagerArguments,
     project_copy_root_path: PATH,
@@ -209,6 +218,7 @@ def execute_configuration(
     measurement: Optional[Dict[str, Any]] = None,
     repetitions: int = SINGLE_MEASUREMENT,
     should_abort: Optional[Callable[[], bool]] = None,
+    store_result: bool = True,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -236,11 +246,12 @@ def execute_configuration(
     the autotuner derives its per-candidate timeout from ``wall_clock_time``,
     which has to bound the whole process -- reads it from there rather than from
     the return value, whose shape many callers depend on.
+
+    ``store_result=False`` runs the script without recording it in
+    ``execution_results.json`` (and leaves ``measurement`` alone): a test
+    compilation of the GUI belongs to no configuration and measures nothing.
     """
-    # Checked before anything about the process is changed -- in particular before
-    # the working directory is moved into the project copy below, which a raise
-    # from further down would leave behind in a directory that is about to be
-    # deleted.
+    # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
     if repetition_error is not None:
         raise ValueError("repetitions: " + repetition_error)
@@ -253,9 +264,9 @@ def execute_configuration(
     settings_name = os.path.basename(settings_path)
     script_name = os.path.basename(script_path)
 
-    config_path = config_path.replace(arguments.project_root, project_copy_root_path)
-    settings_path = settings_path.replace(arguments.project_root, project_copy_root_path)
-    script_path = script_path.replace(arguments.project_root, project_copy_root_path)
+    config_path = _path_in_copy(config_path, arguments.project_root, project_copy_root_path)
+    settings_path = _path_in_copy(settings_path, arguments.project_root, project_copy_root_path)
+    script_path = _path_in_copy(script_path, arguments.project_root, project_copy_root_path)
     project_copy_dp_path = os.path.join(project_copy_root_path, ".discopop")
 
     # get applied suggestions
@@ -277,8 +288,9 @@ def execute_configuration(
     logger.debug("-> settings:\n" + str(settings))
 
     # prepare environment variables
-    home_dir = os.getcwd()
-    os.chdir(project_copy_root_path)
+    # The process-wide working directory is deliberately left alone: this function runs in
+    # worker threads, and os.chdir would change the directory of every other thread.
+    # The script is started with cwd=project_copy_root_path instead (see _run_once).
     my_env: Dict[str, str] = os.environ.copy()
     for key in settings:
         my_env[key] = settings[key]
@@ -388,6 +400,14 @@ def execute_configuration(
             + ")"
         )
 
+    if not store_result:
+        return (
+            representative.returncode,
+            representative.time,
+            representative.stdout,
+            representative.stderr,
+        )
+
     # save execution results
     stored = _store_execution_result(
         arguments,
@@ -418,8 +438,6 @@ def execute_configuration(
     )
     if measurement is not None:
         measurement.update(stored)
-
-    os.chdir(home_dir)
 
     return (
         representative.returncode,

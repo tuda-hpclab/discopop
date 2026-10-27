@@ -53,13 +53,16 @@ class StaticCalltreeNode {
     return true;
   }
   StaticCalltreeNode(uint32_t node_id_arg, bool type_arg, std::string function_name_arg, int32_t instruction_id_arg)
-      : node_id_(node_id_arg), type_(type_arg), function_name_(function_name_arg), instruction_id_(instruction_id_arg) {
+      : node_id_(node_id_arg),
+        type_(type_arg),
+        function_name_(std::move(function_name_arg)),
+        instruction_id_(instruction_id_arg) {
     // type 0: function -> functionName; type 1: call instruction -> "call_<instructionID>"
     label_ = type_ ? ("call_" + std::to_string(instruction_id_)) : function_name_;
   }
   void Print();
   const std::string& GetLabel();
-  bool GetType();
+  bool GetType() const;
   void RegisterSuccessor(StaticCalltreeNode* succ, int32_t trigger_instruction_id);
 };
 
@@ -83,8 +86,8 @@ class StaticCalltree {
   }
   StaticCalltree(const StaticCalltree&) = delete;
   StaticCalltree& operator=(const StaticCalltree&) = delete;
-  StaticCalltreeNode* GetOrInsertFunctionNode(std::string function_name);
-  StaticCalltreeNode* GetOrInsertFunctionNode(std::string function_nam, std::string loop_iteration_instance);
+  StaticCalltreeNode* GetOrInsertFunctionNode(const std::string& function_name);
+  StaticCalltreeNode* GetOrInsertFunctionNode(std::string function_nam, const std::string& loop_iteration_instance);
   StaticCalltreeNode* GetOrInsertInstructionNode(int32_t instruction_id);
   void Print();
   std::string ToDotString();

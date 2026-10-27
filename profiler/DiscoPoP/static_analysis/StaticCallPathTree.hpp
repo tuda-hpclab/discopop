@@ -45,7 +45,7 @@ class StaticCallPathTreeNode {
   void RegisterTransition(int32_t trigger_instruction_id, std::uint32_t target_path_id);
 
   [[nodiscard]] std::string ToDotString();
-  [[nodiscard]] std::string GetPathString();
+  [[nodiscard]] std::string GetPathString() const;
 };
 
 class StaticCallPathTree {
@@ -61,9 +61,9 @@ class StaticCallPathTree {
   StaticCallPathTree();
   explicit StaticCallPathTree(std::uint32_t start_path_id);  // so that ids don't overlap between modules
   ~StaticCallPathTree();
-  std::string ToDotString();
+  std::string ToDotString() const;
 
   [[nodiscard]] std::uint32_t GetNextFreePathId();
-  std::uint32_t GetCurrentFreePathId();  // returns next free path id
+  std::uint32_t GetCurrentFreePathId() const;  // returns next free path id
   void RegisterNodeInAllNodes(StaticCallPathTreeNode* node_ptr);
 };

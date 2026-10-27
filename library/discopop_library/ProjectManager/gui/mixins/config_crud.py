@@ -6,12 +6,17 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import os
-import shutil
 import tkinter as tk
 from tkinter import simpledialog
 
-from discopop_library.ProjectManager.utilities.initializeFiles import initialize_configuration_files
+from discopop_library.ProjectManager.services.configurations import (
+    ConfigurationError,
+    SameNameError,
+    copy_configuration_directory,
+    create_configuration,
+    delete_configuration_directory,
+    rename_configuration,
+)
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import show_error, show_warning, ask_yes_no, show_message
 
@@ -22,19 +27,17 @@ class ConfigCrudMixin(ConfigManagerMixinBase):
         if not dialog:
             return
 
-        config_name = dialog.strip()
-        if not config_name:
-            show_error(self, "Invalid name", "Configuration name cannot be empty")
+        try:
+            config_name = create_configuration(self.arguments, dialog)
+        except ConfigurationError as e:
+            show_error(self, e.title, e.message)
             return
-
-        config_path = os.path.join(self.config_dir, config_name)
-        if os.path.exists(config_path):
-            show_error(self, "Already exists", f"Configuration '{config_name}' already exists")
+        except Exception as e:
+            show_error(self, "Error", f"Failed to create configuration: {e}")
+            self._set_status("Error creating config", fg="red")
             return
 
         try:
-            os.makedirs(config_path, exist_ok=True)
-            initialize_configuration_files(self.arguments)
             self._refresh_config_list()
             self.current_config = config_name
             for i in range(self.listbox.size()):
@@ -57,24 +60,17 @@ class ConfigCrudMixin(ConfigManagerMixinBase):
         if not dialog:
             return
 
-        config_name = dialog.strip()
-        if not config_name:
-            show_error(self, "Invalid name", "Configuration name cannot be empty")
+        try:
+            config_name = copy_configuration_directory(self.config_dir, self.current_config, dialog)
+        except ConfigurationError as e:
+            show_error(self, e.title, e.message)
             return
-
-        if config_name == self.current_config:
-            show_error(self, "Invalid name", "New name must be different from the original")
-            return
-
-        source_path = os.path.join(self.config_dir, self.current_config)
-        dest_path = os.path.join(self.config_dir, config_name)
-
-        if os.path.exists(dest_path):
-            show_error(self, "Already exists", f"Configuration '{config_name}' already exists")
+        except Exception as e:
+            show_error(self, "Error", f"Failed to copy configuration: {e}")
+            self._set_status("Error copying config", fg="red")
             return
 
         try:
-            shutil.copytree(source_path, dest_path)
             self._refresh_config_list()
             self._set_status(f"Copied configuration to '{config_name}'", fg="green", reset_delay=2000)
         except Exception as e:
@@ -90,24 +86,20 @@ class ConfigCrudMixin(ConfigManagerMixinBase):
         if not dialog:
             return
 
-        new_name = dialog.strip()
-        if not new_name:
-            show_error(self, "Invalid name", "Configuration name cannot be empty")
-            return
-
-        if new_name == self.current_config:
+        try:
+            new_name = rename_configuration(self.config_dir, self.current_config, dialog)
+        except SameNameError:
             show_message(self, "No change", "New name is the same as the current name")
             return
-
-        old_path = os.path.join(self.config_dir, self.current_config)
-        new_path = os.path.join(self.config_dir, new_name)
-
-        if os.path.exists(new_path):
-            show_error(self, "Already exists", f"Configuration '{new_name}' already exists")
+        except ConfigurationError as e:
+            show_error(self, e.title, e.message)
+            return
+        except Exception as e:
+            show_error(self, "Error", f"Failed to rename configuration: {e}")
+            self._set_status("Error renaming config", fg="red")
             return
 
         try:
-            os.rename(old_path, new_path)
             self.current_config = new_name
             self._refresh_config_list()
             self._load_config()
@@ -128,9 +120,8 @@ class ConfigCrudMixin(ConfigManagerMixinBase):
         ):
             return
 
-        config_path = os.path.join(self.config_dir, self.current_config)
         try:
-            shutil.rmtree(config_path)
+            delete_configuration_directory(self.config_dir, self.current_config)
             self.current_config = None
             self._refresh_config_list()
             self._set_status("Deleted configuration", fg="green", reset_delay=2000)

@@ -46,11 +46,11 @@ class InstructionDG : public Graph<llvm::Instruction*> {
 
   void HighlightInstructionNode(llvm::Instruction* instr);
 
-  void DumpToDot(const std::string target_path);
+  void DumpToDot(const std::string& target_path);
 
-  std::string GetInstructionLine(llvm::Instruction* i);
+  std::string GetInstructionLine(llvm::Instruction* i) const;
 
-  std::string GetInitEdgeInstructionLine(Edge<llvm::Instruction*>* e);
+  std::string GetInitEdgeInstructionLine(Edge<llvm::Instruction*>* e) const;
 
   std::string GetValueNameAndMemRegIdFromEdge(
       Edge<llvm::Instruction*>* e,

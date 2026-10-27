@@ -127,7 +127,7 @@ class Graph {
   std::list<InstructionNode<InstructionNodeT>*> GetInstructionNodes() const { return instruction_nodes_list_; }
 
   Edge<InstructionNodeT>* AddEdge(InstructionNode<InstructionNodeT>* src, InstructionNode<InstructionNodeT>* dst) {
-    for (Edge<InstructionNodeT>* ed : out_edges_[src]) {
+    for (const Edge<InstructionNodeT>* ed : out_edges_[src]) {
       if (ed->GetDst() == dst) {
         return nullptr;
       }

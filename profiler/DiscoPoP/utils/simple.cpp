@@ -99,7 +99,7 @@ void DiscoPoP::CollectDebugInfo() {
   }
 }
 
-bool DiscoPoP::IsaCallOrInvoke(Instruction* bi) {
+bool DiscoPoP::IsaCallOrInvoke(Instruction* bi) const {
   return (bi != nullptr) && ((isa<CallInst>(bi) && (!isa<DbgDeclareInst>(bi))) || isa<InvokeInst>(bi));
 }
 
@@ -139,7 +139,7 @@ LID DiscoPoP::GetLoopExitLid(BasicBlock* bb, Loop* l) {
       break;
     }
     for (BasicBlock::iterator bi = bb->begin(), ei = bb->end(); bi != ei; ++bi) {
-      LID lid = dputil::GetLid(&*bi, file_id);
+      LID const lid = dputil::GetLid(&*bi, file_id);
       if (lid > 0 && !isa<PHINode>(bi)) {
         return lid;
       }
@@ -172,7 +172,7 @@ bool dp_reduction::CheckValueUsage(llvm::Value* parent_value, llvm::Value* searc
     return false;
   }
 
-  llvm::Instruction* parent_instruction = cast<Instruction>(parent_value);
+  const llvm::Instruction* parent_instruction = cast<Instruction>(parent_value);
   for (unsigned int idx = 0; idx < parent_instruction->getNumOperands(); idx++) {
     if (CheckValueUsage(parent_instruction->getOperand(idx), searched_value)) {
       return true;

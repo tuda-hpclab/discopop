@@ -88,7 +88,7 @@ void InstructionDG::RecursiveDepFinder(std::set<Instruction*>* checked_instructi
 
 void InstructionDG::HighlightInstructionNode(Instruction* instr) { highlighted_instruction_nodes_.insert(instr); }
 
-std::string InstructionDG::GetInstructionLine(Instruction* i) {
+std::string InstructionDG::GetInstructionLine(Instruction* i) const {
   if (DebugLoc dl = i->getDebugLoc()) {
     return std::to_string(dl->getLine());
   }
@@ -104,7 +104,7 @@ bool InstructionDG::EdgeIsInit(Edge<Instruction*>* e) {
   return false;
 }
 
-std::string InstructionDG::GetInitEdgeInstructionLine(Edge<Instruction*>* e) {
+std::string InstructionDG::GetInitEdgeInstructionLine(Edge<Instruction*>* e) const {
   return GetInstructionLine(e->GetSrc()->GetItem());
 }
 
@@ -193,7 +193,7 @@ std::string InstructionDG::EdgeToInstructionBasedDpDep(
          + "(" + static_value_name_to_mem_reg_id_map[vnf_->GetVarName(i)].second + ")";
 }
 
-void InstructionDG::DumpToDot(const std::string target_path) {
+void InstructionDG::DumpToDot(const std::string& target_path) {
   // Write the graph to a DOT file
   std::ofstream dot_stream;
   dot_stream.open(target_path);

@@ -42,11 +42,11 @@ using llvm::Value;
 namespace {
 // The head of the statement a call belongs to: the trailing instructions of a CU that evaluate the operands of the
 // call. They follow the last store, call or terminator of the CU (the end of the statement before) and are not on a
-// line before the call's: the arguments of a call continued on the next lines come before the call, but have later lines.
-// Returns the position of the first one: the number of instructions if there is no head, 0 if the CU consists of
+// line before the call's: the arguments of a call continued on the next lines come before the call, but have later
+// lines. Returns the position of the first one: the number of instructions if there is no head, 0 if the CU consists of
 // nothing else.
 size_t StatementHeadStart(const std::vector<llvm::Instruction*>& instructions, llvm::Instruction* call, int file_id) {
-  LID call_lid = dputil::GetLid(call, file_id);
+  LID const call_lid = dputil::GetLid(call, file_id);
   size_t start = instructions.size();
   while (start > 0) {
     llvm::Instruction* previous = instructions[start - 1];
@@ -68,9 +68,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
   Node* current_node = root;
   CU* cu;
   LID lid;
-  std::string var_name;
   bool is_global_var = false;
-  std::string var_type;
   std::set<std::string> suspicious_variables;
   std::string basic_block_name;
 
@@ -81,7 +79,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
 
   // the data of a CU that one instruction contributes
   auto account = [&](CU* c, llvm::Instruction* i) {
-    LID l = dputil::GetLid(i, file_id);
+    LID const l = dputil::GetLid(i, file_id);
     if (l <= 0) {
       return;
     }
@@ -107,14 +105,14 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
     }
     if (isa<StoreInst>(i)) {
       // size of data written into memory by this store instruction
-      unsigned u = dl->getTypeSizeInBits(i->getOperand(1)->getType());
+      const unsigned u = dl->getTypeSizeInBits(i->getOperand(1)->getType());
       c->write_data_size += u;
       c->write_phase_line_numbers.insert(l);
     } else if (isa<LoadInst>(i)) {
       // size of data read from memory by this load instruction
-      unsigned u = dl->getTypeSizeInBits(i->getType());
+      const unsigned u = dl->getTypeSizeInBits(i->getType());
       c->read_data_size += u;
-      std::string name = DetermineVariableNameStatic(i, is_global_var, false, "");
+      const std::string name = DetermineVariableNameStatic(i, is_global_var, false, "");
       if (cautious_loads.count(i) || global_variables_set.count(name) || program_global_variables_set_.count(name)) {
         c->read_phase_line_numbers.insert(l);
       }
@@ -280,15 +278,15 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
           // allow only a single function call per CU
           // create new CU if the old one contains any instruction
           // the statement of the call is not split: a CU that holds nothing else than its head is the CU of the call
-          size_t head = StatementHeadStart(cu->instructions, &*instruction, file_id);
+          const size_t head = StatementHeadStart(cu->instructions, &*instruction, file_id);
           if (head > 0 && ((!cu->read_phase_line_numbers.empty()) || (!cu->write_phase_line_numbers.empty()) ||
                            (!cu->return_instructions.empty()))) {
             CU* previous = cu;
             cu = new_cu(cu);
             // the head (the operands) moves along with the call
             if (head < previous->instructions.size()) {
-              std::vector<llvm::Instruction*> moved(previous->instructions.begin() + head,
-                                                    previous->instructions.end());
+              const std::vector<llvm::Instruction*> moved(previous->instructions.begin() + head,
+                                                          previous->instructions.end());
               previous->instructions.resize(head);
               rebuild(previous);
               for (llvm::Instruction* i : moved) {
@@ -305,7 +303,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
 
           // get the name of the called function and check if a FileIO function
           // is called
-          std::set<std::string> io_functions{
+          const std::set<std::string> io_functions{
               "fopen",       "fopen_s",      "freopen",    "freopen_s",      "fclose",    "fflush",     "setbuf",
               "setvbuf",     "fwide",        "fread",      "fwrite",         "fgetc",     "getc",       "fgets",
               "fputc",       "putc",         "fputs",      "getchar",        "gets",      "gets_s",     "putchar",
@@ -360,7 +358,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
     // check for call instructions in current basic block
     for (BasicBlock::iterator instruction = (*bb)->begin(); instruction != (*bb)->end(); ++instruction) {
       // Note: Don't create nodes for library functions (c++/llvm).
-      LID lid = dputil::GetLid(&*instruction, file_id);
+      LID const lid = dputil::GetLid(&*instruction, file_id);
       if (lid > 0) {
         if (isa<CallInst>(instruction) || isa<InvokeInst>(instruction)) {
           Function* f = nullptr;
@@ -417,7 +415,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
               std::string type_str;
               raw_string_ostream rso(type_str);
               (it->getType())->print(rso);
-              Variable v(std::string(it->getName()), rso.str(), lid, true, true);
+              const Variable v(std::string(it->getName()), rso.str(), lid, true, true);
               n->arguments_list.push_back(v);
             }
           } else {  // get name of the indirect function which is called
@@ -433,15 +431,15 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
 
           // if (isRecursive(*f, CGWP->getCallGraph())) {
           if (IsRecursive(*f, cg)) {
-            LID lid = dputil::GetLid(&*instruction, file_id);
+            LID const lid = dputil::GetLid(&*instruction, file_id);
             n->recursive_function_call = n->name + " " + dputil::DecodeLid(lid) + ",";
           }
 
-          std::vector<CU*> bb_cus_vector = bb_id_to_cu_ids_map[bb->getName().str()];
+          const std::vector<CU*> bb_cus_vector = bb_id_to_cu_ids_map[bb->getName().str()];
           // locate the CU where this function call belongs: the one that holds the call instruction
           for (auto i : bb_cus_vector) {
             if (std::find(i->instructions.begin(), i->instructions.end(), &*instruction) != i->instructions.end()) {
-              LID lid = dputil::GetLid(&*instruction, file_id);
+              LID const lid = dputil::GetLid(&*instruction, file_id);
               i->instructions_line_numbers.insert(lid);
               i->children_nodes.push_back(n);
               i->call_line_to_function_map[lid].push_back(n);

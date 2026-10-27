@@ -43,17 +43,17 @@ llvm::Instruction* dp_reduction::GetLoadInstr(llvm::Value* load_val, llvm::Instr
         if (points_to == load_val) {
           return cur_instr;
         }
-        bool found = static_cast<bool>(
+        const bool found = static_cast<bool>(
             dp_reduction::GetLoadInstr(load_val, llvm::dyn_cast<llvm::Instruction>(points_to), reduction_operations));
         return (found) ? cur_instr : nullptr;
       }
-      bool found = static_cast<bool>(dp_reduction::GetLoadInstr(load_val, prev_use, reduction_operations));
+      const bool found = static_cast<bool>(dp_reduction::GetLoadInstr(load_val, prev_use, reduction_operations));
       return (found) ? cur_instr : nullptr;
     }
     return nullptr;
   }
 
-  char c = dp_reduction::GetCharForOpcode(cur_instr);
+  const char c = dp_reduction::GetCharForOpcode(cur_instr);
   if (c != ' ') {
     reduction_operations.push_back(c);
   }

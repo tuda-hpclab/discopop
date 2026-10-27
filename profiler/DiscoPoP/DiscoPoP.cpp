@@ -35,9 +35,9 @@ using llvm::Type;
 
 // Initializations
 void DiscoPoP::SetupDataTypes() {
-  void_type_ = const_cast<Type*>(Type::getVoidTy(*this_module_context_));
-  int32_ = const_cast<IntegerType*>(IntegerType::getInt32Ty(*this_module_context_));
-  int64_ = const_cast<IntegerType*>(IntegerType::getInt64Ty(*this_module_context_));
+  void_type_ = Type::getVoidTy(*this_module_context_);
+  int32_ = IntegerType::getInt32Ty(*this_module_context_);
+  int64_ = IntegerType::getInt64Ty(*this_module_context_);
   char_ptr_ = PointerType::getUnqual(Type::getInt8Ty(*this_module_context_));
 }
 

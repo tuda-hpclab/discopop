@@ -33,7 +33,7 @@ using llvm::Value;
 std::string DiscoPoP::DpReductionDetermineVariableName(
     Instruction* i, std::map<std::string, std::string>* true_var_names_from_metadata_map) {
   assert(i && "Instruction cannot be NULL \n");
-  int index = isa<StoreInst>(i) ? 1 : 0;
+  const int index = isa<StoreInst>(i) ? 1 : 0;
   Value* operand = i->getOperand(index);
 
   IRBuilder<> builder(i);
@@ -69,10 +69,10 @@ std::string DiscoPoP::DpReductionDetermineVariableName(
           ConstantInt* idx_ptr = cast<ConstantInt>(gep->getOperand(2));
           std::uint64_t member_idx = *(idx_ptr->getValue().getRawData());
           if (!(cast<StructType>(struct_type))->isLiteral()) {
-            std::string str_name(struct_type->getStructName().data());
-            std::map<std::string, MDNode*>::iterator it = structs_.find(str_name);
+            const std::string str_name(struct_type->getStructName().data());
+            const std::map<std::string, MDNode*>::iterator it = structs_.find(str_name);
             if (it != structs_.end()) {
-              std::string ret = FindStructMemberNameStatic(it->second, member_idx, builder);
+              const std::string ret = FindStructMemberNameStatic(it->second, member_idx, builder);
               if (ret.size() > 0) {
                 std::string ret_val = ret;
                 if (true_var_names_from_metadata_map->find(ret_val) == true_var_names_from_metadata_map->end()) {
