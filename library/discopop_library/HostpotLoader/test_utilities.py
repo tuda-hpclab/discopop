@@ -16,6 +16,8 @@ from discopop_library.HostpotLoader.utilities import get_patterns_by_hotspot_typ
 
 
 def _pattern(pattern_id: int, first: int, last: int, **attached: Any) -> Any:
+    attached.setdefault("applicable_pattern", True)
+    attached.setdefault("standalone_pattern", True)
     return SimpleNamespace(pattern_id=pattern_id, start_line=f"1:{first}", end_line=f"1:{last}", **attached)
 
 
@@ -55,3 +57,14 @@ def test_without_hotspot_information_every_pattern_is_considered() -> None:
         _result(_pattern(1, 1, 2), _pattern(2, 3, 4, hotspot_type=HotspotType.NO)), {}
     )
     assert result[HotspotType.YES] == [1, 2]
+
+
+def test_a_pattern_without_a_patch_of_its_own_is_no_candidate() -> None:
+    # the tasks of a parallel region are applied by the region's patch only
+    region = _pattern(1, 30, 31, hotspot_type=HotspotType.YES)
+    task = _pattern(2, 30, 31, hotspot_type=HotspotType.YES, applicable_pattern=False, standalone_pattern=False)
+    merged_doall = _pattern(3, 5, 15, standalone_pattern=False)
+    result = _classify(region, task, merged_doall)
+    assert result == {HotspotType.YES: [1], HotspotType.NO: [], HotspotType.MAYBE: []}
+    without_hotspots = get_patterns_by_hotspot_type(_result(region, task, merged_doall), {})
+    assert without_hotspots[HotspotType.YES] == [1]

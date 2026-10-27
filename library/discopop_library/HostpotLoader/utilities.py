@@ -13,7 +13,13 @@ from discopop_library.HostpotLoader.hostpot_loader import AVERAGE_RUNTIME, FILEI
 from discopop_library.result_classes.DetectionResult import DetectionResult
 
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
+
+
+def applicable_on_its_own(pattern: Any) -> bool:
+    """Whether the pattern can be applied by itself, i.e. whether the patch generator creates a patch for it.
+    A pattern that is not, e.g. a task of a parallel region, is applied as part of the pattern containing it."""
+    return bool(pattern.applicable_pattern and pattern.standalone_pattern)
 
 
 def get_patterns_by_hotspot_type(
@@ -42,6 +48,9 @@ def get_patterns_by_hotspot_type(
 
     for pattern_id in pattern_ids:
         pattern = detection_result.patterns.get_pattern_from_id(pattern_id)
+        if not applicable_on_its_own(pattern):
+            # no candidate: it has no patch of its own
+            continue
         start_line = int(pattern.start_line.split(":")[1])
         end_line = int(pattern.end_line.split(":")[1])
         file_id = int(pattern.start_line.split(":")[0])
