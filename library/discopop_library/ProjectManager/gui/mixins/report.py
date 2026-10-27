@@ -7,12 +7,15 @@
 # directory for details.
 
 import copy
-import os
-import threading
+import subprocess
 import tkinter as tk
 
 
+from discopop_library.ProjectManager.services.reports import ReportProblem, find_latest_report_pdf
 from discopop_library.ProjectManager.reports.full import generate_full_report
+from discopop_library.ProjectManager.gui.job_adapter import start_work
+from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
+from discopop_library.ProjectManager.services.project_state import ResultsChanged
 from discopop_library.ProjectManager.gui.mixins.mixin_base import ConfigManagerMixinBase
 from discopop_library.ProjectManager.gui.mixins.helpers import show_warning
 
@@ -27,40 +30,35 @@ class ReportMixin(ConfigManagerMixinBase):
             self.output_text.see(tk.END)
             self.output_text.config(state="disabled")
 
-        self.after(0, lambda: append_output("Generating report...\n"))  # type: ignore
+        append_output("Generating report...\n")
 
         args_copy = copy.copy(self.arguments)
         args_copy.show_report = False
 
-        def thread_func() -> None:
-            try:
-                generate_full_report(args_copy)
-                self.after(0, lambda: append_output("Report generated.\n"))  # type: ignore
-                self.after(0, lambda: self.view_report_button.config(state=tk.NORMAL))  # type: ignore
-            except Exception as e:
-                self.after(0, lambda e_msg=str(e): append_output(f"Error generating report: {e_msg}\n"))  # type: ignore
-                self.after(0, lambda: self.generate_report_button.config(state=tk.NORMAL))  # type: ignore
+        def handle(event: WorkEvent) -> None:
+            if not isinstance(event, WorkFinished):
+                return
+            if event.error is None:
+                append_output("Report generated.\n")
+                self.view_report_button.config(state=tk.NORMAL)
+            else:
+                append_output(f"Error generating report: {event.error}\n")
+                self.generate_report_button.config(state=tk.NORMAL)
 
-        threading.Thread(target=thread_func, daemon=True).start()
+        start_work(self, lambda _ctx: generate_full_report(args_copy), handle)
 
     def _view_report(self) -> None:
-        reports_dir = os.path.join(self.arguments.project_dir, "reports")
-        if not os.path.exists(reports_dir):
-            show_warning(self, "No report", "No report found. Generate one first.")
+        report_path, problem = find_latest_report_pdf(self.arguments.project_dir)
+        if report_path is None:
+            if problem == ReportProblem.NO_REPORTS_DIRECTORY:
+                show_warning(self, "No report", "No report found. Generate one first.")
+            elif problem == ReportProblem.NO_REPORT:
+                show_warning(self, "No report", "No report found.")
+            else:
+                show_warning(self, "No report", "No report PDF found.")
             return
 
-        report_dirs = sorted([d for d in os.listdir(reports_dir) if os.path.isdir(os.path.join(reports_dir, d))])
-        if not report_dirs:
-            show_warning(self, "No report", "No report found.")
-            return
-
-        latest_report_dir = os.path.join(reports_dir, report_dirs[-1])
-        report_path = os.path.join(latest_report_dir, "full_report.pdf")
-        if not os.path.exists(report_path):
-            show_warning(self, "No report", "No report PDF found.")
-            return
-
-        os.system(f"xdg-open {report_path}")
+        subprocess.Popen(["xdg-open", report_path])
 
     def _reset_execution_results(self) -> None:
         args_copy = copy.copy(self.arguments)
@@ -73,7 +71,7 @@ class ReportMixin(ConfigManagerMixinBase):
             reset_project(args_copy)
             self._set_status("Execution results reset successfully", fg="green")
             self._refresh_config_list()
-            self._update_report_display()
+            self.project_state.publish(ResultsChanged())
             self._update_pattern_detection_ui()
         except Exception as e:
             self._set_status(f"Error resetting execution results: {e}", fg="red")
@@ -89,7 +87,7 @@ class ReportMixin(ConfigManagerMixinBase):
             reset_project(args_copy)
             self._set_status("Project reset successfully", fg="green")
             self._refresh_config_list()
-            self._update_report_display()
+            self.project_state.publish(ResultsChanged())
             self._update_pattern_detection_ui()
         except Exception as e:
             self._set_status(f"Error resetting project: {e}", fg="red")

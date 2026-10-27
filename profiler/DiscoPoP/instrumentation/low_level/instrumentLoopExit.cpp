@@ -22,7 +22,7 @@ using llvm::Value;
 
 void DiscoPoP::InstrumentLoopExit(BasicBlock* bb, std::int32_t id, Loop* l) {
   // see getLoopExitLID for exit blocks without a valid LID of their own
-  LID lid = GetLoopExitLid(bb, l);
+  LID const lid = GetLoopExitLid(bb, l);
   if (lid == 0) {
     return;
   }

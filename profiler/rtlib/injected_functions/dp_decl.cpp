@@ -29,9 +29,9 @@ namespace dp {
 extern "C" {
 
 #ifdef SKIP_DUP_INSTR
-void __dp_decl(LID lid, ADDR addr, char* var, ADDR lastaddr, std::int64_t count) {
+void __dp_decl(LID lid, ADDR addr, const char* var, ADDR lastaddr, std::int64_t count) {
 #else
-void __dp_decl(LID lid, ADDR addr, char* var) {
+void __dp_decl(LID lid, ADDR addr, const char* var) {
 #endif
 
   DP_CALLBACK_SCOPE(DECL);

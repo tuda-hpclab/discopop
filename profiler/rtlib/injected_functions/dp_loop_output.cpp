@@ -46,7 +46,7 @@ void __dp_loop_output() {
   ifile.open(ProfilerOutputPath("loop_meta.txt"));
   while (std::getline(ifile, line)) {
     LoopInfoT loop_info;
-    int cnt = sscanf(line.c_str(), "%d %d %d", &loop_info.file_id, &loop_info.loop_id, &loop_info.line_nr);
+    const int cnt = sscanf(line.c_str(), "%d %d %d", &loop_info.file_id, &loop_info.loop_id, &loop_info.line_nr);
     if (cnt == 3) {
       loop_infos[loop_info.loop_id] = loop_info;
     }

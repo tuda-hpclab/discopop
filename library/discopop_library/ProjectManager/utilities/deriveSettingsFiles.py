@@ -7,8 +7,9 @@
 # directory for details.
 import os
 import json
-import copy
 import logging
+
+from discopop_library.ProjectManager.services.derived_settings import derive_settings
 
 logger = logging.getLogger("ConfigurationManager")
 
@@ -22,31 +23,10 @@ def derive_settings_files(config_dir: str, overwrite: bool = True) -> None:
     with open(shared_settings_path, "r") as f:
         settings = json.load(f)
 
-    shared_dp_settings = os.path.join(config_dir, "dp_settings.json")
-    if overwrite or not os.path.exists(shared_dp_settings):
-        dp_settings = copy.deepcopy(settings)
-        dp_settings["CC"] = "discopop_cc"
-        dp_settings["CXX"] = "discopop_cxx"
-        with open(shared_dp_settings, "w") as f:
-            json.dump(dp_settings, f, indent=2)
-        logger.debug("Created derived settings file: " + shared_dp_settings)
-
-    shared_hd_settings = os.path.join(config_dir, "hd_settings.json")
-    if overwrite or not os.path.exists(shared_hd_settings):
-        hd_settings = copy.deepcopy(settings)
-        hd_settings["CC"] = "discopop_hotspot_cc"
-        hd_settings["CXX"] = "discopop_hotspot_cxx"
-        hd_settings["CFLAGS"] += " -fopenmp" if len(hd_settings["CFLAGS"]) != 0 else "-fopenmp"
-        hd_settings["CXXFLAGS"] += " -fopenmp" if len(hd_settings["CXXFLAGS"]) != 0 else "-fopenmp"
-        with open(shared_hd_settings, "w") as f:
-            json.dump(hd_settings, f, indent=2)
-        logger.debug("Created derived settings file: " + shared_hd_settings)
-
-    shared_par_settings = os.path.join(config_dir, "par_settings.json")
-    if overwrite or not os.path.exists(shared_par_settings):
-        parallel_settings = copy.deepcopy(settings)
-        parallel_settings["CFLAGS"] += " -fopenmp" if len(parallel_settings["CFLAGS"]) != 0 else "-fopenmp"
-        parallel_settings["CXXFLAGS"] += " -fopenmp" if len(parallel_settings["CXXFLAGS"]) != 0 else "-fopenmp"
-        with open(shared_par_settings, "w") as f:
-            json.dump(parallel_settings, f, indent=2)
-        logger.debug("Created derived settings file: " + shared_par_settings)
+    derived = derive_settings(settings)
+    for mode in ("dp", "hd", "par"):
+        derived_path = os.path.join(config_dir, mode + "_settings.json")
+        if overwrite or not os.path.exists(derived_path):
+            with open(derived_path, "w") as f:
+                json.dump(derived[mode], f, indent=2)
+            logger.debug("Created derived settings file: " + derived_path)

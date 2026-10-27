@@ -28,7 +28,7 @@ using llvm::Value;
 
 void DiscoPoP::InstrumentPosixMemalign(CallBase* to_instrument) {
   // add instrumentation for calls to posix_memalign
-  LID lid = dputil::GetLid(to_instrument, file_id);
+  LID const lid = dputil::GetLid(to_instrument, file_id);
   if (lid == 0) {
     return;
   }

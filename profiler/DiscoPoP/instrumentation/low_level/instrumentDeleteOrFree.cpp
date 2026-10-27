@@ -22,7 +22,7 @@ using llvm::Value;
 
 void DiscoPoP::InstrumentDeleteOrFree(CallBase* to_instrument) {
   // add instrumentation for delete instructions or calls to free
-  LID lid = dputil::GetLid(to_instrument, file_id);
+  LID const lid = dputil::GetLid(to_instrument, file_id);
   if (lid == 0) {
     return;
   }

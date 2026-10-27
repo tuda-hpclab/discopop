@@ -19,8 +19,8 @@
 // Inserts calls to allow for dynamic analysis of the loops.
 void dp_reduction::ReductionInstrumenter::InsertFunctions() {
   // insert function calls to monitor the variable's load and store operations
-  for (auto const& instruction : instructions_) {
-    int store_line = instruction.store_inst->getDebugLoc().getLine();
+  for (const auto& instruction : instructions_) {
+    const int store_line = instruction.store_inst->getDebugLoc().getLine();
 
     // output information about the reduction variables
     reduction_file_ << " FileID : " << instruction.file_id;
@@ -35,17 +35,15 @@ void dp_reduction::ReductionInstrumenter::InsertFunctions() {
   std::string tmp(dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler"));
   tmp += "/loop_meta.txt";
   loop_metadata_file.open(tmp.data());
-  llvm::Type* loop_incr_fn_arg_type = llvm::Type::getInt32Ty(module_.getContext());
   // llvm::ArrayRef<llvm::Type *> loop_incr_fn_args();
-  std::vector<llvm::Type*> loop_incr_fn_args;
-  loop_incr_fn_args.push_back(loop_incr_fn_arg_type);
-  loop_incr_fn_args.push_back(loop_incr_fn_arg_type);
+  const std::vector<llvm::Type*> loop_incr_fn_args(2, llvm::Type::getInt32Ty(module_.getContext()));
 
   llvm::FunctionType* loop_incr_fn_type =
       llvm::FunctionType::get(llvm::Type::getVoidTy(module_.getContext()), loop_incr_fn_args, false);
-  llvm::FunctionCallee incr_loop_counter_callee = module_.getOrInsertFunction("__dp_loop_incr", loop_incr_fn_type);
+  const llvm::FunctionCallee incr_loop_counter_callee =
+      module_.getOrInsertFunction("__dp_loop_incr", loop_incr_fn_type);
 
-  for (auto const& loop_info : loops_) {
+  for (const auto& loop_info : loops_) {
     //    llvm::Value *val = llvm::ConstantInt::get(llvm::Type::getInt32Ty(module_.getContext()), loop_id);
     //    llvm::Value *val2 = llvm::ConstantInt::get(llvm::Type::getInt32Ty(module_.getContext()), 0);  // instruction
     //    id will be replaced after assigning unique instruction ids

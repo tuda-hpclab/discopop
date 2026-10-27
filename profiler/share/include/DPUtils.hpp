@@ -95,13 +95,13 @@ inline std::string DecodeLid(int64_t lid) {
   }
 
   std::stringstream ss;
-  uint32_t ulid = static_cast<uint32_t>(lid);
+  const uint32_t ulid = static_cast<uint32_t>(lid);
 
   ss << (ulid >> kLidSize) << ":" << ulid % kMaxLno;
   return ss.str();
 }
 
-inline std::vector<std::string>* Split(std::string input, char delim) {
+inline std::vector<std::string>* Split(const std::string& input, char delim) {
   std::vector<std::string>* substrings = new std::vector<std::string>();
   std::istringstream input_string_stream(input);
   std::string sub;
@@ -114,7 +114,7 @@ inline std::vector<std::string>* Split(std::string input, char delim) {
 }
 
 inline bool FileExists(const std::string& filename) {
-  std::ifstream ifile(filename.c_str());
+  const std::ifstream ifile(filename.c_str());
 
   if (ifile.fail()) {
     return false;
@@ -122,7 +122,7 @@ inline bool FileExists(const std::string& filename) {
   return true;
 }
 
-int32_t GetFileId(std::string file_mapping, std::string full_path_name);
+int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);
 
 // Encode a file id and a line number as LID, see lid_constants.hpp. Returns 0 ("no location") and warns
 // once per file id if one of them does not fit into the LID.
@@ -138,7 +138,7 @@ class VariableNameFinder {
  public:
   explicit VariableNameFinder(llvm::Module& m);
 
-  std::string GetVarName(llvm::Value const* v);
+  std::string GetVarName(const llvm::Value* v);
 };
 
 }  // namespace dputil

@@ -60,13 +60,13 @@ class PerfectShadow : public AbstractShadow {
   inline SigElement TestInWrite(std::int64_t mem_addr) override { return (*sig_write_)[mem_addr]; }
 
   inline SigElement InsertToRead(std::int64_t mem_addr, SigElement value) override {
-    SigElement old_value = TestInRead(mem_addr);
+    const SigElement old_value = TestInRead(mem_addr);
     (*sig_read_)[mem_addr] = value;
     return old_value;
   }
 
   inline SigElement InsertToWrite(std::int64_t mem_addr, SigElement value) override {
-    SigElement old_value = TestInWrite(mem_addr);
+    const SigElement old_value = TestInWrite(mem_addr);
     (*sig_write_)[mem_addr] = value;
     return old_value;
   }
@@ -207,7 +207,7 @@ class PerfectShadow2 : public AbstractShadow {
   std::vector<std::pair<std::int64_t, SigElement>> GetReadKvPairs() override {
     std::vector<std::pair<std::int64_t, SigElement>> kv_pairs;
     kv_pairs.reserve(read_cache_.size());
-    for (auto kv_pair : read_cache_) {
+    for (const auto& kv_pair : read_cache_) {
       kv_pairs.emplace_back(kv_pair.first, kv_pair.second);
     }
     return kv_pairs;
@@ -216,7 +216,7 @@ class PerfectShadow2 : public AbstractShadow {
   std::vector<std::pair<std::int64_t, SigElement>> GetWriteKvPairs() override {
     std::vector<std::pair<std::int64_t, SigElement>> kv_pairs;
     kv_pairs.reserve(write_cache_.size());
-    for (auto kv_pair : write_cache_) {
+    for (const auto& kv_pair : write_cache_) {
       kv_pairs.emplace_back(kv_pair.first, kv_pair.second);
     }
     return kv_pairs;
@@ -225,7 +225,7 @@ class PerfectShadow2 : public AbstractShadow {
   void Print() override {
     std::cout << "ADDR \t READ \t WRITE\t\t// Shadow Memory" << std::endl;
     std::cout << "-------------------------" << std::endl;
-    for (auto pair : read_cache_) {
+    for (const auto& pair : read_cache_) {
       std::cout << "| " << pair.first << "\t| " << pair.second << "\t| " << write_cache_[pair.first] << "\t|"
                 << std::endl;
     }

@@ -42,6 +42,8 @@ dependencies = [
     "packaging",
     "plotille",
     "pydot",
+    # the Qt GUI of the Project Manager (--gui-toolkit qt); QtWidgets and QtGui are all it uses
+    "PySide6-Essentials",
     "requests",
     "scipy",
     "sympy",
@@ -88,7 +90,7 @@ discopop_library = [
     "py.typed",
     "global_data/version/VERSION",
     "PatchRepair/prompts/*.md",
-    "ProjectManager/gui/assets/*.png",
+    "ProjectManager/assets/*.png",
 ]
 
 [tool.setuptools]

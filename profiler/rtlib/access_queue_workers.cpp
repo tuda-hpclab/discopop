@@ -103,7 +103,7 @@ void* ProcessFirstAccessQueue(void* arg) {
         // the chunk boundary happens to fall decides what is reported. So everything up to
         // and including the first write to an address is analyzed by the second queue, which
         // carries the state the earlier chunks left behind.
-        bool is_entry_condition_access = smem->TestInWrite(access.addr) == 0;
+        const bool is_entry_condition_access = smem->TestInWrite(access.addr) == 0;
         if (is_entry_condition_access) {
           // Once per address and LID: the second queue would derive the same dependency from
           // the second one, and a read heavy chunk repeats the same pair thousands of times.

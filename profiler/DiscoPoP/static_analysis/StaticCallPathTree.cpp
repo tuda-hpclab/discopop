@@ -16,7 +16,7 @@
 
 StaticCallPathTreeNode* StaticCallPathTreeNode::GetOrRegisterSuccessor(StaticCallPathTree* tree,
                                                                        StaticCalltreeNode* successor_node) {
-  std::lock_guard<std::mutex> lg(mtx);
+  const std::lock_guard<std::mutex> lg(mtx);
   // search for successor
   for (auto succ : successors) {
     if (succ->base_node == successor_node) {
@@ -45,7 +45,7 @@ std::string StaticCallPathTreeNode::ToDotString() {
   return result;
 }
 
-std::string StaticCallPathTreeNode::GetPathString() {
+std::string StaticCallPathTreeNode::GetPathString() const {
   if (this->base_node == nullptr) {
     return "";
   }
@@ -59,7 +59,7 @@ std::string StaticCallPathTreeNode::GetPathString() {
 }
 
 void StaticCallPathTreeNode::RegisterTransition(int32_t trigger_instruction_id, const std::uint32_t target_path_id) {
-  std::lock_guard<std::mutex> lg(mtx);
+  const std::lock_guard<std::mutex> lg(mtx);
   state_transitions[trigger_instruction_id] = target_path_id;
 }
 
@@ -77,7 +77,7 @@ StaticCallPathTree::StaticCallPathTree(std::uint32_t start_path_id) {
 
 StaticCallPathTree::~StaticCallPathTree() { delete root; }
 
-std::string StaticCallPathTree::ToDotString() {
+std::string StaticCallPathTree::ToDotString() const {
   std::string result = "";
   result += "diGraph G {\n";
   result += root->ToDotString();
@@ -97,6 +97,6 @@ std::uint32_t StaticCallPathTree::GetNextFreePathId() {
   return next_free_path_id_.fetch_add(1);
 }
 
-std::uint32_t StaticCallPathTree::GetCurrentFreePathId() { return next_free_path_id_.load(); }
+std::uint32_t StaticCallPathTree::GetCurrentFreePathId() const { return next_free_path_id_.load(); }
 
 void StaticCallPathTree::RegisterNodeInAllNodes(StaticCallPathTreeNode* node_ptr) { all_nodes.push_back(node_ptr); }
