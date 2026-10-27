@@ -24,7 +24,7 @@ void StaticCalltreeNode::Print() {
 
 const std::string& StaticCalltreeNode::GetLabel() { return label_; }
 
-bool StaticCalltreeNode::GetType() { return type_; }
+bool StaticCalltreeNode::GetType() const { return type_; }
 
 void StaticCalltreeNode::RegisterSuccessor(StaticCalltreeNode* succ, int32_t trigger_instruction_id) {
   // check if trigger is already registered
@@ -32,7 +32,7 @@ void StaticCalltreeNode::RegisterSuccessor(StaticCalltreeNode* succ, int32_t tri
     // already registered
   } else {
     // register trigger
-    std::vector<StaticCalltreeNode*> tmp;
+    const std::vector<StaticCalltreeNode*> tmp;
     successors[trigger_instruction_id] = tmp;
   }
 
@@ -51,7 +51,7 @@ StaticCalltree::StaticCalltree() { std::cout << "constructing StaticCalltree.\n"
 
 StaticCalltree::~StaticCalltree() {
   // delete CalltreeNodes
-  for (auto pair : function_map) {
+  for (const auto& pair : function_map) {
     delete pair.second;
   }
   for (auto pair : instruction_map) {
@@ -59,7 +59,7 @@ StaticCalltree::~StaticCalltree() {
   }
 }
 
-StaticCalltreeNode* StaticCalltree::GetOrInsertFunctionNode(std::string function_name) {
+StaticCalltreeNode* StaticCalltree::GetOrInsertFunctionNode(const std::string& function_name) {
   if (function_map.count(function_name) == 0) {
     //        std::cout << "first encountered function name: " << function_name << "\n";
     StaticCalltreeNode* node_ptr = new StaticCalltreeNode(node_count_++, 0, function_name, 0);
@@ -71,7 +71,7 @@ StaticCalltreeNode* StaticCalltree::GetOrInsertFunctionNode(std::string function
 }
 
 StaticCalltreeNode* StaticCalltree::GetOrInsertFunctionNode(std::string function_name,
-                                                            std::string loop_iteration_instance) {
+                                                            const std::string& loop_iteration_instance) {
   function_name = function_name + "_loopstate" + loop_iteration_instance;
 
   if (function_map.count(function_name) == 0) {
@@ -111,10 +111,10 @@ std::string StaticCalltree::ToDotString() {
   std::string result = "";
   result += "diGraph G {\n";
   // add function nodes and successors
-  for (auto pair : function_map) {
+  for (const auto& pair : function_map) {
     auto node_ptr = pair.second;
-    for (auto succ_pair : node_ptr->successors) {
-      int32_t trigger_instruction_id = succ_pair.first;
+    for (const auto& succ_pair : node_ptr->successors) {
+      const int32_t trigger_instruction_id = succ_pair.first;
       auto node_label = node_ptr->GetLabel();
       // remove . from label for .dot compatibility
       std::replace(node_label.begin(), node_label.end(), '.', '_');
@@ -133,8 +133,8 @@ std::string StaticCalltree::ToDotString() {
   // add call instruction nodes and successors
   for (auto pair : instruction_map) {
     auto node_ptr = pair.second;
-    for (auto succ_pair : node_ptr->successors) {
-      int32_t trigger_instruction_id = succ_pair.first;
+    for (const auto& succ_pair : node_ptr->successors) {
+      const int32_t trigger_instruction_id = succ_pair.first;
       auto node_label = node_ptr->GetLabel();
 
       // remove . from label for .dot compatibility

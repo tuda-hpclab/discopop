@@ -12,6 +12,8 @@ from tkinter import ttk
 from typing import Any, Dict, List, Optional, Tuple
 
 from discopop_library.ProjectManager.gui import widgets
+from discopop_library.ProjectManager.gui.mixins.helpers import grab_when_viewable
+from discopop_library.ProjectManager.services.patches import discover_patches
 from discopop_library.ProjectManager.gui.widgets import (
     heading_label,
     caption_label,
@@ -66,22 +68,12 @@ class SuggestionBrowserDialog:
     # ── patch discovery ──────────────────────────────────────────────────────
 
     def _load_patches(self) -> None:
-        patch_gen_dir = os.path.join(self.dot_dp_path, "patch_generator")
-        if not os.path.isdir(patch_gen_dir):
-            return
-        for suggestion_id in sorted(
-            os.listdir(patch_gen_dir),
-            key=lambda x: int(x) if x.isdigit() else x,
-        ):
-            sid_dir = os.path.join(patch_gen_dir, suggestion_id)
-            if not os.path.isdir(sid_dir):
-                continue
-            patch_files = sorted(f for f in os.listdir(sid_dir) if f.endswith(".patch"))
-            if patch_files:
-                self._patches[suggestion_id] = patch_files
-                for filename in patch_files:
-                    patch_path = os.path.join(sid_dir, filename)
-                    self._patch_display_names[(suggestion_id, filename)] = _get_patch_display_name(patch_path)
+        self._patches = discover_patches(self.dot_dp_path)
+        for suggestion_id, patch_files in self._patches.items():
+            sid_dir = os.path.join(self.dot_dp_path, "patch_generator", suggestion_id)
+            for filename in patch_files:
+                patch_path = os.path.join(sid_dir, filename)
+                self._patch_display_names[(suggestion_id, filename)] = _get_patch_display_name(patch_path)
 
     # ── dialog construction ──────────────────────────────────────────────────
 
@@ -117,7 +109,7 @@ class SuggestionBrowserDialog:
         self.dialog.after(10, lambda: main_paned.sash_place(0, 500, 0))  # type: ignore[misc]
 
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
+        grab_when_viewable(self.dialog)
 
     def _build_left_panel(self, parent: tk.Widget) -> None:
         heading_label(parent, f"Suggestions ({len(self._patches)})").pack(anchor=tk.W, padx=5, pady=(5, 2))

@@ -39,19 +39,19 @@ void DiscoPoP::CreateTakenBranchInstrumentation(Region* top_region,
           // prepare IRBuilder to insert instrumentation
           IRBuilder<> irb(branch_inst);
           // get BBId and CU IDS of the source
-          std::string source_bb_id = bb->getName().str();
+          const std::string source_bb_id = bb->getName().str();
           for (auto source_cu : bb_id_to_cu_ids_map[source_bb_id]) {
             // get BBIds of all targets
             for (unsigned int i = 0; i < branch_inst->getNumSuccessors(); i++) {
-              std::string successor_bb_id = branch_inst->getSuccessor(i)->getName().str();
+              const std::string successor_bb_id = branch_inst->getSuccessor(i)->getName().str();
               // get CUs of all targets
               for (auto target_cu : bb_id_to_cu_ids_map[successor_bb_id]) {
                 // add instrumentation prior to the branch instruction
                 std::vector<Value*> args;
-                std::string source_and_target = source_cu->id + ";" + target_cu->id;
+                const std::string source_and_target = source_cu->id + ";" + target_cu->id;
                 args.push_back(GetOrInsertVarNameDynamic(source_and_target, irb));
                 args.push_back(branch_inst->getCondition());
-                bool counter_active_on_cmp_value = (i == 0 ? 1 : 0);
+                const bool counter_active_on_cmp_value = (i == 0 ? 1 : 0);
                 args.push_back(ConstantInt::get(int32_, counter_active_on_cmp_value));
                 irb.CreateCall(dp_taken_branch_counter_incr_, args);
               }

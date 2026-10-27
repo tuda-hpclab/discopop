@@ -19,8 +19,8 @@ llvm::Instruction* dp_reduction::FindReductionInstr(llvm::Value* val) {
     return nullptr;
   }
   llvm::Instruction* instr = llvm::cast<llvm::Instruction>(val);
-  unsigned opcode = instr->getOpcode();
-  char c = dp_reduction::GetCharForOpcode(instr);
+  const unsigned opcode = instr->getOpcode();
+  const char c = dp_reduction::GetCharForOpcode(instr);
   if (c != ' ') {
     return instr;
   }

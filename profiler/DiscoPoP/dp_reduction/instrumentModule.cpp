@@ -33,7 +33,7 @@ void dp_reduction::ReductionInstrumenter::InstrumentModule(llvm::ModuleAnalysisM
   llvm::Module* module = &module_;
   for (llvm::Module::iterator func_it = module->begin(); func_it != module->end(); ++func_it) {
     llvm::Function* func = &(*func_it);
-    std::string fn_name = func->getName().str();
+    const std::string fn_name = func->getName().str();
     if (func->isDeclaration() || (std::strcmp(fn_name.c_str(), "NULL") == 0) ||
         fn_name.find("llvm") != std::string::npos || dp_reduction::InlinedFunction(func)) {
       continue;

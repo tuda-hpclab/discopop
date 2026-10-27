@@ -127,7 +127,7 @@ void InitializeCurrentCallpathState() {
 void RegisterCallForCallstate(int32_t instruction_id) { pending_call_instruction = instruction_id; }
 
 void EnterFunctionForCallstate(int32_t function_entry_id) {
-  int32_t call_instruction = pending_call_instruction;
+  const int32_t call_instruction = pending_call_instruction;
   pending_call_instruction = 0;
   if (!callstate_owner) {
     return;

@@ -100,7 +100,7 @@ inline llvm::Function* GetCalledFunctionThroughAliases(llvm::Instruction* i) {
 
 // the unique instruction id assigned to I (metadata "dp.md.instr.id"), or 0 if it has none
 inline int32_t GetDpInstructionId(llvm::Instruction* i) {
-  llvm::MDNode* md = i->getMetadata("dp.md.instr.id");
+  const llvm::MDNode* md = i->getMetadata("dp.md.instr.id");
   if (md == nullptr) {
     return 0;
   }
@@ -145,7 +145,7 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
   void SetupCallbacks();
 
   // Helper functions
-  bool IsaCallOrInvoke(llvm::Instruction* bi);
+  bool IsaCallOrInvoke(llvm::Instruction* bi) const;
 
   bool SanityCheck(llvm::BasicBlock* bb);
 
@@ -158,7 +158,7 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
 
   void CollectDebugInfo();
 
-  void ProcessStructTypes(std::string const& full_struct_name, llvm::MDNode* struct_node);
+  void ProcessStructTypes(const std::string& full_struct_name, llvm::MDNode* struct_node);
 
   llvm::DIGlobalVariable* FindDbgGlobalDeclare(llvm::GlobalVariable* v);
 
@@ -170,11 +170,11 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
 
   llvm::Type* PointsToStruct(llvm::PointerType* p_ty);
 
-  llvm::Value* DetermineVariableNameDynamic(llvm::Instruction* const i, std::string prefix);
+  llvm::Value* DetermineVariableNameDynamic(llvm::Instruction* i, const std::string& prefix);
 
   std::string DetermineVariableNameStatic(llvm::Instruction* i,
                                           bool& is_global_variable /*=defaultIsGlobalVariableValue*/,
-                                          bool disable_metadata_map, std::string prefix);
+                                          bool disable_metadata_map, const std::string& prefix);
 
   void GetTrueVarNamesFromMetadata(llvm::Region* top_region, Node* root,
                                    std::map<std::string, std::string>* true_var_names_from_metadata_map);

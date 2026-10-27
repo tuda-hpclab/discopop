@@ -71,10 +71,10 @@ void DiscoPoP::FillCuVariables(Region* top_region, std::set<std::string>& global
 
         var_def_line = DetermineVariableDefLine(&*instruction);
 
-        bool read_access = isa<LoadInst>(instruction);
-        bool write_access = isa<StoreInst>(instruction);
+        const bool read_access = isa<LoadInst>(instruction);
+        const bool write_access = isa<StoreInst>(instruction);
 
-        Variable v(var_name, var_type, var_def_line, read_access, write_access);
+        const Variable v(var_name, var_type, var_def_line, read_access, write_access);
 
         if (lid > (*bb_cu)->end_line) {
           bb_cu = std::next(bb_cu, 1);

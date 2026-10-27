@@ -36,7 +36,7 @@ bool DiscoPoP::IsInstrumentedFunction(Function& f) {
     return false;
   }
 
-  std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  const std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
 
   SmallVector<std::pair<unsigned, MDNode*>, 4> mds;
   f.getAllMetadata(mds);
@@ -163,7 +163,7 @@ void DiscoPoP::BuildCuGraph(Function& f, ModuleAnalysisManager& mam, FunctionCUG
     std::string type_str;
     raw_string_ostream rso(type_str);
     (it->getType())->print(rso);
-    Variable v(it->getName().str(), rso.str(), std::to_string(file_id) + ":" + lid, true, true);
+    const Variable v(it->getName().str(), rso.str(), std::to_string(file_id) + ":" + lid, true, true);
     graph.root->arguments_list.push_back(v);
   }
   /********************* End of initialize root values
@@ -178,7 +178,7 @@ void DiscoPoP::BuildCuGraph(Function& f, ModuleAnalysisManager& mam, FunctionCUG
   // RIpass = &getAnalysis<RegionInfoPass>(F);
   // RI = &(RIpass->getRegionInfo());
   // RegionInfoPass *RIpass;
-  llvm::RegionInfo& ri = fam.getResult<llvm::RegionInfoAnalysis>(f);
+  const llvm::RegionInfo& ri = fam.getResult<llvm::RegionInfoAnalysis>(f);
 
   Region* top_region = ri.getTopLevelRegion();
 

@@ -160,7 +160,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
         if (call_inst->getCalledFunction()) {
           for (uint i = 0; i < call_inst->getNumOperands() - 1; ++i) {
             v = call_inst->getArgOperand(i);
-            std::set<Value*>::iterator it = statically_predictable_values.find(v);
+            const std::set<Value*>::iterator it = statically_predictable_values.find(v);
             if (it != statically_predictable_values.end()) {
               statically_predictable_values.erase(v);
               if (kDpHybridDebug) {
@@ -248,7 +248,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
   // auto &DT = getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
   llvm::FunctionAnalysisManager& fam = mam.getResult<FunctionAnalysisManagerModuleProxy>(*f.getParent()).getManager();
   // llvm::LoopInfo &LI = fam.getResult<llvm::LoopAnalysis>(F);
-  llvm::DominatorTree& dt = fam.getResult<llvm::DominatorTreeAnalysis>(f);
+  const llvm::DominatorTree& dt = fam.getResult<llvm::DominatorTreeAnalysis>(f);
 
   InstructionCFG cfg(vnf_.get(), f);
   InstructionDG dg(vnf_.get(), &cfg, fid);
@@ -258,11 +258,11 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
   std::map<std::string, std::set<std::string>> line_to_initialized_vars_map;
   for (auto edge : dg.GetEdges()) {
     if (dg.EdgeIsInit(edge)) {
-      std::string init_line = dg.GetInitEdgeInstructionLine(edge);
-      std::string var_identifier = dg.GetValueNameAndMemRegIdFromEdge(edge, static_value_name_to_mem_reg_id_map);
+      const std::string init_line = dg.GetInitEdgeInstructionLine(edge);
+      const std::string var_identifier = dg.GetValueNameAndMemRegIdFromEdge(edge, static_value_name_to_mem_reg_id_map);
 
       if (line_to_initialized_vars_map.find(init_line) == line_to_initialized_vars_map.end()) {
-        std::set<std::string> tmp;
+        const std::set<std::string> tmp;
         line_to_initialized_vars_map[init_line] = tmp;
       }
       line_to_initialized_vars_map[init_line].insert(var_identifier);
@@ -284,7 +284,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
 
     if (src != dst && dt.dominates(dst, src) && (isa<AllocaInst>(dst) || dst->getParent() == src->getParent())) {
       if (!conditional_bb_dep_map.count(src->getParent())) {
-        std::set<std::string> tmp;
+        const std::set<std::string> tmp;
         conditional_bb_dep_map[src->getParent()] = tmp;
       }
       conditional_bb_dep_map[src->getParent()].insert(
@@ -296,7 +296,8 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
         // check if initialization exists in the instruction line
         if (line_to_initialized_vars_map.find(dg.GetInstructionLine(dst)) != line_to_initialized_vars_map.end()) {
           // check if the accessed variable is initialed here
-          std::string var_identifier = dg.GetValueNameAndMemRegIdFromEdge(edge, static_value_name_to_mem_reg_id_map);
+          const std::string var_identifier =
+              dg.GetValueNameAndMemRegIdFromEdge(edge, static_value_name_to_mem_reg_id_map);
           if (line_to_initialized_vars_map[dg.GetInstructionLine(dst)].find(var_identifier) !=
               line_to_initialized_vars_map[dg.GetInstructionLine(dst)].end()) {
             // ignore this access as the initialized variable is accessed
@@ -327,7 +328,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
   }
 
   // Add observation of execution of single basic blocks
-  for (auto pair : conditional_bb_dep_map) {
+  for (const auto& pair : conditional_bb_dep_map) {
     // Insert call to reportbb
     Instruction* insertion_point = GetHybridReportInsertionPoint(pair.first);
     CallInst::Create(report_bb_, ConstantInt::get(int32_, bb_dep_count), "", insertion_point->getIterator());
@@ -338,7 +339,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
     }
     bool first = true;
     bb_dep_string_ += std::to_string(bb_dep_count) + "=";
-    for (auto dep : pair.second) {
+    for (const auto& dep : pair.second) {
       if (!first) {
         bb_dep_string_ += ",";
       }
@@ -449,9 +450,9 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
 
   if (kDpHybridDebug) {
     errs() << "--- Conditional BB Dependences:\n";
-    for (auto pair : conditional_bb_dep_map) {
+    for (const auto& pair : conditional_bb_dep_map) {
       errs() << pair.first->getName() << ":\n";
-      for (auto s : pair.second) {
+      for (const auto& s : pair.second) {
         errs() << "\t" << s << "\n";
       }
     }
@@ -462,7 +463,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
         for (auto& pair2 : variable.second) {
           errs() << pair1.first->getName() << "-";
           errs() << pair2.first->getName() << ":\n";
-          for (auto s : pair2.second) {
+          for (const auto& s : pair2.second) {
             errs() << "\t" << s << "\n";
           }
         }
@@ -526,15 +527,15 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
 
   std::ofstream static_dependency_file = profiler_files::Open("static_dependencies.txt");
 
-  for (auto pair : conditional_bb_dep_map) {
-    for (auto s : pair.second) {
+  for (const auto& pair : conditional_bb_dep_map) {
+    for (const auto& s : pair.second) {
       static_dependency_file << s << "\n";
     }
   }
   for (auto& pair1 : conditional_bb_pair_dep_map) {
     for (auto& variable : pair1.second) {
       for (auto& pair2 : variable.second) {
-        for (auto s : pair2.second) {
+        for (const auto& s : pair2.second) {
           static_dependency_file << s << "\n";
         }
       }

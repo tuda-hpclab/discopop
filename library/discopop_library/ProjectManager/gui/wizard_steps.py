@@ -11,9 +11,11 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
-from discopop_library.ProjectManager.utilities.initializeFiles import (
-    initial_settings_content,
-    initial_script_content,
+from discopop_library.ProjectManager.services.wizard import (
+    COMPILE_PLACEHOLDER,
+    EXECUTE_PLACEHOLDER,
+    existing_compile_script,
+    initial_seq_settings,
 )
 from discopop_library.ProjectManager.gui import widgets
 from discopop_library.ProjectManager.gui.widgets import (
@@ -107,16 +109,13 @@ You can still proceed with the configuration, but keep this limitation in mind."
         self.compile_sh_text.tag_config("placeholder", foreground=widgets.PLACEHOLDER_FG)
         self._compile_sh_has_placeholder = False
 
-        compile_sh_path = os.path.join(self.arguments.project_config_dir, "compile.sh")
-        if os.path.exists(compile_sh_path):
-            with open(compile_sh_path, "r") as f:
-                existing = f.read()
-            if existing.strip() != initial_script_content.strip():
-                self.compile_sh_text.insert(1.0, existing)
-                return frame
+        existing = existing_compile_script(self.arguments.project_config_dir)
+        if existing is not None:
+            self.compile_sh_text.insert(1.0, existing)
+            return frame
 
         self.compile_sh_text.insert(1.0, "#!/bin/bash\n")
-        self.compile_sh_text.insert("2.0", "$CXX your_code.cpp -o a.out", "placeholder")
+        self.compile_sh_text.insert("2.0", COMPILE_PLACEHOLDER, "placeholder")
         self._compile_sh_has_placeholder = True
 
         self.compile_sh_text.bind("<KeyPress>", self._on_compile_sh_interact)
@@ -137,7 +136,7 @@ You can still proceed with the configuration, but keep this limitation in mind."
 
         self._compile_sh_has_placeholder = False
         line2_text = self.compile_sh_text.get("2.0", "2.end")
-        if line2_text == "$CXX your_code.cpp -o a.out":
+        if line2_text == COMPILE_PLACEHOLDER:
             self.compile_sh_text.delete("2.0", "3.0")
             self.compile_sh_text.insert("1.end", "\n")
         self.compile_sh_text.mark_set("insert", "2.0")
@@ -173,19 +172,11 @@ You can still proceed with the configuration, but keep this limitation in mind."
         self.cxxflags_entry = ttk.Entry(form_frame, width=40)
         self.cxxflags_entry.grid(row=3, column=1, sticky=tk.W, padx=10)
 
-        import json
-
-        seq_settings_path = os.path.join(self.arguments.project_config_dir, "seq_settings.json")
-        if os.path.exists(seq_settings_path):
-            with open(seq_settings_path, "r") as f:
-                settings = json.load(f)
-        else:
-            settings = initial_settings_content
-
-        self.cc_entry.insert(0, settings.get("CC", "clang"))
-        self.cxx_entry.insert(0, settings.get("CXX", "clang++"))
-        self.cflags_entry.insert(0, settings.get("CFLAGS", ""))
-        self.cxxflags_entry.insert(0, settings.get("CXXFLAGS", ""))
+        settings = initial_seq_settings(self.arguments.project_config_dir)
+        self.cc_entry.insert(0, settings["CC"])
+        self.cxx_entry.insert(0, settings["CXX"])
+        self.cflags_entry.insert(0, settings["CFLAGS"])
+        self.cxxflags_entry.insert(0, settings["CXXFLAGS"])
 
         return frame
 
@@ -278,7 +269,7 @@ You can still proceed with the configuration, but keep this limitation in mind."
         self._execute_sh_has_placeholder = False
 
         self.execute_sh_text.insert(1.0, "#!/bin/bash\n")
-        self.execute_sh_text.insert("2.0", "./a.out <args>", "placeholder")
+        self.execute_sh_text.insert("2.0", EXECUTE_PLACEHOLDER, "placeholder")
         self._execute_sh_has_placeholder = True
 
         self.execute_sh_text.bind("<KeyPress>", self._on_execute_sh_interact)
@@ -352,7 +343,7 @@ You can still proceed with the configuration, but keep this limitation in mind."
 
         self._execute_sh_has_placeholder = False
         line2_text = self.execute_sh_text.get("2.0", "2.end")
-        if line2_text == "./a.out <args>":
+        if line2_text == EXECUTE_PLACEHOLDER:
             self.execute_sh_text.delete("2.0", "3.0")
             self.execute_sh_text.insert("1.end", "\n")
         self.execute_sh_text.mark_set("insert", "2.0")
