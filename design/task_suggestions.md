@@ -314,9 +314,87 @@ Where the branches met (commit "reconcile the merged task branches"):
   dependence kind `WAW`; `pet.callpath_tree` (not stored).
 
 Open questions of the agents, still undecided: the region of a group (wrap the first call in the caller, as omp-tasks,
-instead of a parallel region per recursive function); `taskwait` or `depend` for dependences between tasks; whether
+instead of a parallel region per recursive function); whether
 a group that cannot be placed keeps a comment-only patch; `variable = ""` for join entries without a name; the
 name mapping of the join is a heuristic (no call arguments); a declaration as task line (fib: `int a = fib(n-1);`)
 cannot be patched; sparselu: fwd and bdiv are one region in omp-tasks; the data sharing of `csols` / `b` in nqueens
 (`&csols[i]` is only an address computation in the CU, the AST helper of the join branch could close it); the
 sibling race on a parent's field in health (cut call paths).
+
+### 3.8 Decision: depend and taskwait in the patches of task groups (2026-10-23)
+
+Maintainer: `depend` clauses are for the dependences between the tasks themselves; `taskwait` is for the case that a
+following statement needs the results of all tasks. In general `depend` is preferred: it allows more independent groups
+of tasks to run in parallel in the future while the dependences between the tasks stay correct.
+
+Implemented (branch `improvement/patch/depend_clauses`, `UnpackedSuggestion`): a task gets
+`depend(inout: ...) depend(out: ...) depend(in: ...)` from `in_out_dep` / `out_dep` / `in_dep` (each variable once); the
+`taskwait` before a dependent task is gone; a `#pragma omp taskwait` ends the group (before the closing brace of the
+`single` block) if the group has `after_dependences`. Test: `test/end_to_end/task_patches` (`waw`: two writes of a
+variable are ordered by `depend(out: d)`, the patched program gives the output of the serial one).
+Note: groups are pairs without a data edge, so today only WAW (and the `depend` clauses of loop tasks, none) shows
+up as `depend`; RAW and WAR between the tasks are the join, i.e. the taskwait.
+
+### 3.9 Plan: hotspot information for `task` and `parallel_region` patterns (draft, not implemented)
+
+Need (maintainer): the autotuner shall be able to use task and parallel-region suggestions.
+
+Finding: the autotuner classifies a pattern only in `HostpotLoader/utilities.get_patterns_by_hotspot_type`
+(used by `priorities`, `check_single_combination`, `greedy`/`linear`/`evolutionary`/`coordinate_descent`/
+`hotspot_guided`/`parallel_region_combination_with_refinement`, `measure_only`, `PatchRepair/candidates`, `SanityChecker`).
+It only looks at **loop** hotspots (`HotspotNodeType.LOOP`) whose start line lies in `[start_line, end_line]` of the
+pattern (file id from `start_line`). Consequences for tasks:
+- the group patterns (`ParallelRegionInfo`) of recursive functions (fib, nqueens, ...) contain no loop, so they are
+  never YES/MAYBE/NO: they fall out of every bucket and are never tried; with hotspot information present, nothing is
+  falling back to "all suggestions" either (that fallback needs empty hotspot information);
+- `start_line`/`end_line` are the CU lines of the first task, not the region, so even a group around a hotspot loop
+  can be missed. The `FUNCTION` hotspots (`Hotspots.json`) are ignored.
+- the detectors already filter by hotspots (`filter_for_hotspots`, `_hotspot_functions` in `new_task_detector`), but
+  the result is not recorded on the pattern.
+
+Plan (each step with its tests, in this order):
+1. **Decide the semantics** (maintainer): a task group is YES if one of its tasks calls a hotspot function, or the
+   region contains a hotspot loop; MAYBE / NO analogously, using the best class of any contained hotspot; the
+   average runtime of the matching entries is recorded. Open: is a recursive function's hotspot the function itself
+   (FUNCTION entry matching the callee / the enclosing function)?
+2. **Attach the information in the explorer**: a field `hotspot_type` (`YES`/`MAYBE`/`NO`/None) and
+   `hotspot_runtime` on `PatternInfo` (serialised in `patterns.json`, loaded with the old files defaulting to None);
+   set by one function `classify_pattern(pattern, hotspots, pet)` that uses the region lines
+   (`region_start_line`..`region_end_line`, `loop_start_line`/`loop_end_line` for loop groups) and the callee names of
+   the tasks. Called in `pattern_detection.py` after the task detection, for `task` and `parallel_region` only.
+3. **Use it in the library**: `get_patterns_by_hotspot_type` first uses the attached type (if set), else the old
+   loop containment rule, and in addition matches `FUNCTION` hotspots against regions. One implementation, so all
+   optimisers profit. Unit tests with stub `DetectionResult`s (group with hotspot loop, recursive group with
+   function hotspot, group without hotspot, no hotspot information).
+4. **End to end**: a case with a recursive function that is a hotspot (the `omp_tasks` cases, e.g. fib/nqueens, or a
+   small program): the explorer output carries the type, `discopop_auto_tuner` selects the group and the run does not
+   skip it (check with `measure_only` and `-A` variants that list patterns by type).
+5. **MCP / docs**: show the class in `get_parallelization_suggestions` and `explain_parallelization`; document the
+   fields in `docs/.../tasks.md` and `Explorer_output.md`.
+
+Risks: pattern ids and the patterns.json schema (step 2 is additive); the hotspot file ids must match the
+`file_id:line` of the regions (checked per entry); nested groups can both match (the optimisers already handle
+overlapping patterns through the sanity checker).
+
+### 3.6 Patch generation of reductions, unnamed dependences and last_private (2026-10-28)
+
+- Reductions: the tasks of a group that reduce a variable are wrapped in `#pragma omp taskgroup task_reduction(<op>:<vars>)`
+  (inside the `single`, for loop tasks around the whole loop), the tasks get `in_reduction(<op>:<var>)`; reduced
+  variables are in no other data sharing clause. A depend clause on the same variable is kept (redundant ordering, still
+  correct). An unknown operation (`?`) or two operations for one variable gives the "not applicable as it is" comment.
+- A dependence without a variable name (`task_dependences[].variable == ""`) is a `taskwait` before the dependent task.
+- `last_private` of a loop task: the group is "not applicable as it is" (the tasks race on the shared variable).
+
+### 3.7 Parallel region of recursive task groups (2026-10-28)
+
+- A group is recursive if the function that holds it reaches itself, in its tasks or elsewhere (`node_calls` of the CUs, `task_recursion.py`).
+  `ParallelRegionInfo.entry_call_lines` holds the calls to that function from functions it does not reach.
+- Patch: no `parallel` / `single` / braces in the function (a nested region per recursion level), the tasks and always a
+  `taskwait` after the group (or the reduction taskgroup); `parallel` + `single` directly before each entry call, in the
+  file of the call (the code generator routes every pragma to the buffer of its own file).
+- Limits: an entry call that is a declaration gives the "not applicable as it is" comment; only calls to the function of
+  the group are entries (not to another function of its cycle); without an entry call the old form remains.
+- Cutoff: the tasks of a recursive group carry no `final`/`if` clause (the condition depends on what the arguments
+  mean). The patch appends a comment (`RECURSIVE_TASK_CUTOFF_MARKER`, `/* DiscoPoP TODO: add the cutoff
+  final(<condition>) */`) to their pragmas, so it still compiles; `get_parallelization_suggestions` asks the agent
+  for the condition ("cutoff:" line of the recursion note). BOTS fib: 16.7 s without, 0.27 s with `final(n <= 25)`.

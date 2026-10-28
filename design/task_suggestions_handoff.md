@@ -77,14 +77,18 @@ Open (details in the design notes):
 - uts and every loop with recursive calls: the call paths are cut at a recursive call (3.3); future profiler work: the
   memory intrinsics, the maximum of iterations after `return`, `IsSingleExit`, `DP_DEBUG`, the unused return targets
   file (3.4).
-- Decisions of the maintainer still needed (3.7): the region of a group (wrap the first call), `taskwait` or `depend`,
-  comment-only patches, `variable = ""`.
+- Decisions of the maintainer still needed (3.7): the region of a group (wrap the first call), comment-only patches,
+  `variable = ""`.
+- Decided: `depend` for dependences between tasks, `taskwait` only when a following statement needs the results of
+  the tasks (3.8); implemented on `improvement/patch/depend_clauses` (`312d4fe1`), not yet pushed.
 - Sharing of `csols` / `b` (nqueens) and of the loop index (sparselu); sparselu fwd + bdiv as one region.
 - Enclosing loop export; decision log for tasks (`pattern_decisions.json`); unknown end line 262143; `static_callees`
   of a self-recursive function; trivial groups (a few `sprintf` calls); loops with `depend`; mutual recursion for the
   warning; the outermost loop / collapse check for plain do-all (3.6).
 - MCP server items (skipped): stale server output, `dp_common/` paths in the output, stale `get_project_status` after a
   manual run, GUI fallback default.
+- Hotspot information for `task` / `parallel_region` patterns (needed by the autotuner; plan in 3.9): today such
+  patterns are never classified YES/MAYBE/NO, because only loop hotspots contained in the CU lines are matched.
 - Performance (parked): the cost per recursive call site, floorplan.
 - Open the PR chain (interface -> task_suggestions -> instruction_ids ...) and decide where the branches go.
 
