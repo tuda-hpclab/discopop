@@ -39,6 +39,7 @@ for file in "$@"; do
     [[ "$file" = *".git" ]] && continue
     [[ "$file" = *".git/"* ]] && continue
     [[ "$file" = *"test/"* ]] && continue
+    [[ "$file" = *"/testdata/"* ]] && continue # test data next to the unit tests, e.g. JSON (no comments)
     [[ "$file" = *"docs/"* ]] && continue
     [[ "$file" = *"build/"* ]] && continue
     [[ "$file" = *"LICENSE" ]] && continue

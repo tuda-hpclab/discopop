@@ -104,6 +104,7 @@ This document contains critical information about working with this codebase. Fo
 - `pytest -m "not e2e and not profiler"` runs the unit tests only; the step "Python unit tests" of the CI job `python_tests` runs exactly this
 - `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1` (`DP_RUN_WIP_TESTS=1 venv/bin/python -m pytest test/wip_end_to_end`); CI does not run it
 - all suites are run with pytest; many tests are still written as `unittest.TestCase` classes, which pytest runs unchanged. Write new tests in pytest style
+- test data (inputs too large to write inline, e.g. excerpts of a real `patterns.json`) is data, not code: put it as JSON into a `testdata/` directory next to the tests and load it in a pytest fixture in the `conftest.py` of that directory (e.g. `mcp_server/tools/testdata`, `mcp_server/tools/conftest.py`); it is not packaged (`include-package-data = false`) and needs no license tag (`scripts/dev/check-license.sh` skips `testdata/`)
 - `verbosity_subtests = "0"` (root `pyproject.toml`) hides passing subtests even with `-v`; `-o verbosity_subtests=1` lists them
 
 ### Python unit tests (discopop_explorer)

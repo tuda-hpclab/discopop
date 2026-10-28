@@ -16,7 +16,6 @@ from typing import Any, cast
 from discopop_explorer.classes.patterns.PatternDecisions import CodeRegion, PatternDecisionLog
 from mcp_server.argument_coercion import coerce_arguments, validation_error
 from mcp_server.tools import get_parallelization_suggestions, task_groups
-from mcp_server.tools.fft_task_groups_fixture import ENTRIES
 from mcp_server.tools.helpers import ToolContext
 
 
@@ -467,19 +466,6 @@ class TestTaskGroups(unittest.TestCase):
         self.assertIn("  nested in suggestion 7", text)
         self.assertIn("doall, #pragma omp parallel for; contains task group 5", text)
 
-    def test_the_groups_of_a_real_run_of_bots_fft_are_flagged_where_they_look_implausible(self) -> None:
-        # the task entries of patterns.json from a run of BOTS fft: 26 groups, 52 tasks
-        groups = task_groups.task_groups({"task": ENTRIES})
-        self.assertEqual(len(groups), 26)
-        self.assertEqual(sum(len(g.tasks) for g in groups.values()), 52)
-        flagged = {pid: task_groups.flags(g, []) for pid, g in groups.items()}
-        self.assertEqual(flagged["2"], ["an end line is unknown"])
-        self.assertEqual(flagged["8"], ["an end line is unknown"])
-        self.assertEqual(flagged["5"], ["tasks 3 and 4 have the same lines"])
-        self.assertEqual(flagged["81"], ["the lines of tasks 79 and 80 overlap"])
-        self.assertEqual(flagged["84"], [])
-        self.assertEqual(len([pid for pid, f in flagged.items() if f]), 16)
-
     def test_dependences_are_printed_as_the_explorer_recorded_them(self) -> None:
         self.__group([_task(3, 8, 8, out_dep=["x"]), _task(4, 9, 9, in_dep=["x"], in_out_dep=["y"])], 8, 9)
         self.assertIn("dependences between the tasks: task 3: out x; task 4: in x; in/out y", self.__handle())
@@ -511,6 +497,22 @@ class TestTaskGroups(unittest.TestCase):
 
     def test_the_closing_hint_says_that_the_agent_places_the_pragmas(self) -> None:
         self.assertIn("not where to put the pragmas", self.__handle().splitlines()[-1])
+
+
+def test_the_groups_of_a_real_run_of_bots_fft_are_flagged_where_they_look_implausible(
+    fft_task_entries: list[dict[str, Any]],
+) -> None:
+    # the task entries of patterns.json from a run of BOTS fft: 26 groups, 52 tasks
+    groups = task_groups.task_groups({"task": fft_task_entries})
+    assert len(groups) == 26
+    assert sum(len(g.tasks) for g in groups.values()) == 52
+    flagged = {pid: task_groups.flags(g, []) for pid, g in groups.items()}
+    assert flagged["2"] == ["an end line is unknown"]
+    assert flagged["8"] == ["an end line is unknown"]
+    assert flagged["5"] == ["tasks 3 and 4 have the same lines"]
+    assert flagged["81"] == ["the lines of tasks 79 and 80 overlap"]
+    assert flagged["84"] == []
+    assert len([pid for pid, f in flagged.items() if f]) == 16
 
 
 if __name__ == "__main__":
