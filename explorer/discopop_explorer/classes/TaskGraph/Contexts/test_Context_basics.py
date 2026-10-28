@@ -325,14 +325,13 @@ def test_task_parent_context_registers_its_tasks_and_end() -> None:
 
 
 def test_task_end_context_records_its_task_parent() -> None:
-    """The parent is stored as task_parent. The class-level task_parent_context is a separate attribute
-    which set_task_parent leaves untouched."""
+    """set_task_parent stores the parent in task_parent_context; a new end context has none."""
     parent, end = TaskParentContext(), TaskEndContext()
+    assert end.task_parent_context is None
 
     end.set_task_parent(parent)
 
-    assert end.task_parent is parent
-    assert end.task_parent_context is None
+    assert end.task_parent_context is parent
 
 
 # --- callstacks ---------------------------------------------------------------------------

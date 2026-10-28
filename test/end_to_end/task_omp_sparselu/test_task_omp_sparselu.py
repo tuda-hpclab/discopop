@@ -25,15 +25,12 @@ FWD = ("53", "53")
 BDIV = ("57", "57")
 BMOD = ("65", "66")
 EXPLORER_REASON_GROUP_1 = (
-    "the explorer gives one region per task loop (lines 50-53 and 54-57, with the loop heads) instead of one region "
-    "with the two task statements 53 and 57"
+    "the explorer gives one region per task loop (the lines 53 and 57) instead of one region with the two task "
+    "statements, which one taskwait joins"
 )
-EXPLORER_REASON_GROUP_2 = (
-    "the explorer gives the regions 60-66 and 62-66, which include the loop heads, instead of one region with the "
-    "task block 65-66"
-)
-EXPLORER_REASON_TASKS = (
-    "the explorer reports the tasks with the loop heads (e.g. 51-53 for fwd) instead of the statement"
+EXPLORER_REASON_CLAUSES = (
+    "the data sharing differs from omp-tasks: the loop index (jj, ii) is not first_private, and BENCH, which the "
+    "tasks write through, is not shared"
 )
 
 
@@ -74,13 +71,12 @@ def test_the_blocks_written_by_fwd_and_bdiv_are_read_by_bmod_after_the_taskwait(
     assert _raw(region) == {("col", "1:66"), ("row", "1:66")}
 
 
-@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_TASKS)  # type: ignore[misc]
 @pytest.mark.parametrize("lines", [FWD, BDIV])  # type: ignore[misc]
 def test_fwd_and_bdiv_are_one_task_each(result: Any, lines: Tuple[str, str]) -> None:
     assert len(_tasks(result, lines)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_TASKS)  # type: ignore[misc]
+@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_CLAUSES)  # type: ignore[misc]
 @pytest.mark.parametrize("lines", [FWD, BDIV])  # type: ignore[misc]
 def test_the_clauses_of_fwd_and_bdiv(result: Any, lines: Tuple[str, str]) -> None:
     task = _tasks(result, lines)[0]
@@ -89,17 +85,15 @@ def test_the_clauses_of_fwd_and_bdiv(result: Any, lines: Tuple[str, str]) -> Non
     assert ("jj" if lines == FWD else "ii") in task.first_private
 
 
-@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_GROUP_2)  # type: ignore[misc]
 def test_bmod_is_one_region(result: Any) -> None:
     assert len(_regions(result, *BMOD)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_TASKS)  # type: ignore[misc]
 def test_bmod_is_one_task(result: Any) -> None:
     assert len(_tasks(result, BMOD)) == 1
 
 
-@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_TASKS)  # type: ignore[misc]
+@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON_CLAUSES)  # type: ignore[misc]
 def test_the_clauses_of_bmod(result: Any) -> None:
     task = _tasks(result, BMOD)[0]
     assert "BENCH" in task.shared

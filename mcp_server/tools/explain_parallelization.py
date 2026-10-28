@@ -115,6 +115,11 @@ def _reason_text(reason: Any, file_mapping: dict[int, Path], project_path: str) 
 
 
 def _region_text(decision: Any, file_mapping: dict[int, Path], project_path: str) -> list[str]:
+    notes = [f"- Note: {note.message}" for note in getattr(decision, "notes", [])]
+    return _region_lines(decision, file_mapping, project_path) + notes
+
+
+def _region_lines(decision: Any, file_mapping: dict[int, Path], project_path: str) -> list[str]:
     region = decision.region
     path = display_path(project_path, file_mapping.get(region.file_id))
     lines_text = (

@@ -49,17 +49,11 @@ def test_the_task_in_the_loop_is_found_once(result: Any, first: int, last: int, 
 
 
 @pytest.mark.parametrize("first,last,_join", VARIANTS)  # type: ignore[misc]
-@pytest.mark.xfail(  # type: ignore[misc]
-    strict=True, reason="the region also covers the line of the for loop that creates the tasks"
-)
 def test_the_region_covers_exactly_the_task_statement(result: Any, first: int, last: int, _join: int) -> None:
     assert (str(first), str(last)) in _lines(_regions(result))
 
 
 @pytest.mark.parametrize("first,last,join", VARIANTS)  # type: ignore[misc]
-@pytest.mark.xfail(  # type: ignore[misc]
-    strict=True, reason="the region has no after_dependences: the read of csols after the taskwait is not reported"
-)
 def test_the_sum_after_the_taskwait_reads_csols(result: Any, first: int, last: int, join: int) -> None:
     region = next(r for r in _regions(result) if r.region_end_line == str(last))
     assert {(a["variable"], a["kind"], a["line"]) for a in region.after_dependences} == {("csols", "RAW", f"1:{join}")}

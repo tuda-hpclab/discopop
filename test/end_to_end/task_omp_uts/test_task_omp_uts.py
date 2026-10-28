@@ -32,6 +32,12 @@ def dot_discopop(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return build_and_profile(SRC, tmp_path_factory.mktemp("task_omp_uts") / "src")
 
 
+EXPLORER_REASON = (
+    "the explorer finishes but reports no task pattern at all: the do-all detection rejects the loop around the "
+    "recursive call (RAW on `parent` between the iterations)"
+)
+
+
 @lru_cache(maxsize=None)
 def _explore(dot_discopop: Path) -> Any:
     return explore(dot_discopop, "task")
@@ -49,9 +55,11 @@ def _dependences(region: ParallelRegionInfo) -> List[Tuple[str, str, str]]:
     return sorted((a["variable"], a["kind"], a["line"]) for a in region.after_dependences)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="the explorer aborts on the loop around the recursive call: 'Invalid iteration structure'"
-)  # type: ignore[misc]
+def test_the_explorer_finishes(dot_discopop: Path) -> None:
+    assert _explore(dot_discopop) is not None
+
+
+@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON)  # type: ignore[misc]
 def test_the_task_in_the_loop_is_one_group_joined_by_the_taskwait(dot_discopop: Path) -> None:
     regions = _regions(_explore(dot_discopop))
     region = next(r for r in regions if r.region_start_line == TASK_LINE)
@@ -59,17 +67,13 @@ def test_the_task_in_the_loop_is_one_group_joined_by_the_taskwait(dot_discopop: 
     assert len([t for t in _tasks(_explore(dot_discopop)) if t.region_start_line == TASK_LINE]) == 1
 
 
-@pytest.mark.xfail(
-    strict=True, reason="the explorer aborts on the loop around the recursive call: 'Invalid iteration structure'"
-)  # type: ignore[misc]
+@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON)  # type: ignore[misc]
 def test_partial_counts_are_read_after_the_taskwait(dot_discopop: Path) -> None:
     region = next(r for r in _regions(_explore(dot_discopop)) if r.region_start_line == TASK_LINE)
     assert _dependences(region) == [("partialCount", "RAW", "1:" + SUM_LINE)]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="the explorer aborts on the loop around the recursive call: 'Invalid iteration structure'"
-)  # type: ignore[misc]
+@pytest.mark.xfail(strict=True, reason=EXPLORER_REASON)  # type: ignore[misc]
 def test_the_task_shares_partial_count_and_privatizes_the_loop_state(dot_discopop: Path) -> None:
     task = next(t for t in _tasks(_explore(dot_discopop)) if t.region_start_line == TASK_LINE)
     assert "partialCount" in task.shared

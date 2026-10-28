@@ -108,6 +108,18 @@ class TestExplainParallelization(unittest.TestCase):
             text,
         )
 
+    def test_a_note_of_the_explorer_is_shown_whatever_the_outcome(self) -> None:
+        from discopop_explorer.classes.patterns.PatternDecisions import RECURSION_IN_LOOP
+
+        note = DecisionReason(RECURSION_IN_LOOP, "The body of the loop calls the function the loop is in.")
+        self.log.note(DETECTOR, TYPES, CodeRegion("1:5", 1, 6, 8, "loop"), note)  # accepted
+        self.log.note(DETECTOR, TYPES, CodeRegion("1:11", 1, 10, 30, "loop"), note)  # rejected
+        self.__save()
+        for line in (7, 20):
+            with self.subTest(line=line):
+                text = self.__handle(start_line=line)
+                self.assertIn("- Note: The body of the loop calls the function the loop is in.", text)
+
     def test_a_dependency_of_the_static_analysis_that_cannot_be_privatized_says_so(self) -> None:
         reason = DecisionReason(
             UNPRIVATIZABLE_STATIC_DEPENDENCY,

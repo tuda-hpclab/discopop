@@ -59,6 +59,10 @@ CUT_EARLY_EXIT = "early_exit"
 # the loop contains an exception handler, which the analysis cut together with its dependencies
 CUT_EXCEPTION_HANDLER = "exception_handler"
 
+# a note on a candidate (CandidateDecision.notes), which does not decide its outcome: the loop calls its own function.
+# Loops with recursive calls are not fully supported yet: the profiler cuts the call paths at a recursive call.
+RECURSION_IN_LOOP = "recursion_in_loop"
+
 # the profiler's name for an access through a computed address, e.g. an array element or a field
 GEP_RESULT_PREFIX = "GEPRESULT_"
 
@@ -199,7 +203,11 @@ class CandidateDecision:
     outcome: str = PENDING
     patterns: List[Dict[str, Any]] = field(default_factory=list)  # {"type": ..., "pattern_id": ...}
     reasons: List[DecisionReason] = field(default_factory=list)
+    # remarks on the candidate which do not decide its outcome, and which are kept whatever it is (an accepted candidate
+    # has no reasons, see PatternDecisionLog.finalize)
+    notes: List[DecisionReason] = field(default_factory=list)
     _reason_keys: set[Tuple[Any, ...]] = field(default_factory=set, repr=False, compare=False)
+    _note_keys: set[Tuple[Any, ...]] = field(default_factory=set, repr=False, compare=False)
 
     def add_reason(self, reason: DecisionReason) -> None:
         key = reason.key()
@@ -208,8 +216,15 @@ class CandidateDecision:
         self._reason_keys.add(key)
         self.reasons.append(reason)
 
+    def add_note(self, note: DecisionReason) -> None:
+        key = note.key()
+        if key in self._note_keys:
+            return
+        self._note_keys.add(key)
+        self.notes.append(note)
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "detector": self.detector,
             "pattern_types": list(self.pattern_types),
             "region": self.region.to_dict(),
@@ -217,6 +232,9 @@ class CandidateDecision:
             "patterns": list(self.patterns),
             "reasons": [r.to_dict() for r in self.reasons],
         }
+        if self.notes:
+            data["notes"] = [n.to_dict() for n in self.notes]
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> CandidateDecision:
@@ -229,6 +247,8 @@ class CandidateDecision:
         )
         for reason in data.get("reasons", []):
             decision.add_reason(DecisionReason.from_dict(reason))
+        for note in data.get("notes", []):
+            decision.add_note(DecisionReason.from_dict(note))
         return decision
 
 
@@ -334,6 +354,14 @@ class PatternDecisionLog:
     ) -> CandidateDecision:
         decision = self.consider(detector, pattern_types, region)
         decision.add_reason(reason)
+        return decision
+
+    def note(
+        self, detector: str, pattern_types: Iterable[str], region: CodeRegion, note: DecisionReason
+    ) -> CandidateDecision:
+        """attaches a remark which does not decide the outcome of the candidate"""
+        decision = self.consider(detector, pattern_types, region)
+        decision.add_note(note)
         return decision
 
     def finalize(self, detector: str, patterns: Iterable[PatternBase]) -> None:

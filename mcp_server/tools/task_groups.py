@@ -24,6 +24,8 @@ logger = logging.getLogger("discopop-mcp")
 # the explorer's value for a line it does not know
 UNKNOWN_LINE = 262143
 _MAX_BODY_WIDTH = 70
+# how a dependence that is no RAW is marked
+_KIND_MARKS = {"WAR": " (anti)", "WAW": " (output)"}
 
 
 @dataclass
@@ -37,6 +39,11 @@ class Task:
     shared: list[str] = field(default_factory=list)
     private: list[str] = field(default_factory=list)
     first_private: list[str] = field(default_factory=list)
+    # "<operation>:<name>" ("?" if the explorer does not know the operation): accumulated by several tasks or
+    # reduced by the iterations of a loop of tasks; absent from shared
+    reduction: list[str] = field(default_factory=list)
+    # the value of the last iteration of a loop of tasks is needed after the loop (also listed as shared)
+    last_private: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -50,9 +57,11 @@ class TaskGroup:
     # set if the tasks are created per iteration of a loop: the line of the loop
     loop_line: Optional[int] = None
     # what the explorer found out about the data flow of the group; None if it recorded nothing (older results)
-    # {"from_task", "to_task", "variable", "kind": RAW | WAR}: the later task depends on the earlier one
+    # {"from_task", "to_task", "variable", "kind": RAW | WAR | WAW}: the later task depends on the earlier one
     task_dependences: Optional[list[dict[str, Any]]] = None
-    # {"task", "variable", "kind": RAW | WAR, "line": file id:line}: the code after the region depends on a task
+    # {"task", "variable", "kind": RAW | WAR | WAW, "line": file id:line, "at_return": bool}: the code after the region
+    # depends on a task. "at_return" (absent in older results: false) means the reader is outside of the function (its
+    # caller), "line" is null then. "variable" is a name of the function's scope, "" if there is none.
     after_dependences: Optional[list[dict[str, Any]]] = None
 
 
@@ -103,6 +112,8 @@ def task_groups(patterns: dict[str, Any]) -> dict[str, TaskGroup]:
             _names(entry.get("shared")),
             _names(entry.get("private")),
             _names(entry.get("first_private")),
+            _names(entry.get("reduction")),
+            _names(entry.get("last_private")),
         )
     groups: dict[str, TaskGroup] = {}
     for entry in entries:
@@ -190,15 +201,15 @@ def flags(group: TaskGroup, source: list[str]) -> list[str]:
 
 
 def dependences(group: TaskGroup) -> str:
-    """The dependences between the tasks: a later task needs what an earlier one wrote (RAW), or overwrites what it
-    read (WAR, marked as anti dependence)."""
+    """The dependences between the tasks: a later task needs what an earlier one wrote (RAW), overwrites what it
+    read (WAR, marked as anti dependence) or overwrites what it wrote (WAW, marked as output dependence)."""
     if group.task_dependences is None:
         return _recorded_clauses(group)
     if not group.task_dependences:
         return "none"
     return "; ".join(
-        f"task {d.get('from_task')} -> task {d.get('to_task')}: {d.get('variable')}"
-        + (" (anti)" if d.get("kind") == "WAR" else "")
+        f"task {d.get('from_task')} -> task {d.get('to_task')}: {d.get('variable') or 'a pointer target'}"
+        + _KIND_MARKS.get(str(d.get("kind")), "")
         for d in group.task_dependences
     )
 
@@ -217,21 +228,46 @@ def _recorded_clauses(group: TaskGroup) -> str:
     return "; ".join(parts) if parts else "none recorded"
 
 
+def _reader(entry: dict[str, Any]) -> str:
+    verb = "overwrites" if entry.get("kind") in ("WAR", "WAW") else "reads"
+    variable = entry.get("variable")
+    # no name: the explorer found the dependence but no name of the scope of the function for it
+    what = str(variable) if variable else "what the tasks write through a pointer"
+    return f"{verb} {what} (task {entry.get('task')})"
+
+
 def join_points(group: TaskGroup, display_file: str) -> list[str]:
-    """Where the code after the region depends on the tasks: the line, the variables and the tasks to wait for."""
+    """Where the code after the region depends on the tasks: the line, the variables and the tasks to wait for. A
+    reader outside of the function (``at_return``: a task writes through a pointer parameter or a global, the caller
+    reads it) has no line: the tasks have to be complete before the function returns."""
     if group.after_dependences is None:
         return []
     by_line: dict[str, list[str]] = {}
+    at_return: list[str] = []
     for d in sorted(group.after_dependences, key=lambda d: (_int(str(d.get("line")).split(":")[-1]) or 0, str(d))):
+        if d.get("at_return"):
+            at_return.append(_reader(d))
+            continue
         line = str(d.get("line") or "").split(":")[-1] or "?"
-        verb = "overwrites" if d.get("kind") == "WAR" else "reads"
-        by_line.setdefault(line, []).append(f"{verb} {d.get('variable')} (task {d.get('task')})")
-    if not by_line:
-        return ["  join: no later code depends on the tasks (not tracked: what recursive calls write)"]
-    return [
+        by_line.setdefault(line, []).append(_reader(d))
+    lines = [
         f"  join: the tasks have to be complete before {display_file}:{line}, which " + ", ".join(entries)
         for line, entries in by_line.items()
     ]
+    if at_return:
+        lines.append(
+            "  join: the tasks have to be complete before the function returns, because its caller "
+            + ", ".join(at_return)
+        )
+    if not lines:
+        return ["  join: no later code depends on the tasks (not tracked: what recursive calls write)"]
+    return lines
+
+
+def _reduction(entry: str) -> str:
+    """``+:sum`` as OpenMP writes it; ``?:sum`` (the operation is not known) as ``sum (operation unknown)``."""
+    operation, _, name = entry.partition(":")
+    return f"{name} (operation unknown)" if operation in ("?", "") else entry
 
 
 def data_sharing(group: TaskGroup) -> list[str]:
@@ -244,6 +280,8 @@ def data_sharing(group: TaskGroup) -> list[str]:
                 ("shared", task.shared),
                 ("firstprivate", task.first_private),
                 ("private", task.private),
+                ("reduction", [_reduction(r) for r in task.reduction]),
+                ("lastprivate", task.last_private),
             )
             if names
         ]
@@ -272,7 +310,7 @@ def _describe_loop(group: TaskGroup, display_file: str, source: list[str]) -> li
     """A task group that creates one task per iteration of a loop (the iterations are independent)."""
     lines = [
         f"  one task per iteration of the loop at {display_file}:{group.loop_line}"
-        f" (loop lines {group.start_line}-{group.end_line})"
+        f" (loop lines {group.loop_line}-{group.end_line})"
     ]
     for task in group.tasks:
         place = f"{display_file}:{task.start_line}-{task.end_line}"
@@ -287,9 +325,12 @@ def _describe_loop(group: TaskGroup, display_file: str, source: list[str]) -> li
 
 
 def covering(groups: dict[str, TaskGroup], file_id: int, start_line: int, end_line: int) -> dict[str, TaskGroup]:
-    """The groups whose parallel region shares a line with the given lines."""
+    """The groups whose parallel region shares a line with the given lines. The region of a loop group is the statement
+    of its tasks; the loop, i.e. its header, belongs to the group as well."""
     return {
         pid: g
         for pid, g in groups.items()
-        if g.file_id == file_id and g.start_line <= end_line and start_line <= g.end_line
+        if g.file_id == file_id
+        and min(g.start_line, g.loop_line or g.start_line) <= end_line
+        and start_line <= g.end_line
     }

@@ -7,9 +7,12 @@
 # directory for details.
 from __future__ import annotations
 
-from typing import Any, Callable, Tuple
+import logging
+from typing import Any, Callable, List, Tuple, cast
 
 from discopop_explorer.aliases.LineID import LineID
+from discopop_explorer.aliases.NodeID import NodeID
+from discopop_explorer.classes.PEGraph.CUNode import CUNode
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
@@ -24,6 +27,7 @@ from discopop_explorer.classes.patterns.PatternDecisions import (
     LOOP_CARRIED_DEPENDENCY,
     NO_PATTERN_NODE,
     NOT_REPORTED,
+    RECURSION_IN_LOOP,
     REJECTED,
     TOO_FEW_ITERATIONS,
     UNPRIVATIZABLE_STATIC_DEPENDENCY,
@@ -809,3 +813,70 @@ def test_without_a_decision_log_nothing_is_recorded_and_the_result_is_unchanged(
         make_node, build_pet_graph, build_task_graph, make_tg_node
     )
     assert len(identify_simple_doall_and_reduction(tg, ASTPatternDetectionHelper(), DataEdgeIndex(tg.pet))) == 1
+
+
+def _loop_with_call(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    recursive_calls: List[str],
+) -> Tuple[TaskGraph, Node]:
+    tg, loop, _loop_ctx, _work1, _work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    body = tg.pet.node_at(NodeID("1:3"))
+    assert isinstance(body, CUNode)
+    body.recursive_function_calls = recursive_calls
+    return tg, loop
+
+
+def test_a_loop_which_calls_its_own_function_is_noted_and_warned_about(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+    caplog: Any,
+) -> None:
+    # the function of the loop is "main"; the profiler lists a call as "<called function> <file>:<line>,"
+    # an empty <recursiveFunctionCall> element of Data.xml is read as None
+    tg, loop = _loop_with_call(
+        make_node, build_pet_graph, build_task_graph, make_tg_node, [cast(Any, None), "", "main 1:7,"]
+    )
+    with caplog.at_level(logging.WARNING):
+        decision = _decided(tg, loop)
+    # the note does not change the outcome
+    assert decision.outcome == ACCEPTED
+    assert [n.kind for n in decision.notes] == [RECURSION_IN_LOOP]
+    assert decision.notes[0].details == {"function": "main", "call_lines": ["1:7"]}
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1  # once for the loop, not once per copy or iteration
+    assert "lines 5-10" in warnings[0] and "not fully supported" in warnings[0]
+
+
+def test_a_loop_which_calls_another_recursive_function_is_not_noted(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+    caplog: Any,
+) -> None:
+    # a call of a recursive function from a loop outside of its recursion: the call paths of the loop are exact
+    tg, loop = _loop_with_call(make_node, build_pet_graph, build_task_graph, make_tg_node, ["fib 1:7,"])
+    with caplog.at_level(logging.WARNING):
+        decision = _decided(tg, loop)
+    assert decision.notes == []
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_a_loop_without_recursive_calls_is_not_noted(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+) -> None:
+    tg, loop = _loop_with_call(make_node, build_pet_graph, build_task_graph, make_tg_node, [])
+    assert _decided(tg, loop).notes == []

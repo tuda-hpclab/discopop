@@ -15,12 +15,12 @@ The [explorer](../../tools/Explorer.md) searches the [program execution graph](.
 |---|---|---|
 | Do-all (`doall`) | detected, default | [Do-All](doall.md) |
 | Reduction (`reduction`) | detected, default | [Reduction](reduction.md) |
-| Task (`task`) | experimental, only with `--enable-patterns task` | [Tasks](tasks.md) |
+| Task (`task`) | experimental, default | [Tasks](tasks.md) |
 | Pipeline (`pipeline`) | not run at the moment | [Pipeline](pipeline.md) |
 | Geometric decomposition (`geodec`) | not run at the moment | [Geometric decomposition](geometric_decomposition.md) |
 | Simple GPU (`simplegpu`) | not run at the moment | - |
 
-The help text of `--enable-patterns` still lists `pipeline`, `geodec` and `simplegpu`, but the explorer does not call their detectors; the value `*` enables all detectors that are run, including the experimental `task`.
+The help text of `--enable-patterns` still lists `pipeline`, `geodec` and `simplegpu`, but the explorer does not call their detectors; the value `*` enables all detectors that are run, including the experimental `task` (which is also part of the default).
 
 ## How patterns are reported
 

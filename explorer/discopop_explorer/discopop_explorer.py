@@ -44,6 +44,7 @@ from discopop_library.StatusReporting.console import banner, stage, success
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.json_serializer import PatternBaseSerializer
 from discopop_explorer.utilities.PEGraphConstruction.parser import parse_inputs
+from discopop_explorer.utilities.callpath_states import read_callpath_tree
 from discopop_explorer.pattern_detection import PatternDetectorX
 from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 
@@ -160,6 +161,9 @@ def __run(
 
     with stage("Constructing PET graph"):
         pet = PEGraphX.from_parsed_input(*parse_inputs(cu_xml, dep_file, reduction_file, file_mapping), visualizer=visualizer)  # type: ignore  # noqa: E501
+        pet.callpath_tree = read_callpath_tree(
+            os.path.join(os.path.dirname(dep_file), "stateID_to_callpath_mapping.txt")
+        )
         pet.validate()
 
     # pet.show()

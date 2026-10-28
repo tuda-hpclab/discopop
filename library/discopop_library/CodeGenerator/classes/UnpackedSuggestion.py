@@ -24,6 +24,9 @@ from discopop_library.CodeGenerator.classes.Pragma import Pragma
 from discopop_library.discopop_optimizer.classes.system.devices.DeviceTypeEnum import DeviceTypeEnum
 from discopop_library.discopop_optimizer.classes.types.Aliases import DeviceID
 
+# the line the explorer reports for a line it does not know (a decoded unset line id of the profiler)
+UNKNOWN_LINE = 262143
+
 
 class UnpackedSuggestion(object):
     type: str
@@ -206,6 +209,112 @@ class UnpackedSuggestion(object):
         pragmas.append(pragma)
         return pragmas
 
+    def __task_data_sharing_clauses(self) -> str:
+        """The data sharing clauses of a task, each variable once (shared before firstprivate before private)."""
+        seen: set[str] = set()
+        clauses = ""
+        for clause, key in (("shared", "shared"), ("firstprivate", "first_private"), ("private", "private")):
+            names: List[str] = []
+            for name in self.values.get(key) or []:
+                if str(name) not in seen:
+                    seen.add(str(name))
+                    names.append(str(name))
+            if len(names) > 0:
+                clauses += " " + clause + "(" + ",".join(names) + ")"
+        return clauses
+
+    def __get_parallel_region_of_tasks_pragmas(
+        self, contained_patterns: Optional[Dict[str, List[str]]]
+    ) -> List[Pragma]:
+        """The pragmas of a task group (PARALLELREGION entry of the pattern type "task") and of its tasks.
+
+        Form (the smallest one that is correct; omp-tasks puts the region around the first call of the recursion
+        instead, which the explorer does not know):
+
+            #pragma omp parallel
+            #pragma omp single
+            {
+            [#pragma omp taskwait]      only before a task that depends on an earlier one of the group
+            #pragma omp task <data sharing clauses>
+            <task>
+            ...
+            }                           the end of the region is the join: the tasks are complete after it
+
+        A group of tasks per loop iteration starts at the loop header and ends after the last line of the loop.
+        A group that cannot be placed (an unknown line, tasks that share lines) is left to the reader: the patch
+        only holds a comment, so that the suggestion still has a patch.
+        """
+        region_start = int(self.values["region_start_line"])
+        region_end = int(self.values["region_end_line"])
+        loop_end_unknown = False
+        if self.values.get("loop_start_line"):
+            # tasks per loop iteration: the region (which covers the task statement) starts at the loop header and ends
+            # with the loop, not with the last task in its body
+            region_start = int(str(self.values["loop_start_line"]).split(":")[1])
+            if self.values.get("loop_end_line"):
+                region_end = int(str(self.values["loop_end_line"]).split(":")[1])
+            else:
+                loop_end_unknown = True
+
+        tasks: List[Dict[str, Any]] = []
+        if contained_patterns is not None:
+            wanted = set(self.values.get("contains_patterns") or [])
+            for pattern_strs in contained_patterns.values():
+                for pattern_str in pattern_strs:
+                    pattern_dict = json.loads(pattern_str)
+                    if pattern_dict["pattern_id"] in wanted and pattern_dict.get("type") == "TASK":
+                        tasks.append(pattern_dict)
+        tasks.sort(key=lambda t: (int(t["region_start_line"]), int(t["region_end_line"])))
+
+        reason: Optional[str] = None
+        if loop_end_unknown:
+            reason = "the end of the loop is unknown"
+        elif not self.values.get("loop_start_line") and region_start <= self.start_line:
+            # the span of a task includes the header of the function (or loop) it is in: no pragma can go there
+            reason = "a task starts at the header of its scope"
+        elif UNKNOWN_LINE in [region_start, region_end] + [int(t["region_end_line"]) for t in tasks]:
+            reason = "the end of a task is unknown"
+        elif any(
+            int(later["region_start_line"]) <= int(earlier["region_end_line"])
+            for earlier, later in zip(tasks, tasks[1:])
+        ):
+            reason = "tasks share lines"
+        if reason is not None:
+            if region_start == UNKNOWN_LINE:
+                return []
+            hint = Pragma()
+            hint.file_id = self.file_id
+            hint.start_line = region_start
+            hint.end_line = region_start
+            hint.pragma_str = "// DiscoPoP: task group not applicable as it is, " + reason + ", see the suggestion"
+            return [hint]
+
+        def line_pragma(text: str, line: int, position: PragmaPosition) -> Pragma:
+            pragma = Pragma()
+            pragma.file_id = self.file_id
+            pragma.start_line = line
+            pragma.end_line = line
+            pragma.pragma_position = position
+            pragma.pragma_str = text
+            return pragma
+
+        parallel_pragma = line_pragma(self.values["pragma"][0], region_start, PragmaPosition.BEFORE_START)
+        single_pragma = line_pragma(self.values["pragma"][1], region_start, PragmaPosition.BEFORE_START)
+        parallel_pragma.children.append(single_pragma)
+        single_pragma.children.append(line_pragma("{", region_start, PragmaPosition.BEFORE_START))
+
+        # a later task that depends on an earlier one of the group waits for the tasks created so far
+        waiting_tasks = {int(d["to_task"]) for d in (self.values.get("task_dependences") or [])}
+        for task in tasks:
+            if task["pattern_id"] in waiting_tasks:
+                single_pragma.children.append(
+                    line_pragma("#pragma omp taskwait", int(task["region_start_line"]), PragmaPosition.BEFORE_START)
+                )
+            single_pragma.children += UnpackedSuggestion("task", task).get_pragmas(contained_patterns)
+
+        single_pragma.children.append(line_pragma("}", region_end, PragmaPosition.AFTER_END))
+        return [parallel_pragma]
+
     def __get_task_pragmas(self, contained_patterns: Optional[Dict[str, List[str]]]) -> List[Pragma]:
         pragmas: List[Pragma] = []
         if self.values["type"] == "TASKLOOP":
@@ -220,57 +329,10 @@ class UnpackedSuggestion(object):
             pragma.file_id = self.file_id
             pragma.start_line = int(self.values["region_start_line"])  # self.start_line
             pragma.end_line = int(self.values["region_end_line"])  # self.end_line
-            pragma.pragma_str += " ".join(self.values["pragma"])
+            pragma.pragma_str += " ".join(self.values["pragma"]) + self.__task_data_sharing_clauses()
             pragmas.append(pragma)
         elif self.values["type"] == "PARALLELREGION":
-            parallel_region_pragma = Pragma()
-            parallel_region_pragma.file_id = self.file_id
-            parallel_region_pragma.start_line = int(self.values["region_start_line"])
-            parallel_region_pragma.end_line = int(self.values["region_end_line"])
-            parallel_region_pragma.pragma_position = PragmaPosition.BEFORE_START
-            parallel_region_pragma.pragma_str = self.values["pragma"][0]
-
-            single_pragma = Pragma()
-            single_pragma.file_id = self.file_id
-            single_pragma.start_line = int(self.values["region_start_line"])
-            single_pragma.end_line = int(self.values["region_end_line"])
-            single_pragma.pragma_position = PragmaPosition.BEFORE_START
-            single_pragma.pragma_str = self.values["pragma"][1]
-
-            entry_brace = Pragma()
-            entry_brace.file_id = self.file_id
-            entry_brace.start_line = int(self.values["region_start_line"])
-            entry_brace.end_line = int(self.values["region_end_line"])
-            entry_brace.pragma_position = PragmaPosition.BEFORE_START
-            entry_brace.pragma_str = "{"
-            single_pragma.children.append(entry_brace)
-
-            # add contained pragmas as children
-            child_pragmas: List[Pragma] = []
-            if contained_patterns is not None:
-                for contained_pattern_id in self.values["contains_patterns"]:
-                    for pattern_type in contained_patterns:
-                        for pattern_str in contained_patterns[pattern_type]:
-                            pattern_dict = json.loads(pattern_str)
-                            if pattern_dict["pattern_id"] == contained_pattern_id:
-                                ups = UnpackedSuggestion(pattern_type, pattern_dict)
-                                child_pragmas += ups.get_pragmas(contained_patterns)
-
-            for cp in child_pragmas:
-                single_pragma.children.append(cp)
-
-            exit_brace = Pragma()
-            exit_brace.file_id = self.file_id
-            exit_brace.start_line = int(self.values["region_start_line"])
-            exit_brace.end_line = int(self.values["region_end_line"])
-            exit_brace.pragma_position = PragmaPosition.BEFORE_END
-            exit_brace.pragma_str = "}"
-
-            single_pragma.children.append(exit_brace)
-
-            parallel_region_pragma.children.append(single_pragma)
-
-            pragmas.append(parallel_region_pragma)
+            pragmas += self.__get_parallel_region_of_tasks_pragmas(contained_patterns)
         elif self.values["type"] == "TASKWAIT":
             pragma = Pragma()
             pragma.file_id = self.file_id

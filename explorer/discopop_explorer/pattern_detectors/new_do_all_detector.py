@@ -11,7 +11,10 @@ from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.NodeID import NodeID
+from discopop_explorer.classes.PEGraph.CUNode import CUNode
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
+from discopop_explorer.classes.PEGraph.FunctionNode import FunctionNode
+from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.classes.TaskGraph.Aliases import PETNodeID
 from discopop_explorer.classes.TaskGraph.Contexts.Context import Context
@@ -24,6 +27,7 @@ from discopop_explorer.classes.patterns.PatternDecisions import (
     CUT_EARLY_EXIT,
     CUT_EXCEPTION_HANDLER,
     LOOP_CARRIED_DEPENDENCY,
+    RECURSION_IN_LOOP,
     NO_PATTERN_NODE,
     TOO_FEW_ITERATIONS,
     UNPRIVATIZABLE_STATIC_DEPENDENCY,
@@ -38,6 +42,7 @@ from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_explorer.functions.PEGraph.queries.edges import in_edges
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
+from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
 from discopop_explorer.pattern_detectors.clause_classification import filter_classifications, merge_classifications
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
 from discopop_explorer.pattern_detectors.loop_collapse_analysis import identify_collapsible_loop_nests
@@ -222,6 +227,58 @@ def loop_node_of(pet: PEGraphX, node_id: NodeID) -> Optional[LoopNode]:
     return None
 
 
+def _enclosing_function(pet: PEGraphX, node: Node) -> Optional[FunctionNode]:
+    """the function a node lies in (following the CHILD edges upwards), or None if there is none"""
+    current: Node = node
+    visited: Set[NodeID] = set()
+    while current.id not in visited:
+        if isinstance(current, FunctionNode):
+            return current
+        visited.add(current.id)
+        parents = [parent_id for parent_id, _, _ in in_edges(pet, current.id, EdgeType.CHILD)]
+        if not parents:
+            return None
+        current = pet.node_at(parents[0])
+    return None
+
+
+def recursion_in_loop_note(pet: PEGraphX, loop_node: Optional[LoopNode]) -> Optional[DecisionReason]:
+    """a note if the body of the loop calls the function the loop is in (direct recursion), else None.
+
+    The profiler cuts the call paths at a recursive call, so every recursion level shares the states of the first one:
+    a dependence between an iteration of the loop and an iteration of the loop in a recursive call looks like a
+    dependence between iterations of one loop execution (the loop is rejected although its iterations are independent),
+    and a dependence which is carried by the loop between recursive instances may be missed."""
+    if loop_node is None:
+        return None
+    function = _enclosing_function(pet, loop_node)
+    if function is None:
+        return None
+    call_lines: List[str] = []
+    for cu in subtree_of_type(pet, loop_node, CUNode):
+        for text in cu.recursive_function_calls:
+            if not text:  # an empty element of Data.xml is read as None
+                continue
+            # "<function> <file id>:<line>," per call, the function being the called one
+            for entry in text.split(","):
+                name, _, line = entry.strip().partition(" ")
+                if name == function.name and line:
+                    call_lines.append(line)
+    if not call_lines:
+        return None
+    call_lines = sorted(set(call_lines))
+    return DecisionReason(
+        kind=RECURSION_IN_LOOP,
+        message="The body of the loop calls the function the loop is in (recursion, at "
+        + ", ".join(call_lines)
+        + "). Loops with recursive calls are not fully supported yet: the profiler cuts the call paths at a recursive "
+        "call, so a dependence between an iteration of the loop and an iteration of the loop in the recursive call "
+        "may be reported as carried by the loop (the loop is then rejected although its iterations are independent), "
+        "and a dependence carried by the loop between recursive instances may be missed.",
+        details={"function": function.name, "call_lines": call_lines},
+    )
+
+
 def _has_dynamic_records_within(tg: TaskGraph, loop_node: LoopNode) -> bool:
     lines = tg.lines_with_dynamic_records
     return any(
@@ -334,6 +391,9 @@ def identify_simple_doall_and_reduction(
     # without any loop record (an older profile, or a synthetic one) the iteration counts are unknown
     profile_has_loop_data = any(getattr(n, "loop_data", None) is not None for n in all_nodes(tg.pet, LoopNode))
 
+    # the loops checked for recursion, once each: the task graph holds several copies of a loop
+    recursion_checked: Set[NodeID] = set()
+
     for node in progress(loop_parent_nodes, desc="Checking loops for doall/reduction"):
         # check if node is LoopParent
         if not isinstance(node.created_context, LoopParentContext):
@@ -343,6 +403,22 @@ def identify_simple_doall_and_reduction(
             region = region_of_pet_node(tg.pet, node.pet_node_id)
             decision_regions[node.pet_node_id] = region
             decisions.consider(DECISION_DETECTOR, DECISION_PATTERN_TYPES, region)
+        if node.pet_node_id not in recursion_checked:
+            recursion_checked.add(node.pet_node_id)
+            recursion_note = recursion_in_loop_note(tg.pet, loop_node_of(tg.pet, node.pet_node_id))
+            if recursion_note is not None:
+                loop_region = decision_regions.get(node.pet_node_id) or region_of_pet_node(tg.pet, node.pet_node_id)
+                logger.warning(
+                    "The loop at file %d, lines %d-%d calls its own function (%s): loops with recursive calls are "
+                    "not fully supported yet. The loop may be rejected for dependences between its iterations and "
+                    "the recursive instances, and dependences carried by it may be missed.",
+                    loop_region.file_id,
+                    loop_region.start_line,
+                    loop_region.end_line,
+                    ", ".join(recursion_note.details["call_lines"]),
+                )
+                if decisions is not None:
+                    decisions.note(DECISION_DETECTOR, DECISION_PATTERN_TYPES, loop_region, recursion_note)
         # check if loop is not already preventedvariables
         if node.pet_node_id in prevented_loops:
             counts["skipped_prevented"] += 1

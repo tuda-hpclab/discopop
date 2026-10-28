@@ -9,9 +9,9 @@
 lines 31 and 32 and ``return x + y;`` on line 34."""
 
 from types import SimpleNamespace
+from typing import Any, List, Set, Tuple
 
 import pytest
-from typing import Any, List, Set, Tuple
 
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.pattern_detectors.combined_gpu_patterns.classes.Aliases import VarName
@@ -23,11 +23,12 @@ from discopop_explorer.utilities.PEGraphConstruction.parser import instructionTo
 from discopop_explorer.pattern_detectors.task_dataflow import (
     AfterDependence,
     TaskDependence,
+    _output_dependences,
     after_dependences_of_instructions,
     analyze_task_group,
     classify_variable,
     clauses_of_dependences,
-    instructions_with_callees,
+    variables_of_instructions,
 )
 
 
@@ -47,6 +48,9 @@ class _Ctx:
 
     def get_contained_contexts(self, inclusive: bool = False) -> Set[Any]:
         return set()
+
+    def get_instruction_scope(self, pet: Any, inclusive: bool = False) -> List[int]:
+        return []
 
     def get_successive_contexts(self) -> Set[Any]:
         return self.successive
@@ -153,57 +157,135 @@ def test_global_variables_and_variables_written_by_a_sibling_are_shared() -> Non
     assert flow.sharing[0].shared == ["a", "g"]
 
 
+def test_a_variable_that_several_tasks_accumulate_into_is_a_reduction_not_shared() -> None:
+    first = _Ctx([_var("sum", "3:20", "RW")])
+    second = _Ctx([_var("sum", "3:20", "RW")])
+    flow = _analyze(_pet({}), [first, second])
+    assert [(s.shared, s.reduction) for s in flow.sharing] == [([], ["?:sum"]), ([], ["?:sum"])]
+
+
+def test_the_operation_of_a_reduction_comes_from_the_reduction_entry_on_a_line_of_the_task() -> None:
+    first = _Ctx([_var("sum", "3:20", "RW")])
+    second = _Ctx([_var("sum", "3:20", "RW")])
+    pet = _pet({})
+    pet.reduction_vars = [{"name": "sum", "reduction_line": "3:32", "loop_line": "3:30", "operation": "+"}]
+    flow = _analyze(pet, [first, second])
+    # the entry lies on the line of the second task (32) only: the first one does not know the operation
+    assert flow.sharing[0].reduction == ["?:sum"]
+    assert flow.sharing[1].reduction == ["+:sum"]
+
+
+def test_a_variable_that_one_task_writes_and_another_only_reads_is_no_reduction() -> None:
+    first = _Ctx([_var("a", "3:20", "RW")])
+    second = _Ctx([_var("a", "3:20", "R")])
+    flow = _analyze(_pet({}), [first, second])
+    assert flow.sharing[0].reduction == [] and flow.sharing[0].shared == ["a"]
+    assert flow.sharing[1].reduction == [] and flow.sharing[1].first_private == []
+    assert flow.sharing[1].shared == ["a"]
+
+
+def test_a_variable_whose_write_is_known_from_a_dependence_only_is_written() -> None:
+    """The CU of ``sum += f(k)`` can list ``sum`` as read only; the RAW from the task to the code after it shows the
+    write."""
+    first, second, after = _fib_tasks()
+    first.variables = [_var("sum", "3:20", "R")]
+    _depends(after, first, "sum", DepType.RAW, 40)
+    flow = _analyze(_pet({40: "3:34"}), [first, second])
+    assert flow.sharing[0].shared == ["sum"] and flow.sharing[0].first_private == []
+
+
+def test_a_waw_dependence_makes_both_tasks_outs() -> None:
+    dependences = [TaskDependence(0, 1, "d", "WAW")]
+    assert clauses_of_dependences(dependences, 0) == ([], ["d"], [])
+    assert clauses_of_dependences(dependences, 1) == ([], ["d"], [])
+
+
+def test_output_dependences_between_tasks_are_read_from_the_instructions_of_the_tasks(
+    make_node: Any, build_pet_graph: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``d = f(k);`` (store 5) in the first task, ``d = f(n);`` (store 6) in the second: a WAW from 5 to 6, which is
+    not registered on contexts. A WAW inside a task and one to the code after the tasks are no dependences between
+    the tasks."""
+    first_cu = make_node("3:10", instruction_ids=[5, 7])
+    second_cu = make_node("3:11", instruction_ids=[6])
+    edges = []
+    for source, sink, variable in ((5, 6, "d"), (5, 7, "e")):
+        dependence = Dependency(EdgeType.DATA)
+        dependence.dtype, dependence.var_name = DepType.WAW, variable
+        dependence.source_instruction_id, dependence.sink_instruction_id = source, sink
+        edges.append((second_cu.id if sink == 6 else first_cu.id, first_cu.id, dependence))
+    pet = build_pet_graph([first_cu, second_cu], edges)
+    for instruction, cu in ((5, first_cu), (7, first_cu), (6, second_cu)):
+        monkeypatch.setitem(instructionToCUIdMap, instruction, cu.id)
+    assert _output_dependences(pet, [{5, 7}, {6}]) == [TaskDependence(0, 1, "d", "WAW")]
+
+
 def test_classify_variable() -> None:
     assert classify_variable(True, False, False, False, False, False) == "first_private"
     assert classify_variable(True, False, False, True, False, False) == "shared"
     assert classify_variable(True, True, False, False, False, False) == "shared"
     assert classify_variable(True, False, True, False, False, False) == "private"
     assert classify_variable(False, False, False, False, False, False) is None
+    assert classify_variable(True, True, False, False, True, False, True) == "reduction"
+    assert classify_variable(True, True, True, False, True, False, True) == "private"
 
 
-def test_what_a_callee_writes_through_a_pointer_is_read_after_the_task(
-    monkeypatch: pytest.MonkeyPatch, make_node: Any, build_pet_graph: Any
-) -> None:
-    """``put(&a, k);`` on line 15 (instruction 5), ``*out = f(n)`` in the callee (store 20), ``return a`` on line 17."""
-    caller = make_node("3:10", node_calls=[{"cuid": "3:99", "atLine": "3:15", "callInstId": "5"}], instruction_ids=[5])
-    # the code after the task reads a itself (line 17) and calls a function that reads b (line 20)
-    reader = make_node(
-        "3:11", node_calls=[{"cuid": "3:98", "atLine": "3:20", "callInstId": "11"}], instruction_ids=[9, 11]
+def _recursive_function(
+    monkeypatch: pytest.MonkeyPatch, make_node: Any, build_pet_graph: Any, passed: List[str]
+) -> Tuple[Any, Any]:
+    """``void f(int *out, int *in)`` (header line 1) with the task ``f(&x, ...)`` on line 15 (instruction 5, its CU
+    accesses the variables ``passed``), a store through ``out`` on line 3 (instruction 20, the base case), a header
+    store (instruction 2) and the code after the task: line 17 reads ``x`` and ``out``, line 18 reads ``in``."""
+    function = make_node(
+        "3:1",
+        NodeType.FUNC,
+        end_line=30,
+        args=[Variable("ptr", VarName("out"), "1", "RW"), Variable("ptr", VarName("in"), "1", "RW")],
     )
-    function = make_node("3:1", NodeType.FUNC, end_line=30)
-    put = make_node("3:99", NodeType.FUNC)
-    put_body = make_node("3:50", instruction_ids=[20, 21])
-    show = make_node("3:98", NodeType.FUNC)
-    show_body = make_node("3:60", instruction_ids=[30])
-    reads = []
-    for variable, sink in (("a", 9), ("b", 30)):
+    header = make_node("3:10", instruction_ids=[2], start_line=1)
+    base = make_node("3:11", instruction_ids=[20], start_line=3)
+    call = make_node(
+        "3:12",
+        node_calls=[{"cuid": "3:1", "atLine": "3:15", "callInstId": "5"}],
+        instruction_ids=[5],
+        local_vars=[Variable("ptr", VarName(name), "3:2", "R") for name in passed],
+        global_vars=[],
+    )
+    reader = make_node("3:13", instruction_ids=[9, 10], start_line=17)
+    edges: List[Any] = [(function.id, cu.id, EdgeType.CHILD) for cu in (header, base, call, reader)]
+    for source, sink, variable in ((20, 9, "x"), (20, 9, "out"), (20, 10, "in"), (2, 9, "h")):
         dependence = Dependency(EdgeType.DATA)
         dependence.dtype, dependence.var_name = DepType.RAW, variable
-        dependence.source_instruction_id, dependence.sink_instruction_id = 20, sink
-        reads.append((reader.id if sink == 9 else show_body.id, put_body.id, dependence))
-    pet = build_pet_graph(
-        [caller, reader, function, put, put_body, show, show_body],
-        [
-            (function.id, caller.id, EdgeType.CHILD),
-            (function.id, reader.id, EdgeType.CHILD),
-            (put.id, put_body.id, EdgeType.CHILD),
-            (show.id, show_body.id, EdgeType.CHILD),
-        ]
-        + reads,
-    )
-    pet.instruction_lines = {"5": "3:15", "20": "3:10", "9": "3:17", "11": "3:20", "30": "3:40"}
-    for instruction, cu in ((5, caller), (20, put_body), (9, reader), (11, reader), (30, show_body)):
+        dependence.source_instruction_id, dependence.sink_instruction_id = source, sink
+        edges.append((reader.id, header.id if source == 2 else base.id, dependence))
+    pet = build_pet_graph([function, header, base, call, reader], edges)
+    pet.instruction_lines = {"2": "3:1", "20": "3:3", "5": "3:15", "9": "3:17", "10": "3:18"}
+    for instruction, cu in ((2, header), (20, base), (5, call), (9, reader), (10, reader)):
         monkeypatch.setitem(instructionToCUIdMap, instruction, cu.id)
-    assert instructions_with_callees(pet, [5]) == {5, 20, 21}
-    found = after_dependences_of_instructions(pet, [5], 3, 15, function)
-    assert [(a.variable, a.kind, a.line) for a in found] == [("a", "RAW", "3:17"), ("b", "RAW", "3:20")]
-    assert after_dependences_of_instructions(pet, [5], 3, 17, function)[0].line == "3:20"  # only what follows
+    return pet, function
 
-    # a task that calls its own function reaches the code around it: no result
-    recursive = make_node(
-        "3:12", node_calls=[{"cuid": "3:1", "atLine": "3:16", "callInstId": "6"}], instruction_ids=[6]
-    )
-    pet.g.add_node(recursive.id, data=recursive)
-    pet.g.add_edge(function.id, recursive.id, data=Dependency(EdgeType.CHILD))
-    monkeypatch.setitem(instructionToCUIdMap, 6, recursive.id)
-    assert after_dependences_of_instructions(pet, [6], 3, 16, function) == []
+
+def test_the_join_of_a_recursive_task_is_found_without_the_states_of_the_recursion_levels(
+    monkeypatch: pytest.MonkeyPatch, make_node: Any, build_pet_graph: Any
+) -> None:
+    """The base case of the recursion (instruction 20) writes through ``out``, which the caller passed as ``&x``: the
+    read of ``x`` on line 17 is a join. The header store of the parameters (instruction 2) never reaches the caller,
+    and a parameter that the task does not pass on (``in``) is only read in the frame of its own level."""
+    pet, function = _recursive_function(monkeypatch, make_node, build_pet_graph, passed=["out"])
+    found = after_dependences_of_instructions(pet, [5], 3, 15, function)
+    assert [(a.variable, a.kind, a.line) for a in found] == [("out", "RAW", "3:17"), ("x", "RAW", "3:17")]
+
+
+def test_a_parameter_the_recursive_task_does_not_pass_on_is_no_join(
+    monkeypatch: pytest.MonkeyPatch, make_node: Any, build_pet_graph: Any
+) -> None:
+    pet, function = _recursive_function(monkeypatch, make_node, build_pet_graph, passed=[])
+    found = after_dependences_of_instructions(pet, [5], 3, 15, function)
+    assert [(a.variable, a.kind, a.line) for a in found] == [("x", "RAW", "3:17")]
+
+
+def test_variables_of_instructions(monkeypatch: pytest.MonkeyPatch, make_node: Any, build_pet_graph: Any) -> None:
+    pet, _ = _recursive_function(monkeypatch, make_node, build_pet_graph, passed=["out", "k"])
+    assert variables_of_instructions(pet, [5]) == {"out", "k"}
+    assert variables_of_instructions(pet, [2]) == set()
+    assert variables_of_instructions(pet, [999]) == set()

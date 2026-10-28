@@ -73,11 +73,15 @@ CU nodes follow a read-after-write pattern. They contain:
 | `readDataSize`, `writeDataSize` | bytes read and written in the CU, computed from the LLVM-IR load and store instructions |
 | `performsFileIO` | `1` if the CU performs file I/O, else `0` |
 | `instructionsCount` | number of LLVM-IR instructions |
+| `instructionIDs` | ids of the instructions of the CU (attribute `count`: number of instructions); the ids are those of `instructionID_to_lineID_mapping.txt` and the dependencies |
+| `jumpInstructionIDs` | the subset of these instructions that are jumps (the terminators of a basic block, e.g. `br`, `switch`, `ret`, `unreachable`; except `invoke` and `callbr`), attribute `count` as above. A jump carries the line of a closing brace or of the jump over an `else`, no statement; the explorer does not count a line that holds only jumps as part of a task |
 | `instructionLines`, `readPhaseLines`, `writePhaseLines`, `returnInstructions` | source lines of all instructions, loads, stores and return instructions (attribute `count`: number of lines) |
 | `successors` | `<CU>id</CU>` for each CU that can execute after this one |
 | `localVariables` | variables that live within the CU: `<local type defLine accessMode>name</local>` |
 | `globalVariables` | variables that break the read-after-write rule and thus start a new CU: `<global type defLine accessMode>name</global>` |
 | `callsNode` | functions called by the CU: `<nodeCalled atLine callInstId>function node id</nodeCalled>`, each followed by a `<recursiveFunctionCall>` element that records whether the call is recursive |
+
+The explorer needs `instructionIDs` (it stops with an error for a CU without them). `Data.xml` files written by an older profiler lack both elements and are not supported: reinstall the profiler (`pip install ./profiler`, not editable), remove `.discopop` and instrument and profile the program again. Without `jumpInstructionIDs` the explorer would not fail but also could not tell jump-only lines, which makes the lines of tasks less exact.
 
 `accessMode` is `R`, `W` or `RW`; `defLine` is the line the variable is defined in, or `LineNotFound`.
 
@@ -90,6 +94,8 @@ CU nodes follow a read-after-write pattern. They contain:
     <performsFileIO>0</performsFileIO>
     <instructionsCount>2</instructionsCount>
     <instructionLines count="2">1:16,1:17</instructionLines>
+    <instructionIDs count="2">25,26</instructionIDs>
+    <jumpInstructionIDs count="0"></jumpInstructionIDs>
     <readPhaseLines count="0"></readPhaseLines>
     <writePhaseLines count="2">1:16,1:17</writePhaseLines>
     <returnInstructions count="0"></returnInstructions>

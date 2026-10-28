@@ -55,6 +55,12 @@ class TaskParallelismInfo(PatternInfo):
         self.first_private = first_private
         self.private = private
         self.shared = shared
+        # "<operation>:<name>" (operation "?" if unknown): variables that several tasks accumulate into or that the
+        # iterations of a loop of tasks reduce; they are not listed in shared. Set after the construction, so
+        # that the patterns.json of older runs, which has no such entries, stays loadable.
+        self.reduction: List[str] = []
+        # the variables whose value after the last iteration of a loop of tasks is needed after the loop
+        self.last_private: List[str] = []
         self.in_dep: List[str] = []
         self.out_dep: List[str] = []
         self.in_out_dep: List[str] = []
@@ -78,6 +84,8 @@ class TaskParallelismInfo(PatternInfo):
             f'first_private: {" ".join(self.first_private)}\n'
             f'private: {" ".join(self.private)}\n'
             f'shared: {" ".join(self.shared)}\n'
+            f'reduction: {" ".join(self.reduction)}\n'
+            f'last_private: {" ".join(self.last_private)}\n'
             f'in_dep: {" ".join(self.in_dep)}\n'
             f'out_dep: {" ".join(self.out_dep)}\n'
             f'in_out_dep: {" ".join(self.in_out_dep)}\n'
@@ -112,9 +120,14 @@ class ParallelRegionInfo(PatternInfo):
         )
         # set if the tasks are created per iteration of a loop: the line of the loop (file id:line)
         self.loop_start_line: Optional[str] = None
-        # a later task depends on an earlier one: {"from_task", "to_task" (pattern ids), "variable", "kind": RAW | WAR}
+        # set if the tasks are created per iteration of a loop: the last line of the loop (file id:line), where the
+        # parallel region has to end; the tasks themselves end before it (the closing brace of the body)
+        self.loop_end_line: Optional[str] = None
+        # a later task depends on an earlier one: {"from_task", "to_task" (pattern ids), "variable",
+        # "kind": RAW | WAR | WAW}
         self.task_dependences: List[Dict[str, Any]] = []
-        # the code after the region depends on a task: {"task" (pattern id), "variable", "kind": RAW | WAR, "line"}
+        # the code after the region depends on a task: {"task" (pattern id), "variable", "kind": RAW | WAR | WAW,
+        # "line"}
         self.after_dependences: List[Dict[str, Any]] = []
 
     def __str__(self) -> str:

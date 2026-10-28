@@ -313,6 +313,61 @@ class TestTaskGroups(unittest.TestCase):
         self.assertIn("  data sharing of task 3: shared x; firstprivate n\n", text)
         self.assertIn("  data sharing of task 4: shared y; firstprivate n\n", text)
 
+    def test_a_reader_in_the_caller_makes_the_join_before_the_function_returns(self) -> None:
+        self.__group(
+            [_task(3, 8, 8, first_private=["r1", "k"]), _task(4, 9, 9, first_private=["r2", "n"])],
+            8,
+            9,
+            data_flow={
+                "task_dependences": [],
+                "after_dependences": [
+                    {"task": 3, "variable": "r1", "kind": "RAW", "line": None, "at_return": True},
+                    {"task": 4, "variable": "r2", "kind": "RAW", "line": None, "at_return": True},
+                    {"task": 4, "variable": "y", "kind": "RAW", "line": "3:11", "at_return": False},
+                ],
+            },
+        )
+        text = self.__handle()
+        self.assertIn(
+            "  join: the tasks have to be complete before the function returns, because its caller "
+            "reads r1 (task 3), reads r2 (task 4)\n",
+            text,
+        )
+        # a reader in the function keeps its line
+        self.assertIn("  join: the tasks have to be complete before fib.c:11, which reads y (task 4)\n", text)
+        self.assertNotIn("no later code depends", text)
+
+    def test_a_reader_in_the_caller_without_a_name_is_still_a_join_before_the_return(self) -> None:
+        self.__group(
+            [_task(3, 8, 8), _task(4, 9, 9)],
+            8,
+            9,
+            data_flow={
+                "task_dependences": [],
+                "after_dependences": [{"task": 3, "variable": "", "kind": "RAW", "line": None, "at_return": True}],
+            },
+        )
+        text = self.__handle()
+        self.assertIn(
+            "  join: the tasks have to be complete before the function returns, because its caller "
+            "reads what the tasks write through a pointer (task 3)\n",
+            text,
+        )
+
+    def test_a_task_per_iteration_names_a_join_before_the_function_returns(self) -> None:
+        self.__group(
+            [_task(3, 8, 8)],
+            7,
+            9,
+            loop_start_line="3:7",
+            data_flow={
+                "after_dependences": [{"task": 3, "variable": "out", "kind": "RAW", "line": None, "at_return": True}]
+            },
+        )
+        text = self.__handle()
+        self.assertIn("because its caller reads out (task 3)", text)
+        self.assertNotIn("wait for the tasks after the loop", text)
+
     def test_a_dependence_between_tasks_names_the_variable_and_marks_an_anti_dependence(self) -> None:
         self.__group(
             [_task(3, 8, 8), _task(4, 9, 9)],
@@ -329,6 +384,33 @@ class TestTaskGroups(unittest.TestCase):
         text = self.__handle()
         self.assertIn("  dependences between the tasks: task 3 -> task 4: a; task 3 -> task 4: b (anti)\n", text)
         self.assertIn("  join: no later code depends on the tasks", text)
+
+    def test_an_output_dependence_between_tasks_is_marked_and_the_join_says_overwrites(self) -> None:
+        self.__group(
+            [_task(3, 8, 8), _task(4, 9, 9)],
+            8,
+            9,
+            data_flow={
+                "task_dependences": [{"from_task": 3, "to_task": 4, "variable": "d", "kind": "WAW"}],
+                "after_dependences": [{"task": 4, "variable": "d", "kind": "WAW", "line": "3:11"}],
+            },
+        )
+        text = self.__handle()
+        self.assertIn("  dependences between the tasks: task 3 -> task 4: d (output)\n", text)
+        self.assertIn("which overwrites d (task 4)\n", text)
+
+    def test_reductions_and_last_private_variables_are_named_in_the_data_sharing(self) -> None:
+        self.__group(
+            [
+                _task(3, 8, 8, shared=["x"], reduction=["+:sum"], last_private=["x"]),
+                _task(4, 9, 9, reduction=["?:acc"]),
+            ],
+            8,
+            9,
+        )
+        text = self.__handle()
+        self.assertIn("  data sharing of task 3: shared x; reduction +:sum; lastprivate x\n", text)
+        self.assertIn("  data sharing of task 4: reduction acc (operation unknown)\n", text)
 
     def test_a_task_per_iteration_names_the_loop_and_the_join_after_it(self) -> None:
         self.__group([_task(3, 8, 8)], 7, 9, loop_start_line="3:7")

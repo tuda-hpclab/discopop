@@ -114,6 +114,9 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
     # lines (file id:line) whose instructions all jump (the closing brace of a loop, the jump over an else): they hold
     # no statement. Empty if the profiler listed no jumps.
     jump_only_lines: Set[str]
+    # the callpath states of the profiler (state id -> (parent state id, label)), see utilities/callpath_states.py;
+    # empty if the profile has none. Dependences carry state ids of their ends.
+    callpath_tree: Dict[str, Tuple[str, str]]
 
     def __init__(
         self,
@@ -131,6 +134,7 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
         self.pos = pos
         self.instruction_lines = dict()
         self.jump_only_lines = set()
+        self.callpath_tree = dict()
 
     def get_line_ids_of_instructions(self, instruction_ids: Iterable[int]) -> List[LineID]:
         """The lines of the instructions, each once, in the order of the instructions. Instructions without a

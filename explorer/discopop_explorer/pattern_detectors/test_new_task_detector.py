@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Set, Tuple
 
 import pytest
 
+from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.patterns.TaskParallelismInfo import ParallelRegionInfo, TaskParallelismInfo
@@ -27,7 +28,8 @@ from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_explorer.enums.NodeType import NodeType
 from discopop_explorer.pattern_detectors.new_task_detector import identify_loop_tasking, identify_simple_tasking
-from discopop_explorer.pattern_detectors.task_dataflow import after_dependences_of_instructions
+from discopop_explorer.pattern_detectors import new_task_detector
+from discopop_explorer.pattern_detectors.task_dataflow import AfterDependence, after_dependences_of_instructions
 from discopop_explorer.utilities.PEGraphConstruction.parser import instructionToCUIdMap
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
@@ -83,6 +85,7 @@ def _detect(
     instruction_lines: Dict[int, str] | None = None,
     task_cus: List[List[Node]] | None = None,
     pet: Any = None,
+    observed: Set[Tuple[int, int]] | None = None,
 ) -> Tuple[Any, Any]:
     """The tasks and the parallel region the detector reports for one group of tasks."""
     instructions = task_instructions or [[] for _ in task_scopes]
@@ -95,11 +98,29 @@ def _detect(
     )
     lines = instruction_lines or {}
     lines_of = lambda ids: [lines[i] for i in ids if i in lines]  # noqa: E731
-    pet = pet or SimpleNamespace(get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of)
-    patterns = identify_simple_tasking(SimpleNamespace(pet=pet), [tpc])  # type: ignore[arg-type, list-item]
+    # g: the stub has no node, so instruction ids that another test left in the global instructionToCUIdMap lead
+    # nowhere
+    pet = pet or SimpleNamespace(
+        get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of, g=set()
+    )
+    patterns = identify_simple_tasking(SimpleNamespace(pet=pet), [tpc], observed)  # type: ignore[arg-type, list-item]
     tasks = [p for p in patterns if isinstance(p, TaskParallelismInfo) and not isinstance(p, ParallelRegionInfo)]
     regions = [p for p in patterns if isinstance(p, ParallelRegionInfo)]
     return tasks, regions
+
+
+def _detect_groups(pet: Any, groups: List[Tuple[Node, List[List[str]], List[List[int]]]]) -> Tuple[Any, Any]:
+    """The tasks and parallel regions reported for several groups at once (one simplification result each)."""
+    tpcs = [
+        SimpleNamespace(
+            parent_context=_context(["3:29", "3:35"], parent),
+            registered_tasks=[_context(scope, None, ids) for scope, ids in zip(scopes, instructions)],
+        )
+        for parent, scopes, instructions in groups
+    ]
+    patterns = identify_simple_tasking(SimpleNamespace(pet=pet), tpcs)  # type: ignore[arg-type]
+    tasks = [p for p in patterns if isinstance(p, TaskParallelismInfo) and not isinstance(p, ParallelRegionInfo)]
+    return tasks, [p for p in patterns if isinstance(p, ParallelRegionInfo)]
 
 
 def _span(task: TaskParallelismInfo) -> Tuple[int, int]:
@@ -155,6 +176,47 @@ def test_the_spans_follow_the_lines_of_the_instructions_of_the_tasks(
     )
     assert [_span(t) for t in tasks] == [(31, 31), (32, 32)]
     assert (int(regions[0].region_start_line), int(regions[0].region_end_line)) == (31, 32)
+
+
+def _group_with_dependences(
+    make_node: MakeNode, observed: Set[Tuple[int, int]], ids: List[List[int]]
+) -> Tuple[Any, Any]:
+    parent = make_node("3:233", NodeType.CU, start_line=29, end_line=29)
+    lines = {i: f"3:{30 + n}" for n, task in enumerate(ids) for i in task}
+    return _detect(parent, ["3:29", "3:40"], [[f"3:{30 + n}"] for n in range(len(ids))], ids, lines, observed=observed)
+
+
+def test_a_group_whose_neighbouring_tasks_depend_on_each_other_is_dropped(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode
+) -> None:
+    """health: check_patients_inside writes what check_patients_assess reads. The simplification found the pair in a
+    copy of the code the profile's dependences did not reach; the dependence of another copy is the same instructions.
+    """
+    tasks, regions = _group_with_dependences(make_node, {(849, 853)}, [[849, 850], [853, 854]])
+    assert tasks == [] and regions == []
+
+
+def test_a_dependence_of_an_earlier_task_on_a_later_one_does_not_count(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode
+) -> None:
+    tasks, regions = _group_with_dependences(make_node, {(853, 849)}, [[849, 850], [853, 854]])
+    assert len(tasks) == 2 and len(regions) == 1
+
+
+def test_tasks_that_depend_on_a_non_neighbour_only_stay_a_group(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode
+) -> None:
+    """The dependence is a depend clause (task_dependences), no reason to drop the group."""
+    tasks, _ = _group_with_dependences(make_node, {(1, 5)}, [[1, 2], [3, 4], [5, 6]])
+    assert len(tasks) == 3
+
+
+def test_instructions_both_tasks_reach_do_not_make_them_dependent(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode
+) -> None:
+    """fib: both calls reach the whole function (the recursion), which depends on itself."""
+    tasks, _ = _group_with_dependences(make_node, {(1, 3), (1, 2), (3, 1)}, [[1, 2], [1, 3]])
+    assert len(tasks) == 2
 
 
 def test_a_group_without_scope_inside_its_parent_is_skipped(isolated_pattern_id_cwd: Any, make_node: MakeNode) -> None:
@@ -267,6 +329,8 @@ def _loop_with_call(make_node: MakeNode, build_pet_graph: BuildPetGraph, calls: 
         shared=[SimpleNamespace(name="data")],
         private=[SimpleNamespace(name="k")],
         first_private=[SimpleNamespace(name="n"), SimpleNamespace(name="n")],
+        last_private=[],
+        reduction=[],
     )
     return pet, do_all
 
@@ -284,7 +348,7 @@ def test_a_call_to_a_hotspot_function_in_a_do_all_loop_is_a_task_per_iteration(
     regions = [p for p in patterns if isinstance(p, ParallelRegionInfo)]
     assert len(tasks) == 1 and len(regions) == 1
     assert _span(tasks[0]) == (2952, 2952)  # the body, without the line of the loop header and the closing brace
-    assert (regions[0].region_start_line, regions[0].region_end_line) == ("2951", "2952")
+    assert (regions[0].region_start_line, regions[0].region_end_line) == ("2952", "2952")  # the statement
     assert tasks[0].loop_start_line == regions[0].loop_start_line == "3:2951"
     assert tasks[0].task_group == regions[0].task_group == [4]
     assert tasks[0].instruction_ids == [5, 6, 7, 8]
@@ -321,6 +385,38 @@ def test_a_loop_task_takes_the_data_sharing_of_the_do_all_loop(
     assert (task.shared, task.private, task.first_private) == (["data"], ["k"], ["n"])
 
 
+def test_a_reduced_variable_of_a_loop_task_is_a_reduction_and_not_shared(
+    monkeypatch: pytest.MonkeyPatch, isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet, do_all = _loop_with_call(make_node, build_pet_graph)
+    do_all.shared = [SimpleNamespace(name="data"), SimpleNamespace(name="sum")]
+    do_all.reduction = [SimpleNamespace(name="sum", operation="+")]
+    # the code after the loop reads the sum: it stays a reduction instead of becoming shared
+    after = [AfterDependence(0, "sum", "RAW", "3:2960")]
+    monkeypatch.setattr(
+        "discopop_explorer.pattern_detectors.new_task_detector.after_dependences_of_instructions",
+        lambda *a, **kw: after,
+    )
+    task: Any = identify_loop_tasking(pet, [do_all], None, first_task_group=0)[0]
+    assert task.reduction == ["+:sum"]
+    assert task.shared == ["data"]
+
+
+def test_the_last_private_variables_of_a_do_all_loop_are_kept_next_to_shared(
+    monkeypatch: pytest.MonkeyPatch, isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet, do_all = _loop_with_call(make_node, build_pet_graph)
+    do_all.last_private = [SimpleNamespace(name="last")]
+    after = [AfterDependence(0, "last", "RAW", "3:2960")]
+    monkeypatch.setattr(
+        "discopop_explorer.pattern_detectors.new_task_detector.after_dependences_of_instructions",
+        lambda *a, **kw: after,
+    )
+    task: Any = identify_loop_tasking(pet, [do_all], None, first_task_group=0)[0]
+    assert task.last_private == ["last"]
+    assert task.shared == ["data", "last"]
+
+
 def test_the_join_of_a_loop_task_is_the_first_line_after_the_loop_that_reads_what_it_wrote(
     monkeypatch: pytest.MonkeyPatch, isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
 ) -> None:
@@ -348,3 +444,174 @@ def test_the_join_of_a_loop_task_is_the_first_line_after_the_loop_that_reads_wha
         monkeypatch.setitem(instructionToCUIdMap, instruction, header.id)
     found = after_dependences_of_instructions(pet, [5, 6, 7], 3, 2952, function)  # type: ignore[arg-type]
     assert [(a.variable, a.kind, a.line) for a in found] == [("sum", "RAW", "3:2958")]
+
+
+@pytest.fixture  # type: ignore[misc]
+def lines_pet() -> Any:
+    lines = {1: "3:31", 2: "3:32", 3: "3:33"}
+    lines_of = lambda ids: [lines[i] for i in ids if i in lines]  # noqa: E731
+    # g: no node, so instruction ids that other tests left in the global instructionToCUIdMap lead nowhere
+    return SimpleNamespace(
+        get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of, g=set()
+    )
+
+
+def test_copies_of_a_group_from_the_levels_of_a_recursion_are_reported_once(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, lines_pet: Any
+) -> None:
+    parent = make_node("3:233", NodeType.CU, start_line=29, end_line=29)
+    group = (parent, [["3:31"], ["3:32"]], [[1], [2]])
+    tasks, regions = _detect_groups(lines_pet, [group, group, group])
+    assert len(tasks) == 2
+    assert len(regions) == 1
+    assert [_span(t) for t in tasks] == [(31, 31), (32, 32)]
+
+
+def test_groups_that_differ_in_parent_lines_or_instructions_are_kept(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, lines_pet: Any
+) -> None:
+    parent = make_node("3:233", NodeType.CU, start_line=29, end_line=29)
+    other_parent = make_node("3:234", NodeType.CU, start_line=29, end_line=29)
+    groups = [
+        (parent, [["3:31"], ["3:32"]], [[1], [2]]),
+        (other_parent, [["3:31"], ["3:32"]], [[1], [2]]),
+        (parent, [["3:31"], ["3:33"]], [[1], [3]]),
+        (parent, [["3:31"], ["3:32"]], [[1], [2, 3]]),
+    ]
+    tasks, regions = _detect_groups(lines_pet, groups)
+    assert len(regions) == 4
+    assert len(tasks) == 8
+    assert sorted(g for r in regions for g in r.task_group) == [0, 1, 2, 3]
+
+
+# --- the statement of a loop task: no loop headers, no guards, one suggestion per nest ----------------------------
+
+
+def _guarded_call_loop(
+    make_node: MakeNode, build_pet_graph: BuildPetGraph, guard_calls: bool = False
+) -> Tuple[Any, Any]:
+    """sparselu: ``for (jj ...)`` (line 50), ``if (BENCH[jj] != NULL)`` (51), ``fwd(...)`` (53), the jump of ``if.end``
+    on line 51. The guard CU has two successors."""
+    calls = [{"cuid": "3:99", "atLine": "3:53", "callInstId": "5"}]
+    guard_call = [{"cuid": "3:99", "atLine": "3:51", "callInstId": "3"}] if guard_calls else []
+    header = make_node("3:10", NodeType.CU, start_line=50, instruction_ids=[1])
+    guard = make_node("3:11", NodeType.CU, start_line=51, instruction_ids=[2, 3], node_calls=guard_call)
+    call = make_node("3:12", NodeType.CU, start_line=53, instruction_ids=[4, 5], node_calls=calls)
+    end = make_node("3:13", NodeType.CU, start_line=51, instruction_ids=[6])  # if.end: only the jump, no variable
+    function = make_node("3:99", NodeType.FUNC, name="fwd", end_line=70)
+    for cu in (header, guard, call, end):
+        cu.parent_function_id = function.id
+    pet = build_pet_graph(
+        [header, guard, call, end, function],
+        [
+            ("3:11", "3:12", EdgeType.SUCCESSOR),
+            ("3:11", "3:13", EdgeType.SUCCESSOR),
+            ("3:12", "3:13", EdgeType.SUCCESSOR),
+        ],
+    )
+    pet.instruction_lines = {"1": "3:50", "2": "3:51", "3": "3:51", "4": "3:53", "5": "3:53", "6": "3:51"}
+    do_all = SimpleNamespace(
+        node_id="3:10",
+        instruction_ids=[1, 2, 3, 4, 5, 6],
+        affected_cu_ids=["3:10"],
+        shared=[],
+        private=[],
+        first_private=[],
+        reduction=[],
+        last_private=[],
+    )
+    return pet, do_all
+
+
+def _tasks_and_regions(patterns: List[Any]) -> Tuple[List[Any], List[Any]]:
+    return (
+        [p for p in patterns if isinstance(p, TaskParallelismInfo) and not isinstance(p, ParallelRegionInfo)],
+        [p for p in patterns if isinstance(p, ParallelRegionInfo)],
+    )
+
+
+def test_the_condition_that_only_guards_a_loop_task_is_not_part_of_it(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet, do_all = _guarded_call_loop(make_node, build_pet_graph)
+    tasks, regions = _tasks_and_regions(identify_loop_tasking(pet, [do_all], None, first_task_group=0))
+    assert _span(tasks[0]) == (53, 53)
+    assert (regions[0].region_start_line, regions[0].region_end_line) == ("53", "53")
+    assert tasks[0].loop_start_line == regions[0].loop_start_line == "3:50"  # the loop is still known
+
+
+def test_a_condition_that_calls_something_is_part_of_the_loop_task(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet, do_all = _guarded_call_loop(make_node, build_pet_graph, guard_calls=True)  # if (ok(b)) f(b);
+    tasks, regions = _tasks_and_regions(identify_loop_tasking(pet, [do_all], None, first_task_group=0))
+    assert _span(tasks[0]) == (51, 53)
+    assert (regions[0].region_start_line, regions[0].region_end_line) == ("51", "53")
+
+
+def test_the_loops_of_a_nest_with_the_same_statement_are_one_suggestion_for_the_innermost(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    """``for (ii) for (jj) bmod(...)``: both loops are do-all; the task is per iteration of the inner loop."""
+    outer = make_node("3:10", NodeType.CU, start_line=50, instruction_ids=[1])
+    inner = make_node("3:11", NodeType.CU, start_line=51, instruction_ids=[2])
+    call = make_node(
+        "3:12",
+        NodeType.CU,
+        start_line=52,
+        instruction_ids=[3, 4],
+        node_calls=[{"cuid": "3:99", "atLine": "3:52", "callInstId": "4"}],
+    )
+    inner_loop = make_node("3:20", NodeType.LOOP, start_line=51, end_line=52)
+    function = make_node("3:99", NodeType.FUNC, name="bmod", end_line=70)
+    pet = build_pet_graph([outer, inner, call, inner_loop, function])
+    pet.instruction_lines = {"1": "3:50", "2": "3:51", "3": "3:52", "4": "3:52"}
+    outer_do_all = SimpleNamespace(
+        node_id="3:10",
+        instruction_ids=[1, 2, 3, 4],
+        affected_cu_ids=[],
+        shared=[],
+        private=[],
+        first_private=[],
+        reduction=[],
+        last_private=[],
+    )
+    inner_do_all = SimpleNamespace(
+        node_id="3:11",
+        instruction_ids=[2, 3, 4],
+        affected_cu_ids=[],
+        shared=[],
+        private=[],
+        first_private=[],
+        reduction=[],
+        last_private=[],
+    )
+    for order in ([outer_do_all, inner_do_all], [inner_do_all, outer_do_all]):
+        found = identify_loop_tasking(pet, order, None, first_task_group=0)  # type: ignore[arg-type]
+        tasks, regions = _tasks_and_regions(found)
+        assert len(tasks) == len(regions) == 1
+        assert _span(tasks[0]) == (52, 52)
+        assert tasks[0].loop_start_line == "3:51"  # the inner loop
+        assert tasks[0].instruction_ids == [2, 3, 4]
+
+
+def test_a_later_write_of_what_the_task_gets_by_value_is_no_after_dependence(
+    monkeypatch: pytest.MonkeyPatch, isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    """The next loop of the function starts with ``jj = kk + 1``: a WAR on the index of the loop (and on a
+    firstprivate variable) does not make the code after the loop wait for the task; a WAR on another variable does."""
+    pet, do_all = _guarded_call_loop(make_node, build_pet_graph)
+    do_all.first_private = [SimpleNamespace(name="kk")]
+    index_dependence = Dependency(EdgeType.DATA)  # jj++ in the header depends on the jj of the iteration before
+    index_dependence.dtype, index_dependence.var_name = DepType.RAW, "jj"
+    index_dependence.sink_line = index_dependence.source_line = LineID("3:50")
+    pet.g.add_edge("3:10", "3:10", data=index_dependence)
+    after = [
+        AfterDependence(0, "col", "RAW", "3:66"),
+        AfterDependence(0, "jj", "WAR", "3:62"),
+        AfterDependence(0, "kk", "WAR", "3:62"),
+        AfterDependence(0, "other", "WAR", "3:62"),
+    ]
+    monkeypatch.setattr(new_task_detector, "after_dependences_of_instructions", lambda *args, **kwargs: after)
+    _, regions = _tasks_and_regions(identify_loop_tasking(pet, [do_all], None, first_task_group=0))
+    assert [(a["variable"], a["kind"]) for a in regions[0].after_dependences] == [("col", "RAW"), ("other", "WAR")]

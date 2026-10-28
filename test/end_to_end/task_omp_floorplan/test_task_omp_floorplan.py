@@ -10,8 +10,10 @@
 possible location of a cell in the nested loops, with private copies of the board, joined by one taskwait before
 the return of the counters."""
 
+import signal
 from pathlib import Path
-from typing import Any, List
+from types import FrameType
+from typing import Any, List, Optional
 
 import pytest
 
@@ -22,16 +24,31 @@ SRC = Path(__file__).parent / "src"
 
 # the task statement is the block in src/floorplan.c lines 36 to 51, the code after the taskwait is line 55
 TASK_START, TASK_END, AFTER_LINE = "36", "51", "1:55"
+EXPLORER_TIMEOUT_SECONDS = 120
 EXPLORER_REASON = (
-    "the explorer fails with 'Invalid iteration structure' on nested loops that contain a recursive call, so it "
-    "gives no task patterns at all"
+    "the explorer does not finish: constructing the ContextTaskGraph (45142 nodes) slows down to under 100 nodes "
+    "per second for the nested loops around the recursive call, so no task is detected within the time limit"
 )
+
+
+class _ExplorerTimeout(Exception):
+    pass
+
+
+def _raise_timeout(signum: int, frame: Optional[FrameType]) -> None:
+    raise _ExplorerTimeout(f"the explorer did not finish within {EXPLORER_TIMEOUT_SECONDS} s")
 
 
 @pytest.fixture(scope="module")  # type: ignore[misc]
 def result(tmp_path_factory: pytest.TempPathFactory) -> Any:
     dot_discopop = build_and_profile(SRC, tmp_path_factory.mktemp("task_omp_floorplan") / "src")
-    return explore(dot_discopop, "task")
+    previous = signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.alarm(EXPLORER_TIMEOUT_SECONDS)
+    try:
+        return explore(dot_discopop, "task")
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _regions(result: Any) -> List[ParallelRegionInfo]:

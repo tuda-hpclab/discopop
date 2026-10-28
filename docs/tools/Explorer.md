@@ -13,13 +13,13 @@ nav_order: 5
 The explorer analyzes the [output of the instrumentation and profiling stage](../data/Profiling_and_instrumentation_output.md) and identifies opportunities for parallelism in the sequential target code ([parallel patterns](../data/Parallel_patterns/Patterns.md)).
 As part of the analysis, it creates the [program execution graph](../data/Program_execution_graph.md).
 
-By default, it detects [do-all loops](../data/Parallel_patterns/doall.md) and [reductions](../data/Parallel_patterns/reduction.md).
+By default, it detects [do-all loops](../data/Parallel_patterns/doall.md), [reductions](../data/Parallel_patterns/reduction.md) and (experimental) [task parallelism](../data/Parallel_patterns/tasks.md).
 When it has found the patterns, it runs the [patch generator](Patch_generator.md), so the patch files of all suggestions exist when the explorer returns.
 
 ## Required input
 The explorer works on the data of one `.discopop` directory. Run it from inside that directory, or pass the directory with `--path`.
 - [File mapping](../data/Filemapping.md) (`FileMapping.txt`)
-- [Profiling and instrumentation output](../data/Profiling_and_instrumentation_output.md) (the `profiler` folder: `Data.xml`, `dynamic_dependencies.txt`, `loop_counter_output.txt`, `reduction.txt`)
+- [Profiling and instrumentation output](../data/Profiling_and_instrumentation_output.md) (the `profiler` folder: `Data.xml`, `dynamic_dependencies.txt`, `loop_counter_output.txt`, `reduction.txt`). The output of the profiler has to match the installed explorer: a `Data.xml` without the `instructionIDs` of the CUs (written by older versions of the profiler) is rejected, so instrument the program again with the installed profiler.
 - Optional: hotspot information (`hotspot_detection/Hotspots.json`, see [Hotspot detection](Hotspot_detection.md)). If it exists, only the code regions classified by `--hotspot-types` are analyzed.
 
 ## Output
@@ -40,7 +40,7 @@ All paths are relative to the `.discopop` directory. The files are described in 
 cd .discopop && discopop_explorer
 ```
 
-On `example/example.cpp`, this finds two suggestions (a do-all loop and a reduction) and writes the patches to `patch_generator/0/` and `patch_generator/1/`. Apply them with the [patch applicator](Patch_applicator.md).
+On `example/example.cpp`, this finds two suggestions (a do-all loop and a reduction; no task group) and writes the patches to `patch_generator/0/` and `patch_generator/1/`. Apply them with the [patch applicator](Patch_applicator.md).
 
 ## Options
 Options for the patterns to detect:
@@ -80,8 +80,8 @@ Further options:
 
 ### Pattern types
 `--enable-patterns` accepts `reduction`, `doall`, `task`, `pipeline`, `geodec` and `simplegpu`.
-- `reduction` and `doall` are enabled by default.
-- `task` (on by default) runs the experimental [task detector](../data/Parallel_patterns/tasks.md). It is slow and its results are not deterministic.
+- `reduction`, `doall` and `task` are enabled by default (`--enable-patterns reduction,doall,task`); the selection is recorded as `enabled_patterns` in `patterns.json`.
+- `task` runs the experimental [task detector](../data/Parallel_patterns/tasks.md), which reports task groups (a parallel region and its tasks, with the dependences between the tasks, where they have to be complete and their data sharing) and one task per iteration for do-all loops that call a hotspot function. It can be slow, in particular for recursive functions with many call sites. The loops are then analyzed even if `doall` is not selected, but their do-all patterns are only reported if it is.
 - `pipeline`, `geodec` and `simplegpu` are listed in the help of the explorer, but the explorer does not run these detectors (see [pipeline](../data/Parallel_patterns/pipeline.md) and [geometric decomposition](../data/Parallel_patterns/geometric_decomposition.md)).
 
 ### Experimental and debugging options
