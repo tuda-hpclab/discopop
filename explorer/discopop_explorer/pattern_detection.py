@@ -17,6 +17,7 @@ from discopop_explorer.functions.PEGraph.queries.edges import out_edges
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.pattern_detectors.combined_gpu_patterns.classes.Aliases import VarName
 from discopop_explorer.classes.variable import Variable
+from discopop_explorer.pattern_detectors.task_hotspots import attach_hotspot_information
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.JSONHandler.JSONHandler import read_patterns_from_json_to_json
@@ -196,6 +197,10 @@ class PatternDetectorX(object):
                 self.pattern_decisions.finalize(
                     DO_ALL_AND_REDUCTION_DETECTOR, list(res.patterns.do_all) + list(res.patterns.reduction)
                 )
+
+        # the autotuner selects patterns by their hotspot class
+        if "*" in enable_patterns or "task" in enable_patterns:
+            attach_hotspot_information(self.pet, res.patterns.task, hotspots)
 
         # reduction before doall!
 

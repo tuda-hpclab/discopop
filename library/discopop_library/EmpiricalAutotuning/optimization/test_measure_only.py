@@ -15,7 +15,8 @@ a stub that records what it is asked to apply.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Any, Collection, Dict, List, Optional
 
 import pytest
 
@@ -26,16 +27,22 @@ from discopop_library.HostpotLoader.HotspotType import HotspotType
 
 
 class _Patterns:
-    def __init__(self, ids: List[int]) -> None:
+    def __init__(self, ids: List[int], parts: Collection[int]) -> None:
         self.ids = ids
+        self.parts = parts
 
     def get_pattern_ids(self) -> List[int]:
         return list(self.ids)
 
+    def get_pattern_from_id(self, pattern_id: int) -> Any:
+        # a part of another pattern (e.g. a task of a parallel region) has no patch of its own
+        own = pattern_id not in self.parts
+        return SimpleNamespace(applicable_pattern=own, standalone_pattern=own)
+
 
 class _DetectionResult:
-    def __init__(self, ids: List[int]) -> None:
-        self.patterns = _Patterns(ids)
+    def __init__(self, ids: List[int], parts: Collection[int]) -> None:
+        self.patterns = _Patterns(ids, parts)
 
 
 class _Configuration:
@@ -63,7 +70,9 @@ class _Configuration:
         pass
 
 
-def _measured(monkeypatch: pytest.MonkeyPatch, hotspot_types: str, search_space: Optional[str]) -> List[List[int]]:
+def _measured(
+    monkeypatch: pytest.MonkeyPatch, hotspot_types: str, search_space: Optional[str], parts: Collection[int] = ()
+) -> List[List[int]]:
     by_type: Dict[HotspotType, List[int]] = {HotspotType.YES: [1], HotspotType.MAYBE: [2], HotspotType.NO: [3]}
     monkeypatch.setattr(measure_only, "get_patterns_by_hotspot_type", lambda *a: by_type)
     monkeypatch.setattr(measure_only, "show_debug_stats", lambda *a: None)
@@ -74,7 +83,7 @@ def _measured(monkeypatch: pytest.MonkeyPatch, hotspot_types: str, search_space:
     arguments.thread_count = 1
     applied: List[List[int]] = []
     measure_only.execute_measure_only(
-        _DetectionResult([1, 2, 3, 4]),  # type: ignore[arg-type]
+        _DetectionResult([1, 2, 3, 4], parts),  # type: ignore[arg-type]
         {},
         logging.getLogger("test_measure_only"),
         3600,
@@ -93,3 +102,9 @@ def test_without_a_search_space_only_the_selected_buckets_are_measured(monkeypat
 
 def test_an_unclassified_suggestion_in_the_search_space_is_measured(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _measured(monkeypatch, "yes,no,maybe", "1,2,3,4") == [[1], [2], [3], [4]]
+
+
+def test_an_unclassified_suggestion_without_a_patch_of_its_own_is_not_measured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _measured(monkeypatch, "yes,no,maybe", "1,2,3,4", parts={4}) == [[1], [2], [3]]

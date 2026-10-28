@@ -376,6 +376,24 @@ Risks: pattern ids and the patterns.json schema (step 2 is additive); the hotspo
 `file_id:line` of the regions (checked per entry); nested groups can both match (the optimisers already handle
 overlapping patterns through the sanity checker).
 
+#### Implementation (branch `improvement/task/hotspot_information`)
+
+Done as planned, with these decisions (maintainer unavailable, conservative choices):
+- Semantics as in step 1; the enclosing function is **no** match (a cold group in a hot `main` stays unclassified);
+  without hotspot information nothing is attached (consumers keep their fallback "all suggestions").
+- `PatternInfo.hotspot_type` / `hotspot_runtime` are class attributes with default `None` (old `patterns.json` load).
+  Set by `pattern_detectors/task_hotspots.attach_hotspot_information` for `PARALLELREGION` and the tasks it contains.
+- Recursive calls are no graph edges: they are resolved from the `recursive_function_calls` text of the CUs
+  ("<function> <file id>:<line>,") for the lines of the region, by name, preferring the functions of the call's file.
+- `get_patterns_by_hotspot_type`: the attached class first (only if hotspot information exists), else the old loop
+  rule. Patterns of old results without the class are not matched against function hotspots (no callee names there).
+- **Bug found:** function nodes have the id `0:<n>`, so `node.file_id` of a function is 0 and never equals the file
+  id of a hotspot function. `identify_loop_tasking` (hotspot functions called in do-all loops) was therefore a no-op
+  on real data when hotspot information existed. Both places now use `function_files(pet)` (the file of the CUs
+  that belong to the function). Test: `test_the_hotspot_function_is_matched_with_the_file_of_its_code...`.
+- MCP: `get_parallelization_suggestions` already shows hotspot data for task groups by its own mapping (the function
+  of the group); unchanged. End-to-end test: `test/end_to_end/task_hotspots`.
+
 ### 3.6 Patch generation of reductions, unnamed dependences and last_private (2026-10-28)
 
 - Reductions: the tasks of a group that reduce a variable are wrapped in `#pragma omp taskgroup task_reduction(<op>:<vars>)`

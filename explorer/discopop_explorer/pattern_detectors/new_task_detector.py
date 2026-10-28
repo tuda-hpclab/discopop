@@ -41,6 +41,7 @@ from discopop_explorer.pattern_detectors.task_dataflow import (
     instructions_with_callees,
 )
 from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import ASTPatternDetectionHelper
+from discopop_explorer.pattern_detectors.task_hotspots import function_files
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.StatusReporting.console import stage
@@ -486,6 +487,7 @@ def identify_loop_tasking(
     """
     patterns: List[PatternInfo] = []
     hotspot_functions = _hotspot_functions(hotspots)
+    files = function_files(pet)
     # instruction id of a call -> the function it calls
     callees: Dict[int, Node] = dict()
     cu_of: Dict[int, CUNode] = dict()
@@ -505,7 +507,10 @@ def identify_loop_tasking(
             callees[i]
             for i in do_all.instruction_ids
             if i in callees
-            and (hotspot_functions is None or (callees[i].file_id, callees[i].name) in hotspot_functions)
+            and (
+                hotspot_functions is None
+                or (files.get(callees[i].id, callees[i].file_id), callees[i].name) in hotspot_functions
+            )
         ]
         if len(called) == 0:
             continue

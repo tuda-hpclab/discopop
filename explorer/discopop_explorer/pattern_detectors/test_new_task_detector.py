@@ -619,6 +619,37 @@ def test_a_later_write_of_what_the_task_gets_by_value_is_no_after_dependence(
     assert [(a["variable"], a["kind"]) for a in regions[0].after_dependences] == [("col", "RAW"), ("other", "WAR")]
 
 
+def test_the_hotspot_function_is_matched_with_the_file_of_its_code_not_the_one_of_its_node(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    """the id of a function node is "0:<n>" in a real graph; the hotspot detection knows the file of the source"""
+    header = make_node(
+        "3:10",
+        NodeType.CU,
+        start_line=2951,
+        end_line=2951,
+        node_calls=[{"cuid": "0:99", "atLine": "3:2952", "callInstId": "7"}],
+    )
+    function = make_node("0:99", NodeType.FUNC, name="fft_aux", end_line=2960)
+    callee_code = make_node("3:11", NodeType.CU, start_line=2907, end_line=2908)
+    header.parent_function_id = function.id
+    callee_code.parent_function_id = function.id
+    pet = build_pet_graph([header, function, callee_code])
+    pet.instruction_lines = {"5": "3:2951", "6": "3:2952", "7": "3:2952", "8": "3:2953"}
+    pet.jump_only_lines = {"3:2953"}
+    do_all = SimpleNamespace(
+        node_id="3:10",
+        instruction_ids=[5, 6, 7, 8],
+        affected_cu_ids=["3:10"],
+        shared=[],
+        private=[],
+        first_private=[],
+        last_private=[],
+        reduction=[],
+    )
+    assert len(identify_loop_tasking(pet, [do_all], _hotspots("fft_aux"), first_task_group=0)) == 2
+
+
 def test_loop_tasks_calling_their_own_function_record_the_calls_that_enter_the_recursion(
     isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
 ) -> None:

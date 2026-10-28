@@ -87,8 +87,8 @@ Open (details in the design notes):
   warning; the outermost loop / collapse check for plain do-all (3.6).
 - MCP server items (skipped): stale server output, `dp_common/` paths in the output, stale `get_project_status` after a
   manual run, GUI fallback default.
-- Hotspot information for `task` / `parallel_region` patterns (needed by the autotuner; plan in 3.9): today such
-  patterns are never classified YES/MAYBE/NO, because only loop hotspots contained in the CU lines are matched.
+- Hotspot information for `task` / `parallel_region` patterns: implemented on `improvement/task/hotspot_information`
+  (3.9), not yet pushed or merged.
 - Performance (parked): the cost per recursive call site, floorplan.
 - Open the PR chain (interface -> task_suggestions -> instruction_ids ...) and decide where the branches go.
 

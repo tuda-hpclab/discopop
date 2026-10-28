@@ -8,6 +8,7 @@
 from typing import Iterable, List, Optional
 from discopop_explorer.classes.patterns.PatternBase import PatternBase
 
+from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.discopop_optimizer.classes.system.devices.DeviceTypeEnum import DeviceTypeEnum
 
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
@@ -39,6 +40,10 @@ class PatternInfo(PatternBase):
     dp_optimizer_device_id: Optional[int] = None  # used by discopop_optimizer. unused by discopop_explorer.
     device_id: Optional[int]
     device_type: Optional[DeviceTypeEnum]
+    # hotspot class and average runtime of the code of the pattern, set for the task and parallel_region patterns
+    # (design/task_suggestions.md, 3.9). Class attributes: the patterns.json of older runs has no such entries.
+    hotspot_type: Optional[HotspotType] = None
+    hotspot_runtime: Optional[float] = None
 
     def __init__(self, node: Node):
         """
