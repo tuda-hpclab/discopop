@@ -98,6 +98,11 @@ class TaskParallelismInfo(PatternInfo):
 class ParallelRegionInfo(PatternInfo):
     """Class, that contains parallel region info."""
 
+    # Set if the function that holds the group reaches itself (a recursion): the lines ("file id:line") of the
+    # calls that enter the recursion from outside of it. The parallel region belongs around them, not into the
+    # function. The class level default keeps the patterns.json of older runs loadable.
+    entry_call_lines: List[str] = []
+
     def __init__(
         self,
         node: Node,
@@ -129,6 +134,7 @@ class ParallelRegionInfo(PatternInfo):
         # the code after the region depends on a task: {"task" (pattern id), "variable", "kind": RAW | WAR | WAW,
         # "line"}
         self.after_dependences: List[Dict[str, Any]] = []
+        self.entry_call_lines = []
 
     def __str__(self) -> str:
         return (
@@ -138,4 +144,5 @@ class ParallelRegionInfo(PatternInfo):
             f"pragma: \n\t{self.pragma}\n"
             f"Parallel Region Start line: {self.region_start_line}\n"
             f"Parallel Region End line {self.region_end_line}\n"
+            f'Entry calls of the recursion: {" ".join(self.entry_call_lines)}\n'
         )

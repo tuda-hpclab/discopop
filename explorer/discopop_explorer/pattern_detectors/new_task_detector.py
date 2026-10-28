@@ -12,6 +12,7 @@ import warnings
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.PEGraph.CUNode import CUNode
+from discopop_explorer.classes.PEGraph.FunctionNode import FunctionNode
 from discopop_explorer.classes.PEGraph.LoopNode import LoopNode
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
@@ -30,6 +31,7 @@ from discopop_explorer.functions.PEGraph.queries.edges import out_edges
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.pattern_detectors.task_cursor_loops import LoopTaskSource
+from discopop_explorer.pattern_detectors.task_recursion import CallStructure
 from discopop_explorer.pattern_detectors.task_dataflow import (
     AfterDependence,
     analyze_task_group,
@@ -245,6 +247,23 @@ def _neighbours_depend(pet: PEGraphX, tasks: List[TaskParallelismInfo], observed
     return False
 
 
+def _set_entry_calls(
+    pet: PEGraphX, calls: CallStructure, region: ParallelRegionInfo, node: Node, function: Optional[FunctionNode]
+) -> None:
+    """A group in a function that reaches itself (a recursion) gets the calls that enter the recursion
+    from the outside (``entry_call_lines``): the parallel region belongs around them, see ``task_recursion``.
+    ``node`` is only used if ``function`` is None."""
+    if not calls.calls:
+        return
+    if function is None:
+        function = function_of(pet, node)
+    if function is None:
+        return
+    lines = calls.entry_call_lines(function, region.instruction_ids)
+    if lines:
+        region.entry_call_lines = lines
+
+
 def identify_simple_tasking(
     ctg: ContextTaskGraph,
     simplification_results: List[TaskParentContext],
@@ -266,6 +285,7 @@ def identify_simple_tasking(
         return int(lid.split(":")[1])
 
     task_group_num = 0
+    calls = CallStructure(ctg.pet)
     # a recursive function is inlined once per level, which gives one copy of a group per context instance; a group
     # is reported once per (parent node, line ranges and instructions of its tasks)
     seen_groups: Set[Tuple[NodeID, Tuple[Tuple[int, int, Tuple[int, ...]], ...]]] = set()
@@ -388,6 +408,7 @@ def identify_simple_tasking(
         )
 
         _record_data_flow(ctg.pet, valid_tasks, task_lines, pattern_objects, parallel_region_pattern, ast_helper)
+        _set_entry_calls(ctg.pet, calls, parallel_region_pattern, tpc_parent_pet_node, None)
 
         patterns.append(parallel_region_pattern)
         # close task group
@@ -516,6 +537,7 @@ def identify_loop_tasking(
             innermost[key] = do_all
 
     task_group_num = first_task_group
+    calls = CallStructure(pet)
     for do_all, loop_node, body_lines, header_lines in candidates:
         if innermost[(loop_node.file_id, min(body_lines), max(body_lines))] is not do_all:
             continue
@@ -592,6 +614,7 @@ def identify_loop_tasking(
         if len(loop_ends) > 0:
             region.loop_end_line = f"{loop_node.file_id}:{max(loop_ends)}"
         region.after_dependences = [_after_record(task.pattern_id, a) for a in after]
+        _set_entry_calls(pet, calls, region, loop_node, function)
         patterns += [task, region]
         task_group_num += 1
     return patterns

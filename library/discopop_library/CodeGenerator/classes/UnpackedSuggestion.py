@@ -7,7 +7,8 @@
 # directory for details.
 
 import json
-from typing import Dict, List, Any, Optional, Tuple
+import re
+from typing import Callable, Dict, List, Any, Optional, Tuple
 
 from discopop_explorer.pattern_detectors.combined_gpu_patterns.classes.Enums import (
     EntryPointType,
@@ -27,6 +28,22 @@ from discopop_library.discopop_optimizer.classes.types.Aliases import DeviceID
 # the line the explorer reports for a line it does not know (a decoded unset line id of the profiler)
 UNKNOWN_LINE = 262143
 
+# a statement that starts with a type: two or more identifiers (and ``*``, ``&``, ``::``, template arguments)
+# followed by an initializer; ``res = fib(n);`` and ``a[i] = f();`` have a single identifier before the ``=``
+_DECLARATION = re.compile(
+    r"^\s*(?:[A-Za-z_]\w*(?:::\w+)*(?:<[^;=()]*>)?[\s*&]+)+[*&\s]*[A-Za-z_]\w*\s*(?:\[[^\]]*\]\s*)*(?:=|\(|\{)"
+)
+_NOT_A_TYPE = {"return", "else", "case", "goto", "delete", "throw", "co_return", "co_yield", "new", "do", "sizeof"}
+
+
+def _is_declaration(text: Optional[str]) -> bool:
+    """Whether the source line starts with a declaration that has an initializer (``long long r = fib(n);``): a
+    pragma cannot apply to it. Unknown text (None) is no declaration."""
+    if text is None:
+        return False
+    first = re.match(r"\s*(\w+)", text)
+    return _DECLARATION.match(text) is not None and first is not None and first.group(1) not in _NOT_A_TYPE
+
 
 class UnpackedSuggestion(object):
     type: str
@@ -37,6 +54,8 @@ class UnpackedSuggestion(object):
     device_id: Optional[DeviceID]
     device_type: Optional[DeviceTypeEnum]
     host_device_id: int
+    # the text of a line of the original source (file id, line), if the caller can give it
+    line_text: Optional[Callable[[int, int], Optional[str]]] = None
 
     def __init__(
         self,
@@ -297,6 +316,19 @@ class UnpackedSuggestion(object):
         stay independent); a taskwait is for the case that a following statement needs the results of all tasks.
 
         A group of tasks per loop iteration starts at the loop header and ends after the last line of the loop.
+
+        A group of recursive tasks (``entry_call_lines`` of the pattern: the calls that enter the recursion) has no
+        parallel region inside of the function: a region on every level of the recursion is a nested region each.
+        The region is placed around the entry calls instead, as in omp-tasks, in the file of each call:
+
+            #pragma omp parallel
+            #pragma omp single
+            res = fib(n);               the entry call (the pragmas apply to the statement)
+
+        and the function only holds the tasks and, always, the join (a taskwait after the group, or the end of the
+        taskgroup of a reduction): without the region, nothing else ends the tasks, which may use the locals of the
+        function. An entry call that is a declaration (``long r = fib(n);``) cannot take the pragmas: the group is
+        left to the reader then.
         A group that cannot be placed (an unknown line, tasks that share lines) is left to the reader: the patch
         only holds a comment, so that the suggestion still has a patch.
         """
@@ -337,6 +369,16 @@ class UnpackedSuggestion(object):
             reason = "tasks share lines"
         if reason is None:
             reason = self.__reason_not_applicable_by_data_sharing(tasks)
+        entry_lines = [(int(e.split(":")[0]), int(e.split(":")[1])) for e in self.values.get("entry_call_lines") or []]
+        if reason is None and self.line_text is not None:
+            for entry_file, entry_line in entry_lines:
+                if _is_declaration(self.line_text(entry_file, entry_line)):
+                    reason = (
+                        "the call that enters the recursion declares a variable (line "
+                        + str(entry_line)
+                        + "), the parallel region cannot be placed around it"
+                    )
+                    break
         if reason is not None:
             if region_start == UNKNOWN_LINE:
                 return []
@@ -355,6 +397,9 @@ class UnpackedSuggestion(object):
             pragma.pragma_position = position
             pragma.pragma_str = text
             return pragma
+
+        if entry_lines:
+            return self.__get_recursive_tasks_pragmas(tasks, region_start, region_end, entry_lines, line_pragma)
 
         parallel_pragma = line_pragma(self.values["pragma"][0], region_start, PragmaPosition.BEFORE_START)
         single_pragma = line_pragma(self.values["pragma"][1], region_start, PragmaPosition.BEFORE_START)
@@ -395,6 +440,51 @@ class UnpackedSuggestion(object):
         if reductions:
             single_pragma.children.append(line_pragma("}", region_end, PragmaPosition.AFTER_END))
         return [parallel_pragma]
+
+    def __get_recursive_tasks_pragmas(
+        self,
+        tasks: List[Dict[str, Any]],
+        region_start: int,
+        region_end: int,
+        entry_lines: List[Tuple[int, int]],
+        line_pragma: Callable[[str, int, PragmaPosition], Pragma],
+    ) -> List[Pragma]:
+        """The pragmas of a group of recursive tasks: the tasks and their join in the function, the parallel region
+        around each call that enters the recursion (see ``__get_parallel_region_of_tasks_pragmas``)."""
+        reductions: Dict[str, List[str]] = {}
+        for task in tasks:
+            for entry in task.get("reduction") or []:
+                operation, _, name = str(entry).partition(":")
+                if name not in reductions.setdefault(operation, []):
+                    reductions[operation].append(name)
+        top: List[Pragma] = []
+        inner = top
+        if reductions:
+            # the taskgroup waits for the tasks: it is the join
+            clauses = " ".join("task_reduction(" + op + ":" + ",".join(names) + ")" for op, names in reductions.items())
+            group = line_pragma("#pragma omp taskgroup " + clauses, region_start, PragmaPosition.BEFORE_START)
+            top.append(group)
+            inner = group.children
+            inner.append(line_pragma("{", region_start, PragmaPosition.BEFORE_START))
+        unnamed = {int(d["to_task"]) for d in (self.values.get("task_dependences") or []) if not d.get("variable")}
+        for task in tasks:
+            if task["pattern_id"] in unnamed:
+                inner.append(
+                    line_pragma("#pragma omp taskwait", int(task["region_start_line"]), PragmaPosition.BEFORE_START)
+                )
+            inner += UnpackedSuggestion("task", task).get_pragmas(None)
+        if reductions:
+            inner.append(line_pragma("}", region_end, PragmaPosition.AFTER_END))
+        else:
+            top.append(line_pragma("#pragma omp taskwait", region_end, PragmaPosition.AFTER_END))
+        for entry_file, entry_line in entry_lines:
+            parallel = line_pragma(self.values["pragma"][0], entry_line, PragmaPosition.BEFORE_START)
+            parallel.file_id = entry_file
+            single = line_pragma(self.values["pragma"][1], entry_line, PragmaPosition.BEFORE_START)
+            single.file_id = entry_file
+            parallel.children.append(single)
+            top.append(parallel)
+        return top
 
     def __get_task_pragmas(self, contained_patterns: Optional[Dict[str, List[str]]]) -> List[Pragma]:
         pragmas: List[Pragma] = []

@@ -384,3 +384,13 @@ overlapping patterns through the sanity checker).
   correct). An unknown operation (`?`) or two operations for one variable gives the "not applicable as it is" comment.
 - A dependence without a variable name (`task_dependences[].variable == ""`) is a `taskwait` before the dependent task.
 - `last_private` of a loop task: the group is "not applicable as it is" (the tasks race on the shared variable).
+
+### 3.7 Parallel region of recursive task groups (2026-10-28)
+
+- A group is recursive if the function that holds it reaches itself, in its tasks or elsewhere (`node_calls` of the CUs, `task_recursion.py`).
+  `ParallelRegionInfo.entry_call_lines` holds the calls to that function from functions it does not reach.
+- Patch: no `parallel` / `single` / braces in the function (a nested region per recursion level), the tasks and always a
+  `taskwait` after the group (or the reduction taskgroup); `parallel` + `single` directly before each entry call, in the
+  file of the call (the code generator routes every pragma to the buffer of its own file).
+- Limits: an entry call that is a declaration gives the "not applicable as it is" comment; only calls to the function of
+  the group are entries (not to another function of its cycle); without an entry call the old form remains.

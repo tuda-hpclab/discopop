@@ -147,3 +147,21 @@ def test_the_patch_of_a_loop_task_with_a_last_private_variable_is_a_comment(tmp_
     text = "\n".join(source)
     assert "#pragma omp" not in text
     assert "// DiscoPoP: task group not applicable as it is, the last iteration's value of last" in text
+
+
+def test_the_patch_of_a_recursion_puts_the_parallel_region_around_the_entry_call(tmp_path: Path) -> None:
+    """The recursive calls of fib are tasks; a parallel region on every level of the recursion would be a nested region
+    each. The region belongs around the call from main (as in omp-tasks), the function only holds tasks and the join."""
+    expected, patched, source, region = _patched_run(HERE / "recursion", tmp_path / "src", "fib.c")
+    assert region.entry_call_lines == ["1:13"]
+    assert patched == expected
+    text = "\n".join(source)
+    function = "\n".join(source[source.index("long long fib(int n) {") : source.index("int main() {")])
+    assert "#pragma omp parallel" not in function and "#pragma omp single" not in function
+    assert function.count("#pragma omp task ") == 2
+    assert "#pragma omp taskwait" in function
+    assert source[source.index("  res = fib(20);  // line 13") - 2 :][:3] == [
+        "  #pragma omp parallel",
+        "  #pragma omp single",
+        "  res = fib(20);  // line 13",
+    ], text

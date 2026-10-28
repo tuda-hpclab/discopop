@@ -20,6 +20,8 @@ from typing import Any, Callable, Dict, List, Set, Tuple
 
 import pytest
 
+import networkx as nx
+
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.Node import Node
@@ -101,7 +103,7 @@ def _detect(
     # g: the stub has no node, so instruction ids that another test left in the global instructionToCUIdMap lead
     # nowhere
     pet = pet or SimpleNamespace(
-        get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of, g=set()
+        get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of, g=nx.MultiDiGraph()
     )
     patterns = identify_simple_tasking(SimpleNamespace(pet=pet), [tpc], observed)  # type: ignore[arg-type, list-item]
     tasks = [p for p in patterns if isinstance(p, TaskParallelismInfo) and not isinstance(p, ParallelRegionInfo)]
@@ -452,7 +454,7 @@ def lines_pet() -> Any:
     lines_of = lambda ids: [lines[i] for i in ids if i in lines]  # noqa: E731
     # g: no node, so instruction ids that other tests left in the global instructionToCUIdMap lead nowhere
     return SimpleNamespace(
-        get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of, g=set()
+        get_line_ids_of_instructions=lines_of, get_statement_line_ids_of_instructions=lines_of, g=nx.MultiDiGraph()
     )
 
 
@@ -615,3 +617,23 @@ def test_a_later_write_of_what_the_task_gets_by_value_is_no_after_dependence(
     monkeypatch.setattr(new_task_detector, "after_dependences_of_instructions", lambda *args, **kwargs: after)
     _, regions = _tasks_and_regions(identify_loop_tasking(pet, [do_all], None, first_task_group=0))
     assert [(a["variable"], a["kind"]) for a in regions[0].after_dependences] == [("col", "RAW"), ("other", "WAR")]
+
+
+def test_loop_tasks_calling_their_own_function_record_the_calls_that_enter_the_recursion(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet, do_all = _loop_with_call(make_node, build_pet_graph)
+    # the loop calls its own function (fft_aux, 3:99) at instruction 7; main (3:1) calls it at line 40
+    main = make_node("3:1", NodeType.FUNC, name="main", end_line=50)
+    entry = make_node("3:2", NodeType.CU, node_calls=[{"cuid": "3:99", "atLine": "3:40", "callInstId": "90"}])
+    entry.parent_function_id = main.id
+    header = pet.node_at("3:10")
+    header.node_calls = [{"cuid": "3:99", "atLine": "3:2952", "callInstId": "7"}]
+    pet.g.add_node(main.id, data=main)
+    pet.g.add_node(entry.id, data=entry)
+    _, regions = _tasks_and_regions(identify_loop_tasking(pet, [do_all], None, first_task_group=0))
+    assert regions[0].entry_call_lines == ["3:40"]
+    # without a call from outside, the group stays as it was
+    pet.g.remove_node(entry.id)
+    _, regions = _tasks_and_regions(identify_loop_tasking(pet, [do_all], None, first_task_group=0))
+    assert regions[0].entry_call_lines == []
