@@ -306,7 +306,11 @@ def _recursion_note(group: TaskGroup, display_file: str) -> list[str]:
     return [
         f"  recursion: the tasks call their own function again. The parallel region (parallel + single) belongs around "
         f"the call(s) that enter the recursion ({entries}), not into the function: there, only the tasks and the "
-        f"taskwait go (a parallel region on every level of the recursion would be a nested region each)"
+        f"taskwait go (a parallel region on every level of the recursion would be a nested region each)",
+        "  cutoff: add final(<condition>) to the task pragmas, true when the remaining work is too small to be worth a "
+        "task, e.g. a bound on a parameter that shrinks with every recursive call: without it, every call "
+        "down to the smallest creates tasks, and their overhead outweighs the work. final also runs the tasks below "
+        "it without new tasks, unlike if(). Tune the threshold by measuring (run_configuration)",
     ]
 
 
