@@ -28,6 +28,9 @@ from discopop_library.discopop_optimizer.classes.types.Aliases import DeviceID
 # the line the explorer reports for a line it does not know (a decoded unset line id of the profiler)
 UNKNOWN_LINE = 262143
 
+# appended to the task pragmas of a recursive group: the place of the missing cutoff, for the reader to fill in
+RECURSIVE_TASK_CUTOFF_MARKER = " /* DiscoPoP TODO: add the cutoff final(<condition>) */"
+
 # a statement that starts with a type: two or more identifiers (and ``*``, ``&``, ``::``, template arguments)
 # followed by an initializer; ``res = fib(n);`` and ``a[i] = f();`` have a single identifier before the ``=``
 _DECLARATION = re.compile(
@@ -450,7 +453,12 @@ class UnpackedSuggestion(object):
         line_pragma: Callable[[str, int, PragmaPosition], Pragma],
     ) -> List[Pragma]:
         """The pragmas of a group of recursive tasks: the tasks and their join in the function, the parallel region
-        around each call that enters the recursion (see ``__get_parallel_region_of_tasks_pragmas``)."""
+        around each call that enters the recursion (see ``__get_parallel_region_of_tasks_pragmas``).
+
+        The tasks lack a cutoff: without one, every level of the recursion creates tasks, down to the smallest calls,
+        and the overhead outweighs the work. The condition depends on the meaning of the function's arguments, which the
+        profile does not show, so the task pragmas carry a comment instead (it compiles) for the reader to replace by a
+        ``final(<condition>)`` clause."""
         reductions: Dict[str, List[str]] = {}
         for task in tasks:
             for entry in task.get("reduction") or []:
@@ -472,7 +480,11 @@ class UnpackedSuggestion(object):
                 inner.append(
                     line_pragma("#pragma omp taskwait", int(task["region_start_line"]), PragmaPosition.BEFORE_START)
                 )
-            inner += UnpackedSuggestion("task", task).get_pragmas(None)
+            task_pragmas = UnpackedSuggestion("task", task).get_pragmas(None)
+            for pragma in task_pragmas:
+                if pragma.pragma_str.startswith("#pragma omp task"):
+                    pragma.pragma_str += RECURSIVE_TASK_CUTOFF_MARKER
+            inner += task_pragmas
         if reductions:
             inner.append(line_pragma("}", region_end, PragmaPosition.AFTER_END))
         else:

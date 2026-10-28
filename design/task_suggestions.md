@@ -394,3 +394,7 @@ overlapping patterns through the sanity checker).
   file of the call (the code generator routes every pragma to the buffer of its own file).
 - Limits: an entry call that is a declaration gives the "not applicable as it is" comment; only calls to the function of
   the group are entries (not to another function of its cycle); without an entry call the old form remains.
+- Cutoff: the tasks of a recursive group carry no `final`/`if` clause (the condition depends on what the arguments
+  mean). The patch appends a comment (`RECURSIVE_TASK_CUTOFF_MARKER`, `/* DiscoPoP TODO: add the cutoff
+  final(<condition>) */`) to their pragmas, so it still compiles; `get_parallelization_suggestions` asks the agent
+  for the condition ("cutoff:" line of the recursion note). BOTS fib: 16.7 s without, 0.27 s with `final(n <= 25)`.
