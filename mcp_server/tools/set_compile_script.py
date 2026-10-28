@@ -181,8 +181,6 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         ctx.log_action(project_path, "set_compile_script", f"Wrote {compile_sh.name} ({len(script_body)} bytes)")
 
         result: dict[str, Any] = {
-            "status": "success",
-            "project_path": project_path,
             "path": str(compile_sh),
             "purpose": purpose,
         }
@@ -191,7 +189,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         if purpose == "validate":
             result["applies_to"] = __describe_validation_scope(configs_dir, config_name)
         result["next_step"] = setup_next_step(configs_dir)
-        ctx.log_response("set_compile_script", result)
+        ctx.log_response("set_compile_script", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]
 
     except Exception as e:

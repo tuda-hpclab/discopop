@@ -24,7 +24,7 @@ The [explorer](../tools/Explorer.md) reads `.discopop/profiler` and writes its r
 
 ## patterns.json
 
-`explorer/patterns.json` (option `--json`) contains the detected patterns. It has the keys `version` and `patterns`; `patterns` maps a pattern type to a list of patterns. Only the detectors that ran appear: `do_all` and `reduction` by default, `task` with `--enable-patterns task`, plus the always present, usually empty lists `optimizer_output` and `merged_pattern`.
+`explorer/patterns.json` (option `--json`) contains the detected patterns. It has the keys `version`, `patterns` and `enabled_patterns`; `patterns` maps a pattern type to a list of patterns. Only the detectors that ran appear: `do_all`, `reduction` and `task` by default (`--enable-patterns reduction,doall,task`), plus the always present, usually empty lists `optimizer_output` and `merged_pattern`. `enabled_patterns` lists the pattern types the detection was asked for, in the order `reduction`, `doall`, `task`, ... (e.g. `["reduction", "doall", "task"]`); the [MCP server](../tools/MCP_server.md) uses it to find out whether a result has to be detected again.
 
 ```json
 {
@@ -33,12 +33,14 @@ The [explorer](../tools/Explorer.md) reads `.discopop/profiler` and writes its r
     "optimizer_output": [],
     "merged_pattern": [],
     "do_all": [ { "pattern_id": 0, "node_id": "1:7", "start_line": "1:20", "...": "..." } ],
-    "reduction": [ { "pattern_id": 1, "node_id": "1:12", "start_line": "1:24", "...": "..." } ]
-  }
+    "reduction": [ { "pattern_id": 1, "node_id": "1:12", "start_line": "1:24", "...": "..." } ],
+    "task": []
+  },
+  "enabled_patterns": ["reduction", "doall", "task"]
 }
 ```
 
-The `version` field is not maintained at the moment and always contains the text `CURRENTLY INVALID!`. The fields of the patterns are described on the pages [Parallel patterns](Parallel_patterns/Patterns.md), [Do-All](Parallel_patterns/doall.md) and [Reduction](Parallel_patterns/reduction.md).
+The `version` field is not maintained at the moment and always contains the text `CURRENTLY INVALID!`. The fields of the patterns are described on the pages [Parallel patterns](Parallel_patterns/Patterns.md), [Do-All](Parallel_patterns/doall.md) and [Reduction](Parallel_patterns/reduction.md). The `task` list holds, per [task group](Parallel_patterns/tasks.md), one entry of `type` `TASK` per task and one of `type` `PARALLELREGION`; the fields `task_dependences` and `after_dependences` (region) and `shared`, `private`, `first_private` (task) describe the data flow of the group and are documented there.
 
 ## pattern_decisions.json
 

@@ -7,7 +7,7 @@
 # directory for details.
 
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.patterns.PatternInfo import PatternInfo
@@ -55,12 +55,22 @@ class TaskParallelismInfo(PatternInfo):
         self.first_private = first_private
         self.private = private
         self.shared = shared
+        # "<operation>:<name>" (operation "?" if unknown): variables that several tasks accumulate into or that the
+        # iterations of a loop of tasks reduce; they are not listed in shared. Set after the construction, so
+        # that the patterns.json of older runs, which has no such entries, stays loadable.
+        self.reduction: List[str] = []
+        # the variables whose value after the last iteration of a loop of tasks is needed after the loop
+        self.last_private: List[str] = []
         self.in_dep: List[str] = []
         self.out_dep: List[str] = []
         self.in_out_dep: List[str] = []
         self.critical_sections: List[str] = []
         self.atomic_sections: List[str] = []
         self.task_group: List[int] = []
+        # the instructions of the task (instruction ids of this build), see design/instruction_focus.md
+        self.instruction_ids: List[int] = []
+        # set if one task is created per iteration of a loop: the line of the loop (file id:line)
+        self.loop_start_line: Optional[str] = None
 
     def __str__(self) -> str:
         return (
@@ -74,6 +84,8 @@ class TaskParallelismInfo(PatternInfo):
             f'first_private: {" ".join(self.first_private)}\n'
             f'private: {" ".join(self.private)}\n'
             f'shared: {" ".join(self.shared)}\n'
+            f'reduction: {" ".join(self.reduction)}\n'
+            f'last_private: {" ".join(self.last_private)}\n'
             f'in_dep: {" ".join(self.in_dep)}\n'
             f'out_dep: {" ".join(self.out_dep)}\n'
             f'in_out_dep: {" ".join(self.in_out_dep)}\n'
@@ -85,6 +97,11 @@ class TaskParallelismInfo(PatternInfo):
 
 class ParallelRegionInfo(PatternInfo):
     """Class, that contains parallel region info."""
+
+    # Set if the function that holds the group reaches itself (a recursion): the lines ("file id:line") of the
+    # calls that enter the recursion from outside of it. The parallel region belongs around them, not into the
+    # function. The class level default keeps the patterns.json of older runs loadable.
+    entry_call_lines: List[str] = []
 
     def __init__(
         self,
@@ -102,6 +119,22 @@ class ParallelRegionInfo(PatternInfo):
         self.type = type
         self.task_group: List[int] = [] if task_group is None else task_group
         self.contains_patterns: List[int] = [] if contained_tasks is None else [t.pattern_id for t in contained_tasks]
+        # the instructions of the contained tasks (instruction ids of this build)
+        self.instruction_ids: List[int] = list(
+            dict.fromkeys(i for t in (contained_tasks or []) for i in t.instruction_ids)
+        )
+        # set if the tasks are created per iteration of a loop: the line of the loop (file id:line)
+        self.loop_start_line: Optional[str] = None
+        # set if the tasks are created per iteration of a loop: the last line of the loop (file id:line), where the
+        # parallel region has to end; the tasks themselves end before it (the closing brace of the body)
+        self.loop_end_line: Optional[str] = None
+        # a later task depends on an earlier one: {"from_task", "to_task" (pattern ids), "variable",
+        # "kind": RAW | WAR | WAW}
+        self.task_dependences: List[Dict[str, Any]] = []
+        # the code after the region depends on a task: {"task" (pattern id), "variable", "kind": RAW | WAR | WAW,
+        # "line"}
+        self.after_dependences: List[Dict[str, Any]] = []
+        self.entry_call_lines = []
 
     def __str__(self) -> str:
         return (
@@ -111,4 +144,5 @@ class ParallelRegionInfo(PatternInfo):
             f"pragma: \n\t{self.pragma}\n"
             f"Parallel Region Start line: {self.region_start_line}\n"
             f"Parallel Region End line {self.region_end_line}\n"
+            f'Entry calls of the recursion: {" ".join(self.entry_call_lines)}\n'
         )

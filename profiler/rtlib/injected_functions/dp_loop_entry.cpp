@@ -32,7 +32,7 @@ void __dp_loop_entry(LID lid, std::int32_t loop_id, std::int32_t instruction_id)
   DP_CALLBACK_SCOPE(LOOP_ENTRY);
 
   const auto function_stack_level = function_manager->GetCurrentStackLevel();
-  const auto is_new_loop = loop_manager->IsNewLoop(loop_id);
+  const auto is_new_loop = loop_manager->IsNewLoop(function_stack_level, loop_id);
 
   if (is_new_loop) {
     loop_manager->CreateNewLoop(function_stack_level, loop_id, lid);
@@ -42,16 +42,15 @@ void __dp_loop_entry(LID lid, std::int32_t loop_id, std::int32_t instruction_id)
     loop_manager->IterateLoop(function_stack_level);
 
     // Handle error made in instrumentation.
-    // When recorded loopStack->top().funcLevel is different
-    // with the current FuncStackLevel, two possible errors
-    // happen during instrumentation:
+    // The entry of a loop from a deeper function level than the one recorded for the loop on top
+    // is a new loop (see IsNewLoop). When the recorded level is higher or the levels differ for
+    // another reason, two possible errors happen during instrumentation:
     // 1) the loop entry is wrong, earlier than the real place;
-    // 2) return of at least one function call inside the loop
-    //    is missing.
-    // So far it seems the first case happens sometimes but
-    // the second case has never been seen. Thus whenever we
-    // encounter such problem, we trust the current FuncStackLevel
-    // and update top().funcLevel.
+    // 2) the return of at least one function call inside the loop is missing (the landing pad
+    //    closes the levels of the functions an exception leaves).
+    // So far it seems the first case happens sometimes but the second case has never been
+    // seen. Thus whenever we encounter such problem, we trust the current FuncStackLevel and
+    // update top().funcLevel.
 
     loop_manager->CorrectFuncLevel(function_stack_level);
   }

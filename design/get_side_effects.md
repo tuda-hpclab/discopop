@@ -138,7 +138,8 @@ insertion (`TaskGraph.py:3683-3690`), never re-built as a cross product.
   passes its own buffer) and is not reported.
 - `via`: function chain from `F` to `fn(x)` (instance ancestry), `null` if `fn(x) = F`.
 - `name` = the name at the inside instruction from the instruction-name table
-  (§2.2); for a crossing record also `outside_names`.
+  (§2.2); for a crossing record also `outside_names`: the name of the outside end
+  together with the file of that end (`OutsideName(name, file_id)`).
 - `source`: `observed`.
 
 **Static fallback (globals only).** A global referenced (AST `DeclRefExpr`) in a
@@ -519,7 +520,9 @@ Two independent reviews (semantics; architecture/API/tests). Fixed:
   references and pointer wrappers (smart pointers, iterators, span, string_view).
 - **unprofiled_calls** are matched by the referenced declaration where known, so a
   project `Logger::write` no longer hides POSIX `write`.
-- **Output.** `outside_names` without linker names or the effect's own name; duplicate
+- **Output.** `outside_names` without linker names or the effect's own name, each with the
+  file of its access (the text output adds "(in util.h)" when that is not the function's
+  file, as for sites); duplicate
   notes removed (coverage is explained by `next_step`); sites capped also with
   `var_name` (50); recursive `via` runs collapsed (`recurse(int) x5`); callee and
   unprofiled lists capped at 20 with `num_*` totals; tool description <= 2048 chars

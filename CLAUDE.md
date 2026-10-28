@@ -81,7 +81,7 @@ This document contains critical information about working with this codebase. Fo
 ### MCP server end-to-end tests
 - `test/end_to_end/mcp_server` drives the MCP server as a client does: it starts `python -m mcp_server.server` from the repository root (so the server code of the checkout is tested) as a stdio subprocess and calls it with the MCP SDK client
 - run only them via `venv/bin/python -m pytest test/end_to_end/mcp_server`; they are also part of the end-to-end command above and of the bare `pytest` run
-- `test_stdio_server.py` (protocol, tool listing, setup tools, error paths) and `test_daemon_proxy.py` (stdio proxy forwarding to a `--daemon`) need no profiler; `test_workflows.py` (pipeline, auto-tuning, patches, failure paths, cancellation) runs the real pipeline on `src/code.cpp` and is skipped when `discopop_cc`/`discopop_cxx` are not installed
+- `test_stdio_server.py` (protocol, tool listing, setup tools, error paths) and `test_daemon_proxy.py` (stdio proxy forwarding to a `--daemon`) need no profiler; `test_workflows.py` (pipeline, suggestions, run_configuration, failure paths, cancellation) runs the real pipeline on `src/code.cpp` and is skipped when `discopop_cc`/`discopop_cxx` are not installed
 - every server gets a free `--daemon-port`, so a developer's daemon on the default port never takes over the calls; known server bugs are marked `unittest.expectedFailure` with a comment naming the cause
 
 ### Python unit tests (all)
@@ -104,6 +104,7 @@ This document contains critical information about working with this codebase. Fo
 - `pytest -m "not e2e and not profiler"` runs the unit tests only; the step "Python unit tests" of the CI job `python_tests` runs exactly this
 - `test/wip_end_to_end` is work in progress and opt-in: it only runs with `DP_RUN_WIP_TESTS=1` (`DP_RUN_WIP_TESTS=1 venv/bin/python -m pytest test/wip_end_to_end`); CI does not run it
 - all suites are run with pytest; many tests are still written as `unittest.TestCase` classes, which pytest runs unchanged. Write new tests in pytest style
+- test data (inputs too large to write inline, e.g. excerpts of a real `patterns.json`) is data, not code: put it as JSON into a `testdata/` directory next to the tests and load it in a pytest fixture in the `conftest.py` of that directory (e.g. `mcp_server/tools/testdata`, `mcp_server/tools/conftest.py`); it is not packaged (`include-package-data = false`) and needs no license tag (`scripts/dev/check-license.sh` skips `testdata/`)
 - `verbosity_subtests = "0"` (root `pyproject.toml`) hides passing subtests even with `-v`; `-o verbosity_subtests=1` lists them
 
 ### Python unit tests (discopop_explorer)

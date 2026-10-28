@@ -30,4 +30,4 @@ class TaskEndContext(Context):
         return "TaskEnd"
 
     def set_task_parent(self, task_parent_context: TaskParentContext) -> None:
-        self.task_parent = task_parent_context
+        self.task_parent_context = task_parent_context

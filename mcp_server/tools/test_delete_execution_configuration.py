@@ -40,7 +40,7 @@ class TestDeleteExecutionConfiguration(unittest.TestCase):
 
     def test_deletes_the_configuration_directory_only(self) -> None:
         data = self._handle("large")
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertFalse(os.path.exists(os.path.join(self.configs_dir, "large")))
         self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "small", "execute.sh")))
         self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "seq_settings.json")))

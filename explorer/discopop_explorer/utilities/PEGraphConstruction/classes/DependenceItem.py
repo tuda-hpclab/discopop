@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -19,6 +19,11 @@ class DependenceItem(object):
     var_name: Any
     memory_region: Any
     is_gep_result_dependency: bool
+    # the instruction ids and callpath states of the ends, None for ends recorded without them
+    source_instruction_id: Optional[int] = None
+    sink_instruction_id: Optional[int] = None
+    source_state_id: Optional[str] = None
+    sink_state_id: Optional[str] = None
     # TODO improve typing
 
     def is_equal(self, other: DependenceItem) -> bool:

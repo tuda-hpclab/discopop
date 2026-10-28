@@ -216,7 +216,7 @@ def _work_contexts_at(
     tg: TaskGraph,
     location: str,
     state_id: str,
-    location_index: Dict[LineID, Set[WorkContext]],
+    location_index: Dict[str, Set[WorkContext]],
     instruction_ids: Dict[str, str] = {},
 ) -> Set[Context]:
     state_ids_cache: Dict[Context, FrozenSet[int]] = {}
@@ -238,7 +238,7 @@ def _work_context_in_state(state_id: int) -> WorkContext:
 
 def test_work_contexts_by_location_without_state(build_task_graph: Any) -> None:
     first, second = WorkContext(), WorkContext()
-    index = {LineID("1:5"): {first, second}}
+    index: Dict[str, Set[WorkContext]] = {LineID("1:5"): {first, second}}
     tg = build_task_graph(None)
 
     assert _work_contexts_at(tg, "1:5", "NO_STATE", index) == {first, second}
@@ -246,9 +246,21 @@ def test_work_contexts_by_location_without_state(build_task_graph: Any) -> None:
     assert _work_contexts_at(tg, "*", "NO_STATE", index) == set(), "an unknown location matches nothing"
 
 
+def test_work_contexts_by_instruction_id_are_exact(build_task_graph: Any) -> None:
+    """Two contexts share a line; the instruction decides. One that no CU holds falls back to its line, one of
+    a deleted CU (in the index without contexts) to nothing."""
+    first, second = WorkContext(), WorkContext()
+    index: Dict[str, Set[WorkContext]] = {LineID("1:5"): {first, second}, "851": {first}, "852": set()}
+    tg = build_task_graph(None)
+
+    assert _work_contexts_at(tg, "851", "NO_STATE", index) == {first}
+    assert _work_contexts_at(tg, "852", "NO_STATE", index, {"852": "1:5"}) == set()
+    assert _work_contexts_at(tg, "853", "NO_STATE", index, {"853": "1:5"}) == {first, second}
+
+
 def test_work_contexts_by_location_filter_by_inherited_state(build_task_graph: Any) -> None:
     in_state_3, in_state_4 = _work_context_in_state(3), _work_context_in_state(4)
-    index = {LineID("1:5"): {in_state_3, in_state_4}}
+    index: Dict[str, Set[WorkContext]] = {LineID("1:5"): {in_state_3, in_state_4}}
     tg = build_task_graph(None)
 
     assert _work_contexts_at(tg, "1:5", "3", index) == {in_state_3}
@@ -258,7 +270,7 @@ def test_work_contexts_by_location_filter_by_inherited_state(build_task_graph: A
 def test_work_contexts_by_location_translate_instruction_ids(build_task_graph: Any) -> None:
     """Locations given as instruction ids are mapped to their source line first."""
     work = WorkContext()
-    index = {LineID("1:5"): {work}}
+    index: Dict[str, Set[WorkContext]] = {LineID("1:5"): {work}}
     tg = build_task_graph(None)
 
     assert _work_contexts_at(tg, "1234", "NO_STATE", index, instruction_ids={"1234": "1:5"}) == {work}

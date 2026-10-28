@@ -50,7 +50,7 @@ TOOL = Tool(
         "    validation_compile_script, each null when the configuration does not define it\n"
         "\n"
         "Example output:\n"
-        '  {"status":"success","compile_script":"#!/bin/bash\\n$CXX $CXXFLAGS main.cpp -o myapp\\n",'
+        '  {"compile_script":"#!/bin/bash\\n$CXX $CXXFLAGS main.cpp -o myapp\\n",'
         '"validation_compile_script":null,'
         '"configurations":[{"name":"default","execute_script":"#!/bin/bash\\n./myapp\\n",'
         '"compile_script_override":null,"validate_script":null,"validation_compile_script":null}]}'
@@ -100,8 +100,6 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 )
 
         result = {
-            "status": "success",
-            "project_path": project_path,
             "compile_script": compile_script,
             "validation_compile_script": validation_compile_script,
             "settings": settings,
@@ -111,7 +109,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         # is ready has a reason of its own, and is not to be steered into the pipeline.
         if not (compile_script_configured(configs_dir) and configuration_names(configs_dir)):
             result["next_step"] = setup_next_step(configs_dir)
-        ctx.log_response("get_configurations", result)
+        ctx.log_response("get_configurations", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]
 
     except Exception as e:

@@ -42,6 +42,7 @@ from typing import Any, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 import pytest
 
+from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.classes.PEGraph.LoopNode import LoopNode
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.classes.TaskGraph.Contexts.Context import Context
@@ -86,7 +87,12 @@ def _task_graph_from_profile(name: str, tmp_path: Path) -> TaskGraph:
     shutil.copytree(PROFILES / name, profile)
     # the parser collects the line -> CU maps in module globals and never resets them, so a second
     # PET built in the same process would see the CUs of the first one (pre-existing, see PLAN.md)
-    for line_map in (parser.readlineToCUIdMap, parser.writelineToCUIdMap, parser.lineToCUIdMap):
+    for line_map in (
+        parser.readlineToCUIdMap,
+        parser.writelineToCUIdMap,
+        parser.lineToCUIdMap,
+        parser.instructionToCUIdMap,
+    ):
         line_map.clear()
     pet = PEGraphX.from_parsed_input(
         *parse_inputs(  # type: ignore[arg-type]
@@ -1281,9 +1287,10 @@ _RECORD_ENDS_AT_CUT_LINES: Dict[str, Dict[str, int]] = {
     # return value; since the hybrid-analysis records carry states, one end per state of the returning
     # iteration)
     "exitinloop": {"early exits": 9, "exception unwinding": 0},
-    # the catch handler runs once (g_caught, under the state work threw from) and the landing pads
-    # copy the exception object (exn.slot, ehselector.slot)
-    "trycatch": {"early exits": 0, "exception unwinding": 6},
+    # the catch handler runs once (g_caught, under the state work threw from: the INIT of the store and
+    # the WAR from the load to the store of `g_caught += 1`) and the landing pads copy the exception
+    # object (exn.slot, ehselector.slot)
+    "trycatch": {"early exits": 0, "exception unwinding": 7},
 }
 
 
@@ -1322,6 +1329,26 @@ def test_exception_unwind_paths_are_cut(tmp_path: Path) -> None:
     callpaths = _callpaths(tg)
     assert [callpaths[state][-2:] for state in tg.approximately_assigned_state_ids] == [["call_41", "_ZN5GuardD2Ev"]]
     assert tg.state_assignment_statistics["observed"] == tg.state_assignment_statistics["assigned"] + 1
+
+
+def test_dependencies_keep_the_instruction_ids_and_states_of_their_ends(tmp_path: Path) -> None:
+    """trycatch: the record 36@69 NOM RAW 57@50 (g_sum, the load 36 reads what the store 57 wrote)
+    in the TaskGraph, and 100@31 NOM WAR 98@31 (`g_caught += 1` in the catch handler, which is cut
+    from the TaskGraph) in the PET."""
+    tg = _task_graph_from_profile("trycatch", tmp_path)
+    registered = {d for context in tg.contexts for _, d in context.outgoing_dependencies}
+    assert all(d.source_instruction_id is not None and d.sink_instruction_id is not None for d in registered)
+    assert ("g_sum", 57, 36, "50", "69") in {
+        (d.var_name, d.source_instruction_id, d.sink_instruction_id, d.source_state_id, d.sink_state_id)
+        for d in registered
+        if d.dtype == DepType.RAW
+    }
+    assert ("g_caught", 98, 100, "31", "31") in {
+        (d.var_name, d.source_instruction_id, d.sink_instruction_id, d.source_state_id, d.sink_state_id)
+        for _, _, data in tg.pet.g.edges(data=True)
+        for d in [data["data"]]
+        if d.dtype == DepType.WAR
+    }
 
 
 # --- recursion with a loop ------------------------------------------------------------------

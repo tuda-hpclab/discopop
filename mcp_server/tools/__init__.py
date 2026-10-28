@@ -5,5 +5,3 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-
-from mcp_server.tools import manage_patches  # noqa: F401  makes the submodule an attribute of the package

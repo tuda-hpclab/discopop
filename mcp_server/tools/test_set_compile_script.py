@@ -36,7 +36,7 @@ class TestSetCompileScript(unittest.TestCase):
 
     def test_omitted_config_name_writes_shared_script(self) -> None:
         data = self._handle()
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertNotIn("config_name", data)
         shared_path = os.path.join(self.configs_dir, "compile.sh")
         self.assertEqual(data["path"], shared_path)
@@ -45,7 +45,7 @@ class TestSetCompileScript(unittest.TestCase):
 
     def test_valid_config_name_writes_per_config_script_only(self) -> None:
         data = self._handle(config_name="default")
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertEqual(data["config_name"], "default")
         per_config_path = os.path.join(self.configs_dir, "default", "compile.sh")
         self.assertEqual(data["path"], per_config_path)
@@ -54,7 +54,7 @@ class TestSetCompileScript(unittest.TestCase):
 
     def test_purpose_validate_writes_shared_validation_script(self) -> None:
         data = self._handle(purpose="validate")
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertEqual(data["purpose"], "validate")
         shared_path = os.path.join(self.configs_dir, "compile_validate.sh")
         self.assertEqual(data["path"], shared_path)

@@ -5,15 +5,27 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-from typing import Optional
+from typing import Iterable, List, Optional
 from discopop_explorer.classes.patterns.PatternBase import PatternBase
 
+from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.discopop_optimizer.classes.system.devices.DeviceTypeEnum import DeviceTypeEnum
 
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.classes.PEGraph.LoopNode import LoopNode
+from discopop_explorer.classes.PEGraph.CUNode import CUNode
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.utils import calculate_workload, calculate_per_iteration_workload_of_loop
+
+
+def instruction_ids_of(nodes: Iterable[Node]) -> List[int]:
+    """The instruction ids of the CUs among the nodes, each once, in the order of the nodes. Other nodes hold no
+    instructions themselves."""
+    ids: List[int] = []
+    for node in nodes:
+        if isinstance(node, CUNode):
+            ids += node.instruction_ids
+    return list(dict.fromkeys(ids))
 
 
 class PatternInfo(PatternBase):
@@ -28,6 +40,10 @@ class PatternInfo(PatternBase):
     dp_optimizer_device_id: Optional[int] = None  # used by discopop_optimizer. unused by discopop_explorer.
     device_id: Optional[int]
     device_type: Optional[DeviceTypeEnum]
+    # hotspot class and average runtime of the code of the pattern, set for the task and parallel_region patterns
+    # (design/task_suggestions.md, 3.9). Class attributes: the patterns.json of older runs has no such entries.
+    hotspot_type: Optional[HotspotType] = None
+    hotspot_runtime: Optional[float] = None
 
     def __init__(self, node: Node):
         """

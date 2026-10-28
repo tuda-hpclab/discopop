@@ -11,7 +11,7 @@ import os
 import re
 from collections import defaultdict
 from os.path import abspath, dirname
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from lxml import objectify  # type: ignore
 from lxml.objectify import ObjectifiedElement  # type: ignore
@@ -21,6 +21,12 @@ from discopop_explorer.utilities.PEGraphConstruction.classes.LoopData import Loo
 
 # Map to record which line belongs to read set of nodes. LID -> NodeIds
 readlineToCUIdMap = defaultdict(set)  # type: ignore
+# Map from the id of an instruction to the id of the CU that holds it. Exact, in contrast to the line maps.
+instructionToCUIdMap: Dict[int, str] = dict()
+# Map from the id of an instruction to its line (file id:line). Instructions without position are not listed.
+instructionToLineMap: Dict[int, str] = dict()
+# the instructions that only jump (br, switch, ret, unreachable), as listed in the CUs of Data.xml
+jumpInstructionIds: Set[int] = set()
 # Map to record which line belongs to write set of nodes. LID -> NodeIds
 writelineToCUIdMap = defaultdict(set)  # type: ignore
 # Map to record which line belongs to set of nodes. LID -> NodeIds
@@ -41,6 +47,12 @@ def __parse_xml_input(xml_fd: TextIOWrapper) -> Dict[str, ObjectifiedElement]:
     for node in parsed_cu.Node:
         node.childrenNodes = str(node.childrenNodes).split(",") if node.childrenNodes else []
         if node.get("type") == "0":
+            for instruction_id in str(node.instructionIDs).split(","):
+                if instruction_id.strip():
+                    instructionToCUIdMap[int(instruction_id)] = node.get("id")
+            for jump_id in str(getattr(node, "jumpInstructionIDs", "")).split(","):
+                if jump_id.strip():
+                    jumpInstructionIds.add(int(jump_id))
             for instruction_id in str(node.writePhaseLines).split(","):
                 writelineToCUIdMap[instruction_id].add(node.get("id"))
             for instruction_id in str(node.readPhaseLines).split(","):
@@ -104,6 +116,18 @@ def __map_dummy_nodes(cu_dict: Dict[str, ObjectifiedElement]) -> Dict[str, Objec
     return cu_dict
 
 
+def _split_location(
+    location: str, instruction_to_line_id_mapping: Dict[str, str]
+) -> Tuple[Optional[int], Optional[str], str]:
+    """(instruction id, callpath state, line id) of an end of a dependency record: an instruction id with an
+    optional "@state", or a line id (file id:line) of a record without instruction id"""
+    if ":" in location:
+        return None, None, location
+    instruction, _, state = location.partition("@")
+    line = instruction_to_line_id_mapping.get(instruction, instruction)
+    return (int(instruction) if instruction.isdigit() else None), (state if state else None), line
+
+
 def __parse_dep_file(dep_fd: TextIOWrapper, output_path: str) -> Tuple[List[DependenceItem], List[LoopData]]:
     dependencies_list: List[DependenceItem] = []
     loop_data_list: List[LoopData] = []
@@ -134,6 +158,7 @@ def __parse_dep_file(dep_fd: TextIOWrapper, output_path: str) -> Tuple[List[Depe
                 line_num = line_id_split[1]
                 _column_num = line_id_split[2]
                 instruction_to_line_id_mapping[instruction_id] = str(file_id) + ":" + str(line_num)
+                instructionToLineMap[int(instruction_id)] = str(file_id) + ":" + str(line_num)
 
     for line in dep_fd.readlines() + static_dependency_lines:
         dep_fields = line.split()
@@ -179,22 +204,27 @@ def __parse_dep_file(dep_fd: TextIOWrapper, output_path: str) -> Tuple[List[Depe
                 var_name = var_name.replace("GEPRESULT_", "")
                 is_gep_result_dependency = True
 
-            # convert instruction ids to lineIds for backwards compatibility
-            source = source_fields[0]
-            if ":" not in sink:
-                if "@" in sink:
-                    sink = sink[: sink.index("@")]  # remove state information
-                if sink in instruction_to_line_id_mapping:
-                    sink = instruction_to_line_id_mapping[sink]
-            if ":" not in source:
-                if "@" in source:
-                    source = source[: source.index("@")]  # remove state information
-                if source in instruction_to_line_id_mapping:
-                    source = instruction_to_line_id_mapping[source]
+            # keep the instruction ids and callpath states of the ends, and convert the ids to line ids,
+            # which the PEG is built on
+            sink_instruction_id, sink_state_id, sink_line = _split_location(sink, instruction_to_line_id_mapping)
+            source_instruction_id, source_state_id, source_line = _split_location(
+                source_fields[0], instruction_to_line_id_mapping
+            )
 
             # register dependencies
             dependencies_list.append(
-                DependenceItem(sink, source, type, var_name, aa_var_name, is_gep_result_dependency)
+                DependenceItem(
+                    sink_line,
+                    source_line,
+                    type,
+                    var_name,
+                    aa_var_name,
+                    is_gep_result_dependency,
+                    source_instruction_id,
+                    sink_instruction_id,
+                    source_state_id,
+                    sink_state_id,
+                )
             )
 
     return dependencies_list, loop_data_list

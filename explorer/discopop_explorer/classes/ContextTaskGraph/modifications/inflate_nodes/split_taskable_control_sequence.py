@@ -44,7 +44,10 @@ def split_taskable_control_sequence(
     )
     while sequences_split:
         sequences_split = False
+        # in program order (the nodes are in the order of the TaskGraph): of overlapping candidates, the earlier
+        # sequence is split first
         queue: List[Context] = list(ctg.graph.nodes())
+        queue.reverse()
         while len(queue) > 0:
             node = queue.pop()
             # check if node is of type Work or CombinedContext

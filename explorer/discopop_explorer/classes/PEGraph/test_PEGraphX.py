@@ -36,6 +36,27 @@ def test_node_at_returns_the_node_added_to_the_graph(make_node: MakeNode, build_
     assert pet.node_at(cu.id) is cu
 
 
+# --- get_line_ids_of_instructions ---------------------------------------------
+
+
+def test_the_lines_of_instructions_are_listed_once_and_those_without_position_are_skipped(
+    make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet = build_pet_graph([make_node("1:1", NodeType.CU)])
+    pet.instruction_lines = {"10": "3:31", "11": "3:31", "12": "3:32"}  # 13 has no position
+    assert pet.get_line_ids_of_instructions([12, 10, 13, 11]) == ["3:32", "3:31"]
+    assert pet.get_line_ids_of_instructions([]) == []
+
+
+def test_lines_that_only_jump_are_no_statement_lines(make_node: MakeNode, build_pet_graph: BuildPetGraph) -> None:
+    pet = build_pet_graph([make_node("1:1", NodeType.CU)])
+    pet.instruction_lines = {"10": "3:31", "11": "3:32", "12": "3:33"}
+    pet.jump_only_lines = {"3:32"}
+    assert pet.get_statement_line_ids_of_instructions([10, 11, 12]) == ["3:31", "3:33"]
+    # without another line, the lines of the jumps are kept
+    assert pet.get_statement_line_ids_of_instructions([11]) == ["3:32"]
+
+
 # --- get_node_parent_id -------------------------------------------------------
 
 
@@ -257,3 +278,19 @@ def test_enforce_single_function_exit_node_adds_exit_node_after_last_successor(
 
     predecessors = {s for s, t, d in in_edges(pet, exit_node.id, EdgeType.SUCCESSOR)}
     assert predecessors == {cu2.id}
+
+
+def test_a_dependence_end_belongs_to_the_cu_that_holds_its_instruction() -> None:
+    from discopop_explorer.classes.PEGraph.PEGraphX import _cu_ids
+    from discopop_explorer.utilities.PEGraphConstruction import parser
+
+    parser.instructionToCUIdMap.clear()
+    parser.instructionToCUIdMap.update({849: "3:237", 853: "3:238"})
+    try:
+        # both CUs have line 32 in their lines; the instruction decides
+        assert _cu_ids(853, {"3:237", "3:238"}) == {"3:238"}
+        # an end without an instruction id, or of an instruction no CU holds, falls back to the line
+        assert _cu_ids(None, {"3:237", "3:238"}) == {"3:237", "3:238"}
+        assert _cu_ids(1, {"3:237"}) == {"3:237"}
+    finally:
+        parser.instructionToCUIdMap.clear()

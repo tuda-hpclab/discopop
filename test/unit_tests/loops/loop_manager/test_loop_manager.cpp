@@ -43,7 +43,7 @@ TEST_F(LoopManagerTest, testInitialization) {
   }
 
   for (auto i = 0; i < 100; i++) {
-    ASSERT_TRUE(lm.IsNewLoop(i));
+    ASSERT_TRUE(lm.IsNewLoop(0, i));
   }
 
   for (auto i = 0; i < 100; i++) {
@@ -74,9 +74,21 @@ TEST_F(LoopManagerTest, testIsNewLoop) {
   lm.CreateNewLoop(2, 2, 1);
   lm.CreateNewLoop(1, 3, 0);
 
-  ASSERT_TRUE(lm.IsNewLoop(1));
-  ASSERT_TRUE(lm.IsNewLoop(2));
-  ASSERT_FALSE(lm.IsNewLoop(3));
+  ASSERT_TRUE(lm.IsNewLoop(1, 1));
+  ASSERT_TRUE(lm.IsNewLoop(1, 2));
+  ASSERT_FALSE(lm.IsNewLoop(1, 3));
+}
+
+TEST_F(LoopManagerTest, testTheEntryOfARecursiveInstanceOfTheLoopOnTopIsANewLoop) {
+  auto lm = dp::LoopManager();
+
+  lm.CreateNewLoop(1, 3, 0);
+
+  // from the function of the loop: the next iteration
+  ASSERT_FALSE(lm.IsNewLoop(1, 3));
+  // from a recursive call of the function (a deeper level): an instance of the loop of its own
+  ASSERT_TRUE(lm.IsNewLoop(2, 3));
+  ASSERT_TRUE(lm.IsNewLoop(5, 3));
 }
 
 TEST_F(LoopManagerTest, testIterateLoop) {

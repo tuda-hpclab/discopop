@@ -20,6 +20,7 @@ import networkx as nx
 from discopop_explorer.utilities.ASTUtils.ASTLoader import ClangASTLoader
 from discopop_explorer.utilities.ASTUtils.ASTGraph import ClangASTGraph
 from discopop_explorer.utilities.ASTUtils.ASTQueries import (
+    ASTQueries,
     ASTVariableAndTypeQueries,
 )
 from discopop_explorer.utilities.ASTUtils.ASTVisualization import ASTVisualization
@@ -132,6 +133,27 @@ class ASTPatternDetectionHelper:
             self._variables_at_location_cache[cache_key] = cached
         # a copy, so that a caller mutating the returned list cannot corrupt the cache
         return list(cached)
+
+    def get_referenced_names(self, file_id: Union[int, str], first_line: int, last_line: int) -> FrozenSet[str]:
+        """The names the code on the lines refers to (the references to declarations, e.g. ``a`` and ``k`` of
+        ``put(&a, k);``, and ``put`` itself), also the ones the profiler cannot tell: a variable whose address is taken
+        is neither read nor written there. Empty when the file is unknown or the AST has not been loaded."""
+        if not self.ast_graph:
+            return frozenset()
+        if isinstance(file_id, int):
+            file_path = self.file_mapping.get(file_id)
+            if file_path is None:
+                return frozenset()
+            file_path_str = str(file_path)
+        else:
+            file_path_str = file_id
+        names: set[str] = set()
+        for line in range(first_line, last_line + 1):
+            for node_id in ASTQueries.find_nodes_at_location(self.ast_graph, file_path_str, line):
+                attrs = self.ast_graph.nodes[node_id]
+                if attrs.get("kind") == "DeclRefExpr" and attrs.get("referenced_name"):
+                    names.add(str(attrs["referenced_name"]))
+        return frozenset(names)
 
     def get_variables_assigned_in_loop_at(self, file_id: Union[int, str], line: int) -> FrozenSet[str]:
         """Get the variables assigned directly inside the loop whose header is at a location.

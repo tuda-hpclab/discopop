@@ -826,7 +826,19 @@ struct HotspotDetection_new_PM_adaptor : public PassInfoMixin<HotspotDetection_n
     return PreservedAnalyses::all();
   }
 
+  // CMake compiles probe programs (CMakeCCompilerId.c, TryCompile-*/testCCompiler.c) below the build
+  // directory of the project, the former from within their directory. They are not part of the
+  // project, and registering them leaves entries of files in FileMapping.txt that may not exist anymore.
+  static bool isCMakeProbe(const Module &M) {
+    std::error_code ec;
+    const string cwd = std::filesystem::current_path(ec).string();
+    return cwd.find("/CMakeFiles/") != string::npos || M.getSourceFileName().find("/CMakeFiles/") != string::npos;
+  }
+
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
+    if (isCMakeProbe(M)) {
+      return PreservedAnalyses::all();
+    }
     errs() << "Running HotspotDetection pass on Module: \n";
     //const ModuleAnalysisManager &MAM = AM.getResult<ModuleAnalysisManagerFunctionProxy>(F).getManager();
     HotspotPass().runOnModule(M, MAM);

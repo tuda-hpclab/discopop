@@ -29,15 +29,12 @@ SETUP_TOOLS = {
 ANALYSIS_TOOLS = {
     "get_project_status",
     "get_configurations",
-    "get_execution_results",
-    "get_data_dependencies",
     "get_side_effects",
     "gather_data",
     "get_hotspots",
-    "get_parallelization_patches",
+    "get_parallelization_suggestions",
     "explain_parallelization",
-    "run_auto_tuning",
-    "manage_patches",
+    "run_configuration",
 }
 
 
@@ -49,7 +46,7 @@ class TestStdioProtocol(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(init.capabilities.tools)
             instructions = init.instructions or ""
             self.assertIn("DiscoPoP", instructions)
-            for step in ("initialize_discopop_directory", "set_compile_script", "gather_data", "run_auto_tuning"):
+            for step in ("initialize_discopop_directory", "set_compile_script", "gather_data", "get_hotspots"):
                 self.assertIn(step, instructions)
             # Claude Code cuts instructions off after 2048 characters
             self.assertLessEqual(len(instructions), 2048)
@@ -126,7 +123,7 @@ class TestArgumentValidation(unittest.IsolatedAsyncioTestCase):
             async with mcp_session() as server:
                 result = await server.call("initialize_discopop_directory", {"project_path": project, "reset": "false"})
                 self.assertFalse(result.is_error, result)
-                self.assertEqual(result.data["status"], "success")
+                self.assertNotIn("status", result.data)
 
 
 class TestSetupWorkflow(unittest.IsolatedAsyncioTestCase):
@@ -168,7 +165,7 @@ class TestSetupWorkflow(unittest.IsolatedAsyncioTestCase):
                 {"project_path": project, "base_cc": "gcc", "base_cxx": "g++", "cxxflags": "-O2"},
             )
             self.assertFalse(result.is_error, result)
-            self.assertEqual(result.data["status"], "success")
+            self.assertNotIn("status", result.data)
             created = {Path(f).name for f in result.data["created_files"]}
             self.assertEqual(
                 created,
@@ -283,7 +280,6 @@ class TestSetupWorkflow(unittest.IsolatedAsyncioTestCase):
                 ("delete_execution_configuration", {"config_name": ".."}),
                 ("set_compile_script", {"config_name": "../x", "script_body": "true"}),
                 ("gather_data", {"config_name": "../x"}),
-                ("run_auto_tuning", {"config_name": "/tmp"}),
             ):
                 with self.subTest(f"{tool} with config_name {args['config_name']!r}"):
                     result = await server.call(tool, {"project_path": project, **args})
@@ -309,8 +305,7 @@ class TestSetupWorkflow(unittest.IsolatedAsyncioTestCase):
 
             # --- tools that need analysis results report so instead of failing obscurely
             before_analysis: list[tuple[str, dict[str, Any]]] = [
-                ("get_parallelization_patches", {}),
-                ("manage_patches", {"action": "list"}),
+                ("get_parallelization_suggestions", {}),
                 ("explain_parallelization", {"file_path": str(Path(project) / "code.cpp"), "start_line": 1}),
                 ("get_side_effects", {"function": "main"}),
             ]

@@ -107,8 +107,8 @@ To use the result, apply the selected suggestions with the [patch applicator](Pa
 Due to the empirical nature of the optimization approach described above, varying sets of input data might yield differing selected configurations.
 For this reason it is important, that the used input data (typically specified in `execute.sh`) is representative for a production run of the software and large enough to allow for beneficial parallelizations.
 
-## Invocation from the GUI and from an LLM agent
-The *Autotuning* tab of the [GUI](GUI.md) runs the tuner and shows a live plot of the measurements. The [DiscoPoP MCP server](MCP_server.md) offers it as the tool `run_auto_tuning`, which runs the search and returns the selected suggestion ids; with `apply=true` it applies them, otherwise the ids can be applied with the tool `manage_patches`.
+## Invocation from the GUI
+The *Autotuning* tab of the [GUI](GUI.md) runs the tuner and shows a live plot of the measurements.
 
 ## Note
 For the available run-time arguments, see the table above or the help string of the tool.

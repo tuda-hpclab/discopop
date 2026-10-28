@@ -16,7 +16,7 @@ from discopop_library.EmpiricalAutotuning.output.intermediate import show_info_s
 from discopop_library.EmpiricalAutotuning.Classes.CodeConfiguration import CodeConfiguration
 from discopop_library.EmpiricalAutotuning.Classes.ExecutionResult import ExecutionResult
 from discopop_library.EmpiricalAutotuning.output.intermediate import show_debug_stats
-from discopop_library.HostpotLoader.utilities import get_patterns_by_hotspot_type
+from discopop_library.HostpotLoader.utilities import applicable_on_its_own, get_patterns_by_hotspot_type
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.HostpotLoader.hostpot_loader import AVERAGE_RUNTIME, FILEID, NAME, STARTLINE
@@ -55,7 +55,11 @@ def execute_measure_only(
         # unclassified one would be dropped silently, leaving it out of every result.
         # (The pattern storage was already restricted to the search space.)
         classified = {sid for ids in patterns_by_hotspot_type.values() for sid in ids}
-        configuration += sorted(sid for sid in detection_result.patterns.get_pattern_ids() if sid not in classified)
+        configuration += sorted(
+            sid
+            for sid in detection_result.patterns.get_pattern_ids()
+            if sid not in classified and applicable_on_its_own(detection_result.patterns.get_pattern_from_id(sid))
+        )
 
     # step 1: identify valid suggestions
     valid: Set[int] = set()

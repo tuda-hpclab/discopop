@@ -25,6 +25,8 @@ class CUNode(Node):
     local_vars: List[Variable] = []
     global_vars: List[Variable] = []
     performs_file_io: bool = False
+    # the instructions of the CU in program order (dp.md.instr.id; positions in instructionID_to_lineID_mapping.txt)
+    instruction_ids: List[int] = []
 
     def __init__(self, node_id: NodeID):
         super().__init__(node_id)

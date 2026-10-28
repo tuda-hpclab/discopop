@@ -6,18 +6,31 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
+import contextlib
 import json
 import os
 import subprocess
 import tempfile
 import unittest
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, Iterator, List, Tuple
 from unittest import mock
 
 from mcp_server.tools import gather_data
 from mcp_server.tools.helpers import OUTPUT_TAIL_CHARS, ToolContext
 
 CONFIG_NAME = "default"
+
+
+@contextlib.contextmanager
+def hotspot_steps_succeed() -> Iterator[None]:
+    """The hotspot steps always run, but most tests are about what comes after them."""
+    ok = {"status": "success"}
+    with (
+        mock.patch.object(gather_data, "_hotspot_instrument", return_value=ok),
+        mock.patch.object(gather_data, "_hotspot_profiling_single", return_value=ok),
+        mock.patch.object(gather_data, "_hotspot_analysis", return_value=ok),
+    ):
+        yield
 
 
 class TestGatherDataCompileScriptResolution(unittest.TestCase):
@@ -123,6 +136,7 @@ class TestGatherDataFailureHints(unittest.TestCase):
     def __pipeline(self, **step_results: dict[str, Any]) -> dict[str, Any]:
         success = {"status": "success"}
         with (
+            hotspot_steps_succeed(),
             mock.patch.object(gather_data, "_instrument_project", return_value=step_results.get("instr", success)),
             mock.patch.object(gather_data, "_run_profiling", return_value=step_results.get("prof", success)),
             mock.patch.object(
@@ -130,18 +144,18 @@ class TestGatherDataFailureHints(unittest.TestCase):
             ),
             mock.patch.object(gather_data, "_progress"),
         ):
-            return gather_data._pipeline(self.project_path, CONFIG_NAME, [], 60, False, self.ctx)
+            return gather_data._pipeline(self.project_path, CONFIG_NAME, [CONFIG_NAME], 60, False, self.ctx)
 
     def test_a_failed_build_points_at_its_output_and_the_compile_script(self) -> None:
         result = self.__pipeline(
             instr={"status": "error", "message": "Instrumentation failed (rc=1).", "returncode": 1}
         )
-        self.assertIn("get_execution_results", result["next_step"])
+        self.assertIn("steps.instrumentation.stderr", result["next_step"])
         self.assertIn("set_compile_script", result["next_step"])
 
     def test_a_failed_run_points_at_its_output_and_the_execute_script(self) -> None:
         result = self.__pipeline(prof={"status": "error", "message": "Profiling failed (rc=139).", "returncode": 139})
-        self.assertIn("get_execution_results", result["next_step"])
+        self.assertIn("steps.profiling.stderr", result["next_step"])
         self.assertIn("create_execution_configuration", result["next_step"])
 
     def test_a_step_refused_before_running_gets_no_invented_cause(self) -> None:
@@ -173,12 +187,13 @@ class TestGatherDataCancelledStep(unittest.TestCase):
 
             with (
                 ctx.cancellable(),
+                hotspot_steps_succeed(),
                 mock.patch.object(gather_data, "_instrument_project", return_value={"status": "success"}),
                 mock.patch.object(gather_data, "_run_profiling", side_effect=profiling_stopped_by_a_cancel),
                 mock.patch.object(gather_data, "_run_pattern_detection") as detection,
                 mock.patch.object(gather_data, "_progress"),
             ):
-                result = gather_data._pipeline(project_path, CONFIG_NAME, [], 60, False, ctx)
+                result = gather_data._pipeline(project_path, CONFIG_NAME, [CONFIG_NAME], 60, False, ctx)
         self.assertIs(result["cancelled"], True)
         self.assertNotIn("next_step", result)
         self.assertEqual(result["steps"]["profiling"]["returncode"], -15)
@@ -263,6 +278,35 @@ class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
                 self.assertEqual(result["status"], "error")
                 self.assertFalse(os.path.exists(patterns_json))
 
+    def test_doall_reduction_and_task_detection_are_run_and_results_without_them_are_repeated(self) -> None:
+        self.__write(os.path.join(self.profiler_dir, "dynamic_dependencies.txt"))
+        patterns_json = os.path.join(self.dot_dp, "explorer", "patterns.json")
+        os.makedirs(os.path.dirname(patterns_json), exist_ok=True)
+        proc = subprocess.CompletedProcess(args=["discopop_explorer"], returncode=0, stdout="", stderr="")
+        for detected, expected_status in (
+            (None, "success"),  # results of a version which did not say what was detected
+            (["reduction", "doall"], "success"),
+            (["reduction", "doall", "task"], "skipped"),
+            (["task", "doall", "reduction", "pipeline"], "skipped"),
+        ):
+            with self.subTest(detected=detected):
+                with open(patterns_json, "w") as f:
+                    json.dump(
+                        {"patterns": {}} if detected is None else {"patterns": {}, "enabled_patterns": detected}, f
+                    )
+                with (
+                    mock.patch("mcp_server.tools.gather_data.shutil.which", return_value="discopop_explorer"),
+                    mock.patch.object(self.ctx, "run_process", return_value=proc) as run,
+                ):
+                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx, None)
+                self.assertEqual(result["status"], expected_status)
+                if expected_status == "success":
+                    self.assertEqual(
+                        run.call_args.args[0], ["discopop_explorer", "--enable-patterns", "task,doall,reduction"]
+                    )
+                else:
+                    run.assert_not_called()
+
 
 class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
     """Hotspot results are compared across inputs, so they count only as a complete set."""
@@ -330,6 +374,123 @@ class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
         self.__collect(["small"])
         self.assertEqual(self.__collect(["small", "large"]), ["success", "success", "success"])
         self.assertEqual(self.runs, ["small", "small", "large"])
+
+
+class TestHotspotDetectionAlwaysRuns(unittest.TestCase):
+    """The suggestions are ranked by the hotspots, so the hotspot steps are not optional."""
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+        self.project_path = self._tmp_dir.name
+        self.ctx = ToolContext(debug=False)
+
+    def _requested_hotspot_configs(self, **extra: Any) -> List[str]:
+        arguments = {"project_path": self.project_path, "config_name": CONFIG_NAME, **extra}
+        with mock.patch.object(gather_data, "_pipeline", return_value={"status": "success", "steps": {}}) as pipeline:
+            gather_data.handle(arguments, self.ctx)
+        requested: List[str] = pipeline.call_args.args[2]
+        return requested
+
+    def test_the_main_configuration_is_profiled_when_none_is_named(self) -> None:
+        self.assertEqual(self._requested_hotspot_configs(), [CONFIG_NAME])
+
+    def test_an_empty_list_is_taken_as_none_named(self) -> None:
+        self.assertEqual(self._requested_hotspot_configs(hotspot_config_names=[]), [CONFIG_NAME])
+
+    def test_the_named_configurations_are_profiled(self) -> None:
+        self.assertEqual(self._requested_hotspot_configs(hotspot_config_names=["a", "b"]), ["a", "b"])
+
+
+class TestWarningsOfSuccessfulSteps(unittest.TestCase):
+    """What a build or a run warned about reaches the agent although the step succeeded."""
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+        self.project_path = self._tmp_dir.name
+        configs = os.path.join(self.project_path, ".discopop", "project", "configs")
+        os.makedirs(os.path.join(configs, CONFIG_NAME))
+        for name in ("compile.sh", "dp_settings.json", "hd_settings.json"):
+            with open(os.path.join(configs, name), "w") as f:
+                f.write("{}\n")
+        with open(os.path.join(configs, CONFIG_NAME, "execute.sh"), "w") as f:
+            f.write("#!/bin/bash\n")
+        self.ctx = ToolContext(debug=False)
+
+    def __instrument(self, stdout: str, stderr: str) -> dict[str, Any]:
+        def build(**_kwargs: Any) -> Tuple[int, float, str, str]:
+            # the instrumented build writes Data.xml
+            profiler = os.path.join(self.project_path, ".discopop", "profiler")
+            os.makedirs(profiler, exist_ok=True)
+            with open(os.path.join(profiler, "Data.xml"), "w") as f:
+                f.write("<x/>")
+            return (0, 1.0, stdout, stderr)
+
+        with mock.patch.object(gather_data, "execute_configuration", side_effect=build):
+            return gather_data._instrument_project(self.project_path, CONFIG_NAME, 60, True, self.ctx, None)
+
+    def test_the_warnings_of_the_instrumentation_build_are_listed(self) -> None:
+        result = self.__instrument("", "".join(f"a.cpp:{n}:1: warning: w{n}\n" for n in range(7)))
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(result["warnings"]), 6)
+        self.assertEqual(result["warnings"][0], "a.cpp:0:1: warning: w0")
+        self.assertEqual(result["warnings"][-1], "2 more warnings.")
+
+    def test_a_step_without_warnings_says_nothing(self) -> None:
+        result = self.__instrument("built\n", "")
+        self.assertEqual(result["status"], "success")
+        self.assertNotIn("warnings", result)
+
+
+class TestFailedHotspotDetectionFailsTheCall(unittest.TestCase):
+    """Without the hotspots there is nothing to rank the suggestions by, so the pipeline stops."""
+
+    def setUp(self) -> None:
+        self.ctx = ToolContext(debug=False)
+        self.ok = {"status": "success"}
+        self.failed = {"status": "error", "message": "boom", "returncode": 1, "stderr": "oops"}
+        self.later_steps = {
+            name: mock.patch.object(gather_data, name, return_value=self.ok)
+            for name in ("_instrument_project", "_run_profiling", "_run_pattern_detection")
+        }
+        self.later = {name: patcher.start() for name, patcher in self.later_steps.items()}
+        for patcher in self.later_steps.values():
+            self.addCleanup(patcher.stop)
+
+    def _run(self, instrument: Any, profiling: Any, analysis: Any) -> dict[str, Any]:
+        with (
+            mock.patch.object(gather_data, "_hotspot_instrument", return_value=instrument),
+            mock.patch.object(gather_data, "_hotspot_profiling_single", return_value=profiling),
+            mock.patch.object(gather_data, "_hotspot_analysis", return_value=analysis),
+        ):
+            return gather_data._pipeline("/p", CONFIG_NAME, [CONFIG_NAME], 60, False, self.ctx)
+
+    def _assert_stopped_at(self, result: dict[str, Any], step: str) -> None:
+        self.assertEqual(result["status"], "error")
+        self.assertIn(f"steps.{step}", result["message"])
+        self.assertIn(f"steps.{step}", result["next_step"])
+        self.assertNotIn("instrumentation", result["steps"])
+        for later in self.later.values():
+            later.assert_not_called()
+
+    def test_a_failed_hotspot_instrumentation_stops_the_pipeline(self) -> None:
+        result = self._run(self.failed, self.ok, self.ok)
+        self._assert_stopped_at(result, "hotspot_instrumentation")
+        self.assertEqual(result["steps"]["hotspot_profiling"], [])
+
+    def test_a_failed_hotspot_run_stops_the_pipeline(self) -> None:
+        result = self._run(self.ok, self.failed, self.ok)
+        self._assert_stopped_at(result, "hotspot_profiling")
+        self.assertEqual(result["steps"]["hotspot_analysis"]["reason"], "hotspot_profiling_failed")
+
+    def test_a_failed_hotspot_analysis_stops_the_pipeline(self) -> None:
+        self._assert_stopped_at(self._run(self.ok, self.ok, self.failed), "hotspot_analysis")
+
+    def test_successful_hotspot_detection_goes_on_to_the_pipeline(self) -> None:
+        result = self._run(self.ok, self.ok, self.ok)
+        self.assertNotIn("status", result)
+        self.assertEqual(result["steps"]["instrumentation"], self.ok)
 
 
 class TestGatherDataStderrTail(unittest.TestCase):
@@ -444,6 +605,12 @@ class TestGatherDataRestoresThePlainBuild(unittest.TestCase):
         detection.start()
         self.addCleanup(detection.stop)
 
+        # So are the hotspot steps, which always run; they have tests of their own.
+        for step in ("_hotspot_instrument", "_hotspot_profiling_single", "_hotspot_analysis"):
+            hotspot_step = mock.patch.object(gather_data, step, return_value={"status": "skipped"})
+            hotspot_step.start()
+            self.addCleanup(hotspot_step.stop)
+
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
 
@@ -463,7 +630,7 @@ class TestGatherDataRestoresThePlainBuild(unittest.TestCase):
 
     def test_the_last_build_is_a_plain_one(self) -> None:
         result = self.__handle()
-        self.assertEqual(result["status"], "success")
+        self.assertNotIn("status", result)
         self.assertEqual(self.settings_used[-1], "par_settings.json")
         self.assertEqual(result["steps"]["build_restore"]["status"], "success")
 
@@ -485,7 +652,7 @@ class TestGatherDataRestoresThePlainBuild(unittest.TestCase):
     def test_a_failed_restore_is_reported_but_not_fatal(self) -> None:
         self.restore_returncode = 1
         result = self.__handle()
-        self.assertEqual(result["status"], "success")
+        self.assertNotIn("status", result)
         self.assertEqual(result["steps"]["build_restore"]["status"], "error")
         self.assertIn("instrumented", result["warning"])
 

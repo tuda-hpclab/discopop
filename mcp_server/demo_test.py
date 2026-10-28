@@ -13,7 +13,7 @@
 import json
 
 from mcp_server.server import DiscoPopMCPServer
-from mcp_server.tools import get_configurations, get_execution_results, initialize_discopop_directory
+from mcp_server.tools import get_configurations, initialize_discopop_directory
 
 
 def demo() -> None:
@@ -35,13 +35,6 @@ def demo() -> None:
     print("TEST 2: Get Configurations")
     print("-" * 70)
     result = get_configurations.handle({"project_path": "./example"}, server._ctx)
-    print("Response:", json.loads(result[0].text))
-    print()
-
-    # Test 3: get_execution_results
-    print("TEST 3: Get Execution Results")
-    print("-" * 70)
-    result = get_execution_results.handle({"project_path": "./example"}, server._ctx)
     print("Response:", json.loads(result[0].text))
     print()
 

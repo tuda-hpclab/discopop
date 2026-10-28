@@ -39,7 +39,6 @@ dependencies = [
     # the tools call the project manager and read the explorer's results in-process
     "discopop-library>=0.0.1a11",
     "discopop-explorer>=0.0.1a3",
-    "jsonpickle",
     "termcolor>=2.0",
     "uvicorn>=0.20",
     "starlette>=0.20",

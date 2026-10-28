@@ -22,8 +22,8 @@ from discopop_library.ProjectManager.configurations.execution import execute_con
 from mcp_server.tools.helpers import (
     ToolContext,
     invalid_configuration_name,
-    recorded_applied_suggestions,
     tail_of_output,
+    warning_fields,
     unknown_configuration_message,
 )
 
@@ -40,19 +40,20 @@ TOOL = Tool(
         "\n\n"
         "The pipeline consists of two phases:\n"
         "\n"
-        "OPTIONAL — Hotspot detection (enabled when hotspot_config_names is non-empty):\n"
+        "Hotspot detection (always runs; the call fails if it does, as the suggestions are ranked by it):\n"
         "  1. Compile with hotspot instrumentation (hd_settings.json).\n"
-        "  2. Run the binary once per config in hotspot_config_names to accumulate timing data.\n"
-        "     Use at least 2 configs with different input sizes for accurate classification.\n"
+        "  2. Run the binary once per config in hotspot_config_names (default: config_name) to\n"
+        "     accumulate timing data. Use 2 configs with different input sizes for accurate\n"
+        "     classification.\n"
         "  3. Analyse timing data to classify regions as YES/MAYBE/NO hotspots.\n"
-        "  If hotspot detection is enabled, pattern analysis focuses on hotspot regions.\n"
-        "  If omitted, pattern analysis covers the entire codebase.\n"
+        "  Pattern analysis focuses on hotspot regions.\n"
         "\n"
-        "REQUIRED — Data collection and pattern detection:\n"
+        "Data collection and pattern detection:\n"
         "  4. Compile with DiscoPoP instrumentation (dp_settings.json).\n"
         "  5. Run the instrumented binary to collect runtime dependency traces.\n"
         "     NOTE: significant runtime overhead expected — use small inputs.\n"
-        "  6. Analyse with discopop_explorer to detect parallelization opportunities.\n"
+        "  6. Analyse with discopop_explorer to detect parallelization opportunities (doall, reduction and\n"
+        "     task parallelism).\n"
         "\n"
         "Each step is automatically skipped when its outputs are already current "
         "relative to the source files. Use force=true to re-run all steps unconditionally. "
@@ -63,8 +64,9 @@ TOOL = Tool(
         "the program and may abort, so building and running the program by hand afterwards "
         "is safe. "
         "\n\n"
-        "On success, call run_auto_tuning to measure which combination of the generated "
-        "suggestions is fastest (apply=true also applies it); get_parallelization_patches lists them."
+        "A step that succeeded lists the warnings of its build or run under 'warnings'; a step that failed "
+        "carries the end of its error output under 'stderr'. "
+        "On success, get_parallelization_suggestions lists the suggestions, hottest first."
     ),
     inputSchema={
         "type": "object",
@@ -84,11 +86,10 @@ TOOL = Tool(
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional. List of configuration names for hotspot profiling runs (step 2). "
-                    "At least 1 name is required to enable hotspot detection. "
-                    "Using ≥2 configs with different input sizes improves classification accuracy, "
-                    "but a single config is accepted (results may be less accurate). "
-                    "If omitted, hotspot detection is skipped entirely."
+                    "Optional. Configuration names for the hotspot profiling runs (step 2). "
+                    "Using 2 configs with different input sizes improves classification accuracy, "
+                    "since growth with the input can only be judged then. "
+                    "Default: [config_name], i.e. a single run."
                 ),
             },
             "timeout_seconds": {
@@ -238,7 +239,7 @@ def _hotspot_instrument(
             "compiled_in_place": True,
         }
     ctx.log_action(project_path, "gather_data", f"Hotspot instrumentation succeeded in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True}
+    return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True, **warning_fields(stdout, stderr)}
 
 
 def _hotspot_profiling_single(
@@ -328,7 +329,7 @@ def _hotspot_profiling_single(
         "gather_data",
         f"Hotspot profiling done in {elapsed}s: {len(result_files)} run(s) accumulated",
     )
-    return {"status": "success", "elapsed_time": elapsed}
+    return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
 
 
 def _hotspot_analysis(
@@ -501,7 +502,7 @@ def _instrument_project(
             "compiled_in_place": True,
         }
     ctx.log_action(project_path, "gather_data", f"Instrumentation succeeded in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True}
+    return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True, **warning_fields(stdout, stderr)}
 
 
 def _discard_partial_output(path: Path, project_path: str, ctx: ToolContext) -> None:
@@ -595,11 +596,28 @@ def _run_profiling(
             **_stderr_fields(stderr),
         }
     ctx.log_action(project_path, "gather_data", f"Profiling complete in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed}
+    return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
+
+
+# the pattern types gather_data detects
+DETECTED_PATTERNS = ["task", "doall", "reduction"]
+
+
+def _detected_patterns(patterns_json: Path) -> set[str]:
+    """The pattern types a patterns.json was detected for; none for results which do not say."""
+    try:
+        with open(patterns_json) as f:
+            return set(json.load(f).get("enabled_patterns") or [])
+    except (OSError, ValueError, AttributeError):
+        return set()
 
 
 def _run_pattern_detection(
-    project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext, source_mtime: Optional[float]
+    project_path: str,
+    timeout_seconds: int,
+    force: bool,
+    ctx: ToolContext,
+    source_mtime: Optional[float],
 ) -> dict[str, Any]:
     p = Path(project_path)
     discopop_dir = p / ".discopop"
@@ -615,7 +633,7 @@ def _run_pattern_detection(
             "message": "profiler/dynamic_dependencies.txt not found — profiling step must have failed.",
         }
 
-    if not force and patterns_json.exists():
+    if not force and patterns_json.exists() and _detected_patterns(patterns_json) >= set(DETECTED_PATTERNS):
         result_mtime = patterns_json.stat().st_mtime
         if source_mtime is None or source_mtime <= result_mtime:
             return {
@@ -635,7 +653,12 @@ def _run_pattern_detection(
 
     ctx.log_action(project_path, "gather_data", "Pattern detection: invoking discopop_explorer")
     try:
-        proc = ctx.run_process([explorer], timeout=timeout_seconds, cwd=str(discopop_dir), env=env)
+        proc = ctx.run_process(
+            [explorer, "--enable-patterns", ",".join(DETECTED_PATTERNS)],
+            timeout=timeout_seconds,
+            cwd=str(discopop_dir),
+            env=env,
+        )
     except subprocess.TimeoutExpired:
         _discard_partial_output(patterns_json, project_path, ctx)
         return {"status": "error", "message": f"discopop_explorer timed out after {timeout_seconds}s."}
@@ -788,7 +811,7 @@ def count_suggestions(project_path: str) -> Optional[int]:
 
 
 def next_step_hint(suggestion_count: Optional[int]) -> str:
-    """What to do with the patches that were just generated."""
+    """What to do with the suggestions that were just generated."""
     if suggestion_count == 0:
         return (
             "No parallelization suggestion was found. explain_parallelization tells for a given "
@@ -796,23 +819,27 @@ def next_step_hint(suggestion_count: Optional[int]) -> str:
         )
     found = f"{suggestion_count} parallelization suggestions were generated. " if suggestion_count else ""
     return (
-        found + "Call run_auto_tuning to have DiscoPoP measure which combination of them is "
-        "fastest (add apply=true to apply that combination in the same call) — do this before "
-        "applying anything, since the search needs an un-patched project. "
-        "get_parallelization_patches lists the suggestions, and get_data_dependencies "
-        "explains the dependencies behind an individual one."
+        found + "get_parallelization_suggestions lists them, hottest first, and explain_parallelization tells why "
+        "a code region has none. Apply a suggestion by editing the source yourself."
     )
 
 
-def _cancelled_result(project_path: str, hotspot_detection_enabled: bool, steps: dict[str, Any]) -> dict[str, Any]:
+def _failed_hotspot_step(steps: dict[str, Any]) -> str:
+    """The step of the hotspot detection to look at: the first that did not succeed."""
+    if steps["hotspot_instrumentation"]["status"] not in ("success", "skipped"):
+        return "hotspot_instrumentation"
+    if any(run["status"] not in ("success", "skipped") for run in steps.get("hotspot_profiling", [])):
+        return "hotspot_profiling"
+    return "hotspot_analysis"
+
+
+def _cancelled_result(project_path: str, steps: dict[str, Any]) -> dict[str, Any]:
     """The result of a call the client cancelled; the steps that ran are kept, since the
     plain rebuild after the pipeline depends on knowing what was compiled in place."""
     return {
         "status": "error",
-        "project_path": project_path,
         "message": "Cancelled by the client.",
         "cancelled": True,
-        "hotspot_detection_enabled": hotspot_detection_enabled,
         "steps": steps,
     }
 
@@ -834,69 +861,79 @@ def _pipeline(
     where the caller is most likely to go and run the program by hand.
     """
     steps: dict[str, Any] = {}
-    hotspot_detection_enabled = len(hotspot_config_names) >= 1
     hotspot_ok = True
 
     # Compute source mtime once and reuse across all staleness checks.
     source_mtime = ToolContext.newest_source_mtime(project_path)
 
-    num_hd_steps = 3 if hotspot_detection_enabled else 0
-    total_steps = num_hd_steps + 3  # instrument + profile + detect
+    total_steps = 6  # 3 hotspot steps, instrument + profile + detect
     step = 0
 
-    # === Optional: hotspot detection pipeline ===
-    if hotspot_detection_enabled:
+    # === Hotspot detection ===
+    step += 1
+    _progress(step, total_steps, "Hotspot instrumentation", ctx)
+    hd_instr = _hotspot_instrument(
+        project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, source_mtime
+    )
+    steps["hotspot_instrumentation"] = hd_instr
+
+    if hd_instr["status"] in ("success", "skipped") and not ctx.cancelled:
         step += 1
-        _progress(step, total_steps, "Hotspot instrumentation", ctx)
-        hd_instr = _hotspot_instrument(
-            project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, source_mtime
-        )
-        steps["hotspot_instrumentation"] = hd_instr
+        _progress(step, total_steps, f"Hotspot profiling ({len(hotspot_config_names)} config(s))", ctx)
+        profiling_runs: list[dict[str, Any]] = []
+        for hd_config in hotspot_config_names:
+            if ctx.cancelled:
+                break
+            run_res = _hotspot_profiling_single(project_path, hd_config, timeout_seconds, force, ctx, source_mtime)
+            profiling_runs.append({"config": hd_config, **run_res})
+        steps["hotspot_profiling"] = profiling_runs
 
-        if hd_instr["status"] in ("success", "skipped") and not ctx.cancelled:
+        if not ctx.cancelled and all(r["status"] in ("success", "skipped") for r in profiling_runs):
             step += 1
-            _progress(step, total_steps, f"Hotspot profiling ({len(hotspot_config_names)} config(s))", ctx)
-            profiling_runs: list[dict[str, Any]] = []
-            for hd_config in hotspot_config_names:
-                if ctx.cancelled:
-                    break
-                run_res = _hotspot_profiling_single(project_path, hd_config, timeout_seconds, force, ctx, source_mtime)
-                profiling_runs.append({"config": hd_config, **run_res})
-            steps["hotspot_profiling"] = profiling_runs
-
-            if not ctx.cancelled and all(r["status"] in ("success", "skipped") for r in profiling_runs):
-                step += 1
-                _progress(step, total_steps, "Hotspot analysis", ctx)
-                hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx, source_mtime)
-                steps["hotspot_analysis"] = hd_analysis
-                if hd_analysis["status"] not in ("success", "skipped"):
-                    hotspot_ok = False
-            else:
-                step += 1
+            _progress(step, total_steps, "Hotspot analysis", ctx)
+            hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx, source_mtime)
+            steps["hotspot_analysis"] = hd_analysis
+            if hd_analysis["status"] not in ("success", "skipped"):
                 hotspot_ok = False
-                steps["hotspot_analysis"] = {"status": "not_run", "reason": "hotspot_profiling_failed"}
         else:
-            step += 2
+            step += 1
             hotspot_ok = False
-            steps["hotspot_profiling"] = []
-            steps["hotspot_analysis"] = {"status": "not_run", "reason": "hotspot_instrumentation_failed"}
+            steps["hotspot_analysis"] = {"status": "not_run", "reason": "hotspot_profiling_failed"}
+    else:
+        step += 2
+        hotspot_ok = False
+        steps["hotspot_profiling"] = []
+        steps["hotspot_analysis"] = {"status": "not_run", "reason": "hotspot_instrumentation_failed"}
+
+    # The suggestions are ranked by the hotspots, so there is nothing to continue with.
+    if ctx.cancelled:
+        return _cancelled_result(project_path, steps)
+    if not hotspot_ok:
+        failed_step = _failed_hotspot_step(steps)
+        return {
+            "status": "error",
+            "message": f"Hotspot detection failed. See steps.{failed_step} for details.",
+            "steps": steps,
+            "next_step": (
+                f"steps.{failed_step} names the problem, and its stderr, if present, holds the errors. Fix the "
+                "build (compile.sh) with set_compile_script (it must use $CC/$CXX and $CFLAGS/$CXXFLAGS) or the "
+                "configurations passed as hotspot_config_names with create_execution_configuration (a smaller "
+                "input helps if a run timed out), then call gather_data again."
+            ),
+        }
 
     # === Required: instrument project ===
-    if ctx.cancelled:
-        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
     step += 1
     _progress(step, total_steps, "DiscoPoP instrumentation (compile)", ctx)
     instr = _instrument_project(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
     steps["instrumentation"] = instr
     # a cancel stops the running step, which then fails; that failure is not the answer
     if ctx.cancelled:
-        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
+        return _cancelled_result(project_path, steps)
     if instr["status"] not in ("success", "skipped"):
         result: dict[str, Any] = {
             "status": "error",
-            "project_path": project_path,
             "message": "Instrumentation failed. See steps.instrumentation for details.",
-            "hotspot_detection_enabled": hotspot_detection_enabled,
             "steps": steps,
         }
         # Only a step that ran and failed has output to look at. One refused by its
@@ -904,8 +941,7 @@ def _pipeline(
         # problem in its own message.
         if instr.get("returncode") not in (None, 0):
             result["next_step"] = (
-                "steps.instrumentation.stderr holds the build errors; get_execution_results("
-                "script='compile.sh', failed_only=true, include_output=true) also shows stdout. Fix the build with "
+                "steps.instrumentation.stderr holds the build errors. Fix the build with "
                 "set_compile_script (it must use $CC/$CXX and "
                 "$CFLAGS/$CXXFLAGS), then call gather_data again."
             )
@@ -913,25 +949,22 @@ def _pipeline(
 
     # === Required: run instrumented binary ===
     if ctx.cancelled:
-        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
+        return _cancelled_result(project_path, steps)
     step += 1
     _progress(step, total_steps, "Profiling (run instrumented binary)", ctx)
     prof = _run_profiling(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
     steps["profiling"] = prof
     if ctx.cancelled:
-        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
+        return _cancelled_result(project_path, steps)
     if prof["status"] not in ("success", "skipped"):
         result = {
             "status": "error",
-            "project_path": project_path,
             "message": "Profiling failed. See steps.profiling for details.",
-            "hotspot_detection_enabled": hotspot_detection_enabled,
             "steps": steps,
         }
         if prof.get("returncode") not in (None, 0):
             result["next_step"] = (
-                "steps.profiling.stderr holds the program's errors; get_execution_results("
-                "script='execute.sh', failed_only=true, include_output=true) also shows stdout. Fix execute.sh with "
+                "steps.profiling.stderr holds the program's errors. Fix execute.sh with "
                 "create_execution_configuration (a smaller input helps if "
                 "the run timed out), then call gather_data again."
             )
@@ -939,19 +972,17 @@ def _pipeline(
 
     # === Required: pattern detection ===
     if ctx.cancelled:
-        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
+        return _cancelled_result(project_path, steps)
     step += 1
     _progress(step, total_steps, "Pattern detection (discopop_explorer)", ctx)
     detection = _run_pattern_detection(project_path, timeout_seconds, force, ctx, source_mtime)
     steps["pattern_detection"] = detection
     if ctx.cancelled:
-        return _cancelled_result(project_path, hotspot_detection_enabled, steps)
+        return _cancelled_result(project_path, steps)
     if detection["status"] not in ("success", "skipped"):
         result = {
             "status": "error",
-            "project_path": project_path,
             "message": "Pattern detection failed. See steps.pattern_detection for details.",
-            "hotspot_detection_enabled": hotspot_detection_enabled,
             "steps": steps,
             "next_step": (
                 "If the profiling data is stale or inconsistent, call initialize_discopop_directory "
@@ -966,13 +997,8 @@ def _pipeline(
     sys.stderr.flush()
 
     result = {
-        "status": "success",
-        "project_path": project_path,
-        "hotspot_detection_enabled": hotspot_detection_enabled,
         "steps": steps,
     }
-    if hotspot_detection_enabled and not hotspot_ok:
-        result["warning"] = "Hotspot detection failed; pattern analysis covers the entire codebase."
     # What to do with the patches is the question this pipeline exists to raise, and a
     # result is read far more reliably than a tool description. Saying how many there
     # are and which tool decides between them is what keeps the next step from being a
@@ -988,26 +1014,13 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
     try:
         project_path = arguments.get("project_path", "")
         config_name = arguments.get("config_name", "")
-        hotspot_config_names: list[str] = arguments.get("hotspot_config_names") or []
+        hotspot_config_names: list[str] = arguments.get("hotspot_config_names") or [config_name]
         timeout_seconds: int = arguments.get("timeout_seconds", 3600)
         force: bool = arguments.get("force", False)
         for name in [config_name, *hotspot_config_names]:
             name_error = invalid_configuration_name(name)
             if name_error is not None:
                 return ctx.error(name_error, project_path, "gather_data")
-        # Profiling patched sources analyses the parallel code, and the pattern detection
-        # deletes the applicator's record of what it applied, which a rollback needs.
-        applied, _ = recorded_applied_suggestions(project_path)
-        if applied:
-            return ctx.error(
-                f"The suggestions {applied} are applied to the sources. Analysing them would profile the "
-                "parallelized code, and re-running the pattern detection deletes the record needed to roll "
-                "them back. Roll them back first with manage_patches(action='clear'), then call gather_data "
-                "again.",
-                project_path,
-                "gather_data",
-            )
-
         # A single step (an instrumented run, above all) can take an hour; the heartbeat
         # keeps reporting the step in progress so the client knows the call is alive.
         with ctx.heartbeat():
@@ -1030,7 +1043,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                     warning = str(restore.get("message") or "The plain rebuild failed.")
                     result["warning"] = f"{result['warning']} {warning}" if result.get("warning") else warning
 
-        ctx.log_response("gather_data", result)
+        ctx.log_response("gather_data", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]
 
     except Exception as e:

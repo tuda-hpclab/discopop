@@ -20,6 +20,7 @@ from discopop_explorer.classes.patterns.PatternDecisions import (
     LOOP_CARRIED_DEPENDENCY,
     NOT_REPORTED,
     PENDING,
+    RECURSION_IN_LOOP,
     REJECTED,
     TOO_FEW_ITERATIONS,
     CodeRegion,
@@ -217,3 +218,47 @@ def test_the_detectors_that_ran_are_kept_and_unknown_for_older_logs(tmp_path: An
     older = log.to_dict()
     del older["detectors"]
     assert PatternDecisionLog.from_dict(older).detectors is None
+
+
+def test_a_note_does_not_decide_the_outcome_and_survives_finalize() -> None:
+    log = PatternDecisionLog()
+    note = DecisionReason(kind=RECURSION_IN_LOOP, message="recursion", details={"call_lines": ["1:7"]})
+    log.note(DETECTOR, TYPES, _region("1:5", 5, 10), note)
+    log.note(DETECTOR, TYPES, _region("1:5", 5, 10), note)  # a copy of the region: noted once
+    log.note(DETECTOR, TYPES, _region("1:20", 20, 30), note)
+    log.reject(DETECTOR, TYPES, _region("1:20", 20, 30), _carried())
+    log.finalize(DETECTOR, [_pattern("1:5", 3)])
+
+    accepted = log.get(DETECTOR, "1:5")
+    rejected = log.get(DETECTOR, "1:20")
+    assert accepted is not None and rejected is not None
+    assert (accepted.outcome, rejected.outcome) == (ACCEPTED, REJECTED)
+    assert accepted.reasons == []  # reasons of an accepted candidate are dropped, its notes are not
+    assert [n.kind for n in accepted.notes] == [RECURSION_IN_LOOP]
+    assert [n.kind for n in rejected.notes] == [RECURSION_IN_LOOP]
+
+
+def test_a_candidate_with_only_a_note_is_not_rejected() -> None:
+    log = PatternDecisionLog()
+    log.note(DETECTOR, TYPES, _region("1:5", 5, 10), DecisionReason(kind=RECURSION_IN_LOOP, message="recursion"))
+    log.finalize(DETECTOR, [])
+    decision = log.get(DETECTOR, "1:5")
+    assert decision is not None
+    assert decision.outcome == NOT_REPORTED
+
+
+def test_notes_are_written_and_read_and_left_out_when_there_are_none(tmp_path: Any) -> None:
+    log = PatternDecisionLog()
+    log.note(DETECTOR, TYPES, _region("1:5", 5, 10), DecisionReason(kind=RECURSION_IN_LOOP, message="recursion"))
+    log.consider(DETECTOR, TYPES, _region("1:20", 20, 30))
+    path = str(tmp_path / "decisions.json")
+    log.save(path)
+    with open(path) as f:
+        written = {d["region"]["node_id"]: d for d in json.load(f)["decisions"]}
+    assert "notes" not in written["1:20"]  # files without notes keep their format
+    assert [n["kind"] for n in written["1:5"]["notes"]] == [RECURSION_IN_LOOP]
+
+    loaded = PatternDecisionLog.load(path)
+    decision = loaded.get(DETECTOR, "1:5")
+    assert decision is not None
+    assert [n.kind for n in decision.notes] == [RECURSION_IN_LOOP]

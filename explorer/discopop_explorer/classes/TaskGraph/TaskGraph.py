@@ -14,7 +14,7 @@ import re
 import signal  # noqa: F401  used by the commented-out code
 import logging
 import sys
-from typing import Any, Deque, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple, Union, cast
+from typing import Any, Collection, Deque, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple, Union, cast
 import warnings
 import networkx as nx  # type: ignore
 import matplotlib
@@ -217,6 +217,11 @@ class _ContextFallback:
             result = set(contexts)
         self.resolved[key] = result
         return set(result)
+
+
+def _instruction_id(location: str) -> Optional[int]:
+    """the instruction id of a location of a dependency file, None for a line id or '*'"""
+    return int(location) if location.isdigit() else None
 
 
 class TaskGraph(Plottable, object):  # type: ignore[misc]
@@ -1477,7 +1482,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 # an inner loop inside an outer iteration that is copied first would never be
                 # duplicated (neither in the original nor in the copy). The order is made
                 # deterministic, as get_descendants follows set iteration order.
-                pairs: List[Tuple[TGStartIterationNode, TGEndIterationNode, Set[TGNode]]] = []
+                pairs: List[Tuple[TGStartIterationNode, TGEndIterationNode, Dict[TGNode, None]]] = []
                 for sin in sorted(filtered_start_iteration_nodes, key=self.__pet_node_order):
                     for ein in sorted(filtered_end_iteration_nodes, key=self.__pet_node_order):
                         # only consider pairs with equal corresponding pet_node_id's
@@ -1546,7 +1551,10 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         logger.info("Assigning function contexts...")
         for function_node in progress(self.TGFunctionNode_pet_node_id_to_tg_node.values()):
             descendants = self.get_descendants(function_node)
-            function_start_nodes = [n for n in descendants if isinstance(n, TGStartFunctionNode)]
+            # in a deterministic order: the creation order of the contexts is used as their identity
+            function_start_nodes = sorted(
+                (n for n in descendants if isinstance(n, TGStartFunctionNode)), key=self.__pet_node_order
+            )
             for fsn in function_start_nodes:
                 function_context = FunctionContext(fsn.pet_node_id)
                 function_context.add_node(fsn)
@@ -1684,7 +1692,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
             # search loop iteration starts
             iteration_starts: List[TGNode] = []
-            for n in general_loop_nodes:
+            # in a deterministic order: the iteration contexts are created in this order
+            for n in sorted(general_loop_nodes, key=self.__pet_node_order):
                 if isinstance(n, TGStartIterationNode) and (n.parent_loop_pet_node_id == node.pet_node_id):
                     iteration_starts.append(n)
 
@@ -1709,10 +1718,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     if isinstance(current, TGStartIterationNode) and (
                         cast(TGStartIterationNode, it_start).parent_loop_pet_node_id == current.parent_loop_pet_node_id
                     ):
-                        if entered_equivalent_iterations == -1:
-                            entered_equivalent_iterations += 1
-                        else:
-                            raise ValueError("Invalid iteration structure found at node: " + current.get_label())
+                        # the first start is the one of the iteration itself, further ones belong to inlined
+                        # instances of the same loop (a recursive call in the body) nested in it
+                        entered_equivalent_iterations += 1
                     for succ in self.get_successors(current):
                         if succ not in it_visited:
                             it_queue.append((succ, entered_equivalent_iterations))
@@ -2488,7 +2496,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                     logger.info("Maximum call path depth of " + str(call_path_limit) + " reached.")
                     break
                 modification_found = False
-                descendants = self.get_descendants(self.root)
+                # in a deterministic order: the inlined copies are created in this order
+                descendants = sorted(self.get_descendants(self.root), key=self.__pet_node_order)
                 calling_nodes: List[TGNode] = []
                 for node in descendants:
                     if (
@@ -2975,7 +2984,8 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
         logger.info("--> classify context entry nodes")
         visited: Set[TGNode] = set()
-        context_entry_nodes: Set[TGNode] = set()
+        # ordered: the work nodes are inserted in this order, and the order of a set differs from run to run
+        context_entry_nodes: Dict[TGNode, None] = dict()
         for node in progress(work_nodes):
             if node in visited:
                 continue
@@ -3007,7 +3017,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 # node will be handled as part of another context
                 visited.add(node)
                 continue
-            context_entry_nodes.add(node)
+            context_entry_nodes[node] = None
 
         logger.info("--> inserting work start and end nodes...")
         for node in progress(context_entry_nodes):
@@ -4293,7 +4303,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         state_id: str,
         instructionID_mappings_dict: Dict[str, str],
         state_mappings_dict: Dict[str, List[str]],
-        location_to_work_contexts: Dict[LineID, Set[WorkContext]],
+        location_to_work_contexts: Dict[str, Set[WorkContext]],
         lookup_cache: Dict[Tuple[str, str], Set[Context]],
         state_ids_cache: Dict[Context, FrozenSet[int]],
         fallback: Optional["_ContextFallback"] = None,
@@ -4301,8 +4311,9 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         """instructionID_mappings_dict is a mapping from instructionIDs to lineIDs. This should be removed in the long
         run, when instructionIDs become the default over lineIDs.
         state_mappings_dict is a mapping from stateIDs to callpaths.
-        location_to_work_contexts is a reverse index {lineID: WorkContexts whose code scope contains it},
-        built once per dependency-insertion pass (see __insert_data_dependencies_from_files).
+        location_to_work_contexts is a reverse index {lineID: WorkContexts whose code scope contains it} and
+        {instruction id: WorkContexts whose instruction scope contains it}, built once per dependency-insertion
+        pass (see __insert_data_dependencies_from_files).
         state_ids_cache memoizes get_state_ids per context for the duration of that pass.
         With a fallback, an end whose state no context at the location carries is not dropped but
         mapped approximately (see _ContextFallback.resolve)."""
@@ -4313,11 +4324,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
         contexts: Set[Context] = set()
         requested_location = location
-        # check if location is an instructionID. If so, convert it to a lineID using the mappings_dict.
-        if ":" not in location:
-            # location is an instruction id or something unspecified (e.g. '*').
-            if location in instructionID_mappings_dict:
-                location = instructionID_mappings_dict[location]
+        if ":" not in location and location in location_to_work_contexts:
+            # the instruction is held by a CU of the contexts of the index: an exact match, no line needed. An
+            # instruction of a CU the cuts deleted is in the index without contexts.
+            contexts = set(location_to_work_contexts[location])
+        elif ":" not in location and location in instructionID_mappings_dict:
+            # an instruction id no CU holds: its line
+            location = instructionID_mappings_dict[location]
 
         # handle location, if it is a regular lineID in the format "file:line".
         if ":" in location:
@@ -4416,12 +4429,27 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         state_mappings_dict = self.__get_state_mappings_from_file(dynamic_dependency_file)
 
         # build spatial index: LineID -> Set[WorkContext]
-        location_to_work_contexts: Dict[LineID, Set[WorkContext]] = {}
+        location_to_work_contexts: Dict[str, Set[WorkContext]] = {}
         for _ctx in self.contexts:
             if not isinstance(_ctx, WorkContext):
                 continue
             for _line_id in _ctx.get_code_scope(self.pet):
                 location_to_work_contexts.setdefault(_line_id, set()).add(_ctx)
+
+        # the same by instruction id: the exact match, lines are the fallback for instructions no CU holds
+        for _ctx in self.contexts:
+            if not isinstance(_ctx, WorkContext):
+                continue
+            for _held_instruction in _ctx.get_instruction_scope(self.pet):
+                location_to_work_contexts.setdefault(str(_held_instruction), set()).add(_ctx)
+        # instructions of CUs the cuts deleted belong to no context: they must not fall back to a line
+        for _deleted_cu in self.cus_deleted_by_early_exits | self.cus_deleted_by_exception_unwinding:
+            if _deleted_cu is None:
+                continue
+            _deleted_node = self.pet.node_at(_deleted_cu)
+            if isinstance(_deleted_node, CUNode):
+                for _held_instruction in _deleted_node.instruction_ids:
+                    location_to_work_contexts.setdefault(str(_held_instruction), set())
 
         # cache for repeated (location, state_id) lookups
         _context_lookup_cache: Dict[Tuple[str, str], Set[Context]] = {}
@@ -4599,6 +4627,11 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                                 dependency.approximate_context = approximate_context
                                 dependency.carried_by_loop = carried_by_loop
                                 dependency.carried_by_pet_loops = carried_by_pet_loops
+                                # swapped like the lines, see above
+                                dependency.source_instruction_id = _instruction_id(sink_location)
+                                dependency.sink_instruction_id = _instruction_id(source_location)
+                                dependency.source_state_id = None if sink_state_id == "NO_STATE" else sink_state_id
+                                dependency.sink_state_id = None if source_state_id == "NO_STATE" else source_state_id
                                 if record_dependencies is not None:
                                     record_dependencies[key] = dependency
                                 return dependency
@@ -4839,7 +4872,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
             else {}
         )
 
-        location_to_work_contexts: Dict[LineID, Set[WorkContext]] = {}
+        location_to_work_contexts: Dict[str, Set[WorkContext]] = {}
         for ctx in self.contexts:
             if isinstance(ctx, WorkContext):
                 for line_id in ctx.get_code_scope(self.pet):
@@ -5209,15 +5242,17 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
 
     def __get_iteration_nodes(
         self, iteration_entry: TGStartIterationNode, iteration_exit: TGEndIterationNode
-    ) -> Set[TGNode]:
+    ) -> Dict[TGNode, None]:
+        """The nodes of an iteration, in the order they are found. A dict serves as the ordered set: the nodes are
+        copied in this order, and the order of a set (hashed by address) differs from run to run."""
         queue: Deque[TGNode] = deque([iteration_entry])
         visited: Set[TGNode] = set()
-        iteration_nodes: Set[TGNode] = set()
+        iteration_nodes: Dict[TGNode, None] = dict()
         while len(queue) > 0:
             current_source = queue.popleft()
             visited.add(current_source)
             if nx.has_path(self.graph, current_source, iteration_exit):
-                iteration_nodes.add(current_source)
+                iteration_nodes[current_source] = None
 
             # do not consider successors of iteration end node
             if current_source == iteration_exit:
@@ -5408,7 +5443,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
     def __copy_iteration_subgraph(
         self,
         copied_nodes: Dict[TGNode, TGNode],
-        iteration_nodes: Set[TGNode],
+        iteration_nodes: Collection[TGNode],
         iteration_entry: TGNode,
         iteration_exit: TGNode,
     ) -> Tuple[Dict[TGNode, TGNode], List[TGNode], TGNode, TGNode]:

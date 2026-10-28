@@ -9,14 +9,12 @@
 """get_side_effects: the data a function was observed to read and write outside of itself.
 
 The analysis (discopop_explorer.side_effects.analysis) returns every effect, unranked
-and uncut; this tool filters, ranks, cuts and words them for an agent. See
-design/get_side_effects.md, section 3.
+and uncut; this tool ranks and cuts them and words the most significant ones as text
+for an agent. See design/get_side_effects.md, section 3.
 """
 
 from __future__ import annotations
 
-import dataclasses
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -24,10 +22,11 @@ from typing import TYPE_CHECKING, Any, Optional
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from mcp_server.tools.helpers import ToolContext
+from mcp_server.tools.hotspot_text import display_path, resolve_source_path
 
 if TYPE_CHECKING:
     # imported for annotations only: the server starts without discopop_explorer installed
-    from discopop_explorer.side_effects.result import Effect, EffectSite, FunctionInfo, SideEffects
+    from discopop_explorer.side_effects.result import Effect, EffectSite, FunctionInfo, OutsideName, SideEffects
 
 logger = logging.getLogger("discopop-mcp")
 
@@ -35,53 +34,41 @@ TOOL_NAME = "get_side_effects"
 
 # A function high up in the call tree (main, a solver driver) can touch hundreds of
 # globals and buffers; beyond this many entries the answer costs more than it helps.
-MAX_EFFECTS = 100
-# Sites listed per entry; more when var_name asks for one variable. num_sites has the total.
+DEFAULT_LIMIT = 20
+# Sites listed per entry; the rest is counted.
 MAX_SITES = 3
-MAX_VAR_SITES = 50
-# Entries of summary.contributing_callees and of unprofiled_calls; num_* fields have the totals.
-MAX_LISTED = 20
+# Names listed in a sentence (unprofiled calls, written names of the verdict).
+MAX_LISTED = 5
 # Candidates listed for an ambiguous name.
 MAX_CANDIDATES = 20
 
-ACCESSES = ("read", "write")
-KINDS = ("global", "parameter", "other")
 # Ranking order, see _rank_key.
 _ACCESS_RANK = {"write": 0, "read": 1, "unknown": 2}
 _KIND_RANK = {"global": 0, "parameter": 1, "other": 2}
 _SOURCE_RANK = {"observed": 0, "static": 1}
-# Output list per access; "unknown" holds statically found references whose access could not be derived.
-_BUCKETS = {"write": "writes", "read": "reads", "unknown": "unknown_access"}
+_KIND_TEXT = {"global": "global", "parameter": "parameter", "other": "other memory"}
 
-PROFILED_INPUTS_NOTE = (
-    "Effects were observed on the profiled inputs only; other inputs can reach other code and data. "
-    "Accesses inside library code that was not compiled with DiscoPoP are not observed (see unprofiled_calls)."
-)
+PROFILED_INPUTS_NOTE = "Valid for the profiled inputs only."
 # Only added if the analysis' own note on missing source-level facts is absent.
 NO_AST_NOTE = (
-    "No source-level facts are available for this function or a contributing callee, so its names "
-    "could not be classified and are reported as kind 'other'."
+    "No source-level facts are available for this function or a callee, so its names could not be classified "
+    "and are reported as other memory."
 )
 _NO_AST_NOTE_MARKER = "No source-level"
 
-COVERAGE_NEXT_STEPS = {
+COVERAGE_TEXT = {
     "not_executed": (
-        "The profiling run never executed this function, so only globals it references in the code "
-        "(source 'static') are listed, and absent effects mean nothing. To observe it, run gather_data "
-        "with an execution configuration whose input calls it."
+        "Never executed during profiling: only globals it references in the code are listed, and absent effects "
+        "mean nothing. Run gather_data with an execution configuration whose input calls it to observe it."
     ),
     "untracked": (
-        "The function was executed, but none of its calls could be attributed to it (e.g. called through "
-        "a function pointer, from library code, or nested deeper than the analysis follows calls), so no "
-        "observed effect is reported; only globals it references in the code are listed. Treat absent "
-        "effects as unknown; get_data_dependencies on the function's line range shows the raw observed "
-        "dependencies."
+        "Executed, but none of its calls could be attributed to it (e.g. called through a function pointer, from "
+        "library code, or nested deeper than the analysis follows calls), so no observed effect is reported and "
+        "absent effects are unknown; only globals it references in the code are listed."
     ),
     "partial": (
-        "Some calls of this function, or of functions it calls, could not be followed (e.g. recursion, "
-        "deep call chains, function pointers), or some recorded accesses could not be attributed to a call "
-        "(unmapped_records), so effects may be missing. Treat absent effects as unknown; "
-        "get_data_dependencies on the line range of interest shows the raw observed dependencies."
+        "Some calls could not be followed (e.g. recursion, deep call chains, function pointers) or some accesses "
+        "could not be attributed, so effects may be missing and absent effects are unknown."
     ),
 }
 
@@ -89,28 +76,20 @@ TOOL = Tool(
     name=TOOL_NAME,
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(
-        "Return the data a C/C++ function was observed to read and write outside of itself during "
+        "Describe the data a C/C++ function was observed to read and write outside of itself during "
         "profiling, including through the functions it calls: globals (also static locals and static "
         "members), memory reached through its pointer, reference, array or class-type parameters, and other "
         "memory that outlives the call. Use it to judge whether a call is pure, safe to run concurrently, to "
         "reorder or to memoize, e.g. during a review or a refactoring.\n\n"
-        "Effects are split into writes and reads (unknown_access: static references of unknown access). "
-        "Each entry has name, kind (global, parameter, other), source (observed, or static: referenced in "
-        "the code, not observed), through_pointer and sites with line and via, the call chain to the "
-        "function containing the access (null: the function itself; recursion shown as 'f(int) x5'). "
-        "Names are those at the access: a parameter reached through a callee has the parameter name of the "
-        "last via function. outside_names are other names of the same data, e.g. the caller's argument.\n\n"
-        "coverage: executed, partial, untracked or not_executed; anything but executed means absent effects "
-        "are unknown, not absent. pure_on_observed_inputs: true = no writes, and reads only through its own "
-        "parameters or of constants (for memoizing, the pointed-to contents belong to the key); false = an "
-        "observed write or file I/O; null = undecided. performs_file_io and unprofiled_calls (calls whose "
-        "accesses were not observed) flag what profiling cannot see; unmapped_records counts recorded "
-        "accesses in the function or its callees that could not be attributed to a call (coverage is then "
-        "partial).\n\n"
-        "Order: writes before reads; global, parameter, other; own accesses before callees', shallower "
-        f"first; observed before static; by name. At most {MAX_EFFECTS} entries and {MAX_SITES} sites each "
-        f"({MAX_VAR_SITES} with var_name); num_* fields give totals, summary counts every match, "
-        "truncated=true marks a cut.\n\n"
+        "The answer is a text: whether the function is pure on the profiled inputs, then its writes and reads, "
+        "writes first, each with its name, kind, the lines of the accesses and, for an access in a called "
+        "function, the call chain (via). A name is the one at the access; the caller's name for the same data "
+        "is given as 'also called', with its file when that differs from the function's. "
+        "'referenced in the code' marks data the code names but profiling did not "
+        "observe. Caveats say what profiling cannot see (functions never executed, calls it could not "
+        "follow, library code), as then absent effects are unknown, not absent.\n\n"
+        f"By default the first {DEFAULT_LIMIT} effects are listed (most significant first), and the last line says "
+        "how many are not; raise limit for more.\n\n"
         "Valid only for the profiled inputs. Requires gather_data. Cheap: cached after the first load."
     ),
     inputSchema={
@@ -136,39 +115,15 @@ TOOL = Tool(
                 "type": "integer",
                 "description": "Any line inside the function's definition, to disambiguate.",
             },
-            "access": {
-                "type": "string",
-                "enum": list(ACCESSES),
-                "description": (
-                    "Only return reads or only writes. Entries of unknown access are kept with either. "
-                    "Default: both."
-                ),
-            },
-            "kinds": {
-                "type": "array",
-                "items": {"type": "string", "enum": list(KINDS)},
-                "description": "Kinds of data to return. Default: all.",
-            },
-            "var_name": {
-                "type": "string",
-                "description": (
-                    "Only return entries for this name (also matched against member_of and outside_names), "
-                    f"with up to {MAX_VAR_SITES} sites each."
-                ),
-            },
-            "include_callees": {
-                "type": "boolean",
-                "description": "Also report accesses made by called functions. Default: true.",
+            "limit": {
+                "type": "integer",
+                "description": f"Maximum number of effects to list. Default: {DEFAULT_LIMIT}.",
             },
         },
         "required": ["project_path", "function"],
         "additionalProperties": False,
     },
 )
-
-
-def _strip_prefix(name: str) -> str:
-    return name[len("GEPRESULT_") :] if name.startswith("GEPRESULT_") else name
 
 
 def _same_file(a: Optional[str], b: Path) -> bool:
@@ -180,40 +135,9 @@ def _same_file(a: Optional[str], b: Path) -> bool:
         return False
 
 
-def _candidate(info: FunctionInfo) -> dict[str, Any]:
-    return {"name": info.display_name, "file": info.file, "start_line": info.start_line, "end_line": info.end_line}
-
-
-def _matches_var(effect: Effect, var_name: str) -> bool:
-    wanted = _strip_prefix(var_name)
-    names = [effect.name] + ([effect.member_of] if effect.member_of else []) + list(effect.outside_names)
-    return any(_strip_prefix(name) == wanted for name in names)
-
-
-def _filter(
-    effects: list[Effect],
-    access: Optional[str],
-    kinds: set[str],
-    var_name: Optional[str],
-    include_callees: bool,
-) -> list[Effect]:
-    """The effects matching the filters; without callees, only the sites in the function itself remain."""
-    matched: list[Effect] = []
-    for effect in effects:
-        # an entry of unknown access may be either, so it is kept by both access filters
-        if access is not None and effect.access not in (access, "unknown"):
-            continue
-        if effect.kind not in kinds:
-            continue
-        if var_name is not None and not _matches_var(effect, var_name):
-            continue
-        if not include_callees:
-            own_sites = [site for site in effect.sites if not site.via]
-            if not own_sites:
-                continue
-            effect = dataclasses.replace(effect, sites=own_sites)
-        matched.append(effect)
-    return matched
+def _place(project_path: str, info: FunctionInfo) -> str:
+    path = display_path(project_path, Path(info.file) if info.file else None)
+    return f"{info.display_name} ({path}:{info.start_line}-{info.end_line})"
 
 
 def _rank_key(effect: Effect) -> tuple[Any, ...]:
@@ -244,126 +168,100 @@ def _collapse_via(via: tuple[str, ...]) -> list[str]:
     return collapsed
 
 
-def _site(site: EffectSite, function: FunctionInfo, files: dict[int, Optional[str]]) -> dict[str, Any]:
-    entry: dict[str, Any] = {}
-    if site.file_id != function.file_id:
-        entry["file"] = files.get(site.file_id)
-    entry["line"] = site.line
-    entry["via"] = _collapse_via(site.via) if site.via else None
-    return entry
+def _site_text(site: EffectSite, function: FunctionInfo, files: dict[int, Optional[str]], project_path: str) -> str:
+    """'line 12', 'util.h:7' for another file; 'via a > b' for an access in a called function."""
+    if site.file_id != function.file_id and files.get(site.file_id):
+        text = f"{display_path(project_path, Path(str(files[site.file_id])))}:{site.line}"
+    else:
+        text = f"line {site.line}"
+    if site.via:
+        text += f" via {' > '.join(_collapse_via(site.via))}"
+    return text
 
 
-def _entry(effect: Effect, function: FunctionInfo, files: dict[int, Optional[str]], max_sites: int) -> dict[str, Any]:
+def _outside_text(
+    outside: OutsideName, function: FunctionInfo, files: dict[int, Optional[str]], project_path: str
+) -> str:
+    """The other name; 'pos (in util.h)' when it is used in another file than the function's."""
+    if outside.file_id != function.file_id and files.get(outside.file_id):
+        return f"{outside.name} (in {display_path(project_path, Path(str(files[outside.file_id])))})"
+    return outside.name
+
+
+def _effect_text(effect: Effect, function: FunctionInfo, files: dict[int, Optional[str]], project_path: str) -> str:
+    qualifiers = [_KIND_TEXT.get(effect.kind, effect.kind)]
+    if effect.through_pointer:
+        qualifiers.append("through pointer")
+    if effect.source == "static":
+        qualifiers.append("referenced in the code, not observed")
+    if effect.member_of:
+        qualifiers.append(f"member of {effect.member_of}")
+    text = f"{effect.name} ({', '.join(qualifiers)})"
+    if effect.outside_names:
+        aliases = [_outside_text(outside, function, files, project_path) for outside in effect.outside_names]
+        text += f", also called {', '.join(aliases)}"
     # the function's own sites first, then its file, then by line
     sites = sorted(effect.sites, key=lambda s: (len(s.via), s.file_id != function.file_id, s.file_id, s.line, s.via))
-    shown = sites[:max_sites]
-    entry: dict[str, Any] = {
-        "name": effect.name,
-        "kind": effect.kind,
-        "through_pointer": effect.through_pointer,
-        "source": effect.source,
-    }
-    if effect.member_of:
-        entry["member_of"] = effect.member_of
-    entry["num_sites"] = len(sites)
-    entry["sites"] = [_site(site, function, files) for site in shown]
-    if effect.outside_names:
-        entry["outside_names"] = list(effect.outside_names)
-    return entry
+    listed = [_site_text(site, function, files, project_path) for site in sites[:MAX_SITES]]
+    if len(sites) > MAX_SITES:
+        listed.append(f"{len(sites) - MAX_SITES} more")
+    return f"{text}: {'; '.join(listed)}"
 
 
-def _summary(matched: list[Effect]) -> dict[str, Any]:
-    by_access = {"write": 0, "read": 0, "unknown": 0}
-    by_kind = {kind: 0 for kind in KINDS}
-    callees: set[str] = set()
-    for effect in matched:
-        by_access[effect.access] = by_access.get(effect.access, 0) + 1
-        by_kind[effect.kind] = by_kind.get(effect.kind, 0) + 1
-        callees.update(site.via[-1] for site in effect.sites if site.via)
-    return {
-        "num_effects": len(matched),
-        "by_access": by_access,
-        "by_kind": by_kind,
-        "num_contributing_callees": len(callees),
-        "contributing_callees": sorted(callees)[:MAX_LISTED],
-    }
+def _names(names: list[str]) -> str:
+    shown = names[:MAX_LISTED]
+    return ", ".join(shown) + (f" and {len(names) - len(shown)} more" if len(names) > len(shown) else "")
 
 
-def _resolve_file(project_path: str, file_path: str) -> Path:
-    path = Path(file_path)
-    if not path.is_absolute():
-        path = Path(project_path) / path
-    return path.resolve()
+def _verdict(effects: SideEffects) -> str:
+    written = sorted({effect.name for effect in effects.effects if effect.access == "write"})
+    if effects.pure_on_observed_inputs is True:
+        return "Pure on the profiled inputs: it writes nothing and reads only its own parameters or constants."
+    if effects.pure_on_observed_inputs is False:
+        reasons = ([f"it writes {_names(written)}"] if written else []) + (
+            ["it performs file I/O"] if effects.performs_file_io else []
+        )
+        return f"Not pure: {' and '.join(reasons)}." if reasons else "Not pure."
+    return "Purity is undecided." + (" It performs file I/O." if effects.performs_file_io else "")
 
 
-def build_result(
+def build_text(
     project_path: str,
     effects: SideEffects,
-    access: Optional[str] = None,
-    kinds: Optional[set[str]] = None,
-    var_name: Optional[str] = None,
-    include_callees: bool = True,
     files: Optional[dict[int, Optional[str]]] = None,
-) -> dict[str, Any]:
-    """The tool's answer for one function: filtered, ranked, cut and worded."""
+    limit: int = DEFAULT_LIMIT,
+) -> str:
+    """The tool's answer for one function: ranked, cut and worded."""
     function = effects.function
     files = dict(files or {})
     files.setdefault(function.file_id, function.file)
 
-    matched = _filter(effects.effects, access, kinds or set(KINDS), var_name, include_callees)
-    matched.sort(key=_rank_key)
-    shown = matched[:MAX_EFFECTS]
+    ranked = sorted(effects.effects, key=_rank_key)
+    shown = ranked[: max(limit, 0)]
 
-    buckets: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in _BUCKETS.values()}
-    for effect in shown:
-        buckets[_BUCKETS.get(effect.access, "unknown_access")].append(
-            _entry(effect, function, files, MAX_VAR_SITES if var_name is not None else MAX_SITES)
-        )
+    lines = [_place(project_path, function), _verdict(effects)]
+    sections = (("write", "Writes:"), ("read", "Reads:"), ("unknown", "Referenced in the code, access unknown:"))
+    for access, title in sections:
+        entries = [effect for effect in shown if effect.access == access]
+        if entries:
+            lines.append(title)
+            lines += [f"- {_effect_text(effect, function, files, project_path)}" for effect in entries]
+    if not ranked:
+        lines.append("No effects." if effects.coverage == "executed" else "No effects are known.")
+    if len(shown) < len(ranked):
+        lines.append(f"{len(ranked) - len(shown)} more effects not shown (limit={limit}); pass a larger limit.")
 
-    notes = [PROFILED_INPUTS_NOTE]
-    for note in effects.notes:
-        if note not in notes:
-            notes.append(note)
+    if effects.coverage in COVERAGE_TEXT:
+        lines.append(f"Caveat: {COVERAGE_TEXT[effects.coverage]}")
+    if effects.unprofiled_calls:
+        calls = list(effects.unprofiled_calls)
+        lines.append(f"Caveat: calls whose accesses were not observed (library code): {_names(calls)}.")
+    notes = [note for note in effects.notes if note != PROFILED_INPUTS_NOTE]
     if not effects.ast_facts and not any(note.startswith(_NO_AST_NOTE_MARKER) for note in effects.notes):
         notes.append(NO_AST_NOTE)
-
-    result: dict[str, Any] = {
-        "status": "success",
-        "project_path": project_path,
-        "function": {
-            "name": function.display_name,
-            "file": function.file,
-            "start_line": function.start_line,
-            "end_line": function.end_line,
-        },
-        "coverage": effects.coverage,
-        "pure_on_observed_inputs": effects.pure_on_observed_inputs,
-        "performs_file_io": effects.performs_file_io,
-        "num_unprofiled_calls": len(effects.unprofiled_calls),
-        "unprofiled_calls": list(effects.unprofiled_calls)[:MAX_LISTED],
-        "unmapped_records": effects.unmapped_records,
-        "summary": _summary(matched),
-        "writes": buckets["writes"],
-        "reads": buckets["reads"],
-    }
-    if buckets["unknown_access"]:
-        result["unknown_access"] = buckets["unknown_access"]
-    result["truncated"] = len(matched) > len(shown)
-    result["notes"] = notes
-
-    next_steps: list[str] = []
-    if result["truncated"]:
-        next_steps.append(
-            f"Only the first {MAX_EFFECTS} of {len(matched)} entries are listed (writes first, then by kind, "
-            "own accesses before those of callees). To see the rest, narrow the query with access, kinds, "
-            "var_name or include_callees=false."
-        )
-    coverage_step = COVERAGE_NEXT_STEPS.get(effects.coverage)
-    if coverage_step:
-        next_steps.append(coverage_step)
-    if next_steps:
-        result["next_step"] = " ".join(next_steps)
-    return result
+    lines += [f"Note: {note}" for note in dict.fromkeys(notes)]
+    lines.append(PROFILED_INPUTS_NOTE)
+    return "\n".join(lines)
 
 
 def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
@@ -373,19 +271,10 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         file_path: Optional[str] = arguments.get("file_path") or None
         line_arg = arguments.get("line")
         line: Optional[int] = int(line_arg) if line_arg is not None else None
-        access: Optional[str] = arguments.get("access") or None
-        # An omitted or empty list means "no restriction".
-        kinds: set[str] = set(arguments.get("kinds") or KINDS)
-        var_name: Optional[str] = arguments.get("var_name") or None
-        include_callees: bool = bool(arguments.get("include_callees", True))
+        limit = max(int(arguments.get("limit", DEFAULT_LIMIT)), 0)
 
         if not function_name:
             return ctx.error("function must name a function.", project_path, TOOL_NAME)
-        if access is not None and access not in ACCESSES:
-            return ctx.error(f"access must be one of {list(ACCESSES)}, not {access!r}.", project_path, TOOL_NAME)
-        unknown_kinds = sorted(kinds - set(KINDS))
-        if unknown_kinds:
-            return ctx.error(f"Unknown kinds {unknown_kinds}; known: {list(KINDS)}.", project_path, TOOL_NAME)
 
         index, problem = ctx.get_side_effect_index(project_path)
         if index is None:
@@ -409,7 +298,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             )
         narrowed = candidates
         if file_path is not None:
-            wanted = _resolve_file(project_path, file_path)
+            wanted = resolve_source_path(project_path, file_path)
             narrowed = [info for info in narrowed if _same_file(info.file, wanted)]
         if line is not None:
             narrowed = [info for info in narrowed if info.start_line <= line <= info.end_line]
@@ -419,37 +308,34 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 for part in (f"in {file_path}" if file_path else "", f"at line {line}" if line is not None else "")
                 if part
             )
-            message = f"No definition of '{function_name}' {where}. Definitions: " + json.dumps(
-                [_candidate(info) for info in candidates[:MAX_CANDIDATES]]
-            )
+            definitions = "; ".join(_place(project_path, info) for info in candidates[:MAX_CANDIDATES])
             return ctx.error(
-                message, project_path, TOOL_NAME, next_step="Pass the file_path and line of one of the definitions."
+                f"No definition of '{function_name}' {where}. Definitions: {definitions}.",
+                project_path,
+                TOOL_NAME,
+                next_step="Pass the file_path and line of one of the definitions.",
             )
         if len(narrowed) > 1:
-            result: dict[str, Any] = {
-                "status": "ambiguous",
-                "project_path": project_path,
-                "message": f"'{function_name}' matches {len(narrowed)} functions.",
-                "num_candidates": len(narrowed),
-                "candidates": [_candidate(info) for info in narrowed[:MAX_CANDIDATES]],
-                "next_step": (
-                    "Call again with the full signature as function, or with file_path and a line inside "
-                    "the definition of the one you mean."
-                ),
-            }
-            ctx.log_response(TOOL_NAME, result)
-            return [TextContent(type="text", text=json.dumps(result))]
+            listed = [f"- {_place(project_path, info)}" for info in narrowed[:MAX_CANDIDATES]]
+            text = "\n".join(
+                [f"'{function_name}' matches {len(narrowed)} functions:"]
+                + listed
+                + [
+                    "Call again with the full signature as function, or with file_path and a line inside the "
+                    "definition of the one you mean."
+                ]
+            )
+            return [TextContent(type="text", text=text)]
 
         effects = index.compute(narrowed[0].id)
-        files = _file_table(index)
-        result = build_result(project_path, effects, access, kinds, var_name, include_callees, files)
-        ctx.log_response(TOOL_NAME, result)
-        return [TextContent(type="text", text=json.dumps(result))]
+        text = build_text(project_path, effects, _file_table(index), limit)
+        ctx.log_action(project_path, TOOL_NAME, f"Described the side effects of {narrowed[0].display_name}")
+        return [TextContent(type="text", text=text)]
 
     except Exception as e:
         error_msg = f"Error computing side effects: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        return [TextContent(type="text", text=json.dumps({"status": "error", "message": error_msg}))]
+        return ctx.error(error_msg, arguments.get("project_path", ""), TOOL_NAME)
 
 
 def _file_table(index: Any) -> dict[int, Optional[str]]:

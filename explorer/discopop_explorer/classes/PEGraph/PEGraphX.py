@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 import itertools
 import random
-from typing import Dict, List, Tuple, Set, Optional, cast, Any
+from typing import Dict, Iterable, List, Tuple, Set, Optional, cast, Any
 
 import matplotlib.pyplot as plt  # type: ignore
 import networkx as nx  # type: ignore
@@ -22,8 +22,6 @@ from discopop_explorer.functions.PEGraph.queries.edges import in_edges, out_edge
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
 from discopop_explorer.functions.PEGraph.traversal.children import direct_children, direct_children_or_called_nodes
-from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
-from discopop_library.HostpotLoader.HotspotType import HotspotType  # type: ignore
 from discopop_library.StatusReporting.console import progress, warn
 from discopop_explorer.aliases.MemoryRegion import MemoryRegion
 from discopop_explorer.aliases.NodeID import NodeID
@@ -51,10 +49,17 @@ except (ImportError, ModuleNotFoundError):
 
     Visualizer = object  # type: ignore[assignment, misc]
 
-from discopop_explorer.utilities.PEGraphConstruction.parser import readlineToCUIdMap, writelineToCUIdMap
+from discopop_explorer.utilities.PEGraphConstruction.parser import (
+    instructionToCUIdMap,
+    instructionToLineMap,
+    jumpInstructionIds,
+    readlineToCUIdMap,
+    writelineToCUIdMap,
+)
 from discopop_explorer.utilities.PEGraphConstruction.classes.LoopData import LoopData
 from discopop_explorer.utilities.PEGraphConstruction.classes.DependenceItem import DependenceItem
 from discopop_explorer.utilities.PEGraphConstruction.PEGraphConstructionUtilities import parse_dependency, parse_cu
+from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.classes.variable import Variable
 import logging
 
@@ -90,11 +95,28 @@ global_pet = None
 #            raise ValueError("Mal-formatted MemoryRegion identifier: ", id_string)
 
 
+def _cu_ids(instruction_id: Optional[int], by_line: Set[str]) -> Set[str]:
+    """The CU of a dependence end: the one that holds its instruction. Only an end recorded without an
+    instruction id (or one no CU holds, e.g. in an uninstrumented function) falls back to its line."""
+    if instruction_id is not None and instruction_id in instructionToCUIdMap:
+        return {instructionToCUIdMap[instruction_id]}
+    return by_line
+
+
 class PEGraphX(Plottable, object):  # type: ignore[misc]
     g: nx.MultiDiGraph
     reduction_vars: List[Dict[str, str]]
     main: Node
     pos: Dict[Any, Any]
+    # line (file id:line) of the instructions that have one, keyed by the instruction id as str (json keys).
+    # The lines are a view derived from the instructions, see design/instruction_focus.md.
+    instruction_lines: Dict[str, str]
+    # lines (file id:line) whose instructions all jump (the closing brace of a loop, the jump over an else): they hold
+    # no statement. Empty if the profiler listed no jumps.
+    jump_only_lines: Set[str]
+    # the callpath states of the profiler (state id -> (parent state id, label)), see utilities/callpath_states.py;
+    # empty if the profile has none. Dependences carry state ids of their ends.
+    callpath_tree: Dict[str, Tuple[str, str]]
 
     def __init__(
         self,
@@ -110,6 +132,21 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
             if node.name == "main":
                 self.main = node
         self.pos = pos
+        self.instruction_lines = dict()
+        self.jump_only_lines = set()
+        self.callpath_tree = dict()
+
+    def get_line_ids_of_instructions(self, instruction_ids: Iterable[int]) -> List[LineID]:
+        """The lines of the instructions, each once, in the order of the instructions. Instructions without a
+        position contribute no line."""
+        lines = (self.instruction_lines.get(str(i)) for i in instruction_ids)
+        return [LineID(line) for line in dict.fromkeys(line for line in lines if line is not None)]
+
+    def get_statement_line_ids_of_instructions(self, instruction_ids: Iterable[int]) -> List[LineID]:
+        """The lines of the instructions like get_line_ids_of_instructions, without the lines that hold jumps only
+        (a closing brace is no part of a statement). The lines of all instructions if there is no other."""
+        lines = self.get_line_ids_of_instructions(instruction_ids)
+        return [line for line in lines if line not in self.jump_only_lines] or lines
 
     @classmethod
     def from_parsed_input(
@@ -169,22 +206,22 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
                 pos = nx.random_layout(g)
         for idx, dep in progress(list(enumerate(dependencies_list)), desc="Adding dependencies"):
             if dep.type == "INIT":
-                sink = readlineToCUIdMap[dep.sink]
+                sink = _cu_ids(dep.sink_instruction_id, readlineToCUIdMap[dep.sink])
                 if len(sink) > 0:
                     for s in sink:
                         g.add_edge(s, s, data=parse_dependency(dep))
                 else:
                     # check for write lines
-                    sink = writelineToCUIdMap[dep.sink]
+                    sink = _cu_ids(dep.sink_instruction_id, writelineToCUIdMap[dep.sink])
                     for s in sink:
                         g.add_edge(s, s, data=parse_dependency(dep))
                 continue
             elif dep.type == "RAW" or dep.type == "WAR":
-                sink_cu_ids = readlineToCUIdMap[dep.sink]
-                source_cu_ids = writelineToCUIdMap[dep.source]
+                sink_cu_ids = _cu_ids(dep.sink_instruction_id, readlineToCUIdMap[dep.sink])
+                source_cu_ids = _cu_ids(dep.source_instruction_id, writelineToCUIdMap[dep.source])
             elif dep.type == "WAW":
-                sink_cu_ids = writelineToCUIdMap[dep.sink]
-                source_cu_ids = writelineToCUIdMap[dep.source]
+                sink_cu_ids = _cu_ids(dep.sink_instruction_id, writelineToCUIdMap[dep.sink])
+                source_cu_ids = _cu_ids(dep.source_instruction_id, writelineToCUIdMap[dep.source])
             else:
                 raise ValueError("Unknown dep.type: " + dep.type + " for dependency: " + str(dep))
 
@@ -206,7 +243,15 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
                     #                        continue
                     if sink_cu_id and source_cu_id:
                         g.add_edge(sink_cu_id, source_cu_id, data=parse_dependency(dep))
-        return cls(g, reduction_vars, pos, visualizer)
+        pet = cls(g, reduction_vars, pos, visualizer)
+        pet.instruction_lines = {str(i): line for i, line in instructionToLineMap.items()}
+        lines_with_other_instructions = {
+            line for instruction_id, line in instructionToLineMap.items() if instruction_id not in jumpInstructionIds
+        }
+        pet.jump_only_lines = {
+            line for instruction_id, line in instructionToLineMap.items() if instruction_id in jumpInstructionIds
+        } - lines_with_other_instructions
+        return pet
 
     def validate(self) -> None:
         logger = logging.getLogger("Explorer")
@@ -279,35 +324,17 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
 
     def calculateFunctionMetadata(
         self,
-        hotspot_information: Optional[Dict[HotspotType, List[Tuple[int, int, HotspotNodeType, str, float]]]] = None,
         func_nodes: Optional[List[FunctionNode]] = None,
     ) -> None:
         # store id of parent function in each node
         # and store in each function node a list of all children ids
+        #
+        # All functions are processed, hot or not: the metadata (children, parent function, reachability)
+        # is what attributes accesses to functions, e.g. for the side effects of a function that
+        # is too short to be listed as a hotspot. The pass is cheap (0.2s for the 208 functions of LULESH),
+        # so restricting it to the hotspots saves nothing worth the loss.
         if func_nodes is None:
             func_nodes = all_nodes(self, FunctionNode)
-
-            if hotspot_information is not None:
-                all_hotspot_functions: Set[Tuple[int, str]] = set()
-                for key in hotspot_information:
-                    for entry in hotspot_information[key]:
-                        if entry[2] == HotspotNodeType.FUNCTION:
-                            all_hotspot_functions.add((entry[0], entry[3]))
-
-                # An empty set of hotspot functions means "nothing is known about which
-                # functions are hot", not "no function is hot" - the hotspot loader returns
-                # an empty dict when hotspot_detection/Hotspots.json is absent, and even a
-                # present file may classify only LOOP regions in the requested hotspot
-                # types. Filtering against the empty set in those cases would drop every
-                # function and leave the graph without any reachability metadata, so keep
-                # all functions instead. Mirrors the same guard in utils.filter_for_hotspots.
-                if all_hotspot_functions:
-                    filtered_func_nodes = [
-                        func_node
-                        for func_node in func_nodes
-                        if (func_node.file_id, func_node.name) in all_hotspot_functions
-                    ]
-                    func_nodes = filtered_func_nodes
 
         from discopop_explorer.parallel_utils import (
             pet_function_metadata_initialize_worker,

@@ -132,12 +132,12 @@ class TestStillRejected(unittest.TestCase):
 
     def test_unrecognizable_boolean(self) -> None:
         coerced, _ = coerce_arguments({"project_path": "/p", "apply": "perhaps"}, _SCHEMA)
-        error = self._rejection(validation_error("run_auto_tuning", coerced, _SCHEMA))
+        error = self._rejection(validation_error("gather_data", coerced, _SCHEMA))
         self.assertIn("apply", error)
         self.assertIn("boolean", error)
 
     def test_missing_required_property_is_reported_as_such(self) -> None:
-        error = self._rejection(validation_error("run_auto_tuning", {"apply": True}, _SCHEMA))
+        error = self._rejection(validation_error("gather_data", {"apply": True}, _SCHEMA))
         self.assertIn("required", error)
         # Not "expected object": the type belongs to the enclosing schema, and
         # naming it here would describe the wrong problem.

@@ -43,8 +43,11 @@ class LoopManager {
     }
   }
 
-  bool IsNewLoop(const std::int32_t loop_id) const {
-    return loop_stack_.empty() || (loop_stack_.Top().loop_id != loop_id);
+  // The entry of the loop on top of the stack is its next iteration, unless it is made from a deeper function level:
+  // then it is the entry of an instance of the loop in a recursive call of its function, which is a loop of its own.
+  bool IsNewLoop(const std::int32_t function_level, const std::int32_t loop_id) const {
+    return loop_stack_.empty() || (loop_stack_.Top().loop_id != loop_id) ||
+           (function_level > loop_stack_.Top().func_level);
   }
 
   void IterateLoop(const std::int32_t /*function_level*/) {

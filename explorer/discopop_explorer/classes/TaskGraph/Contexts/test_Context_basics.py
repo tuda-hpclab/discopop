@@ -71,6 +71,25 @@ def test_code_scope_covers_the_lines_of_the_contained_nodes(make_node: Any, buil
     assert context.get_first_pet_node(pet) is pet.node_at(NodeID("1:1"))
 
 
+def test_instruction_scope_lists_the_instructions_of_the_contained_cus(make_node: Any, build_pet_graph: Any) -> None:
+    pet = build_pet_graph(
+        [
+            make_node("1:1", NodeType.CU, start_line=3, instruction_ids=[7, 8]),
+            make_node("1:2", NodeType.CU, start_line=4, instruction_ids=[9, 8]),
+            make_node("1:3", NodeType.LOOP, start_line=5),
+        ]
+    )
+    parent, child = Context(), Context()
+    _nest(parent, child)
+    parent.add_node(_tg_node("1:1"))
+    parent.add_node(_tg_node("1:3"))  # no CU: no instructions
+    parent.add_node(TGNode(None, 0, 0))
+    child.add_node(_tg_node("1:2"))
+
+    assert parent.get_instruction_scope(pet) == [7, 8]
+    assert parent.get_instruction_scope(pet, inclusive=True) == [7, 8, 9]
+
+
 def test_code_scope_cache_is_invalidated_by_add_node(make_node: Any, build_pet_graph: Any) -> None:
     pet = build_pet_graph([make_node("1:1", NodeType.CU, start_line=3), make_node("1:2", NodeType.CU, start_line=4)])
     context = Context()
@@ -306,14 +325,13 @@ def test_task_parent_context_registers_its_tasks_and_end() -> None:
 
 
 def test_task_end_context_records_its_task_parent() -> None:
-    """The parent is stored as task_parent. The class-level task_parent_context is a separate attribute
-    which set_task_parent leaves untouched."""
+    """set_task_parent stores the parent in task_parent_context; a new end context has none."""
     parent, end = TaskParentContext(), TaskEndContext()
+    assert end.task_parent_context is None
 
     end.set_task_parent(parent)
 
-    assert end.task_parent is parent
-    assert end.task_parent_context is None
+    assert end.task_parent_context is parent
 
 
 # --- callstacks ---------------------------------------------------------------------------

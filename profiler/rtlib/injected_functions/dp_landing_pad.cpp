@@ -12,6 +12,7 @@
 
 #include "dp_landing_pad.hpp"
 
+#include <cstddef>
 #include <mutex>
 
 #include "callback_scope.hpp"
@@ -25,11 +26,22 @@ extern "C" {
 
 // An exception unwinds the stack without running the __dp_func_exit of the functions it leaves.
 // Their callpath states are discarded here, when the landing pad of the function which continues
-// is reached.
+// is reached. Their loops and function levels are closed as well: the entry of a loop from a function
+// level above the one of the loop on top of the loop stack starts a new loop (the entry of a recursive
+// instance, see LoopManager::IsNewLoop), so a level left too high would turn every later iteration of a
+// loop of the continuing function into a loop of its own.
 void __dp_landing_pad(int32_t function_entry_id) {
   DP_CALLBACK_SCOPE(LANDING_PAD);
 
+  const std::size_t frames_before = CallstateFrameCount();
   ResumeFunctionForCallstate(function_entry_id);
+  const std::size_t frames_after = CallstateFrameCount();
+
+  // one level per function left; the end line of a loop which is left this way is not known
+  for (std::size_t left = frames_before - frames_after; left > 0; --left) {
+    loop_manager->CleanFunctionExit(function_manager->GetCurrentStackLevel(), 0);
+    function_manager->DecreaseStackLevel();
+  }
 }
 }
 

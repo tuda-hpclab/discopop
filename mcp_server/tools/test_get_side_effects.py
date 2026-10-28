@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 from unittest import mock
 
-from discopop_explorer.side_effects.result import Effect, EffectSite, FunctionInfo, SideEffects
+from discopop_explorer.side_effects.result import Effect, EffectSite, FunctionInfo, OutsideName, SideEffects
 from discopop_explorer.side_effects.schema import FORMAT_VERSION, dependency_file_info, export_path, save_export
 from mcp_server.argument_coercion import coerce_arguments, validation_error
 from mcp_server.tools import get_side_effects
@@ -113,14 +113,17 @@ class TestGetSideEffects(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
 
-    def __call(self, index: Any, problem: Optional[SideEffectDataProblem] = None, **arguments: Any) -> Any:
+    def __call(self, index: Any, problem: Optional[SideEffectDataProblem] = None, **arguments: Any) -> str:
         arguments.setdefault("function", "f")
         with mock.patch.object(self.ctx, "get_side_effect_index", return_value=(index, problem)):
-            return json.loads(get_side_effects.handle({"project_path": self.project, **arguments}, self.ctx)[0].text)
+            return get_side_effects.handle({"project_path": self.project, **arguments}, self.ctx)[0].text
 
-    def __query(self, effects: list[Effect], **arguments: Any) -> Any:
+    def __query(self, effects: list[Effect], **arguments: Any) -> str:
         extra = arguments.pop("result_extra", {})
         return self.__call(FakeIndex([_function()], {"1:5": _result(effects, **extra)}), **arguments)
+
+    def __lines(self, effects: list[Effect], **arguments: Any) -> list[str]:
+        return self.__query(effects, **arguments).splitlines()
 
     # --- name resolution
 
@@ -128,287 +131,198 @@ class TestGetSideEffects(unittest.TestCase):
         index = FakeIndex([_function()], {"1:5": _result([])})
         for name in ("f", "f(int*)", "_Zf"):
             with self.subTest(name=name):
-                data = self.__call(index, function=name)
-                self.assertEqual(data["status"], "success", data)
-                self.assertEqual(
-                    data["function"], {"name": "f(int*)", "file": MAIN_FILE, "start_line": 10, "end_line": 20}
-                )
+                self.assertEqual(self.__call(index, function=name).splitlines()[0], f"f(int*) ({MAIN_FILE}:10-20)")
+
+    def test_the_definition_is_shown_relative_to_the_project(self) -> None:
+        index = FakeIndex([_function(file=f"{self.project}/src/main.cpp")], {"1:5": _result([])})
+        index.results["1:5"] = _result([], function=_function(file=f"{self.project}/src/main.cpp"))
+        self.assertEqual(self.__call(index).splitlines()[0], "f(int*) (src/main.cpp:10-20)")
 
     def test_an_ambiguous_name_lists_the_candidates(self) -> None:
         first = _function("1:5", "f(int*)", MAIN_FILE, 10, 20)
         second = _function("2:3", "f(double)", OTHER_FILE, 3, 8)
-        index = FakeIndex([first, second], {})
-        data = self.__call(index, function="f")
-        self.assertEqual(data["status"], "ambiguous")
-        self.assertEqual(data["num_candidates"], 2)
-        self.assertEqual(
-            data["candidates"],
-            [
-                {"name": "f(int*)", "file": MAIN_FILE, "start_line": 10, "end_line": 20},
-                {"name": "f(double)", "file": OTHER_FILE, "start_line": 3, "end_line": 8},
-            ],
-        )
-        self.assertIn("file_path", data["next_step"])
-        self.assertEqual(index.computed, [])
+        text = self.__call(FakeIndex([first, second], {}))
+        self.assertIn("'f' matches 2 functions:", text)
+        self.assertIn(f"- f(int*) ({MAIN_FILE}:10-20)", text)
+        self.assertIn(f"- f(double) ({OTHER_FILE}:3-8)", text)
+        self.assertIn("full signature", text)
 
     def test_file_path_and_line_pick_one_definition(self) -> None:
-        source = Path(self.project) / "a.cpp"
-        source.write_text("\n")
-        first = _function("1:5", "f(int*)", str(source), 10, 20)
-        second = _function("1:30", "f(double)", str(source), 30, 40)
-        third = _function("2:3", "f(long)", OTHER_FILE, 3, 8)
-        index = FakeIndex([first, second, third], {"1:5": _result([], function=first), "1:30": _result([])})
-        # a relative file_path is taken relative to the project
-        data = self.__call(index, file_path="a.cpp", line=35)
-        self.assertEqual(data["status"], "success", data)
-        self.assertEqual(index.computed, ["1:30"])
-        data = self.__call(index, file_path=str(source))
-        self.assertEqual(data["status"], "ambiguous")
-        self.assertEqual(data["num_candidates"], 2)
-        data = self.__call(index, line=15)
-        self.assertEqual(data["status"], "success", data)
-        self.assertEqual(index.computed[-1], "1:5")
+        first = _function("1:5", "f(int*)", MAIN_FILE, 10, 20)
+        second = _function("2:3", "f(double)", OTHER_FILE, 3, 8)
+        index = FakeIndex([first, second], {"1:5": _result([], function=first), "2:3": _result([], function=second)})
+        text = self.__call(index, file_path=OTHER_FILE)
+        self.assertTrue(text.startswith(f"f(double) ({OTHER_FILE}:3-8)"))
+        self.assertTrue(self.__call(index, line=15).startswith(f"f(int*) ({MAIN_FILE}:10-20)"))
+        self.assertEqual(index.computed, ["2:3", "1:5"])
 
     def test_a_file_or_line_that_excludes_every_definition_names_the_existing_ones(self) -> None:
-        data = self.__call(FakeIndex([_function()], {}), line=99)
+        index = FakeIndex([_function()], {})
+        data = json.loads(self.__call(index, line=99))
         self.assertEqual(data["status"], "error")
         self.assertIn("at line 99", data["message"])
-        self.assertIn("main.cpp", data["message"])
-        self.assertIn("next_step", data)
+        self.assertIn(f"f(int*) ({MAIN_FILE}:10-20)", data["message"])
 
     def test_an_unknown_name_says_how_names_are_matched(self) -> None:
-        data = self.__call(FakeIndex([_function()], {}), function="g")
+        data = json.loads(self.__call(FakeIndex([_function()], {}), function="nope"))
         self.assertEqual(data["status"], "error")
-        self.assertIn("'g'", data["message"])
-        self.assertIn("signature", data["next_step"])
+        self.assertIn("No profiled function named 'nope'", data["message"])
+        self.assertIn("with or without signature", data["next_step"])
 
-    # --- ranking and cutting
+    # --- the answer
 
-    def test_ranking_order(self) -> None:
-        effects = [
-            _effect("z_static", source="static"),
-            _effect("other", kind="other"),
-            _effect("deep", via=("a", "b")),
-            _effect("param", kind="parameter"),
-            _effect("shallow", via=("a",)),
-            _effect("b_global"),
-            _effect("a_global"),
-            _effect("read_global", access="read"),
-            _effect("read_param", kind="parameter", access="read"),
+    def test_the_answer_is_a_text_with_the_verdict_first_and_the_profiled_inputs_last(self) -> None:
+        lines = self.__lines([_effect("g", access="write")], result_extra={"pure_on_observed_inputs": False})
+        self.assertEqual(lines[1], "Not pure: it writes g.")
+        self.assertEqual(lines[-1], "Valid for the profiled inputs only.")
+
+    def test_the_verdicts(self) -> None:
+        cases = [
+            (True, False, [], "Pure on the profiled inputs: it writes nothing and reads only its own parameters"),
+            (False, False, [_effect("a"), _effect("b", kind="parameter")], "Not pure: it writes a, b."),
+            (False, True, [], "Not pure: it performs file I/O."),
+            (False, True, [_effect("a")], "Not pure: it writes a and it performs file I/O."),
+            (None, False, [], "Purity is undecided."),
+            (None, True, [], "Purity is undecided. It performs file I/O."),
         ]
-        data = self.__query(effects)
-        self.assertEqual(
-            [entry["name"] for entry in data["writes"]],
-            ["a_global", "b_global", "z_static", "shallow", "deep", "param", "other"],
-        )
-        self.assertEqual([entry["name"] for entry in data["reads"]], ["read_global", "read_param"])
-        self.assertFalse(data["truncated"])
-        self.assertNotIn("next_step", data)
+        for pure, io, effects, expected in cases:
+            with self.subTest(pure=pure, io=io):
+                lines = self.__lines(effects, result_extra={"pure_on_observed_inputs": pure, "performs_file_io": io})
+                self.assertTrue(lines[1].startswith(expected), lines[1])
 
-    def test_an_own_site_ranks_an_effect_with_callee_sites_as_own(self) -> None:
-        mixed = _effect("mixed")
-        mixed.sites.append(EffectSite(file_id=1, line=50, via=("a", "b", "c")))
-        data = self.__query([_effect("callee_only", via=("a",)), mixed])
-        self.assertEqual([entry["name"] for entry in data["writes"]], ["mixed", "callee_only"])
+    def test_many_written_names_are_cut_in_the_verdict(self) -> None:
+        effects = [_effect(f"g{n}") for n in range(8)]
+        lines = self.__lines(effects, result_extra={"pure_on_observed_inputs": False}, limit=100)
+        self.assertEqual(lines[1], "Not pure: it writes g0, g1, g2, g3, g4 and 3 more.")
 
-    def test_a_cut_keeps_the_highest_ranked_entries_and_the_full_summary(self) -> None:
-        effects = [_effect(f"r{i:03}", access="read") for i in range(get_side_effects.MAX_EFFECTS)]
-        effects += [_effect(f"w{i}", kind="parameter") for i in range(5)]
-        data = self.__query(effects)
-        self.assertTrue(data["truncated"])
-        self.assertEqual(len(data["writes"]) + len(data["reads"]), get_side_effects.MAX_EFFECTS)
-        self.assertEqual(len(data["writes"]), 5)
-        self.assertNotIn(f"r{get_side_effects.MAX_EFFECTS - 1:03}", [entry["name"] for entry in data["reads"]])
-        self.assertEqual(data["summary"]["num_effects"], get_side_effects.MAX_EFFECTS + 5)
-        self.assertEqual(data["summary"]["by_access"], {"write": 5, "read": get_side_effects.MAX_EFFECTS, "unknown": 0})
-        self.assertEqual(data["summary"]["by_kind"], {"global": 100, "parameter": 5, "other": 0})
-        self.assertIn(f"first {get_side_effects.MAX_EFFECTS} of {get_side_effects.MAX_EFFECTS + 5}", data["next_step"])
-        self.assertIn("var_name", data["next_step"])
-
-    def test_the_summary_names_the_contributing_callees(self) -> None:
-        data = self.__query([_effect("g", via=("a", "b")), _effect("h", via=("c",)), _effect("own")])
-        self.assertEqual(data["summary"]["contributing_callees"], ["b", "c"])
-        self.assertEqual(data["summary"]["num_contributing_callees"], 2)
-
-    def test_contributing_callees_and_unprofiled_calls_are_capped(self) -> None:
-        many = get_side_effects.MAX_LISTED + 5
-        effects = [_effect(f"g{i}", via=(f"callee{i:02}",)) for i in range(many)]
-        calls = [f"lib{i:02}" for i in range(many)]
-        data = self.__query(effects, result_extra={"unprofiled_calls": calls})
-        self.assertEqual(data["summary"]["num_contributing_callees"], many)
-        self.assertEqual(len(data["summary"]["contributing_callees"]), get_side_effects.MAX_LISTED)
-        self.assertEqual(data["summary"]["contributing_callees"][0], "callee00")
-        self.assertEqual(data["num_unprofiled_calls"], many)
-        self.assertEqual(data["unprofiled_calls"], calls[: get_side_effects.MAX_LISTED])
-
-    def test_flags_are_passed_through(self) -> None:
-        extra = {"pure_on_observed_inputs": False, "performs_file_io": True, "unprofiled_calls": ["printf"]}
-        data = self.__query([], result_extra={**extra, "unmapped_records": 4})
-        self.assertIs(data["pure_on_observed_inputs"], False)
-        self.assertIs(data["performs_file_io"], True)
-        self.assertEqual(data["unprofiled_calls"], ["printf"])
-        self.assertEqual(data["num_unprofiled_calls"], 1)
-        self.assertEqual(data["unmapped_records"], 4)
-        self.assertEqual(data["coverage"], "executed")
-
-    # --- filters
-
-    def test_access_filter_keeps_entries_of_unknown_access(self) -> None:
-        effects = [_effect("w"), _effect("r", access="read"), _effect("u", access="unknown", source="static")]
-        data = self.__query(effects, access="read")
-        self.assertEqual(data["writes"], [])
-        self.assertEqual([entry["name"] for entry in data["reads"]], ["r"])
-        self.assertEqual([entry["name"] for entry in data["unknown_access"]], ["u"])
-        self.assertEqual(data["summary"]["num_effects"], 2)
-        data = self.__query(effects, access="write")
-        self.assertEqual([entry["name"] for entry in data["writes"]], ["w"])
-        self.assertEqual(data["reads"], [])
-        self.assertEqual(len(data["unknown_access"]), 1)
+    def test_writes_come_before_reads_and_are_ranked_by_kind_then_depth(self) -> None:
+        effects = [
+            _effect("read_g", access="read"),
+            _effect("w_other", kind="other"),
+            _effect("w_param", kind="parameter"),
+            _effect("w_callee", via=("g(int)",)),
+            _effect("w_static", source="static"),
+            _effect("w_own"),
+        ]
+        lines = self.__lines(effects, limit=100)
+        names = [line.split(" ")[1] for line in lines if line.startswith("- ")]
+        self.assertEqual(names, ["w_own", "w_static", "w_callee", "w_param", "w_other", "read_g"])
+        self.assertEqual(lines[2], "Writes:")
+        self.assertIn("Reads:", lines)
 
     def test_unknown_access_is_listed_apart_and_only_when_present(self) -> None:
-        data = self.__query([_effect("w")])
-        self.assertNotIn("unknown_access", data)
-        data = self.__query([_effect("u", access="unknown", source="static")])
-        self.assertEqual(data["unknown_access"][0]["source"], "static")
-        self.assertEqual(data["summary"]["by_access"]["unknown"], 1)
-
-    def test_kinds_filter(self) -> None:
-        effects = [_effect("g"), _effect("p", kind="parameter"), _effect("o", kind="other")]
-        data = self.__query(effects, kinds=["parameter", "other"])
-        self.assertEqual([entry["name"] for entry in data["writes"]], ["p", "o"])
-        self.assertEqual(data["summary"]["by_kind"], {"global": 0, "parameter": 1, "other": 1})
-        # an empty list means no restriction
-        self.assertEqual(len(self.__query(effects, kinds=[])["writes"]), 3)
-
-    def test_var_name_filter_matches_name_member_base_and_outside_names(self) -> None:
-        effects = [
-            _effect("buf", kind="parameter"),
-            _effect("second", kind="parameter", member_of="s"),
-            _effect("p", kind="parameter", outside_names=["GEPRESULT_arr"]),
-            _effect("g"),
-        ]
-        for var_name, expected in (("buf", "buf"), ("GEPRESULT_buf", "buf"), ("s", "second"), ("arr", "p")):
-            with self.subTest(var_name=var_name):
-                data = self.__query(effects, var_name=var_name)
-                self.assertEqual([entry["name"] for entry in data["writes"]], [expected])
-
-    def test_without_callees_only_own_sites_remain(self) -> None:
-        mixed = _effect("mixed", lines=(12,))
-        mixed.sites.append(EffectSite(file_id=1, line=50, via=("a",)))
-        data = self.__query([mixed, _effect("callee_only", via=("a",))], include_callees=False)
-        self.assertEqual([entry["name"] for entry in data["writes"]], ["mixed"])
-        self.assertEqual(data["writes"][0]["sites"], [{"line": 12, "via": None}])
-        self.assertEqual(data["summary"]["contributing_callees"], [])
-
-    def test_an_invalid_access_or_kind_is_rejected(self) -> None:
-        self.assertEqual(self.__query([], access="modify")["status"], "error")
-        self.assertEqual(self.__query([], kinds=["local"])["status"], "error")
-        schema = get_side_effects.TOOL.inputSchema
-        self.assertIsNotNone(validation_error("get_side_effects", {"project_path": "/p"}, schema))
-        self.assertIsNotNone(
-            validation_error("get_side_effects", {"project_path": "/p", "function": "f", "kinds": ["x"]}, schema)
+        self.assertNotIn("access unknown", self.__query([_effect("a")]))
+        text = self.__query([_effect("a"), _effect("u", access="unknown", source="static")])
+        self.assertIn(
+            "Referenced in the code, access unknown:\n- u (global, referenced in the code, not observed)", text
         )
 
-    def test_string_typed_arguments_are_coerced(self) -> None:
-        schema = get_side_effects.TOOL.inputSchema
-        arguments, _changes = coerce_arguments(
-            {"project_path": "/p", "function": "f", "include_callees": "false", "line": "12"}, schema
+    def test_the_limit_keeps_the_most_significant_effects_and_counts_the_rest(self) -> None:
+        effects = [_effect("r1", access="read"), _effect("w1"), _effect("w2"), _effect("r2", access="read")]
+        text = self.__query(effects, limit=2)
+        self.assertIn("- w1 ", text)
+        self.assertIn("- w2 ", text)
+        self.assertNotIn("- r1 ", text)
+        self.assertIn("2 more effects not shown (limit=2); pass a larger limit.", text)
+        self.assertNotIn("not shown", self.__query(effects, limit=4))
+
+    def test_the_default_limit_is_fixed(self) -> None:
+        text = self.__query([_effect(f"g{n:02d}") for n in range(30)])
+        self.assertEqual(text.count("\n- "), get_side_effects.DEFAULT_LIMIT)
+        self.assertIn("10 more effects not shown", text)
+
+    def test_no_effects_are_said_so_and_unknown_effects_too(self) -> None:
+        self.assertIn("No effects.", self.__query([]))
+        text = self.__query([], result_extra={"coverage": "not_executed"})
+        self.assertIn("No effects are known.", text)
+
+    # --- one entry
+
+    def test_an_entry_names_kind_qualifiers_aliases_and_lines(self) -> None:
+        effect = _effect(
+            "p",
+            kind="parameter",
+            through_pointer=True,
+            member_of="s",
+            outside_names=[OutsideName("rij", 1), OutsideName("pos", 1)],
+            lines=(12, 15),
         )
-        self.assertIsNone(validation_error("get_side_effects", arguments, schema))
-        self.assertIs(arguments["include_callees"], False)
+        self.assertIn(
+            "- p (parameter, through pointer, member of s), also called rij, pos: line 12; line 15",
+            self.__query([effect]),
+        )
 
-    # --- sites
+    def test_aliases_in_other_files_carry_the_file(self) -> None:
+        effect = _effect("p", kind="parameter", outside_names=[OutsideName("rij", 1), OutsideName("pos", 2)])
+        self.assertIn(f"p (parameter), also called rij, pos (in {OTHER_FILE}):", self.__query([effect]))
 
-    def test_sites_are_capped_unless_var_name_is_given(self) -> None:
-        effects = [_effect("g", lines=(15, 11, 13, 12, 14))]
-        data = self.__query(effects)
-        entry = data["writes"][0]
-        self.assertEqual(entry["num_sites"], 5)
-        self.assertEqual([site["line"] for site in entry["sites"]], [11, 12, 13])
-        data = self.__query(effects, var_name="g")
-        self.assertEqual([site["line"] for site in data["writes"][0]["sites"]], [11, 12, 13, 14, 15])
+    def test_data_that_was_only_referenced_is_marked(self) -> None:
+        self.assertIn("(global, referenced in the code, not observed)", self.__query([_effect("g", source="static")]))
 
-    def test_sites_are_capped_with_var_name_too(self) -> None:
-        many = get_side_effects.MAX_VAR_SITES + 10
-        data = self.__query([_effect("g", lines=tuple(range(100, 100 + many)))], var_name="g")
-        entry = data["writes"][0]
-        self.assertEqual(entry["num_sites"], many)
-        self.assertEqual(len(entry["sites"]), get_side_effects.MAX_VAR_SITES)
-        self.assertEqual(entry["sites"][0]["line"], 100)
-
-    def test_recursion_in_via_is_collapsed(self) -> None:
-        via = ("main()", "recurse(int)", "recurse(int)", "recurse(int)", "recurse(int)", "recurse(int)", "leaf()")
-        entry = self.__query([_effect("g", via=via)])["writes"][0]
-        self.assertEqual(entry["sites"][0]["via"], ["main()", "recurse(int) x5", "leaf()"])
+    def test_sites_name_the_call_chain_and_collapse_recursion(self) -> None:
+        effect = _effect("g", via=("r(int)",) * 5 + ("w(int)",))
+        self.assertIn("line 12 via r(int) x5 > w(int)", self.__query([effect]))
 
     def test_sites_in_other_files_carry_the_file(self) -> None:
-        effect = _effect("g", lines=(12,))
-        effect.sites.append(EffectSite(file_id=2, line=4, via=("helper(int)",)))
-        entry = self.__query([effect])["writes"][0]
-        self.assertEqual(
-            entry["sites"],
-            [{"line": 12, "via": None}, {"file": OTHER_FILE, "line": 4, "via": ["helper(int)"]}],
-        )
+        effect = _effect("g", lines=(7,), file_id=2)
+        self.assertIn(f"g (global): {OTHER_FILE}:7", self.__query([effect]))
 
-    def test_entry_shape(self) -> None:
-        effect = _effect(
-            "second", kind="parameter", through_pointer=True, member_of="s", outside_names=["GEPRESULT_buf"]
+    def test_the_sites_of_the_function_itself_come_first_and_are_capped(self) -> None:
+        effect = Effect(
+            name="g",
+            kind="global",
+            access="write",
+            source="observed",
+            sites=[
+                EffectSite(file_id=1, line=30, via=("h()",)),
+                EffectSite(file_id=1, line=14, via=()),
+                EffectSite(file_id=1, line=12, via=()),
+                EffectSite(file_id=1, line=40, via=()),
+                EffectSite(file_id=1, line=50, via=()),
+            ],
         )
-        entry = self.__query([effect])["writes"][0]
-        self.assertEqual(
-            entry,
-            {
-                "name": "second",
-                "kind": "parameter",
-                "through_pointer": True,
-                "source": "observed",
-                "member_of": "s",
-                "num_sites": 1,
-                "sites": [{"line": 12, "via": None}],
-                "outside_names": ["GEPRESULT_buf"],
-            },
+        self.assertIn("g (global): line 12; line 14; line 40; 2 more", self.__query([effect]))
+
+    # --- caveats
+
+    def test_coverage_caveats(self) -> None:
+        text = self.__query([], result_extra={"coverage": "not_executed"})
+        self.assertIn("Caveat: Never executed during profiling", text)
+        self.assertIn(
+            "Caveat: Executed, but none of its calls", self.__query([], result_extra={"coverage": "untracked"})
         )
-        plain = self.__query([_effect("g")])["writes"][0]
-        self.assertNotIn("member_of", plain)
-        self.assertNotIn("outside_names", plain)
+        self.assertIn(
+            "Caveat: Some calls could not be followed", self.__query([], result_extra={"coverage": "partial"})
+        )
+        self.assertNotIn("Caveat", self.__query([]))
 
-    # --- notes and coverage
+    def test_the_caveats_do_not_point_at_tools_that_are_gone(self) -> None:
+        for text in get_side_effects.COVERAGE_TEXT.values():
+            self.assertNotIn("get_data_dependencies", text)
 
-    def test_the_profiled_inputs_note_is_always_there(self) -> None:
-        data = self.__query([])
-        self.assertIn("profiled inputs", data["notes"][0])
-        data = self.__query([], result_extra={"notes": ["x", "x", "y"]})
-        self.assertEqual(data["notes"][1:], ["x", "y"])
+    def test_unprofiled_calls_are_listed_and_capped(self) -> None:
+        calls = [f"lib{n}" for n in range(8)]
+        text = self.__query([], result_extra={"unprofiled_calls": calls})
+        self.assertIn(
+            "calls whose accesses were not observed (library code): lib0, lib1, lib2, lib3, lib4 and 3 more.", text
+        )
 
     def test_missing_source_facts_are_noted_once(self) -> None:
-        analysis_note = "No source-level (AST) facts for f(int*); their accesses are classified as 'other'."
-        data = self.__query([], result_extra={"ast_facts": False, "notes": [analysis_note]})
-        self.assertEqual(data["notes"][1:], [analysis_note])
-        # without the analysis' note, the tool adds its own
-        data = self.__query([], result_extra={"ast_facts": False, "notes": []})
-        self.assertEqual(data["notes"][1:], [get_side_effects.NO_AST_NOTE])
+        text = self.__query([], result_extra={"ast_facts": False})
+        self.assertEqual(text.count("No source-level facts"), 1)
+        own = "No source-level facts for this function."
+        text = self.__query([], result_extra={"ast_facts": False, "notes": [own]})
+        self.assertEqual(text.count("No source-level facts"), 1)
+        self.assertIn(f"Note: {own}", text)
 
-    def test_coverage_next_steps(self) -> None:
-        expectations = {
-            "not_executed": "never executed",
-            "untracked": "could be attributed",
-            "partial": "unmapped_records",
-        }
-        for coverage, phrase in expectations.items():
-            with self.subTest(coverage=coverage):
-                data = self.__query([], result_extra={"coverage": coverage})
-                self.assertEqual(data["coverage"], coverage)
-                self.assertIn(phrase, data["next_step"])
-        self.assertNotIn("next_step", self.__query([], result_extra={"coverage": "executed"}))
+    # --- arguments, description and imports
 
-    def test_truncation_and_coverage_next_steps_are_combined(self) -> None:
-        with mock.patch.object(get_side_effects, "MAX_EFFECTS", 1):
-            data = self.__query([_effect("a"), _effect("b")], result_extra={"coverage": "partial"})
-        self.assertTrue(data["truncated"])
-        self.assertIn("first 1 of 2", data["next_step"])
-        self.assertIn("may be missing", data["next_step"])
-
-    # --- description and imports
+    def test_the_schema_has_the_limit_and_no_filters(self) -> None:
+        schema = get_side_effects.TOOL.inputSchema
+        self.assertEqual(set(schema["properties"]), {"project_path", "function", "file_path", "line", "limit"})
+        arguments, _ = coerce_arguments({"project_path": "/p", "function": "f", "limit": "5", "line": "7"}, schema)
+        self.assertEqual((arguments["limit"], arguments["line"]), (5, 7))
+        self.assertIsNone(validation_error(get_side_effects.TOOL_NAME, arguments, schema))
 
     def test_the_description_fits_before_the_client_cuts_it_off(self) -> None:
         # like the server instructions (test_server.py): clients show only the first 2048 characters
@@ -428,7 +342,7 @@ class TestGetSideEffects(unittest.TestCase):
 
     def test_an_export_problem_becomes_an_error_with_a_next_step(self) -> None:
         problem = SideEffectDataProblem("stale", "The data is stale. Run gather_data again.", "Run gather_data.")
-        data = self.__call(None, problem)
+        data = json.loads(self.__call(None, problem))
         self.assertEqual(data["status"], "error")
         self.assertIn("gather_data", data["message"])
         self.assertEqual(data["next_step"], "Run gather_data.")

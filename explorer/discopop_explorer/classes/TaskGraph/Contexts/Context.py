@@ -55,6 +55,11 @@ class Context(object):
         self.state_ids = []
         self.creation_index = next(Context._creation_counter)
 
+    def __hash__(self) -> int:
+        # not the address: the contexts are kept in sets (contained contexts, dependencies, successions), whose
+        # iteration order follows the hashes and would differ from run to run. The creation order is deterministic.
+        return self.creation_index
+
     def get_contained_nodes(self, inclusive: bool = False) -> List[TGNode]:
         """
         Returns the nodes contained in the current context.
@@ -384,6 +389,17 @@ class Context(object):
         if not inclusive:
             self._code_scope_cache = result
         return result
+
+    def get_instruction_scope(self, pet: PEGraphX, inclusive: bool = False) -> List[int]:
+        """the ids of the instructions of the context, in program order of their CUs: the instruction focus
+        counterpart of get_code_scope. Only CUs hold instructions, other nodes contribute none."""
+        scope: List[int] = []
+        for node in self.get_contained_nodes(inclusive=inclusive):
+            pet_node = node.get_pet_node(pet)
+            if isinstance(pet_node, CUNode):
+                scope.extend(pet_node.instruction_ids)
+        # a CU may be contained by several nodes of the context
+        return list(dict.fromkeys(scope))
 
     def get_code_scope_set(self, pet: PEGraphX, inclusive: bool = False) -> Set[LineID]:
         """the code scope of the context as a set, for callers which only test membership.

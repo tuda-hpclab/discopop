@@ -34,7 +34,7 @@ class TestDaemonProxy(unittest.IsolatedAsyncioTestCase):
 
             result = await server.call("initialize_discopop_directory", {"project_path": self.project})
             self.assertFalse(result.is_error, result)
-            self.assertEqual(result.data["status"], "success")
+            self.assertNotIn("status", result.data)
             self.assertTrue((Path(self.project) / ".discopop" / "project" / "configs" / "compile.sh").is_file())
 
             # an error result keeps its payload across the hop (its isError flag: see below)
