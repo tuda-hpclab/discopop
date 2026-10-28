@@ -63,6 +63,9 @@ class TaskGroup:
     # depends on a task. "at_return" (absent in older results: false) means the reader is outside of the function (its
     # caller), "line" is null then. "variable" is a name of the function's scope, "" if there is none.
     after_dependences: Optional[list[dict[str, Any]]] = None
+    # "file id:line" of the calls that enter a recursion: the function that holds the group reaches itself
+    # (absent in older results: none)
+    entry_call_lines: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -132,6 +135,7 @@ def task_groups(patterns: dict[str, Any]) -> dict[str, TaskGroup]:
             _int(str(entry.get("loop_start_line") or "").split(":")[-1]),
             _records(entry.get("task_dependences")),
             _records(entry.get("after_dependences")),
+            _names(entry.get("entry_call_lines")),
         )
     return groups
 
@@ -270,6 +274,10 @@ def _reduction(entry: str) -> str:
     return f"{name} (operation unknown)" if operation in ("?", "") else entry
 
 
+# OpenMP tasks have no lastprivate: the tasks of the iterations write the variable concurrently
+_LAST_PRIVATE_LABEL = "needed after the loop with its last iteration's value (the tasks race on it unless ordered)"
+
+
 def data_sharing(group: TaskGroup) -> list[str]:
     """The variables of each task by the way they are shared with it."""
     lines = []
@@ -281,7 +289,7 @@ def data_sharing(group: TaskGroup) -> list[str]:
                 ("firstprivate", task.first_private),
                 ("private", task.private),
                 ("reduction", [_reduction(r) for r in task.reduction]),
-                ("lastprivate", task.last_private),
+                (_LAST_PRIVATE_LABEL, task.last_private),
             )
             if names
         ]
@@ -290,11 +298,24 @@ def data_sharing(group: TaskGroup) -> list[str]:
     return lines
 
 
+def _recursion_note(group: TaskGroup, display_file: str) -> list[str]:
+    """Where the parallel region of a recursive group belongs: around the calls that enter the recursion."""
+    if not group.entry_call_lines:
+        return []
+    entries = ", ".join(f"{display_file}:{line.split(':')[-1]}" for line in group.entry_call_lines)
+    return [
+        f"  recursion: the tasks call their own function again. The parallel region (parallel + single) belongs around "
+        f"the call(s) that enter the recursion ({entries}), not into the function: there, only the tasks and the "
+        f"taskwait go (a parallel region on every level of the recursion would be a nested region each)"
+    ]
+
+
 def describe(group: TaskGroup, display_file: str, source: list[str]) -> list[str]:
     """The lines under a task group's headline."""
     if group.loop_line is not None:
         return _describe_loop(group, display_file, source)
     lines = [f"  parallel region: {display_file}:{group.start_line}-{group.end_line}"]
+    lines += _recursion_note(group, display_file)
     for task in group.tasks:
         place = f"{display_file}:{task.start_line}-{task.end_line}"
         lines.append(f"  task {task.pattern_id}: {place}   {_body(task, source)}".rstrip())
@@ -315,6 +336,7 @@ def _describe_loop(group: TaskGroup, display_file: str, source: list[str]) -> li
     for task in group.tasks:
         place = f"{display_file}:{task.start_line}-{task.end_line}"
         lines.append(f"  task body {task.pattern_id}: {place}   {_body(task, source)}".rstrip())
+    lines += _recursion_note(group, display_file)
     joins = join_points(group, display_file) if group.after_dependences else []
     # nothing found does not mean that nothing is needed: writes through pointers are not tracked
     lines += joins or ["  join: wait for the tasks after the loop, before the results are used"]

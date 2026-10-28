@@ -12,7 +12,14 @@ The information comes from the dependences registered on the contexts of the Tas
 them while it is simplified): ``Context.outgoing_dependencies`` holds ``(source context, dependence)`` for a context
 that is the sink, the later access, of the dependence. Only RAW and WAR are registered on contexts: a WAW would make
 the contexts depend on each other, which changes which sequences are split into tasks and which loops are do-all.
-The output dependences between the tasks (WAW) are therefore read from the PET by the instructions of the tasks.
+The output dependences between the tasks (WAW) are therefore read from the PET by the instructions of the tasks and of
+the functions they call: both ends of a WAW can lie in a function that both tasks call (``set(&d, n); set(&d, n + 1);``
+with ``*p = ...`` in ``set``). The instructions of such a function belong to both tasks, so the callpath states of the
+two ends tell which task made which access (the call instruction of the task is on the callpath of the state); an end
+without a usable state (none recorded, or a recursion cut it) might come from any task that reaches the instruction,
+and a dependence that might be between two tasks is reported. WAWs inside one call (a callee's local written twice)
+belong to one task and are none. Not even the profiler reports WAWs of callee locals between two calls (the stack of a
+returned call is not tracked), so the tasks of ``a = work(x); b = work(y);`` stay without dependences.
 
 The variable types are not used: with opaque pointers they carry no information. A variable is classified by how the
 tasks and the code after them access it (``classify_variable``).
@@ -28,6 +35,8 @@ not one of the function's is translated (``_caller_names``):
   code at the later access names as well (the variables of the call line that reads the result), else the pointer
   parameters of the function that the task accesses (the callee's ``dst`` is one of them), else none: the dependence is
   reported without a name (``""``), since its join or ordering is still needed.
+- a name that only the profiler lists as a global of a CU (the pointer parameter ``p`` of a callee that writes ``*p``)
+  is not a global for a WAW between tasks (``_declared_global_names``: only what is declared as one),
 - the callee's own name is not known (a dependence holds the name at the later access only), and neither are the
   arguments of a call, so the translation is a heuristic: a task that passes two pointer parameters on yields both.
 """
@@ -35,7 +44,7 @@ not one of the function's is translated (``_caller_names``):
 from __future__ import annotations
 
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
@@ -175,6 +184,16 @@ def _scope_of(
     return _Scope(local, _global_names(pet), pointers, instructions)
 
 
+def _declared_global_names(pet: PEGraphX) -> Set[str]:
+    """The names of the variables that are declared as globals (``defLine`` ``GlobalVar``). ``_global_names`` is wider:
+    it also holds what the profiler lists as the global variables of a CU, e.g. the pointer parameter ``p`` of a callee
+    that writes ``*p``, which is no name of the scope of the caller."""
+    names: Set[str] = set()
+    for cu in all_nodes(pet, CUNode):
+        names.update(v.name for v in list(cu.global_vars) + list(cu.local_vars) if v.defLine == "GlobalVar")
+    return names
+
+
 def _variables_of_instructions(pet: PEGraphX, instruction_ids: Iterable[int]) -> Set[str]:
     """The names of the variables the CUs of the instructions access (the code itself, not its callees)."""
     names: Set[str] = set()
@@ -265,13 +284,49 @@ def _dependences_between(
     return sorted(found.values(), key=lambda d: (d.from_task, d.to_task, d.variable, d.kind))
 
 
-def _output_dependences(pet: PEGraphX, task_instructions: List[Set[int]]) -> List[TaskDependence]:
-    """The WAW dependences between the tasks, by the instructions at their two ends (not registered on contexts)."""
-    owner: Dict[int, int] = {}
-    for task, instructions in enumerate(task_instructions):
-        for instruction in instructions:
-            owner.setdefault(instruction, task)
-    cu_ids = sorted({NodeID(instructionToCUIdMap[i]) for i in owner if i in instructionToCUIdMap})
+def _tasks_of_end(
+    pet: PEGraphX, instruction: Optional[int], state: Optional[str], own: List[Set[int]], reached: List[Set[int]]
+) -> Set[int]:
+    """The tasks that can have made the access of a dependence at ``instruction`` in the callpath state ``state``.
+
+    An instruction of the code of a task belongs to that task. An instruction that only lies in a callee is told by
+    the callpath state: the task whose own call instruction is on the callpath made the access (the tasks share the
+    callee). If there is no state, or none of the calls of the tasks is on its callpath (a recursion cuts it), every
+    task that reaches the instruction might have made it."""
+    if instruction is None:
+        return set()
+    direct = {task for task, instructions in enumerate(own) if instruction in instructions}
+    if direct:
+        return direct
+    candidates = {task for task, instructions in enumerate(reached) if instruction in instructions}
+    calls = call_instructions_of_state(getattr(pet, "callpath_tree", {}), state)
+    if calls:
+        by_call = {task for task in candidates if calls & own[task]}
+        if by_call:
+            return by_call
+    return candidates
+
+
+def _output_dependences(
+    pet: PEGraphX,
+    task_instructions: List[Set[int]],
+    reached_instructions: Optional[List[Set[int]]] = None,
+    scope: Optional[_Scope] = None,
+    own: Optional[List[Set[str]]] = None,
+) -> List[TaskDependence]:
+    """The WAW dependences between the tasks, by the instructions at their two ends (not registered on contexts).
+
+    ``reached_instructions``: the instructions of each task and of its callees. A WAW whose ends lie in a function
+    that both tasks call (``*p = ...`` in a callee that two tasks call with the same pointer) is found there; the
+    callpath states of its ends tell which task made which access, and a dependence that might be between two tasks
+    is reported (the earlier task is the one with the lower index). Without ``reached_instructions`` only the
+    instructions of the tasks themselves are looked at."""
+    reached = reached_instructions if reached_instructions is not None else task_instructions
+    cu_ids = sorted(
+        {NodeID(instructionToCUIdMap[i]) for instructions in reached for i in instructions if i in instructionToCUIdMap}
+    )
+    if scope is not None:
+        scope = replace(scope, globals=_declared_global_names(pet))
     found: Dict[Tuple[int, int, str], TaskDependence] = {}
     for cu_id in cu_ids:
         if cu_id not in pet.g:
@@ -279,11 +334,22 @@ def _output_dependences(pet: PEGraphX, task_instructions: List[Set[int]]) -> Lis
         for _, _, dependence in in_edges(pet, cu_id, EdgeType.DATA):
             if dependence.dtype != DepType.WAW or dependence.var_name is None:
                 continue
-            earlier = owner.get(dependence.source_instruction_id) if dependence.source_instruction_id else None
-            later = owner.get(dependence.sink_instruction_id) if dependence.sink_instruction_id else None
-            if earlier is None or later is None or earlier == later:
-                continue
-            found[(earlier, later, dependence.var_name)] = TaskDependence(earlier, later, dependence.var_name, OUTPUT)
+            earlier_tasks = _tasks_of_end(
+                pet, dependence.source_instruction_id, dependence.source_state_id, task_instructions, reached
+            )
+            later_tasks = _tasks_of_end(
+                pet, dependence.sink_instruction_id, dependence.sink_state_id, task_instructions, reached
+            )
+            pairs = {(min(a, b), max(a, b)) for a in earlier_tasks for b in later_tasks if a != b}
+            for earlier, later in pairs:
+                names = [dependence.var_name]
+                if scope is not None and own is not None:
+                    in_function = (
+                        dependence.sink_instruction_id is None or dependence.sink_instruction_id in scope.instructions
+                    )
+                    names = _caller_names(scope, dependence.var_name, in_function, own[earlier] & own[later]) or [""]
+                for name in names:
+                    found[(earlier, later, name)] = TaskDependence(earlier, later, name, OUTPUT)
     return list(found.values())
 
 
@@ -514,8 +580,9 @@ def analyze_task_group(
             set(_accessed_variables(pet, task)) | _referenced_names(ast_helper, lines)
             for task, lines in zip(tasks, task_lines)
         ]
+    task_instructions = [set(task.get_instruction_scope(pet, inclusive=True)) for task in tasks]
     dependences = _dependences_between(task_contexts, scope, own) + _output_dependences(
-        pet, [set(task.get_instruction_scope(pet, inclusive=True)) for task in tasks]
+        pet, task_instructions, [instructions_with_callees(pet, list(i)) for i in task_instructions], scope, own
     )
     dependences.sort(key=lambda d: (d.from_task, d.to_task, d.variable, d.kind))
     after = _dependences_after(pet, task_contexts, after_contexts, function, own, scope, ast_helper)

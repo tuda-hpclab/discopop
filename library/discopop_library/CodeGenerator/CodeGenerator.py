@@ -46,6 +46,73 @@ def from_pattern_info(
     )
 
 
+def _insert_pragmas(
+    file_mapping: Dict[int, Path],
+    unpacked_suggestions: List[UnpackedSuggestion],
+    skip_compilation_check: bool,
+    compile_check_command: Optional[str],
+    CC: str,
+    CXX: str,
+    contained_patterns: Optional[Dict[str, List[str]]],
+) -> Dict[int, str]:
+    """Insert the pragmas of the suggestions into the sources. Every pragma goes into the buffer of its own file (a
+    suggestion may have pragmas in several files, e.g. the parallel region around the call into a recursion).
+    Returns the modified contents by file id."""
+    # a dictionary mapping fileIds to ContentBuffer elements
+    file_id_to_content_buffer: Dict[int, ContentBuffer] = dict()
+    original_lines: Dict[int, List[str]] = dict()
+
+    def line_text(file_id: int, line: int) -> Optional[str]:
+        if file_id not in original_lines:
+            try:
+                original_lines[file_id] = file_mapping[file_id].read_text(errors="replace").splitlines()
+            except (KeyError, OSError):
+                original_lines[file_id] = []
+        lines = original_lines[file_id]
+        return lines[line - 1] if 0 < line <= len(lines) else None
+
+    for suggestion in unpacked_suggestions:
+        suggestion.line_text = line_text
+        # create new ContentBuffer if required
+        if suggestion.file_id not in file_id_to_content_buffer:
+            file_id_to_content_buffer[suggestion.file_id] = ContentBuffer(
+                suggestion.file_id, file_mapping[suggestion.file_id]
+            )
+        # get pragma objects represented by the UnpackedSuggestion
+        pragmas = suggestion.get_pragmas(contained_patterns=contained_patterns)
+        # add each pragma to the ContentBuffer object of the file it belongs to
+        for pragma in pragmas:
+            target = pragma.file_id if pragma.file_id is not None else suggestion.file_id
+            if target not in file_id_to_content_buffer:
+                file_id_to_content_buffer[target] = ContentBuffer(target, file_mapping[target])
+            successful = file_id_to_content_buffer[target].add_pragma(
+                file_mapping,
+                pragma,
+                [],
+                skip_compilation_check=skip_compilation_check,
+                compile_check_command=compile_check_command,
+                CC=CC,
+                CXX=CXX,
+            )
+            # if the addition resulted in a non-compilable file, add the pragma as a comment
+            if not successful:
+                file_id_to_content_buffer[target].add_pragma(
+                    file_mapping,
+                    pragma,
+                    [],
+                    add_as_comment=True,
+                    compile_check_command=compile_check_command,
+                    CC=CC,
+                    CXX=CXX,
+                )
+
+    # create the resulting dictionary by assembling the contents of the ContentBuffer objects
+    result_dict: Dict[int, str] = dict()
+    for file_id in file_id_to_content_buffer:
+        result_dict[file_id] = file_id_to_content_buffer[file_id].get_modified_source_code()
+    return result_dict
+
+
 def from_json_strings(
     file_mapping: Dict[int, Path],
     pattern_json_strings_by_type: Dict[str, List[str]],
@@ -81,46 +148,15 @@ def from_json_strings(
         for json_str in pattern_json_strings_by_type[type_str]:
             unpacked_suggestions.append(UnpackedSuggestion(type_str, jsons.loads(json_str)))
 
-    # create a dictionary mapping fileIds to ContentBuffer elements
-    file_id_to_content_buffer: Dict[int, ContentBuffer] = dict()
-    # iterate over UnpackedSuggestion objects
-    for suggestion in unpacked_suggestions:
-
-        # create new ContentBuffer if required
-        if suggestion.file_id not in file_id_to_content_buffer:
-            file_id_to_content_buffer[suggestion.file_id] = ContentBuffer(
-                suggestion.file_id, file_mapping[suggestion.file_id]
-            )
-        # get pragma objects represented by the UnpackedSuggestion
-        pragmas = suggestion.get_pragmas(contained_patterns=contained_patterns)
-        # add pragmas to the ContentBuffer object which corresponds to the fileId specified in UnpackedSuggestions
-        for pragma in pragmas:
-            successful = file_id_to_content_buffer[suggestion.file_id].add_pragma(
-                file_mapping,
-                pragma,
-                [],
-                skip_compilation_check=skip_compilation_check,
-                compile_check_command=compile_check_command,
-                CC=CC,
-                CXX=CXX,
-            )
-            # if the addition resulted in a non-compilable file, add the pragma as a comment
-            if not successful:
-                file_id_to_content_buffer[suggestion.file_id].add_pragma(
-                    file_mapping,
-                    pragma,
-                    [],
-                    add_as_comment=True,
-                    compile_check_command=compile_check_command,
-                    CC=CC,
-                    CXX=CXX,
-                )
-
-    # create the resulting dictionary by assembling the contents of the ContentBuffer objects
-    result_dict: Dict[int, str] = dict()
-    for file_id in file_id_to_content_buffer:
-        result_dict[file_id] = file_id_to_content_buffer[file_id].get_modified_source_code()
-    return result_dict
+    return _insert_pragmas(
+        file_mapping,
+        unpacked_suggestions,
+        skip_compilation_check=skip_compilation_check,
+        compile_check_command=compile_check_command,
+        CC=CC,
+        CXX=CXX,
+        contained_patterns=contained_patterns,
+    )
 
 
 def from_json_strings_with_mapping(
@@ -166,42 +202,12 @@ def from_json_strings_with_mapping(
                 )
             )
 
-    # create a dictionary mapping fileIds to ContentBuffer elements
-    file_id_to_content_buffer: Dict[int, ContentBuffer] = dict()
-    # iterate over UnpackedSuggestion objects
-    for suggestion in unpacked_suggestions:
-        # create new ContentBuffer if required
-        if suggestion.file_id not in file_id_to_content_buffer:
-            file_id_to_content_buffer[suggestion.file_id] = ContentBuffer(
-                suggestion.file_id, file_mapping[suggestion.file_id]
-            )
-        # get pragma objects represented by the UnpackedSuggestion
-        pragmas = suggestion.get_pragmas(contained_patterns=contained_patterns)
-        # add pragmas to the ContentBuffer object which corresponds to the fileId specified in UnpackedSuggestions
-        for pragma in pragmas:
-            successful = file_id_to_content_buffer[suggestion.file_id].add_pragma(
-                file_mapping,
-                pragma,
-                [],
-                skip_compilation_check=skip_compilation_check,
-                compile_check_command=compile_check_command,
-                CC=CC,
-                CXX=CXX,
-            )
-            # if the addition resulted in a non-compilable file, add the pragma as a comment
-            if not successful:
-                file_id_to_content_buffer[suggestion.file_id].add_pragma(
-                    file_mapping,
-                    pragma,
-                    [],
-                    add_as_comment=True,
-                    compile_check_command=compile_check_command,
-                    CC=CC,
-                    CXX=CXX,
-                )
-
-    # create the resulting dictionary by assembling the contents of the ContentBuffer objects
-    result_dict: Dict[int, str] = dict()
-    for file_id in file_id_to_content_buffer:
-        result_dict[file_id] = file_id_to_content_buffer[file_id].get_modified_source_code()
-    return result_dict
+    return _insert_pragmas(
+        file_mapping,
+        unpacked_suggestions,
+        skip_compilation_check=skip_compilation_check,
+        compile_check_command=compile_check_command,
+        CC=CC,
+        CXX=CXX,
+        contained_patterns=contained_patterns,
+    )
