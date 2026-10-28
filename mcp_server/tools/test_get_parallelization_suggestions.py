@@ -292,6 +292,17 @@ class TestTaskGroups(unittest.TestCase):
         self.assertNotIn("#pragma omp parallel", text)
         self.assertNotIn("Loop", text)
 
+    def test_a_recursive_group_puts_the_parallel_region_around_the_entry_call(self) -> None:
+        self.__group([_task(3, 8, 8), _task(4, 9, 9)], 8, 9, data_flow={"entry_call_lines": ["3:20", "3:25"]})
+        text = self.__handle()
+        self.assertIn("around the call(s) that enter the recursion (fib.c:20, fib.c:25), not into the function", text)
+        self.assertIn("only the tasks and the taskwait go", text)
+        self.assertNotIn("recursion", self.__without_entry_calls())
+
+    def __without_entry_calls(self) -> str:
+        self.__group([_task(3, 8, 8), _task(4, 9, 9)], 8, 9)
+        return self.__handle()
+
     def test_the_join_names_the_line_after_the_region_and_what_it_reads(self) -> None:
         self.__group(
             [_task(3, 8, 8, shared=["x"], first_private=["n"]), _task(4, 9, 9, shared=["y"], first_private=["n"])],
@@ -409,7 +420,11 @@ class TestTaskGroups(unittest.TestCase):
             9,
         )
         text = self.__handle()
-        self.assertIn("  data sharing of task 3: shared x; reduction +:sum; lastprivate x\n", text)
+        self.assertIn(
+            "  data sharing of task 3: shared x; reduction +:sum; needed after the loop with its last iteration's value"
+            " (the tasks race on it unless ordered) x\n",
+            text,
+        )
         self.assertIn("  data sharing of task 4: reduction acc (operation unknown)\n", text)
 
     def test_a_task_per_iteration_names_the_loop_and_the_join_after_it(self) -> None:
