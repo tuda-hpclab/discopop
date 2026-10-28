@@ -270,6 +270,10 @@ def _reduction(entry: str) -> str:
     return f"{name} (operation unknown)" if operation in ("?", "") else entry
 
 
+# OpenMP tasks have no lastprivate: the tasks of the iterations write the variable concurrently
+_LAST_PRIVATE_LABEL = "needed after the loop with its last iteration's value (the tasks race on it unless ordered)"
+
+
 def data_sharing(group: TaskGroup) -> list[str]:
     """The variables of each task by the way they are shared with it."""
     lines = []
@@ -281,7 +285,7 @@ def data_sharing(group: TaskGroup) -> list[str]:
                 ("firstprivate", task.first_private),
                 ("private", task.private),
                 ("reduction", [_reduction(r) for r in task.reduction]),
-                ("lastprivate", task.last_private),
+                (_LAST_PRIVATE_LABEL, task.last_private),
             )
             if names
         ]

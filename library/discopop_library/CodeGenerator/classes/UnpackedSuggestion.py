@@ -211,7 +211,7 @@ class UnpackedSuggestion(object):
 
     def __task_data_sharing_clauses(self) -> str:
         """The data sharing clauses of a task, each variable once (shared before firstprivate before private)."""
-        seen: set[str] = set()
+        seen: set[str] = {name for _, name in self.__task_reductions()}  # a reduced variable has its own clause
         clauses = ""
         for clause, key in (("shared", "shared"), ("firstprivate", "first_private"), ("private", "private")):
             names: List[str] = []
@@ -222,6 +222,22 @@ class UnpackedSuggestion(object):
             if len(names) > 0:
                 clauses += " " + clause + "(" + ",".join(names) + ")"
         return clauses
+
+    def __task_reductions(self) -> List[Tuple[str, str]]:
+        """(operation, variable) of the reductions of a task, from its entries "<operation>:<variable>"."""
+        reductions: List[Tuple[str, str]] = []
+        for entry in self.values.get("reduction") or []:
+            operation, _, name = str(entry).partition(":")
+            reductions.append((operation, name))
+        return reductions
+
+    def __task_reduction_clauses(self) -> str:
+        """The in_reduction clauses of a task (the variables it reduces, grouped by operation)."""
+        by_operation: Dict[str, List[str]] = {}
+        for operation, name in self.__task_reductions():
+            if name not in by_operation.setdefault(operation, []):
+                by_operation[operation].append(name)
+        return "".join(" in_reduction(" + op + ":" + ",".join(names) + ")" for op, names in by_operation.items())
 
     def __task_depend_clauses(self) -> str:
         """The depend clauses of a task for its dependences on the other tasks of the group (in_dep, out_dep and
@@ -238,6 +254,27 @@ class UnpackedSuggestion(object):
             if len(names) > 0:
                 clauses += " depend(" + clause + ": " + ", ".join(names) + ")"
         return clauses
+
+    @staticmethod
+    def __reason_not_applicable_by_data_sharing(tasks: List[Dict[str, Any]]) -> Optional[str]:
+        """Why the data sharing of the tasks has no pragma form, None if it has one: OpenMP tasks have no lastprivate
+        (every task writes the shared variable, the last one to finish decides the value), and the operation of a
+        reduction has to be known to write it."""
+        for task in tasks:
+            if task.get("last_private"):
+                names = ", ".join(str(n) for n in task["last_private"])
+                return "the last iteration's value of " + names + " is needed after the loop"
+        operations: Dict[str, set[str]] = {}
+        for task in tasks:
+            for entry in task.get("reduction") or []:
+                operation, _, name = str(entry).partition(":")
+                operations.setdefault(name, set()).add(operation)
+        for name, ops in sorted(operations.items()):
+            if ops & {"?", ""}:
+                return "the operation of the reduction of " + name + " is unknown"
+            if len(ops) > 1:
+                return "the reduction of " + name + " has different operations"
+        return None
 
     def __get_parallel_region_of_tasks_pragmas(
         self, contained_patterns: Optional[Dict[str, List[str]]]
@@ -298,6 +335,8 @@ class UnpackedSuggestion(object):
             for earlier, later in zip(tasks, tasks[1:])
         ):
             reason = "tasks share lines"
+        if reason is None:
+            reason = self.__reason_not_applicable_by_data_sharing(tasks)
         if reason is not None:
             if region_start == UNKNOWN_LINE:
                 return []
@@ -322,14 +361,39 @@ class UnpackedSuggestion(object):
         parallel_pragma.children.append(single_pragma)
         single_pragma.children.append(line_pragma("{", region_start, PragmaPosition.BEFORE_START))
 
+        # the tasks reduce into a variable: a taskgroup around all of them combines the contributions, the tasks
+        # take part by in_reduction (OpenMP 5)
+        reductions: Dict[str, List[str]] = {}
         for task in tasks:
+            for entry in task.get("reduction") or []:
+                operation, _, name = str(entry).partition(":")
+                if name not in reductions.setdefault(operation, []):
+                    reductions[operation].append(name)
+        if reductions:
+            clauses = " ".join("task_reduction(" + op + ":" + ",".join(names) + ")" for op, names in reductions.items())
+            single_pragma.children.append(
+                line_pragma("#pragma omp taskgroup " + clauses, region_start, PragmaPosition.BEFORE_START)
+            )
+            single_pragma.children.append(line_pragma("{", region_start, PragmaPosition.BEFORE_START))
+
+        # a dependence the explorer could not name a variable for orders the tasks by a taskwait before the later one
+        # (depend clauses need the name)
+        unnamed = {int(d["to_task"]) for d in (self.values.get("task_dependences") or []) if not d.get("variable")}
+        for task in tasks:
+            if task["pattern_id"] in unnamed:
+                single_pragma.children.append(
+                    line_pragma("#pragma omp taskwait", int(task["region_start_line"]), PragmaPosition.BEFORE_START)
+                )
             single_pragma.children += UnpackedSuggestion("task", task).get_pragmas(contained_patterns)
 
         # Pragmas after the same line are inserted directly after it, so the later one comes first: the closing brace
         # is added before the taskwait, which the code after the group needs if it uses the results of the tasks.
+        # The end of the taskgroup waits for the tasks itself and comes first of all.
         single_pragma.children.append(line_pragma("}", region_end, PragmaPosition.AFTER_END))
-        if self.values.get("after_dependences"):
+        if self.values.get("after_dependences") and not reductions:
             single_pragma.children.append(line_pragma("#pragma omp taskwait", region_end, PragmaPosition.AFTER_END))
+        if reductions:
+            single_pragma.children.append(line_pragma("}", region_end, PragmaPosition.AFTER_END))
         return [parallel_pragma]
 
     def __get_task_pragmas(self, contained_patterns: Optional[Dict[str, List[str]]]) -> List[Pragma]:
@@ -347,7 +411,10 @@ class UnpackedSuggestion(object):
             pragma.start_line = int(self.values["region_start_line"])  # self.start_line
             pragma.end_line = int(self.values["region_end_line"])  # self.end_line
             pragma.pragma_str += (
-                " ".join(self.values["pragma"]) + self.__task_data_sharing_clauses() + self.__task_depend_clauses()
+                " ".join(self.values["pragma"])
+                + self.__task_data_sharing_clauses()
+                + self.__task_reduction_clauses()
+                + self.__task_depend_clauses()
             )
             pragmas.append(pragma)
         elif self.values["type"] == "PARALLELREGION":

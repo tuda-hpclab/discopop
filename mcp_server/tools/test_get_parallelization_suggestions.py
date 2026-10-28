@@ -409,7 +409,11 @@ class TestTaskGroups(unittest.TestCase):
             9,
         )
         text = self.__handle()
-        self.assertIn("  data sharing of task 3: shared x; reduction +:sum; lastprivate x\n", text)
+        self.assertIn(
+            "  data sharing of task 3: shared x; reduction +:sum; needed after the loop with its last iteration's value"
+            " (the tasks race on it unless ordered) x\n",
+            text,
+        )
         self.assertIn("  data sharing of task 4: reduction acc (operation unknown)\n", text)
 
     def test_a_task_per_iteration_names_the_loop_and_the_join_after_it(self) -> None:

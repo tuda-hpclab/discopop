@@ -375,3 +375,12 @@ Plan (each step with its tests, in this order):
 Risks: pattern ids and the patterns.json schema (step 2 is additive); the hotspot file ids must match the
 `file_id:line` of the regions (checked per entry); nested groups can both match (the optimisers already handle
 overlapping patterns through the sanity checker).
+
+### 3.6 Patch generation of reductions, unnamed dependences and last_private (2026-10-28)
+
+- Reductions: the tasks of a group that reduce a variable are wrapped in `#pragma omp taskgroup task_reduction(<op>:<vars>)`
+  (inside the `single`, for loop tasks around the whole loop), the tasks get `in_reduction(<op>:<var>)`; reduced
+  variables are in no other data sharing clause. A depend clause on the same variable is kept (redundant ordering, still
+  correct). An unknown operation (`?`) or two operations for one variable gives the "not applicable as it is" comment.
+- A dependence without a variable name (`task_dependences[].variable == ""`) is a `taskwait` before the dependent task.
+- `last_private` of a loop task: the group is "not applicable as it is" (the tasks race on the shared variable).
