@@ -90,7 +90,7 @@ Implausible groups are flagged, not hidden (see 3.3).
 - [x] `explain_parallelization` for task regions (names the group covering the lines; reasons
       for rejected groups need the decision log of 3.2); tool description and
       `docs/tools/MCP_server.md`.
-- [x] Tests with fixtures from the fib and fft runs (`fft_task_groups_fixture.py`) (including the stale or missing
+- [x] Tests with fixtures from the fib and fft runs (`mcp_server/tools/testdata/fft_task_groups.json`) (including the stale or missing
       hotspot and side-effect data).
 - [x] `gather_data` detects `task,doall,reduction` by default (maintainer's decision). The
       explorer writes the list of detected pattern types as `enabled_patterns` into
