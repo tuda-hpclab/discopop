@@ -22,8 +22,6 @@ from discopop_explorer.functions.PEGraph.queries.edges import in_edges, out_edge
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
 from discopop_explorer.functions.PEGraph.traversal.children import direct_children, direct_children_or_called_nodes
-from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
-from discopop_library.HostpotLoader.HotspotType import HotspotType  # type: ignore
 from discopop_library.StatusReporting.console import progress, warn
 from discopop_explorer.aliases.MemoryRegion import MemoryRegion
 from discopop_explorer.aliases.NodeID import NodeID
@@ -279,35 +277,17 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
 
     def calculateFunctionMetadata(
         self,
-        hotspot_information: Optional[Dict[HotspotType, List[Tuple[int, int, HotspotNodeType, str, float]]]] = None,
         func_nodes: Optional[List[FunctionNode]] = None,
     ) -> None:
         # store id of parent function in each node
         # and store in each function node a list of all children ids
+        #
+        # All functions are processed, hot or not: the metadata (children, parent function, reachability)
+        # is what attributes accesses to functions, e.g. for the side effects of a function that
+        # is too short to be listed as a hotspot. The pass is cheap (0.2s for the 208 functions of LULESH),
+        # so restricting it to the hotspots saves nothing worth the loss.
         if func_nodes is None:
             func_nodes = all_nodes(self, FunctionNode)
-
-            if hotspot_information is not None:
-                all_hotspot_functions: Set[Tuple[int, str]] = set()
-                for key in hotspot_information:
-                    for entry in hotspot_information[key]:
-                        if entry[2] == HotspotNodeType.FUNCTION:
-                            all_hotspot_functions.add((entry[0], entry[3]))
-
-                # An empty set of hotspot functions means "nothing is known about which
-                # functions are hot", not "no function is hot" - the hotspot loader returns
-                # an empty dict when hotspot_detection/Hotspots.json is absent, and even a
-                # present file may classify only LOOP regions in the requested hotspot
-                # types. Filtering against the empty set in those cases would drop every
-                # function and leave the graph without any reachability metadata, so keep
-                # all functions instead. Mirrors the same guard in utils.filter_for_hotspots.
-                if all_hotspot_functions:
-                    filtered_func_nodes = [
-                        func_node
-                        for func_node in func_nodes
-                        if (func_node.file_id, func_node.name) in all_hotspot_functions
-                    ]
-                    func_nodes = filtered_func_nodes
 
         from discopop_explorer.parallel_utils import (
             pet_function_metadata_initialize_worker,

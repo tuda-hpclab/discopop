@@ -24,7 +24,7 @@ from mcp_server.server import (
     DiscoPopMCPServer,
     unavailable_tool_message,
 )
-from mcp_server.tools import get_configurations, get_execution_results
+from mcp_server.tools import get_configurations
 
 
 class TestDiscoPopMCPServer(unittest.TestCase):
@@ -56,21 +56,8 @@ class TestDiscoPopMCPServer(unittest.TestCase):
         self.assertEqual(len(result), 1)
         text_content = result[0].text
         data = json.loads(text_content)
-        self.assertEqual(data["status"], "success")
-        self.assertEqual(data["project_path"], "/test/project")
+        self.assertNotIn("status", data)
         self.assertIn("configurations", data)
-
-    def test_get_execution_results_handler(self) -> None:
-        """Test get_execution_results tool"""
-        result = get_execution_results.handle({"project_path": "/test/project"}, self.server._ctx)
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result), 1)
-        text_content = result[0].text
-        data = json.loads(text_content)
-        self.assertEqual(data["status"], "success")
-        self.assertEqual(data["project_path"], "/test/project")
-        self.assertIn("execution_results", data)
-        self.assertIn("gather_data", data["next_step"])
 
 
 class TestToolSets(unittest.TestCase):
@@ -96,9 +83,8 @@ class TestToolSets(unittest.TestCase):
         # everything the analysis route needs is still there
         for expected in (
             "gather_data",
-            "get_parallelization_patches",
-            "run_auto_tuning",
-            "manage_patches",
+            "get_parallelization_suggestions",
+            "run_configuration",
             "get_side_effects",
         ):
             self.assertIn(expected, names)

@@ -35,7 +35,7 @@ class TestCreateExecutionConfiguration(unittest.TestCase):
 
     def test_creates_only_execute_sh(self) -> None:
         data = self._handle()
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "default", "execute.sh")))
         self.assertEqual(os.listdir(os.path.join(self.configs_dir, "default")), ["execute.sh"])
 
@@ -46,7 +46,7 @@ class TestCreateExecutionConfiguration(unittest.TestCase):
 
     def test_validate_script_body_creates_validate_sh(self) -> None:
         data = self._handle(validate_script_body="./a.out | diff - reference.txt\n")
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         validate_path = os.path.join(self.configs_dir, "default", "validate.sh")
         self.assertEqual(data["validate_script_path"], validate_path)
         self.assertTrue(os.access(validate_path, os.X_OK))
@@ -55,7 +55,7 @@ class TestCreateExecutionConfiguration(unittest.TestCase):
     def test_a_repeated_call_keeps_a_validate_sh_it_is_not_given(self) -> None:
         self._handle(validate_script_body="./a.out | diff - reference.txt\n")
         data = self._handle(script_body="./a.out --small\n")
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "default", "validate.sh")))
         with open(os.path.join(self.configs_dir, "default", "execute.sh")) as f:
             self.assertIn("--small", f.read())

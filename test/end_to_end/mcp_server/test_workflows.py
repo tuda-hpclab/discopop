@@ -14,6 +14,7 @@ installed.
 """
 
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -44,6 +45,8 @@ STEP_TIMEOUT_SECONDS = 300
 # the do-all loop in src/code.cpp
 LOOP_LINE = 14
 LOOP_END_LINE = 17
+# the loop after it, which carries a dependency from one iteration to the next
+CARRIED_LOOP_LINE = 19
 
 COMPILE_SCRIPT = "$CXX $CXXFLAGS code.cpp -o prog\n"
 
@@ -102,23 +105,27 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
             result = await gather_data(server, project)
             self.assertFalse(result.is_error, result)
             data = result.data
-            self.assertEqual(data["status"], "success")
-            self.assertFalse(data["hotspot_detection_enabled"])
-            for step in ("instrumentation", "profiling", "pattern_detection", "build_restore"):
+            self.assertNotIn("status", data)
+            for step in (
+                "hotspot_instrumentation",
+                "hotspot_analysis",
+                "instrumentation",
+                "profiling",
+                "pattern_detection",
+                "build_restore",
+            ):
                 self.assertEqual(data["steps"][step]["status"], "success", (step, data["steps"][step]))
             self.assertGreaterEqual(data["suggestions_found"], 1)
-            self.assertIn("run_auto_tuning", data["next_step"])
+            self.assertIn("get_parallelization_suggestions", data["next_step"])
             self.assertNotIn("warning", data)
 
             result = await server.call("get_project_status", {"project_path": project})
             self.assertFalse(result.is_error, result)
             status = result.data
-            for step in ("instrumentation", "profiling", "pattern_detection", "patch_generation"):
+            for step in ("hotspot_detection", "instrumentation", "profiling", "pattern_detection", "patch_generation"):
                 self.assertFalse(status["pipeline"][step]["stale"], (step, status["pipeline"]))
-            self.assertEqual(status["pipeline"]["hotspot_detection"], {"done": False})
             self.assertGreaterEqual(status["suggestions"], 1)
-            self.assertEqual(status["applied_suggestions"], [])
-            self.assertIn("run_auto_tuning", status["next_step"])
+            self.assertIn("get_parallelization_suggestions", status["next_step"])
 
             # a repeated call finds every result current
             result = await gather_data(server, project)
@@ -128,116 +135,63 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("build_restore", result.data["steps"])
 
             # --- the suggestion for the loop
-            result = await server.call("get_parallelization_patches", {"project_path": project})
+            result = await server.call("get_parallelization_suggestions", {"project_path": project})
             self.assertFalse(result.is_error, result)
-            patches = result.data["patches"]
-            self.assertGreaterEqual(result.data["num_suggestions"], 1)
-            loop_patches = [p for p in patches if p.get("line") == LOOP_LINE]
-            self.assertTrue(loop_patches, patches)
-            patch = loop_patches[0]
-            pattern_id = patch["pattern_id"]
-            self.assertEqual(Path(patch["source_file"]).resolve(), self.source.resolve())
-            self.assertEqual(patch["type"], "doall")
-            self.assertIn("#pragma omp parallel for", patch["patch_content"])
-
-            result = await server.call(
-                "get_parallelization_patches", {"project_path": project, "detail": "summary", "pattern_id": pattern_id}
+            self.assertRegex(result.text, r"^\d+ parallelization suggestions, hottest first:")
+            [line] = [
+                text
+                for text in result.text.splitlines()
+                if re.search(rf"Loop code\.cpp:{LOOP_LINE}(-\d+)? ", text) and ": doall," in text
+            ]
+            match = re.match(
+                r"Suggestion (\d+): (Potential )?(Hotspot )?Loop \S+ \(.* s, \d+% of runtime\): doall, (.*)", line
             )
-            self.assertFalse(result.is_error, result)
-            self.assertEqual(result.data["num_suggestions"], 1)
-            [entry] = result.data["files"]
-            [summary] = entry["suggestions"]
-            self.assertEqual(summary["pattern_id"], pattern_id)
-            self.assertIn("#pragma omp parallel for", summary["pragma"])
-            self.assertNotIn("patch_content", summary)
+            self.assertIsNotNone(match, line)
+            assert match is not None
+            pattern_id = match.group(1)
+            self.assertIn("#pragma omp parallel for", match.group(4))
 
             # --- why: the decision for the loop, and its data dependencies
             result = await server.call(
                 "explain_parallelization", {"project_path": project, "file_path": source, "start_line": LOOP_LINE}
             )
             self.assertFalse(result.is_error, result)
-            accepted = [r for r in result.data["regions"] if r["outcome"] == "accepted"]
-            self.assertTrue(accepted, result.data)
-            self.assertIn(pattern_id, [s["pattern_id"] for r in accepted for s in r.get("suggestions", [])])
+            self.assertIn(f"suggestion {pattern_id} (doall)", result.text)
 
             result = await server.call(
-                "get_data_dependencies",
-                {"project_path": project, "file_path": source, "start_line": LOOP_LINE, "end_line": LOOP_END_LINE},
+                "explain_parallelization",
+                {"project_path": project, "file_path": source, "start_line": CARRIED_LOOP_LINE + 1},
             )
             self.assertFalse(result.is_error, result)
-            deps = result.data["dependencies"]
-            self.assertEqual(set(deps), {"incoming", "outgoing", "intra_region"})
-            self.assertGreater(result.data["num_dependencies"], 0)
-            self.assertEqual(result.data["num_dependencies"], sum(len(v) for v in deps.values()))
-            for entry in (e for bucket in deps.values() for e in bucket):
-                self.assertIn(entry["dep_type"], ("RAW", "WAR", "WAW"))
-
-            result = await server.call(
-                "get_data_dependencies",
-                {
-                    "project_path": project,
-                    "file_path": str(Path(project) / "elsewhere.cpp"),
-                    "start_line": 1,
-                    "end_line": 2,
-                },
+            self.assertIn(f"Loop code.cpp:{CARRIED_LOOP_LINE}-", result.text)
+            self.assertIn("not parallelizable.", result.text)
+            self.assertRegex(
+                result.text,
+                rf"- RAW dependency to code\.cpp:{CARRIED_LOOP_LINE + 1} via elements of variable x "
+                rf"from code\.cpp:{CARRIED_LOOP_LINE + 1} prevents parallelization \(observed during profiling\)\.",
             )
-            self.assertTrue(result.is_error, result)
-            self.assertIn("not found in FileMapping", result.data["message"])
 
-            # --- measure the suggestion; without apply=true the sources stay as they were
+            # --- build and run the program as it is; the sources stay as they are
             result = await server.call(
-                "run_auto_tuning",
-                {
-                    "project_path": project,
-                    "config_name": "small",
-                    "suggestion_ids": [pattern_id],
-                    "timeout_seconds": STEP_TIMEOUT_SECONDS,
-                },
+                "run_configuration",
+                {"project_path": project, "config_name": "small", "threads": 2, "repetitions": 2},
                 timeout=PIPELINE_TIMEOUT,
             )
             self.assertFalse(result.is_error, result)
-            self.assertEqual(result.data["mode"], "selection")
-            self.assertEqual(result.data["suggestion_ids"], [pattern_id])
-            self.assertEqual(result.data["outcome"], "valid", result.data)
-            self.assertIsInstance(result.data["baseline_runtime"], (int, float))
-            self.assertFalse(result.data["applied"])
+            self.assertRegex(
+                result.text,
+                r"^Configuration 'small' with 2 threads: built and ran successfully in [\d.]+ s \(median of 2 runs\)\.",
+            )
+            self.assertIn("There is no validate.sh", result.text)
+            self.assertIn("The program printed nothing.", result.text)
+
+            result = await server.call(
+                "run_configuration", {"project_path": project, "config_name": "small", "rebuild": False, "threads": 1}
+            )
+            self.assertIn("with 1 thread: built and ran successfully", result.text)
+
+            # DiscoPoP only reads the sources: nothing above has modified them
             self.assertEqual(self.source.read_text(), self.original_source)
-
-            result = await server.call(
-                "run_auto_tuning",
-                {"project_path": project, "config_name": "small", "suggestion_ids": ["999999"]},
-            )
-            self.assertTrue(result.is_error, result)
-            self.assertIn("Unknown suggestion IDs: 999999", result.data["message"])
-
-            # --- apply and roll back
-            result = await server.call(
-                "manage_patches", {"project_path": project, "action": "apply", "suggestion_ids": [pattern_id]}
-            )
-            self.assertFalse(result.is_error, result)
-            self.assertEqual(result.data["status"], "success", result.data)
-            self.assertEqual(result.data["applied_now"], [pattern_id])
-            self.assertIn("#pragma omp parallel for", self.source.read_text())
-
-            result = await server.call("manage_patches", {"project_path": project, "action": "list"})
-            self.assertFalse(result.is_error, result)
-            self.assertEqual(result.data["applied_suggestions"], [pattern_id])
-
-            result = await server.call("get_project_status", {"project_path": project})
-            self.assertEqual(result.data["applied_suggestions"], [pattern_id])
-            self.assertIn("rollback", result.data["next_step"])
-
-            result = await server.call(
-                "manage_patches", {"project_path": project, "action": "rollback", "suggestion_ids": [pattern_id]}
-            )
-            self.assertFalse(result.is_error, result)
-            self.assertEqual(self.source.read_text(), self.original_source)
-            result = await server.call("manage_patches", {"project_path": project, "action": "list"})
-            self.assertEqual(result.data["applied_suggestions"], [])
-
-            result = await server.call("manage_patches", {"project_path": project, "action": "apply"})
-            self.assertTrue(result.is_error, result)
-            self.assertIn("suggestion_ids", result.data["message"])
 
             # --- a later failing build must not leave the old results looking current
             result = await server.call(
@@ -248,23 +202,31 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
             os.utime(self.source, (future, future))
             result = await gather_data(server, project)
             self.assertTrue(result.is_error, result)
-            self.assertIn("Instrumentation failed", result.data["message"])
+            self.assertIn("Hotspot detection failed", result.data["message"])
 
             result = await server.call("get_project_status", {"project_path": project})
             self.assertFalse(result.is_error, result)
             pipeline = result.data["pipeline"]
-            self.assertEqual(pipeline["instrumentation"], {"done": False}, pipeline)
-            self.assertEqual(pipeline["profiling"], {"done": False}, pipeline)
+            self.assertEqual(pipeline["hotspot_detection"], {"done": False}, pipeline)
+            self.assertTrue(pipeline["instrumentation"]["stale"], pipeline)
             self.assertTrue(pipeline["pattern_detection"]["stale"], pipeline)
-            self.assertIn("No analysis results exist yet", result.data["next_step"])
+            self.assertIn("sources changed after the last analysis", result.data["next_step"])
 
 
-def _effects(data: dict[str, Any]) -> set[tuple[str, str, str]]:
-    """(access, kind, name) of every listed effect of a get_side_effects result."""
+def _effects(text: str) -> set[tuple[str, str, str]]:
+    """(access, kind, name) of every effect listed in the text of a get_side_effects result."""
+    sections = {"Writes:": "write", "Reads:": "read", "Referenced in the code, access unknown:": "unknown"}
     found: set[tuple[str, str, str]] = set()
-    for access, bucket in (("write", "writes"), ("read", "reads"), ("unknown", "unknown_access")):
-        for effect in data.get(bucket, []):
-            found.add((access, effect["kind"], effect["name"]))
+    access = ""
+    for line in text.splitlines():
+        if line in sections:
+            access = sections[line]
+        elif line.startswith("- ") and access:
+            match = re.match(r"- (\S+) \((global|parameter|other memory)[,)]", line)
+            assert match is not None, line
+            found.add((access, match.group(2).split()[0], match.group(1)))
+        else:
+            access = "" if not line.startswith("- ") else access
     return found
 
 
@@ -289,11 +251,10 @@ class TestSideEffects(unittest.IsolatedAsyncioTestCase):
             result = await gather_data(server, project)
             self.assertFalse(result.is_error, result)
 
-            async def query(function: str, **extra: Any) -> dict[str, Any]:
+            async def query(function: str, **extra: Any) -> str:
                 result = await server.call("get_side_effects", {"project_path": project, "function": function, **extra})
                 self.assertFalse(result.is_error, result)
-                self.assertEqual(result.data["status"], "success", result)
-                return result.data
+                return result.text
 
             expected: dict[str, set[tuple[str, str, str]]] = {
                 "pure_add": set(),
@@ -319,27 +280,22 @@ class TestSideEffects(unittest.IsolatedAsyncioTestCase):
             }
             for function, effects in expected.items():
                 with self.subTest(function=function):
-                    data = await query(function)
-                    self.assertEqual(_effects(data), effects, data)
+                    text = await query(function)
+                    self.assertEqual(_effects(text), effects, text)
 
-            data = await query("pure_add")
-            self.assertEqual(data["coverage"], "executed")
-            self.assertIs(data["pure_on_observed_inputs"], True)
+            text = await query("pure_add")
+            self.assertIn("Pure on the profiled inputs", text)
+            self.assertNotIn("Caveat", text)
 
-            data = await query("wrapper")
-            (write,) = data["writes"]
-            self.assertEqual(write["sites"][0]["via"], ["write_through_param(int*, int)"])
+            text = await query("wrapper")
+            self.assertRegex(text, r"- p \(parameter.*: line \d+ via write_through_param\(int\*, int\)")
 
-            data = await query("wrapper", include_callees=False)
-            self.assertEqual(_effects(data), set(), data)
-
-            data = await query("read_const_table")
-            (read,) = data["reads"]
-            self.assertEqual((read["name"], read["source"]), ("g_table", "static"))
-            self.assertIs(data["pure_on_observed_inputs"], True)
+            text = await query("read_const_table")
+            self.assertIn("- g_table (global, referenced in the code, not observed)", text)
+            self.assertIn("Pure on the profiled inputs", text)
 
             # main aggregates the effects of everything it calls, also beyond the inlining depth
-            data = await query("main")
+            text = await query("main", limit=100)
             self.assertLessEqual(
                 {
                     ("write", "global", "g_counter"),
@@ -349,27 +305,28 @@ class TestSideEffects(unittest.IsolatedAsyncioTestCase):
                     ("read", "global", "g_seq"),
                     ("write", "global", "calls"),
                 },
-                _effects(data),
-                data,
+                _effects(text),
+                text,
             )
-            self.assertIs(data["pure_on_observed_inputs"], False)
+            self.assertIn("Not pure: it writes", text)
 
-            data = await query("clear")
-            self.assertIn("memset", data["unprofiled_calls"])
-            self.assertIsNone(data["pure_on_observed_inputs"])
+            text = await query("clear")
+            self.assertIn("calls whose accesses were not observed (library code):", text)
+            self.assertIn("memset", text)
+            self.assertIn("Purity is undecided.", text)
 
-            data = await query("log_value")
-            self.assertTrue(data["performs_file_io"])
-            self.assertIs(data["pure_on_observed_inputs"], False)
+            text = await query("log_value")
+            self.assertIn("Not pure: it performs file I/O.", text)
 
-            data = await query("never_called")
-            self.assertEqual(data["coverage"], "not_executed")
-            self.assertEqual({(e["name"], e["source"]) for e in data["writes"]}, {("g_unused", "static")})
+            text = await query("never_called")
+            self.assertIn("Caveat: Never executed during profiling", text)
+            self.assertEqual(_effects(text), {("write", "global", "g_unused")})
+            self.assertIn("- g_unused (global, referenced in the code, not observed)", text)
 
-            self.assertEqual((await query("recurse"))["coverage"], "partial")
-            self.assertEqual((await query("chain1"))["coverage"], "partial")
-            self.assertEqual((await query("chain7"))["coverage"], "untracked")
-            self.assertEqual((await query("pointer_target"))["coverage"], "untracked")
+            self.assertIn("Caveat: Some calls could not be followed", await query("recurse"))
+            self.assertIn("Caveat: Some calls could not be followed", await query("chain1"))
+            self.assertIn("Caveat: Executed, but none of its calls", await query("chain7"))
+            self.assertIn("Caveat: Executed, but none of its calls", await query("pointer_target"))
 
             result = await server.call("get_side_effects", {"project_path": project, "function": "no_such_function"})
             self.assertTrue(result.is_error, result)
@@ -395,42 +352,30 @@ class TestFailurePaths(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.is_error, result)
             data = result.data
             self.assertEqual(data["status"], "error")
-            self.assertIn("Instrumentation failed", data["message"])
-            instrumentation = data["steps"]["instrumentation"]
+            self.assertIn("Hotspot detection failed", data["message"])
+            instrumentation = data["steps"]["hotspot_instrumentation"]
             self.assertNotEqual(instrumentation["returncode"], 0)
             self.assertIn("no_such_file.cpp", instrumentation["stderr"])
             # the hint points at the build script and the tool that fixes it
             self.assertIn("compile.sh", data["next_step"])
             self.assertIn("set_compile_script", data["next_step"])
-            self.assertNotIn("profiling", data["steps"])
+            self.assertNotIn("instrumentation", data["steps"])
 
             result = await server.call("get_project_status", {"project_path": project})
             self.assertFalse(result.is_error, result)
-            for step in ("instrumentation", "profiling", "pattern_detection", "patch_generation"):
+            for step in ("hotspot_detection", "instrumentation", "profiling", "pattern_detection", "patch_generation"):
                 self.assertEqual(result.data["pipeline"][step], {"done": False}, result.data["pipeline"])
             self.assertNotIn("suggestions", result.data)
 
-            result = await server.call("get_parallelization_patches", {"project_path": project})
+            result = await server.call("get_parallelization_suggestions", {"project_path": project})
             self.assertTrue(result.is_error, result)
 
-            result = await server.call(
-                "get_execution_results",
-                {"project_path": project, "script": "compile.sh", "failed_only": True, "include_output": True},
-            )
+            # the build error reaches the agent that runs the program, too
+            result = await server.call("run_configuration", {"project_path": project, "config_name": "small"})
             self.assertFalse(result.is_error, result)
-            # the hint names this call as the place to see the failed build's output
-            self.assertGreaterEqual(result.data["num_failed"], 1, result.data)
-            rows = [
-                row
-                for scripts in result.data["execution_results"].values()
-                for settings in scripts.values()
-                for runs in settings.values()
-                for row in runs
-            ]
-            self.assertTrue(
-                any("no_such_file.cpp" in (row.get("stderr") or "") + (row.get("stdout") or "") for row in rows),
-                rows,
-            )
+            self.assertIn("the build failed", result.text)
+            self.assertIn("no_such_file.cpp", result.text)
+            self.assertIn("the program was not run", result.text)
 
     async def test_failing_execute_script(self) -> None:
         project = self.project
@@ -439,10 +384,11 @@ class TestFailurePaths(unittest.IsolatedAsyncioTestCase):
             result = await gather_data(server, project)
             self.assertTrue(result.is_error, result)
             data = result.data
-            self.assertIn("Profiling failed", data["message"])
-            self.assertEqual(data["steps"]["instrumentation"]["status"], "success")
-            self.assertEqual(data["steps"]["profiling"]["returncode"], 3)
-            self.assertIn("program reported a failure", data["steps"]["profiling"]["stderr"])
+            self.assertIn("Hotspot detection failed", data["message"])
+            self.assertEqual(data["steps"]["hotspot_instrumentation"]["status"], "success")
+            (hotspot_run,) = data["steps"]["hotspot_profiling"]
+            self.assertEqual(hotspot_run["returncode"], 3)
+            self.assertIn("program reported a failure", hotspot_run["stderr"])
             self.assertIn("create_execution_configuration", data["next_step"])
 
             result = await server.call("get_project_status", {"project_path": project})

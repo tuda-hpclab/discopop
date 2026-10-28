@@ -118,6 +118,7 @@ class ExportBuilder:
         first_contexts: Sequence[int] = (),
         other_contexts: Sequence[int] = (),
         other_names: Optional[Sequence[str]] = None,
+        other_file: int = 1,
     ) -> None:
         """``first``/``other`` = (instruction id, line in file 1); ``other_names`` go to instruction_names."""
         self.records.append(
@@ -125,7 +126,7 @@ class ExportBuilder:
                 "type": rtype,
                 "var": var,
                 "first": [first[0], 1, f"1:{first[1]}"],
-                "other": None if other is None else [other[0], 1, f"1:{other[1]}"],
+                "other": None if other is None else [other[0], 1, f"{other_file}:{other[1]}"],
                 "pairs": [list(p) for p in pairs],
                 "first_contexts": list(first_contexts),
                 "other_contexts": list(other_contexts),
@@ -306,7 +307,7 @@ def test_callee_param_crossing_reported_via_callee() -> None:
     assert effects(result) == [("write", "parameter", "p", "observed")]
     effect = result.effects[0]
     assert effect.sites[0].via == ("write_through_param(int*, int)",)
-    assert effect.outside_names == ["buf"]  # without the profiler's GEPRESULT_ prefix
+    assert [o.name for o in effect.outside_names] == ["buf"]  # without the profiler's GEPRESULT_ prefix
     assert effect.is_own is False
     assert result.contributing_callees == ["write_through_param(int*, int)"]
     # write_through_param's outermost instance is the one below wrapper; its own param effect
@@ -393,7 +394,7 @@ def test_pointer_local_is_other_only_when_crossing() -> None:
     result = b.index().compute(f)
     assert effects(result) == [("write", "other", "q", "observed")]
     assert result.effects[0].through_pointer is True
-    assert result.effects[0].outside_names == ["call101"]
+    assert [o.name for o in result.effects[0].outside_names] == ["call101"]
 
 
 def test_stack_local_names_are_dropped_even_when_crossing() -> None:
@@ -518,7 +519,7 @@ def test_several_names_for_the_other_end_pick_the_most_significant() -> None:
     b.record("RAW", "x", (94, 150), (95, 11), pairs=[(b.main_ctx, c)], other_names=["tmp", "g"])
     result = b.index().compute(f)
     assert effects(result) == [("write", "global", "g", "observed")]
-    assert result.effects[0].outside_names == ["x"]
+    assert [o.name for o in result.effects[0].outside_names] == ["x"]
 
 
 def test_missing_ast_facts_makes_everything_other() -> None:
@@ -1043,4 +1044,30 @@ def test_outside_names_exclude_linker_names_and_the_effect_name() -> None:
     b.record("RAW", "GEPRESULT_p", (77, 160), (78, 27), pairs=[(b.main_ctx, c_wtp)], other_names=["GEPRESULT_p"])
     b.record("RAW", "_ZZ4mainE5state", (79, 161), (80, 28), pairs=[(b.main_ctx, c_wtp)], other_names=["GEPRESULT_p"])
     effect = find(b.index().compute(wr), "write", "p")
-    assert effect.outside_names == ["state"]
+    assert [o.name for o in effect.outside_names] == ["state"]
+
+
+def test_outside_names_carry_the_file_of_the_other_end() -> None:
+    b = ExportBuilder()
+    wtp = b.function("1:90", "write_through_param(int*, int)", 25, 30, params=[("p", True), ("n", False)])
+    wr = b.function("1:91", "wrapper(int*, int)", 33, 33, params=[("p", True), ("n", False)], static_callees=[wtp])
+    i_wr, _ = b.instance(wr, b.main)
+    _, c_wtp = b.instance(wtp, i_wr)
+    b.record(
+        "RAW", "state", (79, 161), (80, 28), pairs=[(b.main_ctx, c_wtp)], other_names=["GEPRESULT_p"], other_file=2
+    )
+    effect = find(b.index().compute(wr), "write", "p")
+    assert [(o.name, o.file_id) for o in effect.outside_names] == [("state", 1)]
+
+
+def test_outside_names_of_the_other_end_carry_its_file() -> None:
+    b = ExportBuilder()
+    wtp = b.function("1:90", "write_through_param(int*, int)", 25, 30, params=[("p", True), ("n", False)])
+    wr = b.function("1:91", "wrapper(int*, int)", 33, 33, params=[("p", True), ("n", False)], static_callees=[wtp])
+    i_wr, _ = b.instance(wr, b.main)
+    _, c_wtp = b.instance(wtp, i_wr)
+    b.record(
+        "RAW", "GEPRESULT_p", (77, 160), (78, 27), pairs=[(c_wtp, b.main_ctx)], other_names=["state"], other_file=2
+    )
+    effect = find(b.index().compute(wr), "read", "p")
+    assert [(o.name, o.file_id) for o in effect.outside_names] == [("state", 2)]

@@ -63,6 +63,7 @@ from discopop_explorer.side_effects.result import (
     EffectSite,
     FunctionInfo,
     Kind,
+    OutsideName,
     SideEffects,
     Source,
 )
@@ -123,7 +124,7 @@ class _FunctionFacts:
 class _EffectAcc:
     through_pointer: bool = False
     sites: Set[EffectSite] = field(default_factory=set)
-    outside_names: Set[str] = field(default_factory=set)
+    outside_names: Set[OutsideName] = field(default_factory=set)
 
 
 # (name, kind, access, source, member_of)
@@ -610,7 +611,7 @@ class SideEffectIndex:
             access: Access,
             pos: Tuple[int, int],
             inst_id: int,
-            outside: Iterable[str] = (),
+            outside: Iterable[OutsideName] = (),
         ) -> None:
             kind: Kind = "parameter" if classified.cls == _PARAM else classified.cls  # type: ignore[assignment]
             key: _EffectKey = (classified.name, kind, access, "observed", classified.member_of)
@@ -618,12 +619,13 @@ class SideEffectIndex:
             entry.through_pointer = entry.through_pointer or classified.through_pointer
             entry.sites.add(EffectSite(pos[0], pos[1], self._via(root, inst_id, function_id)))
             # without the profiler's GEPRESULT_ prefix and linker names, like Effect.name; only names that differ
-            for outside_name in outside:
+            for outside_end in outside:
+                outside_name = outside_end.name
                 if outside_name.startswith(_GEP_PREFIX):
                     outside_name = outside_name[len(_GEP_PREFIX) :]
                 outside_name = self._linker_names.get(outside_name, outside_name)
                 if outside_name != classified.name:
-                    entry.outside_names.add(outside_name)
+                    entry.outside_names.add(OutsideName(outside_name, outside_end.file_id))
 
         def own_rule(classified: Optional[_Classified], inst_id: int) -> bool:
             """global anywhere in sub(I); parameter of F itself in own(I)."""
@@ -678,10 +680,12 @@ class SideEffectIndex:
                 continue
             if first_inside:
                 classified = classify_first(first_inst)
-                inside_inst, access, pos, outside = first_inst, first_access, first_pos, list(other_names)
+                inside_inst, access, pos = first_inst, first_access, first_pos
+                outside = [OutsideName(name, other_pos[0]) for name in other_names] if other_pos else []
             else:
                 classified = classify_other(other_inst)
-                inside_inst, access, pos, outside = other_inst, other_access, other_pos, [record["var"]]
+                inside_inst, access, pos = other_inst, other_access, other_pos
+                outside = [OutsideName(record["var"], first_pos[0])] if first_pos else []
             if classified is None or pos is None or classified.cls == _LOCAL:
                 continue
             add(classified, access, pos, inside_inst, outside)
@@ -726,7 +730,7 @@ class SideEffectIndex:
                 through_pointer=entry.through_pointer,
                 member_of=key[4],
                 sites=sorted(entry.sites, key=lambda s: (s.file_id, s.line, s.via)),
-                outside_names=sorted(entry.outside_names),
+                outside_names=sorted(entry.outside_names, key=lambda o: (o.name, o.file_id)),
             )
             for key, entry in acc.items()
         ]

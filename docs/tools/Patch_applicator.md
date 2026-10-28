@@ -63,5 +63,4 @@ Only one action is executed per call, in the order `-a`, `-r`, `-C`, `-L`, `-l`.
 Rolling back or clearing only works while the patched files still match the patches. If you edited a patched file by hand, the rollback fails.
 
 ## Use from other tools
-- The [MCP server](MCP_server.md) offers the same actions as the tool `manage_patches`.
 - The [autotuner](Autotuner.md) and the [project manager](Project_manager.md) apply suggestions in a copy of the project.

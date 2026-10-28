@@ -10,17 +10,18 @@ directory for details.
 
 # DiscoPoP MCP Server
 
-A Model Context Protocol (MCP) server that exposes DiscoPoP functionality to MCP clients such as Claude Code and OpenCode, enabling an LLM agent to drive the full instrumentation pipeline and query static and dynamic data dependencies.
+A Model Context Protocol (MCP) server that exposes DiscoPoP functionality to MCP clients such as Claude Code and OpenCode, enabling an LLM agent to drive the full instrumentation pipeline and query the results of the analysis.
 
 ## Overview
 
 The DiscoPoP MCP Server bridges the gap between an LLM agent and DiscoPoP's profiling and analysis tools. It allows the agent to:
 
-- Instrument a project, run profiling, detect parallel patterns, and retrieve OpenMP patches
-- Query static and dynamic data dependencies for arbitrary code regions to support code understanding, refactoring, and correctness checks
-- Report the data a function and its callees were observed to read and write outside of it (side effects)
-- Retrieve profiling information from executed instrumented code
-- List and discover available profiling data and execution configurations
+- Instrument a project, run profiling, detect parallel patterns, and list the suggestions (OpenMP pragmas), ranked by the hotspots
+- Show where the program spends its time, and why a region was or was not suggested for parallelization
+- Report the data a function and its callees were observed to read and write outside of it (side effects), to support code understanding, refactoring, and correctness checks
+- List and discover available execution configurations
+
+DiscoPoP only analyses: the agent edits the source code itself.
 
 ## Features
 
@@ -106,11 +107,15 @@ discopop_mcp_server --debug
 discopop_mcp_server --daemon --daemon-port 8888
 ```
 
-Once registered, ask the agent, for example: "Profile this project and parallelize the hot loops", "What data dependencies exist for lines 40-80 of src/compute.cpp?" or "Which data does `scale` read and write?".
+Once registered, ask the agent, for example: "Profile this project and parallelize the hot loops", "Why was the loop in lines 40-80 of src/compute.cpp not parallelized?" or "Which data does `scale` read and write?".
 
 ## Available Tools
 
-The server offers 15 tools. In workflow order: `initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration` (once per project; `delete_execution_configuration` and `get_configurations` manage them), `get_project_status`, `gather_data`, `get_hotspots`, `get_parallelization_patches`, `explain_parallelization`, `get_data_dependencies`, `get_side_effects`, `run_auto_tuning`, `manage_patches` and `get_execution_results`. The setup tools are hidden by `--tools analysis`.
+The server offers 12 tools. In workflow order: `initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration` (once per project; `delete_execution_configuration` and `get_configurations` manage them), `get_project_status`, `gather_data`, `get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects` and `run_configuration`. The setup tools are hidden by `--tools analysis`.
+
+DiscoPoP only reads the sources: it never modifies them. The agent applies the suggestions itself, by editing the code.
+
+The tools that answer questions about the analysis return a short **text**, not a data structure: one line per hotspot, suggestion or effect, most significant first. Where a list is cut, its last line says how much was left out, and a `limit` parameter lists more. Paths are shown relative to the project. The setup, configuration and pipeline tools return JSON. A successful result holds just the facts of the call plus, where there is a sensible follow-up, a `next_step` hint; it carries neither a `status` nor the `project_path` the caller sent. Errors are returned as `{"status": "error", "message": ..., "next_step": ...}`, and the server marks them as errors (`isError`); `status` appears nowhere else at the top level (the entries of `gather_data`'s `steps` carry their own `status`).
 
 ### `initialize_discopop_directory`
 
@@ -118,7 +123,7 @@ Sets up `.discopop/project/configs/` with `seq_settings.json`, `dp_settings.json
 
 **Parameters:**
 - `project_path` (string, required): Absolute path to the project root
-- `reset` (boolean, optional): Delete all analysis artefacts under `.discopop/` (profiler output, explorer results, patches, hotspot data, execution results) and keep `.discopop/project/`; applied suggestions are rolled back first. Default `false`
+- `reset` (boolean, optional): Delete all analysis artefacts under `.discopop/` (profiler output, explorer results, patches, hotspot data, execution results) and keep `.discopop/project/`. Default `false`
 - `base_cc`, `base_cxx` (string, optional): Compilers of the plain builds. Defaults `clang`, `clang++`
 - `cflags`, `cxxflags` (string, optional): Initial flags shared by all build modes
 
@@ -129,39 +134,6 @@ Deletes a named configuration (its directory under `.discopop/project/configs/` 
 **Parameters:**
 - `project_path` (string, required): Absolute path to the project root
 - `config_name` (string, required): Name of the configuration
-
-### `gather_data`
-
-Runs the complete data collection pipeline and detects patterns: optional hotspot detection (compile with hotspot instrumentation, run once per configuration in `hotspot_config_names`, classify regions as YES/MAYBE/NO), then instrumentation, profiling with `config_name`, and `discopop_explorer`. A step is skipped when its outputs are newer than the sources. Afterwards the project is rebuilt without instrumentation (see below).
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `config_name` (string, required): Execution configuration used for compilation and profiling
-- `hotspot_config_names` (array of strings, optional): Configurations for the hotspot profiling runs; at least two with different input sizes classify best. Omitted: no hotspot detection and the whole program is analyzed
-- `timeout_seconds` (integer, optional): Timeout of each step. Default `3600`
-- `force` (boolean, optional): Re-run all steps. Default `false`
-
-### `get_parallelization_patches`
-
-Returns the generated OpenMP patches (`.discopop/patch_generator/<pattern_id>/`). Use `detail="summary"` to see what was found without the diffs. Which suggestions to apply is measured by `run_auto_tuning`, not decided by reading the patches.
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `pattern_id` (string, optional) / `pattern_ids` (array, optional): Only these suggestions
-- `file_path` (string, optional): Only suggestions for this source file
-- `detail` (`"full"` or `"summary"`, optional): `full` (default) includes the diff; `summary` gives id, pattern type, lines, pragma, hotspot class and the nesting of the suggestions
-- `limit` (integer, optional): Maximum number of suggestions. Default `50`
-
-### `manage_patches`
-
-Applies, rolls back, clears, loads or lists suggestions with `discopop_patch_applicator`; the source files are modified in place. Requires `gather_data`.
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `action` (`apply`, `rollback`, `clear`, `load`, `list`, required): `clear` resets all sources and saves the list of applied suggestions (overwriting an earlier save), `load` applies the saved list again
-- `suggestion_ids` (array of strings, optional): Required for `apply` and `rollback`; the `pattern_id` values of `get_parallelization_patches`
-
-Rollback and clear only work while the patched files still match the patches; make manual edits on top of a selection you keep.
 
 ### `set_compile_script`
 
@@ -222,103 +194,6 @@ Retrieves the build scripts and execution configurations defined for a target pr
 }
 ```
 
-### `get_execution_results`
-
-Shows the recorded runs of a project's scripts, to find out why something failed: a build or profiling step of `gather_data`, a candidate that `run_auto_tuning` rejected, or a run started from the GUI or the command line.
-
-**Parameters:**
-- `project_path` (string, required): Path to the target project
-- `config_name` (string, optional): Only the runs of this configuration
-- `script` (string, optional): Only the runs of this script, e.g. `execute.sh` or `compile.sh`
-- `failed_only` (boolean, optional): Only runs with a non-zero return code, a timeout, or suggestions that could not be applied
-- `include_output` (boolean, optional): Add the last 2000 characters of each run's stdout and stderr
-
-Reads `<project_path>/.discopop/project/execution_results.json` and returns it grouped by configuration, script and settings file, with one compact entry per run (`code`, `time`, `time_source`, `thread_count`, `applied_suggestions`; further fields only when they carry information). Program output is left out unless `include_output` is set: a full log can be hundreds of kilobytes.
-
-**Example:**
-```json
-{
-  "project_path": "./my_project",
-  "failed_only": true,
-  "include_output": true
-}
-```
-
-### `get_data_dependencies`
-
-Returns data dependencies (RAW, WAR, WAW) that cross or lie within a specified code region. Results contain both statically and dynamically identified dependencies — dynamic profiling correctly captures aliasing and other cases that pure static analysis cannot resolve.
-
-Dependencies are grouped by direction:
-- `incoming` — source outside the region, sink inside
-- `outgoing` — source inside the region, sink outside
-- `intra_region` — both source and sink within the region
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `file_path` (string, required): Absolute path to the source file
-- `start_line` (integer, required): First line of the code region (inclusive)
-- `end_line` (integer, required): Last line of the code region (inclusive)
-- `dep_types` (array of `"RAW"`, `"WAR"`, `"WAW"`, optional): Dependency types to return (default: all)
-- `directions` (array of `"incoming"`, `"outgoing"`, `"intra_region"`, optional): Directions to return (default: all)
-- `var_name` (string, optional): Restrict results to a specific variable; automatically excludes incoming dependencies (aliasing safety, reported as `incoming_excluded_due_to_var_name_filter`)
-
-Each entry carries `dep_type`, `var_name`, `source` and `sink`. An end in the queried `file_path` is given as its bare line number, an end in another file as `{"file", "line"}`.
-
-At most 200 dependencies are returned, ordered by direction (incoming, outgoing, intra_region), then sink and source line, so a cut result is reproducible. `num_dependencies` is always the full count; a cut result adds `truncated: true`, `num_dependencies_by_direction` and a `next_step` naming the ways to narrow the query (smaller line range, `var_name`, `dep_types`, `directions`).
-
-This tool is cheap to call repeatedly — `DetectionResult` and `FileMapping` are cached in memory after the first load. Requires `gather_data` to have been run first.
-
-### `get_side_effects`
-
-Returns the data a function was observed to read and write outside of itself during profiling, including through the functions it calls: globals (also static locals and static data members), memory reached through its pointer, reference, array or class-type parameters (a struct, smart pointer or iterator passed by value may point into the caller's memory), and other memory that outlives the call. It answers whether a call is pure, safe to run concurrently, to reorder or to memoize, during code review and refactoring as well as for parallelization. Results are only valid for the profiled inputs.
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `function` (string, required): Name with or without signature (`scale`, `scale(double*, int)`, `ns::Cls::scale`), or the mangled name
-- `file_path` (string, optional), `line` (integer, optional): Source file (absolute or relative to `project_path`) and any line inside the definition, to pick one of several functions of that name
-- `access` (`"read"` or `"write"`, optional): Only reads or only writes; entries of unknown access are kept with either
-- `kinds` (array of `"global"`, `"parameter"`, `"other"`, optional): Default all
-- `var_name` (string, optional): Only entries for this name (also matched against `member_of` and `outside_names`, with or without the `GEPRESULT_` prefix), with up to 50 sites each
-- `include_callees` (boolean, optional): Default `true`; `false` keeps only the accesses made by the function itself
-
-**Returns:**
-- `function`: display name, file and line range of the resolved function
-- `coverage`: `executed`; `partial` (some calls of it or of its callees could not be followed: recursion, deep call chains, function pointers; or `unmapped_records` > 0); `untracked` (executed, but no call could be attributed to it); `not_executed` (only statically found global references are listed). Anything but `executed` means that an absent effect is unknown, and comes with a `next_step`
-- `pure_on_observed_inputs` (`true`/`false`/`null`), `performs_file_io`, `unprofiled_calls` (called functions without a definition in the project, whose accesses are not observed; at most 20, `num_unprofiled_calls` is the total; matched by the called declaration, so a project's `Logger::write` does not hide POSIX `write`), `unmapped_records` (recorded accesses in the function or anything it calls that could not be attributed to a calling context; if > 0, `coverage` is at most `partial`)
-- `summary`: `num_effects`, `by_access`, `by_kind`, `num_contributing_callees` and `contributing_callees` (at most 20) over every entry matching the filters
-- `writes`, `reads` and, when present, `unknown_access` (statically found global references whose access could not be derived). One entry per name, kind and access with `kind`, `source` (`observed`, or `static`: referenced in the code, not observed), `through_pointer`, `member_of` (for a struct member), `num_sites`, up to 3 `sites` (50 with `var_name`) and `outside_names` (other source names of the same data, e.g. the caller's argument; never linker names or the function's own name). A site is `{"line", "via"}`, where `via` is the call chain from the function to the function containing the access (`null` for the function itself; consecutive recursive calls are collapsed to `"f(int) x5"`), plus `file` for a site in another file. Names are those at the access: a `parameter` effect found through a callee has the parameter name of the function named by the last `via` element (`wrapper(int* q)` calling `write_through_param(int* p)` reports `p`; the caller's name for the data, e.g. its argument, goes to `outside_names`)
-- `notes`: always says that the effects were observed on the profiled inputs only; further notes explain e.g. unattributed accesses, missing source-level facts or unprofiled calls
-
-At most 100 entries are returned, ranked writes before reads; global, parameter, other; the function's own accesses before those of callees, shallower callees first; observed before static; then by name. A cut result has `truncated: true` and a `next_step` naming the filters. An ambiguous name returns `status: "ambiguous"` with the `candidates` (name, file, lines).
-
-The tool reads `.discopop/explorer/side_effects.json.gz`, which `discopop_explorer` writes during `gather_data`; it never loads the PET. It refuses, with a `next_step` to run `gather_data` (again), when that file is missing, unreadable or of another format version, stale (`profiler/dynamic_dependencies.txt` changed since it was written), or written by an older explorer run with `--ignore-dependency-states`. The explorer writes no export when it runs with `--ignore-dependency-states` (and removes an earlier one), so the data is then reported as missing. Semantics and limits: [`design/get_side_effects.md`](../design/get_side_effects.md).
-
-### `explain_parallelization`
-
-Explains why DiscoPoP did or did not suggest a parallelization for the code at given lines. Returns every code region pattern detection considered that overlaps them, innermost first, with its outcome:
-- `accepted` — with the ids of the resulting suggestions (as strings, for `get_parallelization_patches`)
-- `rejected` — with the reasons, e.g. the data dependency between iterations that prevents it (type, variable, source and sink lines, and whether profiling or the static analysis found it), or too few observed iterations
-- `not_reported` — passed the checks, but its pattern type was not part of the result
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `file_path` (string, required): Absolute path to the source file
-- `start_line` (integer, required): Line to explain, or the first line of a range
-- `end_line` (integer, optional): Last line of the range (default: `start_line`)
-
-It reads `.discopop/explorer/pattern_decisions.json`, which `discopop_explorer` writes next to `patterns.json` (`--pattern-decisions`). The file is format-versioned and not tied to a detector, so further pattern detectors can record their decisions in it; see `discopop_explorer/classes/patterns/PatternDecisions.py`.
-
-### `get_hotspots`
-
-Lists the code regions (loops and functions) where the program spends its time, from the hotspot detection that `gather_data(hotspot_config_names=[...])` runs. Each region has a hotness: `YES` — above-average runtime that also grows with the input more than average; `MAYBE` — only one of the two; `NO` — neither. Regions come hottest class first, then by their longest measured runtime, with one inclusive runtime per hotspot profiling run and demangled function names. A `warning` says when only one input size was profiled, since growth with the input cannot be judged then.
-
-**Parameters:**
-- `project_path` (string, required): Absolute path to the project root
-- `hotness` (array of `YES`/`MAYBE`/`NO`, optional): Default `["YES", "MAYBE"]`
-- `region_type` (`loop` or `function`, optional): Default both
-- `file_path` (string, optional): Only regions in this source file
-- `limit` (integer, optional): Default 20; `truncated: true` when more matched
-
 ### `get_project_status`
 
 Answers in one cheap, read-only call where a project stands in the DiscoPoP workflow and which call comes next, so an agent starting or resuming work does not have to probe several tools.
@@ -328,87 +203,125 @@ Answers in one cheap, read-only call where a project stands in the DiscoPoP work
 
 **Returns** (fields that do not apply are left out):
 - `initialized`, `compile_script_configured`, `configurations` (names of the runnable configurations)
-- `pipeline`: one entry per step — `hotspot_detection`, `instrumentation`, `profiling`, `pattern_detection`, `patch_generation` — with the time it last ran (`at`) and `stale` when a source file is newer, the same test `gather_data` uses to decide what to re-run; `{"done": false}` for a step that has not run
-- `suggestions` (number of suggestions the pattern detection produced; one suggestion can patch several files), `hotspot_results`, `applied_suggestions`
-- `auto_tuning`: the last tuning run's `config`, whether it was `complete`, its selected `suggestion_ids`, `speedup` and `thread_count`, and `stale` when it predates the current pattern detection
-- `note` when the sources were last changed by applying or rolling back suggestions: that marks the steps stale, but the analysis still describes the un-patched sources
-- `next_step`: the setup step still missing, `gather_data` when there is no or only stale analysis, `run_auto_tuning` when suggestions exist but have not been tuned, `manage_patches` to apply a tuning selection, and so on
+- `pipeline`: one entry per step — `hotspot_detection`, `instrumentation`, `profiling`, `pattern_detection`, `patch_generation` — with the time it last ran (`at`) and `stale` when a source file is newer, the same test `gather_data` uses to decide what to re-run; `{"done": false}` for a step that has not run. Generated sources of a build (CMake build trees, `.git`) are not sources
+- `suggestions`: the number of suggestions the pattern detection produced
+- `next_step`: the setup step still missing, `gather_data` when there is no or only stale analysis, `get_parallelization_suggestions` when suggestions exist, and so on
 
-### `run_auto_tuning`
+### `gather_data`
 
-Runs the [empirical autotuner](https://tuda-hpclab.github.io/discopop/tools/Autotuner/) and returns the combination of suggestions it selected, so the choice of patches is measured rather than guessed. The tuner compiles, executes and validates candidate combinations in throwaway copies of the project and keeps the fastest one that still produces a valid result.
-
-By default the tool leaves the sources as it found them and only reports the selection, which `manage_patches(action="apply", ...)` then persists. Pass `apply=true` to have the selected combination applied in the same call — the shortest route from profiling data to parallelized code.
-
-Patches that are already applied are cleared before the search (the tuner has to measure an un-patched project) and restored afterwards, unless `apply=true` replaces them with the new selection. Nothing has to be cleared by hand.
+Runs the complete data collection pipeline and detects patterns: hotspot detection (compile with hotspot instrumentation, run once per configuration in `hotspot_config_names`, classify regions as YES/MAYBE/NO), then instrumentation, profiling with `config_name`, and `discopop_explorer`. The suggestions are ranked by the hotspots, so a failing hotspot step fails the call and stops the pipeline; the error names the step (`steps.hotspot_instrumentation`, `steps.hotspot_profiling` or `steps.hotspot_analysis`) and carries the end of its error output. A step is skipped when its outputs are newer than the sources. A step that succeeded lists the warnings of its build or run under `warnings` (at most 5, then the number of the rest); a step that failed carries the end of its error output under `stderr`. Afterwards the project is rebuilt without instrumentation (see below).
 
 **Parameters:**
 - `project_path` (string, required): Absolute path to the project root
-- `config_name` (string, required): Execution configuration to tune (a directory under `.discopop/project/configs/`)
-- `apply` (boolean, optional): Apply the selected combination once the search is done, default `false`. The result then carries `applied` with the ids that reached the code; undo them with `manage_patches(action="rollback", ...)`. With `suggestion_ids`, the given selection is applied whenever its `outcome` is `valid`, even if it is slower than the un-patched project; an `invalid`, `failed` or `not_applied` one never is.
-- `suggestion_ids` (array of strings or integers, optional): Measure exactly this selection instead of running a search (see below). The ids are the `pattern_id` values of `get_parallelization_patches`. Cannot be combined with `algorithm`.
-- `algorithm` (string, optional): Search algorithm: `independent`, `linear`, `evolutionary`, `greedy`, `coordinate_descent` or `hotspot_guided`. Omit it and the tool picks `hotspot_guided` (hotspot-guided region descent) when hotspot detection results are available, and `greedy` (greedy forward search) otherwise; the choice and its reason come back as `algorithm` / `algorithm_selection`. Pass a value only to override that; an explicit `hotspot_guided` without hotspot results is refused rather than silently replaced. The names stand for the tuner's `-A` values 0, 1, 3, 4, 5 and 6, which are still accepted. See the [autotuner page](https://tuda-hpclab.github.io/discopop/tools/Autotuner/) for details.
-- `timeout_seconds` (integer, optional): Wall clock bound for the whole search, default `3600`
+- `config_name` (string, required): Execution configuration used for compilation and profiling
+- `hotspot_config_names` (array of strings, optional): Configurations for the hotspot profiling runs; two with different input sizes classify best, since growth with the input can only be judged then. Default: `[config_name]`, a single run
+- `timeout_seconds` (integer, optional): Timeout of each step. Default `3600`
+- `force` (boolean, optional): Re-run all steps. Default `false`
 
-**Preconditions:** `gather_data` must have been run. Running `gather_data` with `hotspot_config_names` set is what makes the hotspot-guided search available.
+### `get_hotspots`
 
-**Example:**
-```json
-{
-  "project_path": "/abs/path/to/my_project",
-  "config_name": "tiny",
-  "timeout_seconds": 1800
-}
+Lists the loops and functions where the program spends its time, as measured by the hotspot detection of `gather_data`, longest running first. A *Hotspot* has an above-average runtime that also grows with the input more than average; a *Potential Hotspot* only one of the two. Each line gives the longest measured runtime (inclusive of what the region calls) and its share of the program's. `main` is left out, as it always takes all of the runtime.
+
+```
+5 hotspots and 2 potential hotspots, longest running first:
+Hotspot Function md.cpp:261 compute (4.05 s, 100% of runtime)
+Hotspot Loop md.cpp:275 (4.05 s, 100% of runtime)
+...
+3 hotspots and 2 potential hotspots not shown (limit=2); pass a larger limit to see them.
 ```
 
-**Example response:**
-```json
-{
-  "status": "success",
-  "algorithm": "hotspot_guided",
-  "algorithm_selection": "hotspot-guided region descent, chosen because hotspot results are available",
-  "suggestion_ids": ["7", "12"],
-  "speedup": 2.31,
-  "efficiency": 0.58,
-  "runtime": 4.12,
-  "baseline_runtime": 9.52,
-  "evaluated_configurations": 14,
-  "applied": false,
-  "message": "Pass suggestion_ids to manage_patches(action='apply', suggestion_ids=[...]) to persist this selection, or call run_auto_tuning again with apply=true. ..."
-}
+With a single profiled input size, growth with the input cannot be judged and the classification reflects the runtime alone; the answer says so.
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `limit` (integer, optional): Maximum number of hotspots to list. Default `10`
+
+### `get_parallelization_suggestions`
+
+Lists the suggestions of `gather_data`, hottest first: the code region (its kind, file and lines), its measured runtime and share of the program's (`Hotspot`, `Potential Hotspot`, or neither), the pattern type, and the change to make, e.g. the OpenMP pragma with its data-sharing clauses to put directly above the region. Suggestions on the same code are marked as nested in, or an alternative to, each other.
+
+```
+13 parallelization suggestions, hottest first:
+Suggestion 5: Hotspot Loop md.cpp:275-317 (4.05 s, 100% of runtime): reduction, #pragma omp parallel for firstprivate(PI2,nd,np,rij) private(d,d2,i,j) shared(f,pos,vel) reduction(+:ke,pe)
+Suggestion 7: Potential Hotspot Loop md.cpp:304-307 (0.96 s, 24% of runtime): doall, #pragma omp parallel for firstprivate(d,d2,f,k,nd,rij); nested in suggestion 5
+...
+3 more suggestions not shown (limit=10); pass a larger limit or file_path to see them.
 ```
 
-This is a measurement run: one compilation plus one execution of the project per candidate. When `timeout_seconds` expires the search is stopped and the best combination measured so far is still returned, with `"status": "timeout"` and `"partial": true`.
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `file_path` (string, optional): Only list suggestions for this source file (absolute, or relative to the project)
+- `limit` (integer, optional): Maximum number of suggestions to list. Default `10`
 
-#### Measuring a given selection
+### `explain_parallelization`
 
-With `suggestion_ids`, no search runs: the tool measures the un-patched project and exactly the given selection (the tuner's `-s <ids> --skip-removal-pass`, which also skips the tuner's refinement of the selection), and reports that one measurement. Unknown ids, malformed ids and a combination with `algorithm` are rejected before anything is cleared, compiled or run. Applied patches are cleared and restored, project copies cleaned up and cancellation handled as for a search. The tuner's result files in `.discopop/auto_tuner/` and its statistics graph (`.discopop/dp_autotuner_statistics.dot/.svg`) are restored afterwards, so the result of the last search, which the GUI and `discopop_project_manager --apply-suggestions auto` apply and `get_project_status` reports, is not replaced by the measurement.
+Explains why DiscoPoP did or did not suggest a parallelization for the code at the given lines: one paragraph per code region that pattern detection considered and that overlaps them, innermost first, with either the suggestion for it or the reasons it was rejected. A dependency is worded as `RAW dependency to md.cpp:306 via elements of variable f from md.cpp:306 prevents parallelization (observed during profiling).`, from the first location to the second, between iterations. Lines no region covers were not considered at all, e.g. because they were never executed during profiling, and the answer says so.
 
-The result carries `"mode": "selection"` and, instead of the search's statistics:
-- `outcome`: `valid` (built, ran and passed the validation), `invalid` (ran, but the result failed the validation, i.e. `validate.sh` or the exit code), `failed` (the build or execution failed, including an execution stopped after twice the un-patched project's wall clock time) or `not_applied` (a patch could not be applied, listed in `not_applied`; nothing was measured)
-- `status`: `success` for a `valid` outcome, `rejected` otherwise
-- `result_valid`: whether the output passed the validation; `null` when it was never checked
-- `runtime` and `baseline_runtime` (seconds), `speedup` over the un-patched project and `efficiency` — `speedup` only for a `valid` outcome, since a program that crashes or computes the wrong result is fast for the wrong reason
-- `return_code` of the selection's run, and a `diagnosis_hint` pointing to `get_execution_results` when it was rejected
-
-```json
-{
-  "status": "success",
-  "mode": "selection",
-  "suggestion_ids": ["3", "5"],
-  "outcome": "valid",
-  "result_valid": true,
-  "return_code": 0,
-  "runtime": 4.0,
-  "baseline_runtime": 10.0,
-  "speedup": 2.5,
-  "efficiency": 0.625,
-  "thread_count": 4,
-  "applied": false
-}
+```
+md.cpp:305 lies in 3 code regions, innermost first:
+Loop md.cpp:304-307: suggestion 7 (doall).
+Loop md.cpp:285-309: not parallelizable.
+- RAW dependency to md.cpp:306 via elements of variable f from md.cpp:306 prevents parallelization (observed during profiling).
+Loop md.cpp:275-317: suggestion 5 (reduction).
 ```
 
-A timeout before the selection's measurement is complete is an error; a timeout afterwards (while the tuner re-runs its best configuration) keeps the measurement.
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `file_path` (string, required): The source file (absolute, or relative to the project)
+- `start_line` (integer, required): The line to explain, or the first line of a range
+- `end_line` (integer, optional): The last line of the range. Default `start_line`
+
+At most 5 regions and 5 reasons per region are explained; the text says how many were left out.
+
+### `get_side_effects`
+
+Describes the data a C/C++ function was observed to read and write outside of itself during profiling, including through the functions it calls: globals (also static locals and static members), memory reached through its pointer, reference, array or class-type parameters, and other memory that outlives the call. Use it to judge whether a call is pure, safe to run concurrently, to reorder or to memoize, e.g. during a review or a refactoring. The answer holds for the profiled inputs only.
+
+```
+dist(int, double*, double*, double*) (md.cpp:328-371)
+Not pure: it writes dr.
+Writes:
+- dr (parameter, through pointer), also called rij: line 366
+Reads:
+- dr (parameter, through pointer): line 367
+- r1 (parameter, through pointer), also called pos: line 366
+Valid for the profiled inputs only.
+```
+
+The first line names the function and where it is defined, the second says whether it is pure on the profiled inputs (it writes nothing and reads only its own parameters or constants), not pure (and why), or undecided. Then the writes and reads, most significant first (writes before reads; globals, parameters, other memory; its own accesses before those of callees), each with the lines of the accesses and, for an access in a called function, the call chain (`via a > b`). A name is the one at the access; the caller's name for the same data follows as `also called`, with its file (`pos (in util.h)`) when that differs from the function's. Data the code names but profiling did not observe is marked `referenced in the code, not observed`. `Caveat` lines say what profiling cannot see: a function that was never executed, calls that could not be followed (recursion, function pointers, deep call chains), or library code. Absent effects are then unknown, not absent.
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `function` (string, required): Function name, with or without signature (`scale`, `scale(double*, int)`, `ns::Cls::scale`), or its mangled name
+- `file_path` (string, optional), `line` (integer, optional): The definition, to disambiguate. An ambiguous name is answered with the list of candidates
+- `limit` (integer, optional): Maximum number of effects to list. Default `20`
+
+### `run_configuration`
+
+Builds the project as it is now, without instrumentation, and runs an execution configuration: to check that the changes of the agent compile and give the same result, and to measure how long the program takes, e.g. with different thread counts. It uses the project's compile script with `par_settings.json` (`seq_settings.json` as the fallback) and the configuration's `execute.sh`, with `OMP_NUM_THREADS` set to `threads`. The sources are never modified. The runs are recorded in `.discopop/project/execution_results.json`, like those of the project manager and the GUI.
+
+The answer is a text: whether the build and the run succeeded, the time (the median of `repetitions`; the program's own timing output when the configuration extracts one), the result of the configuration's `validate.sh` if it has one (built with its `compile_validate.sh` if that exists), the errors and warnings of the build and of the run, and the end of the program's output. Without a `validate.sh` only the exit code is checked, and the answer says so.
+
+```
+Configuration 'medium' with 4 threads: built and ran successfully in 0.99 s (median of 3 runs).
+There is no validate.sh, so the output was not checked; only the exit code.
+Build warnings (2):
+- md.cpp:12:5: warning: unused variable 'x' [-Wunused-variable]
+- md.cpp:40:9: warning: ignoring #pragma omp parallel [-Wunknown-pragmas]
+Output (the end):
+    Elapsed cpu time for main computation:
+    ...
+```
+
+A failed build lists its errors and does not run the program. A failed run gives the exit code, the errors and what the program wrote to stderr; a timeout is reported as one. Warnings are the lines containing `warning:` (or the OpenMP runtime's `Warning #n:`), at most 5 each, with the number of the rest.
+
+**Parameters:**
+- `project_path` (string, required): Absolute path to the project root
+- `config_name` (string, required): The execution configuration to run
+- `threads` (integer, optional): Number of OpenMP threads. Default: the number of CPUs
+- `repetitions` (integer, optional): How often to run it; the median time is reported. Default `1`
+- `rebuild` (boolean, optional): Build before running; `false` runs the last build again, e.g. for another thread count. Default `true`
+- `timeout_seconds` (integer, optional): Maximum time of the build and of each run. Default `3600`
 
 ## Logging Output
 
@@ -437,15 +350,21 @@ venv/bin/python -m pytest mcp_server
 
 Reading raw files from `.discopop` is wasteful and unreliable: the directory contains large binary files, intermediate artefacts, and serialised objects that are expensive to parse and consume a significant number of tokens. The MCP tools return pre-processed, structured summaries that contain exactly the information needed — at a fraction of the token cost.
 
-If a piece of information appears to be missing from the available tools, the correct response is to use the tool that produces it (e.g. run `gather_data` before calling `get_parallelization_patches` or `get_data_dependencies`) rather than reading the underlying files directly.
+If a piece of information appears to be missing from the available tools, the correct response is to use the tool that produces it (e.g. run `gather_data` before calling `get_parallelization_suggestions` or `get_side_effects`) rather than reading the underlying files directly.
 
 ### The route to parallelized code
 
-`gather_data` → `run_auto_tuning` → `manage_patches(action="apply", ...)`, or `gather_data` → `run_auto_tuning(apply=true)`.
+`run_configuration` (the time of the unmodified program) → `gather_data` → `get_hotspots` / `get_parallelization_suggestions` → edit the source yourself → `run_configuration` again (does it build, give the same results, and run faster?).
 
-**Do not decide which patches to apply by reading them.** Which combination is fastest is what `run_auto_tuning` measures; picking from the diffs by hand discards the one thing DiscoPoP can establish and a reader cannot, and a combination that looks sensible is regularly slower than the sequential program (fork/join overhead on short loops) or invalid. Read patches to *understand* a suggestion, not to choose between them — `get_parallelization_patches(detail="summary")` is enough for the former.
+DiscoPoP never modifies the sources: the agent applies a suggestion by making the change it shows (for an OpenMP pragma: adding it directly above the code region it names). The suggestions rest on the profiled inputs, so the changed program has to be checked with `run_configuration`: its output compared to the sequential one (a `validate.sh` does this automatically) and its runtime measured, with the thread counts that matter. A combination of suggestions that looks sensible is regularly slower than the sequential program (fork/join overhead on short loops), so parallelize the hotspots first, and measure. `explain_parallelization` tells why a region has no suggestion, e.g. which dependency between iterations prevents it, and whether a restructuring of the code could remove it.
 
-Run the tuner **before** applying anything. It needs an un-patched project, and while it clears and restores an existing selection on its own, a source file that was also edited by hand can no longer be un-patched automatically.
+After changing the sources, call `gather_data` again: `get_project_status` marks the analysis as stale, as it no longer describes the code.
+
+### Prepared results
+
+The query tools (`get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects`) only read the results in `.discopop`; none of them starts a profiling run, so they are cheap. Results produced beforehand, by a person running `gather_data`, or `discopop_cxx`, the profiled run and `discopop_explorer` by hand (or by an earlier session), are used as they are: an agent starts with `get_project_status`, finds current results and queries them without any wait. This works without `initialize_discopop_directory` and the configuration tools; `--tools analysis` then offers just the analysis tools. A repeated `gather_data` call is cheap as well: it skips every step whose outputs are current.
+
+The results count as current while no source file is newer than them (modification time). After editing, copying or checking out the sources again, `get_project_status` reports them as stale and `gather_data` re-runs the affected steps. The results hold for the inputs that were profiled.
 
 ### The project is left buildable
 
@@ -505,15 +424,14 @@ discopop_mcp_server --daemon-port 8888
 | Lifetime                 | One Claude session             | Until `Ctrl+C`                |
 | Daemon check timing      | First tool call                | N/A                           |
 | State between tool calls | None                           | Kept alive in `ToolContext`   |
-| `DetectionResult` cache  | Not applicable                 | Loaded once, reused across calls |
+| Side effect index cache  | Not applicable                 | Loaded once, reused across calls |
 | Fallback if unavailable  | Inline execution               | N/A                           |
 
 ### What is cached
 
-The daemon's `ToolContext` maintains three caches:
+The daemon's `ToolContext` maintains two caches:
 
-- **`DetectionResult`** — loaded from `.discopop/explorer/detection_result_dump.json` using `jsonpickle` on the first call that needs it (`get_data_dependencies`). Subsequent calls skip the deserialization step entirely.
-- **`FileMapping`** — loaded from `.discopop/FileMapping.txt` on the first call to `get_data_dependencies`. Maps numeric file IDs to absolute source file paths.
+- **`FileMapping`** — loaded from `.discopop/FileMapping.txt` on the first call that needs it. Maps numeric file IDs to absolute source file paths.
 
 - **Side effect index** — built from `.discopop/explorer/side_effects.json.gz` on the first call to `get_side_effects`, keyed by the file's modification time and size; the staleness test against `profiler/dynamic_dependencies.txt` runs on every call.
 
@@ -531,9 +449,9 @@ The default (`discopop_mcp_server`) uses **stdio** for communication with Claude
 2. Proxy checks whether a daemon session is open
    - If yes: forwards the call to the daemon over SSE
    - If no: executes the tool inline
-3. The tool handler runs in a worker thread, so the server stays responsive while a long tool (`gather_data`, `run_auto_tuning`) runs. Tool calls still run one at a time: handlers change the working directory and share their caches
-4. If the client sent a `progressToken`, the server sends MCP progress notifications: one per pipeline step of `gather_data`, the number of measured candidates for `run_auto_tuning`, and a heartbeat every 15 seconds during long steps. Through the daemon, the proxy relays them
-5. If the client cancels a call (`notifications/cancelled`), the processes the tool started — compile and execute scripts, `discopop_explorer`, the autotuner — are stopped with their children, and the tool cleans up as after a timeout: `gather_data` still rebuilds the project without instrumentation, `run_auto_tuning` removes its project copies and restores the patches it cleared. The next call starts once that cleanup is done
+3. The tool handler runs in a worker thread, so the server stays responsive while a long tool (`gather_data`) runs. Tool calls still run one at a time: handlers change the working directory and share their caches
+4. If the client sent a `progressToken`, the server sends MCP progress notifications: one per pipeline step of `gather_data`, and a heartbeat every 15 seconds during long steps. Through the daemon, the proxy relays them
+5. If the client cancels a call (`notifications/cancelled`), the processes the tool started — compile and execute scripts, `discopop_explorer` — are stopped with their children, and the tool cleans up as after a timeout: `gather_data` still rebuilds the project without instrumentation. The next call starts once that cleanup is done
 6. Server logs the incoming call and outgoing response
 7. Response returned to Claude
 
@@ -583,7 +501,7 @@ mypy mcp_server/server.py
 
 ### Missing dependencies
 ```bash
-# Reinstall the server with its dependencies (mcp, jsonpickle, termcolor, uvicorn, starlette, discopop-library,
+# Reinstall the server with its dependencies (mcp, termcolor, uvicorn, starlette, discopop-library,
 # discopop-explorer); from a checkout, pass all packages in one command, as the server requires the library and
 # explorer versions of the checkout
 venv/bin/python -m pip install . ./profiler ./explorer ./library ./GUI ./hotspot_detection ./mcp_server

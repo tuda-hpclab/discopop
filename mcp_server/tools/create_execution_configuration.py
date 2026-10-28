@@ -142,8 +142,6 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         )
 
         result: dict[str, Any] = {
-            "status": "success",
-            "project_path": project_path,
             "config_name": config_name,
             "path": str(execute_sh),
         }
@@ -159,7 +157,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             result["validate_script_path"] = validate_sh
 
         result["next_step"] = setup_next_step(configs_dir)
-        ctx.log_response("create_execution_configuration", result)
+        ctx.log_response("create_execution_configuration", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]
 
     except Exception as e:

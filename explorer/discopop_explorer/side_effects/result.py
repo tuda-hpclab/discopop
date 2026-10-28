@@ -46,6 +46,13 @@ class EffectSite:
     via: Tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class OutsideName:
+    name: str
+    # file of the access that uses the name, to tell it from the queried function's file
+    file_id: int
+
+
 @dataclass
 class Effect:
     # name at the accessing instruction, without the GEPRESULT_ prefix; for a member access the member name
@@ -60,7 +67,7 @@ class Effect:
     # all sites, sorted by (file_id, line, via); the caller decides how many to show
     sites: List[EffectSite] = field(default_factory=list)
     # names under which the other end of crossing records refers to the same data
-    outside_names: List[str] = field(default_factory=list)
+    outside_names: List[OutsideName] = field(default_factory=list)
 
     @property
     def is_own(self) -> bool:

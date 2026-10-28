@@ -8,20 +8,20 @@
 
 import json
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest import mock
 
 from mcp_server.tools import (
     create_execution_configuration,
-    gather_data,
     initialize_discopop_directory,
     set_compile_script,
 )
 from mcp_server.tools.helpers import (
+    MAX_WARNINGS,
+    diagnostics,
+    warning_fields,
     ToolContext,
     compile_script_configured,
     configuration_names,
@@ -68,12 +68,12 @@ class TestSetupState(unittest.TestCase):
         self.__write("small/execute.sh")
         self.assertIn("gather_data", setup_next_step(self.configs_dir))
 
-    def test_a_single_configuration_is_told_how_to_enable_hotspot_detection(self) -> None:
+    def test_a_single_configuration_is_told_about_a_second_one_for_the_hotspot_ranking(self) -> None:
         self.__write("compile.sh", "$CXX $CXXFLAGS main.cpp -o app\n")
         self.__write("small/execute.sh")
         self.assertIn("second configuration", setup_next_step(self.configs_dir))
 
-    def test_two_configurations_are_proposed_for_hotspot_detection(self) -> None:
+    def test_two_configurations_are_proposed_for_the_hotspot_ranking(self) -> None:
         self.__write("compile.sh", "$CXX $CXXFLAGS main.cpp -o app\n")
         self.__write("small/execute.sh")
         self.__write("medium/execute.sh")
@@ -106,7 +106,7 @@ class TestSetupChain(unittest.TestCase):
 
     def __call(self, tool: Any, **arguments: Any) -> Any:
         data = json.loads(tool.handle({"project_path": self.project_path, **arguments}, self.ctx)[0].text)
-        self.assertEqual(data["status"], "success", data)
+        self.assertNotIn("status", data, data)
         return data
 
     def test_the_results_lead_from_initialization_to_gather_data(self) -> None:
@@ -167,61 +167,6 @@ class TestSetupChain(unittest.TestCase):
         self.assertIn("small", message)
 
 
-class TestAppliedSuggestionsSurviveReanalysis(unittest.TestCase):
-    """The applicator's record of applied suggestions is what a rollback needs; the analysis deletes it."""
-
-    def setUp(self) -> None:
-        self._tmp_dir = tempfile.TemporaryDirectory()
-        self.project_path = self._tmp_dir.name
-        self.ctx = ToolContext(debug=False)
-        initialize_discopop_directory.handle({"project_path": self.project_path}, self.ctx)
-
-    def tearDown(self) -> None:
-        self._tmp_dir.cleanup()
-
-    def test_gather_data_refuses_while_suggestions_are_applied(self) -> None:
-        with (
-            mock.patch.object(gather_data, "recorded_applied_suggestions", return_value=(["3"], None)),
-            mock.patch.object(gather_data, "_pipeline") as pipeline,
-        ):
-            result = gather_data.handle({"project_path": self.project_path, "config_name": "small"}, self.ctx)
-        data = json.loads(result[0].text)
-        self.assertEqual(data["status"], "error")
-        self.assertIn("manage_patches(action='clear')", data["message"])
-        pipeline.assert_not_called()
-
-    def test_a_reset_rolls_the_applied_suggestions_back_first(self) -> None:
-        clear = mock.Mock(return_value=(subprocess.CompletedProcess([], 0, "", ""), None))
-        with (
-            mock.patch.object(
-                initialize_discopop_directory, "recorded_applied_suggestions", return_value=(["3"], None)
-            ),
-            mock.patch.object(initialize_discopop_directory, "run_patch_applicator", clear),
-            mock.patch.object(initialize_discopop_directory, "reset_project") as reset,
-        ):
-            reset.side_effect = lambda _args: self.assertEqual(clear.call_count, 1)
-            result = initialize_discopop_directory.handle({"project_path": self.project_path, "reset": True}, self.ctx)
-        data = json.loads(result[0].text)
-        self.assertEqual(clear.call_args.args[1], ["--clear"])
-        self.assertEqual(data["rolled_back_suggestions"], ["3"])
-        self.assertNotIn("warning", data)
-
-    def test_a_reset_whose_rollback_fails_warns_that_patches_may_remain(self) -> None:
-        failed = subprocess.CompletedProcess([], 1, "patch: can't find file", "")
-        with (
-            mock.patch.object(
-                initialize_discopop_directory, "recorded_applied_suggestions", return_value=(["3"], None)
-            ),
-            mock.patch.object(initialize_discopop_directory, "run_patch_applicator", return_value=(failed, None)),
-            mock.patch.object(initialize_discopop_directory, "reset_project"),
-        ):
-            result = initialize_discopop_directory.handle({"project_path": self.project_path, "reset": True}, self.ctx)
-        data = json.loads(result[0].text)
-        self.assertEqual(data["status"], "success")
-        self.assertIn("by hand", data["warning"])
-        self.assertNotIn("rolled_back_suggestions", data)
-
-
 class TestLogCall(unittest.TestCase):
     def test_a_project_path_without_a_discopop_directory_is_not_created(self) -> None:
         with tempfile.TemporaryDirectory() as parent:
@@ -244,3 +189,52 @@ class TestLogCall(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_source_mtimes_ignores_build_trees(tmp_path: Path) -> None:
+    """Generated sources of a CMake build must not count as project sources: every build rewrites them."""
+    files = {
+        "md.cpp": True,
+        "src/util.h": True,
+        "build/CMakeCache.txt": False,
+        "build/CMakeFiles/3.28.3/CompilerIdC/CMakeCCompilerId.c": False,
+        "out/CMakeCache.txt": False,
+        "out/generated.cpp": False,  # inside a CMake build tree below another name than "build"
+        ".discopop/FileMapping.cpp": False,
+        ".git/hooks/x.c": False,
+    }
+    for name in files:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+
+    found = {p.relative_to(tmp_path).as_posix() for p in ToolContext.source_mtimes(str(tmp_path))}
+
+    assert found == {name for name, is_source in files.items() if is_source}
+
+
+def test_diagnostics_find_the_warnings_and_errors_of_compilers_and_runtimes() -> None:
+    output = (
+        "main.cpp:3:5: warning: unused variable 'x' [-Wunused-variable]\n"
+        "main.cpp:3:5: warning: unused variable 'x' [-Wunused-variable]\n"
+        "main.cpp:9:1: error: expected ';'\n"
+        "note: this is no diagnostic\n"
+        "OMP: Warning #96: Cannot form a team.\n"
+        "clang: fatal error: no input files\n"
+    )
+    assert diagnostics(output, None) == [
+        "main.cpp:3:5: warning: unused variable 'x' [-Wunused-variable]",
+        "main.cpp:9:1: error: expected ';'",
+        "OMP: Warning #96: Cannot form a team.",
+        "clang: fatal error: no input files",
+    ]
+
+
+def test_warning_fields_leave_out_errors_cap_and_count() -> None:
+    assert warning_fields("all fine\n", "") == {}
+    assert warning_fields("main.cpp:1: error: x\n") == {}
+    many = "".join(f"a.c:{n}: warning: w{n}\n" for n in range(8))
+    fields = warning_fields(many)
+    assert fields["warnings"][:5] == [f"a.c:{n}: warning: w{n}" for n in range(5)]
+    assert fields["warnings"][5] == "3 more warnings."
+    assert len(fields["warnings"]) == MAX_WARNINGS + 1

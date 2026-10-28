@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from mcp_server.argument_coercion import validation_error
+import pytest
+
+from mcp_server.argument_coercion import coerce_arguments, validation_error
 from mcp_server.tools import get_hotspots
 from mcp_server.tools.helpers import ToolContext
 
@@ -38,6 +40,7 @@ def _region(csid: int, typ: str, line: int, hotness: str, runtimes: list[float],
 class TestGetHotspots(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
         self.project_path = self._tmp_dir.name
         self.source = Path(self.project_path) / "main.cpp"
         self.source.write_text("int main() {}\n")
@@ -45,70 +48,106 @@ class TestGetHotspots(unittest.TestCase):
         (self.dot_discopop / "hotspot_detection").mkdir(parents=True)
         (self.dot_discopop / "FileMapping.txt").write_text(f"1\t{self.source}\n")
         self.ctx = ToolContext(debug=False)
+        # whether a demangler is installed must not matter
+        demangler = mock.patch.object(get_hotspots, "demangle", return_value={})
+        demangler.start()
+        self.addCleanup(demangler.stop)
         self.__write(
             [
-                _region(1, "FUNCTION", 3, "YES", [1.0, 9.0], name="_Z7computei"),
-                _region(2, "LOOP", 5, "MAYBE", [2.0, 20.0]),
-                _region(3, "LOOP", 8, "YES", [0.5, 4.0]),
-                _region(4, "LOOP", 12, "NO", [0.1, 0.1]),
+                _region(1, "FUNCTION", 1, "YES", [1.0, 10.0], name="main"),
+                _region(2, "FUNCTION", 3, "YES", [1.0, 9.0], name="_Z7computei"),
+                _region(3, "LOOP", 5, "MAYBE", [2.0, 20.0 / 3]),
+                _region(4, "LOOP", 8, "YES", [0.5, 4.0]),
+                _region(5, "LOOP", 12, "NO", [0.1, 0.1]),
             ]
         )
-
-    def tearDown(self) -> None:
-        self._tmp_dir.cleanup()
 
     def __write(self, regions: list[dict[str, Any]]) -> None:
         (self.dot_discopop / "hotspot_detection" / "Hotspots.json").write_text(json.dumps({"code_regions": regions}))
 
-    def __handle(self, **arguments: Any) -> Any:
-        return json.loads(get_hotspots.handle({"project_path": self.project_path, **arguments}, self.ctx)[0].text)
+    def __handle(self, **arguments: Any) -> str:
+        return get_hotspots.handle({"project_path": self.project_path, **arguments}, self.ctx)[0].text
 
-    def test_regions_come_hottest_class_first_then_by_longest_runtime(self) -> None:
-        data = self.__handle()
-        self.assertEqual([(r["line"], r["hotness"]) for r in data["regions"]], [(3, "YES"), (8, "YES"), (5, "MAYBE")])
-        self.assertEqual(data["num_regions_by_hotness"], {"YES": 2, "MAYBE": 1, "NO": 1})
-        self.assertEqual(data["regions"][1]["file"], str(self.source))
-        self.assertEqual(data["regions"][1]["runtimes"], [0.5, 4.0])
+    def test_hotspots_come_longest_running_first_whatever_their_class(self) -> None:
+        lines = self.__handle().splitlines()
+        self.assertEqual(lines[0], "2 hotspots and 1 potential hotspot, longest running first:")
+        self.assertEqual(
+            lines[1:4],
+            [
+                "Hotspot Function main.cpp:3 _Z7computei (9.00 s, 90% of runtime)",
+                "Potential Hotspot Loop main.cpp:5 (6.67 s, 67% of runtime)",
+                "Hotspot Loop main.cpp:8 (4.00 s, 40% of runtime)",
+            ],
+        )
 
-    def test_function_names_are_demangled(self) -> None:
-        with mock.patch.object(get_hotspots, "demangle", return_value={"_Z7computei": "compute(int)"}):
-            self.assertEqual(self.__handle()["regions"][0]["name"], "compute(int)")
-        self.assertNotIn("name", self.__handle()["regions"][1])
+    def test_main_and_regions_that_are_no_hotspots_are_left_out(self) -> None:
+        text = self.__handle()
+        self.assertNotIn("main.cpp:1 ", text)
+        self.assertNotIn("main.cpp:12", text)
+        self.assertEqual(text.count("\n"), 3)
 
-    def test_filters_and_limit(self) -> None:
-        self.assertEqual([r["line"] for r in self.__handle(hotness=["NO"])["regions"]], [12])
-        self.assertEqual([r["type"] for r in self.__handle(region_type="loop")["regions"]], ["loop", "loop"])
-        limited = self.__handle(limit=1)
-        self.assertEqual(len(limited["regions"]), 1)
-        self.assertTrue(limited["truncated"])
-        self.assertEqual(limited["num_regions"], 3)
-        self.assertEqual(self.__handle(file_path=str(self.source))["num_regions"], 3)
-        self.assertEqual(self.__handle(file_path="/elsewhere.cpp")["status"], "error")
+    def test_function_names_are_demangled_and_shown_without_their_parameters(self) -> None:
+        with mock.patch.object(get_hotspots, "demangle", return_value={"_Z7computei": "ns::compute(int, double*)"}):
+            self.assertIn("Hotspot Function main.cpp:3 ns::compute (9.00 s", self.__handle())
+
+    def test_the_limit_says_how_many_hotspots_and_potential_hotspots_are_not_shown(self) -> None:
+        text = self.__handle(limit=1)
+        self.assertEqual(len([line for line in text.splitlines() if "main.cpp" in line]), 1)
+        self.assertIn("1 hotspot and 1 potential hotspot not shown (limit=1); pass a larger limit", text)
+        self.assertIn("1 hotspot not shown (limit=2)", self.__handle(limit=2))
+        self.assertNotIn("not shown", self.__handle(limit=3))
+
+    def test_the_default_limit_is_fixed(self) -> None:
+        regions = [_region(100 + n, "LOOP", 100 + n, "YES", [1.0, 5.0 - n / 100]) for n in range(15)]
+        self.__write([_region(1, "FUNCTION", 1, "YES", [1.0, 10.0], name="main"), *regions])
+        text = self.__handle()
+        self.assertEqual(len([line for line in text.splitlines() if "main.cpp" in line]), get_hotspots.DEFAULT_LIMIT)
+        self.assertIn("5 hotspots not shown", text)
 
     def test_a_single_input_size_is_flagged(self) -> None:
-        self.assertNotIn("warning", self.__handle())
-        self.__write([_region(1, "LOOP", 5, "YES", [2.0]), _region(2, "LOOP", 8, "MAYBE", [1.0])])
-        self.assertIn("input sizes", self.__handle()["warning"])
+        self.assertNotIn("Only one input size", self.__handle())
+        self.__write(
+            [_region(1, "LOOP", 5, "YES", [2.0]), _region(2, "LOOP", 8, "MAYBE", [1.0])],
+        )
+        self.assertIn("Only one input size was profiled", self.__handle())
 
     def test_results_without_regions_are_not_blamed_on_the_input_sizes(self) -> None:
         self.__write([])
-        warning = self.__handle()["warning"]
-        self.assertNotIn("input sizes", warning)
-        self.assertIn("no region", warning)
-
-    def test_an_empty_hotness_filter_is_rejected(self) -> None:
-        schema = get_hotspots.TOOL.inputSchema
-        self.assertIsNotNone(validation_error("get_hotspots", {"project_path": "/p", "hotness": []}, schema))
+        text = self.__handle()
+        self.assertIn("No hotspots found.", text)
+        self.assertIn("no region", text)
+        self.assertNotIn("input size", text)
 
     def test_missing_results_name_the_call_that_produces_them(self) -> None:
         (self.dot_discopop / "hotspot_detection" / "Hotspots.json").unlink()
-        data = self.__handle()
-        self.assertEqual(data["regions"], [])
-        self.assertIn("hotspot_config_names", data["next_step"])
+        data = json.loads(self.__handle())
+        self.assertEqual(data["status"], "error")
+        self.assertIn("gather_data", data["message"])
+
+    def test_the_schema_has_the_limit_only(self) -> None:
+        schema = get_hotspots.TOOL.inputSchema
+        self.assertEqual(set(schema["properties"]), {"project_path", "limit"})
+        arguments, _ = coerce_arguments({"project_path": "/p", "limit": "5"}, schema)
+        self.assertEqual(arguments["limit"], 5)
+        self.assertIsNone(validation_error("get_hotspots", arguments, schema))
 
     def test_demangle_without_a_demangler_keeps_the_names(self) -> None:
         with mock.patch("mcp_server.tools.get_hotspots.shutil.which", return_value=None):
             self.assertEqual(get_hotspots.demangle(["_Z1fv"]), {})
+
+
+@pytest.mark.parametrize(
+    "name, short",
+    [
+        ("compute", "compute"),
+        ("ns::Cls::scale(double*, int)", "ns::Cls::scale"),
+        ("f(void (*)(int), int)", "f"),
+        ("Cls::operator()(int)", "Cls::operator()"),
+        ("Cls::operator()", "Cls::operator()"),
+    ],
+)
+def test_the_parameter_list_is_dropped_from_function_names(name: str, short: str) -> None:
+    assert get_hotspots._short_name(name) == short
 
 
 if __name__ == "__main__":

@@ -117,7 +117,7 @@ class PatternDetectorX(object):
         with stage("Mapping static and dynamic dependencies", 2, total=5):
             self.pet.map_static_and_dynamic_dependencies()
         with stage("Calculating function metadata", 3, total=5):
-            self.pet.calculateFunctionMetadata(hotspots)
+            self.pet.calculateFunctionMetadata()
         with stage("Calculating loop metadata", 4, total=5):
             self.pet.calculateLoopMetadata()
         with stage("Enforcing single function exit nodes", 5, total=5):
@@ -270,7 +270,7 @@ class PatternDetectorX(object):
         """skips the pattern discovery on the CU graph and loads a pre-existing pattern file"""
         self.__merge(False, True)
         self.pet.map_static_and_dynamic_dependencies()
-        self.pet.calculateFunctionMetadata(hotspots)
+        self.pet.calculateFunctionMetadata()
         self.pet.calculateLoopMetadata()
         res = DetectionResult(self.pet)
 

@@ -50,7 +50,7 @@ class TestGetConfigurations(unittest.TestCase):
 
         data = self._handle()
 
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertIsNone(data["validation_compile_script"])
         config = data["configurations"][0]
         self.assertEqual(config["name"], "default")
@@ -82,7 +82,7 @@ class TestGetConfigurations(unittest.TestCase):
             result = get_configurations.handle({"project_path": empty_project}, self.ctx)
             data = json.loads(result[0].text)
 
-        self.assertEqual(data["status"], "success")
+        self.assertNotIn("status", data)
         self.assertIsNone(data["compile_script"])
         self.assertIsNone(data["validation_compile_script"])
         self.assertEqual(data["configurations"], [])

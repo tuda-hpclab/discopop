@@ -138,7 +138,7 @@ class TestServerRunsHandlersOffTheEventLoop(unittest.TestCase):
 
     def test_the_server_answers_while_a_tool_runs(self) -> None:
         # Run on the event loop, a handler made the server unresponsive for as long
-        # as the tool ran -- hours for gather_data or run_auto_tuning.
+        # as the tool ran -- hours for gather_data.
         # Client and server share one event loop here, so a handler blocking it would
         # block the client too; what tells the cases apart is whether the client got
         # its ping answered and released the handler before the handler gave up.

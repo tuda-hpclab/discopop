@@ -15,6 +15,10 @@ int main(int argc, const char *argv[]) {
     x[i] = 1.0;
     allowing_doall(x, i);
   }
+  // loop-carried dependency: not parallelizable
+  for (int i = 1; i < n; ++i) {
+    x[i] = x[i - 1] + 1.0;
+  }
   free(x);
   return 0;
 }

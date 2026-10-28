@@ -13,15 +13,15 @@ before the handler is reached. That validation is strict about types, and a good
 number of models -- especially smaller ones, and anything whose tool calling is
 templated rather than natively typed -- emit *every* argument as a string::
 
-    run_auto_tuning(apply="true")            -> 'true' is not of type 'boolean'
+    gather_data(force="true")                 -> 'true' is not of type 'boolean'
     gather_data(hotspot_config_names='["a"]') -> '["a"]' is not of type 'array'
-    get_data_dependencies(start_line="130")   -> '130' is not of type 'integer'
+    explain_parallelization(start_line="130") -> '130' is not of type 'integer'
 
 The call then fails before any DiscoPoP code runs, and the model has no way to
 tell a type error from the tool being unavailable: in one measured benchmark run
-every single ``run_auto_tuning(apply=true)`` was rejected this way, so the tuner
-never applied anything, the model fell back to hand-picking patches, and the
-report showed that as the model's own decision.
+every single ``apply=true`` call of the server's former tuning tool was rejected
+this way, so the tuner never applied anything, the model fell back to
+hand-picking patches, and the report showed that as the model's own decision.
 
 Rejecting the call is the wrong trade. The string ``"true"`` in a field declared
 boolean has exactly one meaning; refusing it buys no safety and costs the whole
