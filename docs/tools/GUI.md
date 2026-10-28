@@ -23,11 +23,11 @@ discopop_gui
 | `discopop_gui` | Opens the GUI for the project in the current directory |
 | `discopop_gui -p <dir>` | Opens the GUI for the project in `<dir>` |
 | `discopop_project_manager --gui` | Same as `discopop_gui` |
-| `discopop_gui --gui-toolkit qt` | Opens the new Qt version of the GUI (see below) |
+| `discopop_gui --gui-toolkit tk` | Opens the old Tk version of the GUI (see below) |
 
 `discopop_gui` accepts the arguments of `discopop_project_manager`, but only `-p/--project` and the logging options matter for the GUI. A `.discopop` directory is created in the project if it does not exist yet; you do not need `--init`.
 
-The GUI is being moved from Tk to Qt (PySide6). Both versions have the same tabs and do the same; the Tk version is the default until the move is complete, `--gui-toolkit qt` selects the Qt version. The Tk version needs `tkinter` (Debian/Ubuntu: `python3-tk`), the Qt version comes with its Python package (`PySide6-Essentials`, a dependency of DiscoPoP); both need a display. Without a display (`$DISPLAY` and `$WAYLAND_DISPLAY` unset), the command prints
+The GUI is being moved from Tk to Qt (PySide6). Both versions have the same tabs and do the same; the Qt version is the default, `--gui-toolkit tk` selects the Tk version until it is removed. The Tk version needs `tkinter` (Debian/Ubuntu: `python3-tk`), the Qt version comes with its Python package (`PySide6-Essentials`, a dependency of DiscoPoP); both need a display. Without a display (`$DISPLAY` and `$WAYLAND_DISPLAY` unset), the command prints
 
 ```text
 ERROR: this command opens a graphical window, but no display is available (neither $DISPLAY nor $WAYLAND_DISPLAY is set).

@@ -50,14 +50,14 @@ def run(arguments: ProjectManagerArguments) -> None:
             initialize_directories(arguments)
             initialize_configuration_files(arguments)
 
-        if arguments.gui_toolkit == "qt":
-            from discopop_library.ProjectManager.qt_gui.app import run_qt_gui
-
-            run_qt_gui(arguments)
-        else:
+        if arguments.gui_toolkit == "tk":
             from discopop_library.ProjectManager.gui.ConfigManagerApp import run_gui
 
             run_gui(arguments)
+        else:
+            from discopop_library.ProjectManager.qt_gui.app import run_qt_gui
+
+            run_qt_gui(arguments)
         return
 
     derive_settings_files(arguments.project_config_dir)
