@@ -49,8 +49,9 @@ class ProjectManagerArguments(GeneralArguments):
     # profiling cost while producing no better measurement. See
     # discopop_library.ProjectManager.configurations.repetitions.
     execution_repetitions: int = DEFAULT_MEASURED_REPETITIONS
-    # Which toolkit draws the window of --gui: "tk" (the original GUI) or "qt" (PySide6). Both use the same services.
-    gui_toolkit: str = "tk"
+    # Which toolkit draws the window of --gui: "qt" (PySide6, the default) or "tk" (the original GUI).
+    # Both use the same services.
+    gui_toolkit: str = "qt"
     # derived values
     dot_dp: str = ""
     project_dir: str = ""

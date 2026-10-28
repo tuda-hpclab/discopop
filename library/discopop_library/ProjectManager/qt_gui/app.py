@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""Starts the Qt GUI: ``discopop_project_manager --gui --gui-toolkit qt``."""
+"""Starts the Qt GUI: ``discopop_project_manager --gui`` (``--gui-toolkit qt``, the default)."""
 
 import os
 import signal
