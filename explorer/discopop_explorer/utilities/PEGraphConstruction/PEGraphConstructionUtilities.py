@@ -42,6 +42,10 @@ def parse_dependency(dep: DependenceItem) -> Dependency:
     d.var_name = dep.var_name
     d.memory_region = dep.memory_region
     d.is_gep_result_dependency = dep.is_gep_result_dependency
+    d.source_instruction_id = dep.source_instruction_id
+    d.sink_instruction_id = dep.sink_instruction_id
+    d.source_state_id = dep.source_state_id
+    d.sink_state_id = dep.sink_state_id
 
     return d
 
@@ -79,6 +83,9 @@ def parse_cu(node: ObjectifiedElement) -> Node:
         if hasattr(node, "performsFileIO"):
             n.performs_file_io = True if int(getattr(node, "performsFileIO")) == 1 else False
         n.instructions_count = int(getattr(node, "instructionsCount"))
+        if not hasattr(node, "instructionIDs"):
+            raise ValueError(f"CU {node_id} of Data.xml lists no instructionIDs: it was created by an older profiler")
+        n.instruction_ids = [int(i) for i in str(node.instructionIDs.text or "").split(",") if i]
 
     # FUNC or DUMMY NODE
     elif node_type == NodeType.DUMMY or node_type == NodeType.FUNC:

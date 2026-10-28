@@ -81,9 +81,9 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "file; without a value, nothing is recorded. Default: explorer/pattern_decisions.json",
     )
     parser.add_argument(
-        "--enable-patterns", type=str, nargs="?", default="reduction,doall",
+        "--enable-patterns", type=str, nargs="?", default="reduction,doall,task",
         help="Specify comma-separated list of pattern types to be identified. Options: "
-        "reduction,doall,task,pipeline,geodec,simplegpu. Default: reduction,doall",
+        "reduction,doall,task,pipeline,geodec,simplegpu. Default: reduction,doall,task",
     )
     parser.add_argument(
         "--hotspot-types", type=str, default="yes,maybe",

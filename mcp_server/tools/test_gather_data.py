@@ -278,6 +278,35 @@ class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
                 self.assertEqual(result["status"], "error")
                 self.assertFalse(os.path.exists(patterns_json))
 
+    def test_doall_reduction_and_task_detection_are_run_and_results_without_them_are_repeated(self) -> None:
+        self.__write(os.path.join(self.profiler_dir, "dynamic_dependencies.txt"))
+        patterns_json = os.path.join(self.dot_dp, "explorer", "patterns.json")
+        os.makedirs(os.path.dirname(patterns_json), exist_ok=True)
+        proc = subprocess.CompletedProcess(args=["discopop_explorer"], returncode=0, stdout="", stderr="")
+        for detected, expected_status in (
+            (None, "success"),  # results of a version which did not say what was detected
+            (["reduction", "doall"], "success"),
+            (["reduction", "doall", "task"], "skipped"),
+            (["task", "doall", "reduction", "pipeline"], "skipped"),
+        ):
+            with self.subTest(detected=detected):
+                with open(patterns_json, "w") as f:
+                    json.dump(
+                        {"patterns": {}} if detected is None else {"patterns": {}, "enabled_patterns": detected}, f
+                    )
+                with (
+                    mock.patch("mcp_server.tools.gather_data.shutil.which", return_value="discopop_explorer"),
+                    mock.patch.object(self.ctx, "run_process", return_value=proc) as run,
+                ):
+                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx, None)
+                self.assertEqual(result["status"], expected_status)
+                if expected_status == "success":
+                    self.assertEqual(
+                        run.call_args.args[0], ["discopop_explorer", "--enable-patterns", "task,doall,reduction"]
+                    )
+                else:
+                    run.assert_not_called()
+
 
 class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
     """Hotspot results are compared across inputs, so they count only as a complete set."""

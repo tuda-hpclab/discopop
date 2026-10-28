@@ -21,6 +21,7 @@
 #include "llvm/IR/Metadata.h"
 
 #include "DPUtils.hpp"
+#include "DiscoPoP.hpp"
 #include "utils/profiler_files.hpp"
 
 using cu_output::XmlEscape;
@@ -183,6 +184,25 @@ void CUGraphWriter::PrintNode(Node* root, bool /*is_root*/) {
       out_cus_ << "\t\t<instructionsCount>" << cu->instructions_count << "</instructionsCount>" << "\n";
       out_cus_ << "\t\t<instructionLines count=\"" << (cu->instructions_line_numbers).size() << "\">"
                << GetLineNumbersString(cu->instructions_line_numbers) << "</instructionLines>" << "\n";
+      std::string instruction_ids = "";
+      for (llvm::Instruction* instruction : cu->instructions) {
+        instruction_ids += (instruction_ids.empty() ? "" : ",") + std::to_string(GetDpInstructionId(instruction));
+      }
+      out_cus_ << "\t\t<instructionIDs count=\"" << cu->instructions.size() << "\">" << instruction_ids
+               << "</instructionIDs>" << "\n";
+      // jumps (br, switch, ret, unreachable) carry the line of a closing brace or the jump over an else: no statement
+      std::string jump_instruction_ids = "";
+      size_t jump_instruction_count = 0;
+      for (llvm::Instruction* instruction : cu->instructions) {
+        if (instruction->isTerminator() && !llvm::isa<llvm::InvokeInst>(instruction) &&
+            !llvm::isa<llvm::CallBrInst>(instruction)) {
+          jump_instruction_ids +=
+              (jump_instruction_ids.empty() ? "" : ",") + std::to_string(GetDpInstructionId(instruction));
+          ++jump_instruction_count;
+        }
+      }
+      out_cus_ << "\t\t<jumpInstructionIDs count=\"" << jump_instruction_count << "\">" << jump_instruction_ids
+               << "</jumpInstructionIDs>" << "\n";
       out_cus_ << "\t\t<readPhaseLines count=\"" << (cu->read_phase_line_numbers).size() << "\">"
                << GetLineNumbersString(cu->read_phase_line_numbers) << "</readPhaseLines>" << "\n";
       out_cus_ << "\t\t<writePhaseLines count=\"" << (cu->write_phase_line_numbers).size() << "\">"

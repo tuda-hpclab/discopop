@@ -14,6 +14,7 @@ from typing import Any, Optional
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from discopop_library.HostpotLoader.detailed_hotspot_loader import HotspotRegionInfo, load_detailed_hotspots
+from mcp_server.tools import task_groups
 from mcp_server.tools.helpers import ToolContext
 from mcp_server.tools.hotspot_text import (
     display_path,
@@ -38,6 +39,9 @@ TOOL = Tool(
         "Potential Hotspot, with its measured runtime and share of the program's), the pattern type "
         "(e.g. doall or reduction) and the change to make, e.g. the OpenMP pragma with its "
         "data-sharing clauses to put directly above the region. "
+        "Task parallelism is a task group: the enclosing function, the parallel region, the code of each task and "
+        "the dependences between the tasks, the join and the data sharing, with flags where the group looks "
+        "implausible; it names no pragmas, you place the parallel region, the tasks and the waits yourself. "
         "Suggestions on the same code are marked as nested in or an alternative to each other. "
         "\n\n"
         "By default the first suggestions are shown and the line at the end says how many are not; "
@@ -120,6 +124,15 @@ def _suggestion_facts(dot_discopop: Path) -> dict[str, dict[str, Any]]:
     return facts
 
 
+def _task_group_facts(dot_discopop: Path) -> dict[str, task_groups.TaskGroup]:
+    """The task groups of patterns.json by the id of their parallel region."""
+    try:
+        with open(dot_discopop / "explorer" / "patterns.json") as f:
+            return task_groups.task_groups(json.load(f).get("patterns", {}))
+    except (OSError, ValueError):
+        return {}
+
+
 def _regions(dot_discopop: Path) -> dict[str, tuple[int, int, int, str]]:
     """Per suggestion id: (file id, first line, last line, kind) of the code it covers, from the
     explorer's pattern decisions; empty for results of versions which did not record them."""
@@ -143,15 +156,27 @@ def _regions(dot_discopop: Path) -> dict[str, tuple[int, int, int, str]]:
     return regions
 
 
-def _hotspot_regions(dot_discopop: Path) -> tuple[dict[tuple[int, int, str], HotspotRegionInfo], float]:
-    """The hotspot region of every loop and function by (file id, first line, kind), and the program's runtime."""
+def _hotspot_regions(
+    dot_discopop: Path,
+) -> tuple[dict[tuple[int, int, str], HotspotRegionInfo], dict[tuple[int, str], HotspotRegionInfo], float]:
+    """The hotspot region of every loop and function by (file id, first line, kind), the functions by
+    (file id, name) as well, and the program's runtime."""
     try:
         regions = load_detailed_hotspots(str(dot_discopop))
     except Exception as e:
         logger.warning(f"Failed to load the hotspot detection results: {e}")
-        return {}, 0.0
+        return {}, {}, 0.0
     by_place = {(r.file_id, r.start_line, r.node_type.name.lower()): r for r in regions}
-    return by_place, total_runtime(regions)
+    # the first line of a function differs between the hotspot detection and the explorer's results
+    by_name = {(r.file_id, r.name): r for r in regions if r.node_type.name.lower() == "function"}
+    return by_place, by_name, total_runtime(regions)
+
+
+def _source_lines(source: Optional[Path]) -> list[str]:
+    try:
+        return source.read_text(errors="replace").splitlines() if source is not None else []
+    except OSError:
+        return []
 
 
 def _relations(pid: str, regions: dict[str, tuple[int, int, int, str]]) -> dict[str, list[str]]:
@@ -176,13 +201,38 @@ def _relations(pid: str, regions: dict[str, tuple[int, int, int, str]]) -> dict[
     return relations
 
 
+def _describe_task_group(suggestion: dict[str, Any], hotspot: Optional[HotspotRegionInfo], total: float) -> str:
+    """A task group: its enclosing function with the weight, then the region, the tasks and what looks wrong."""
+    scope: Optional[task_groups.FunctionSpan] = suggestion["scope"]
+    if scope is None:
+        head = f"Suggestion {suggestion['pattern_id']}: Task group in {suggestion['file']}"
+    else:
+        place = f"{suggestion['file']}:{scope.start_line}-{scope.end_line}"
+        if hotspot is None:
+            weight = "no hotspot data"
+        else:
+            weight = f"{runtime_text(hotspot, total)}, all of the function with the calls it makes"
+        head = (
+            f"Suggestion {suggestion['pattern_id']}: Task group in {hotspot_prefix(hotspot)}"
+            f"Function {scope.name} ({place}; {weight})"
+        )
+    details: list[str] = list(suggestion["details"])
+    if "nested_in" in suggestion:
+        details.append(f"  nested in suggestion {', '.join(sorted(suggestion['nested_in'], key=int))}")
+    return "\n".join([head] + details)
+
+
 def _describe(suggestion: dict[str, Any], hotspot: Optional[HotspotRegionInfo], total: float) -> str:
     """One line per suggestion: the code region, its weight, the pattern and the change."""
+    if "details" in suggestion:
+        return _describe_task_group(suggestion, hotspot, total)
     lines = f"{suggestion['line']}-{suggestion['end_line']}" if "end_line" in suggestion else f"{suggestion['line']}"
     place = f"{suggestion['kind']} {suggestion['file']}:{lines}"
     weight = f" ({runtime_text(hotspot, total)})" if hotspot is not None else ""
     text = f"Suggestion {suggestion['pattern_id']}: {hotspot_prefix(hotspot)}{place}{weight}: {suggestion['type']}"
     text += f", {suggestion['pragma']}"
+    if "contains" in suggestion:
+        text += f"; contains task group {', '.join(sorted(suggestion['contains'], key=int))}"
     if "nested_in" in suggestion:
         text += f"; nested in suggestion {', '.join(suggestion['nested_in'])}"
     if "same_region" in suggestion:
@@ -216,7 +266,9 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
 
         facts = _suggestion_facts(dot_discopop)
         regions = _regions(dot_discopop)
-        hotspots, total = _hotspot_regions(dot_discopop)
+        hotspots, function_hotspots, total = _hotspot_regions(dot_discopop)
+        groups = _task_group_facts(dot_discopop)
+        function_spans = task_groups.functions(dot_discopop) if groups else []
 
         # (hotspot region, suggestion) per patch; a suggestion that changes several files has one per file
         entries: list[tuple[Optional[HotspotRegionInfo], dict[str, Any]]] = []
@@ -236,6 +288,24 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 mapped = file_mapping.get(file_id) if file_id is not None else None
                 patch_source = ToolContext.extract_source_from_patch(patch_content)
                 source = mapped if mapped is not None else (Path(patch_source) if patch_source else None)
+                group = groups.get(pid)
+                if group is not None:
+                    scope = task_groups.enclosing_function(group, function_spans)
+                    source_lines = _source_lines(source)
+                    entries.append(
+                        (
+                            function_hotspots.get((scope.file_id, scope.name)) if scope is not None else None,
+                            {
+                                "pattern_id": pid,
+                                "file": display_path(project_path, source),
+                                "scope": scope,
+                                "details": task_groups.describe(
+                                    group, display_path(project_path, source), source_lines
+                                ),
+                            },
+                        )
+                    )
+                    continue
                 pragma_line, pragma = _summarize_patch(patch_content)
                 suggestion: dict[str, Any] = {
                     "pattern_id": pid,
@@ -255,6 +325,18 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 )
                 entries.append((hotspot, suggestion))
 
+        # a task group inside a suggested loop is nested in it; the loop contains the group
+        by_id = {s["pattern_id"]: s for _, s in entries}
+        for pid, group in groups.items():
+            task_entry = by_id.get(pid)
+            if task_entry is None or group.end_line == task_groups.UNKNOWN_LINE:
+                continue
+            for other, region in regions.items():
+                if region[0] == group.file_id and region[1] <= group.start_line and group.end_line <= region[2]:
+                    task_entry.setdefault("nested_in", []).append(other)
+                    if other in by_id:
+                        by_id[other].setdefault("contains", []).append(pid)
+
         # the longest running first; regions without a measurement keep their order after them
         entries.sort(key=lambda e: -e[0].max_val if e[0] is not None else float("inf"))
         shown = entries[:limit]
@@ -271,6 +353,12 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 "Apply a suggestion by making the change it shows (an OpenMP pragma goes directly above the code it "
                 "names). explain_parallelization tells why code has no suggestion."
             )
+            if any("details" in s for _, s in shown):
+                lines.append(
+                    "A task group says which code may run as tasks, not where to put the pragmas: choose the "
+                    "parallel region, the tasks and a wait before code that uses their results yourself, and check "
+                    "the flags first."
+                )
         else:
             lines[0] = "No parallelization suggestions."
             lines.append("explain_parallelization tells why code was not parallelized.")

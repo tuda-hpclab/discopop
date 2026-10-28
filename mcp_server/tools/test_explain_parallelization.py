@@ -198,6 +198,32 @@ class TestExplainParallelization(unittest.TestCase):
         os.utime(decisions, (decisions.stat().st_atime, patterns.stat().st_mtime - 60))
         self.assertIn("Note: the suggestions were produced after", self.__handle(start_line=7))
 
+    def test_lines_of_a_task_group_name_the_group_instead_of_no_region(self) -> None:
+        tasks = [
+            {"pattern_id": 3, "type": "TASK", "region_start_line": "40", "region_end_line": "40"},
+            {"pattern_id": 4, "type": "TASK", "region_start_line": "41", "region_end_line": "42"},
+            {
+                "pattern_id": 5,
+                "type": "PARALLELREGION",
+                "start_line": "1:38",
+                "region_start_line": "40",
+                "region_end_line": "42",
+                "contains_patterns": [3, 4],
+            },
+        ]
+        (self.dot_discopop / "explorer" / "patterns.json").write_text(json.dumps({"patterns": {"task": tasks}}))
+        os.utime(
+            self.dot_discopop / "explorer" / "pattern_decisions.json",
+            (1e9, 2e9),
+        )
+        text = self.__handle(start_line=41)
+        self.assertIn(
+            "main.cpp:41 lies in the parallel region of task group 5 (lines 40-42, tasks at 40-40, 41-42)", text
+        )
+        self.assertNotIn("considered no code region", text)
+        self.assertIn("does not record why code is not part of a task group", text)
+        self.assertIn("considered no code region", self.__handle(start_line=50))
+
     def test_the_hints_do_not_point_at_tools_that_are_gone(self) -> None:
         description = explain_parallelization.TOOL.description or ""
         for text in (description, self.__handle(start_line=20), self.__handle(start_line=13)):

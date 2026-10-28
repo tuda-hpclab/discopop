@@ -47,7 +47,7 @@ Options for the patterns to detect:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--enable-patterns` | `reduction,doall` | Comma-separated list of the pattern types to identify (see below). |
+| `--enable-patterns` | `reduction,doall,task` | Comma-separated list of the pattern types to identify (see below). |
 | `--hotspot-types` | `yes,maybe` | Hotspot types whose code regions are analyzed (`yes`, `no`, `maybe`). Only takes effect if `hotspot_detection/Hotspots.json` exists; otherwise, the whole program is analyzed. |
 | `--load-existing-doall-and-reduction-patterns` | off | Skip the pattern detection and insert the contents of an existing `patterns.json` into the detection result. |
 
@@ -81,7 +81,7 @@ Further options:
 ### Pattern types
 `--enable-patterns` accepts `reduction`, `doall`, `task`, `pipeline`, `geodec` and `simplegpu`.
 - `reduction` and `doall` are enabled by default.
-- `task` runs the experimental [task detector](../data/Parallel_patterns/tasks.md). It is slow and its results are not deterministic.
+- `task` (on by default) runs the experimental [task detector](../data/Parallel_patterns/tasks.md). It is slow and its results are not deterministic.
 - `pipeline`, `geodec` and `simplegpu` are listed in the help of the explorer, but the explorer does not run these detectors (see [pipeline](../data/Parallel_patterns/pipeline.md) and [geometric decomposition](../data/Parallel_patterns/geometric_decomposition.md)).
 
 ### Experimental and debugging options

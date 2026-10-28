@@ -6,12 +6,14 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from mcp_server.tools import task_groups
 from mcp_server.tools.helpers import ToolContext
 from mcp_server.tools.hotspot_text import display_path, resolve_source_path
 
@@ -135,6 +137,27 @@ def _region_text(decision: Any, file_mapping: dict[int, Path], project_path: str
     ]
 
 
+def _task_group_lines(decisions_path: Path, file_id: int, start_line: int, end_line: int, place: str) -> list[str]:
+    """The task groups at the lines. Task detection records no decisions, so there is nothing to say
+    about why code is not in a group, and the groups are not among the regions."""
+    try:
+        with open(decisions_path.parent / "patterns.json") as f:
+            groups = task_groups.task_groups(json.load(f).get("patterns", {}))
+    except (OSError, ValueError):
+        return []
+    found = task_groups.covering(groups, file_id, start_line, end_line)
+    lines = []
+    for pid, group in sorted(found.items(), key=lambda item: int(item[0])):
+        tasks = ", ".join(f"{t.start_line}-{t.end_line}" for t in group.tasks)
+        lines.append(
+            f"{place} lies in the parallel region of task group {pid} (lines {group.start_line}-{group.end_line}, "
+            f"tasks at {tasks}); see suggestion {pid} of get_parallelization_suggestions."
+        )
+    if lines:
+        lines.append("Task detection does not record why code is not part of a task group.")
+    return lines
+
+
 def _hint(decisions: list[Any]) -> Optional[str]:
     from discopop_explorer.classes.patterns.PatternDecisions import TOO_FEW_ITERATIONS
 
@@ -186,7 +209,10 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             f"-{end_line}" if end_line != start_line else ""
         )
         shown = matches[:MAX_REGIONS]
-        if not matches and log.detectors is not None and not log.detectors:
+        task_lines = _task_group_lines(decisions_path, file_id, start_line, end_line, place)
+        if not matches and task_lines:
+            lines = []
+        elif not matches and log.detectors is not None and not log.detectors:
             lines = [
                 f"Nothing can be explained for {place}: the last pattern detection ran no detector that records why "
                 "code was (not) parallelized. Run gather_data(force=true) to repeat it with the default pattern "
@@ -208,6 +234,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             hint = _hint(shown)
             if hint is not None:
                 lines.append(hint)
+        lines += task_lines
         patterns_path = decisions_path.parent / "patterns.json"
         if patterns_path.exists() and patterns_path.stat().st_mtime > decisions_path.stat().st_mtime:
             lines.append(

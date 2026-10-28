@@ -60,6 +60,11 @@ class Dependency:
     # to, so it is also known for ends mapped to a standalone copy of a function or approximately.
     # None if unknown.
     carried_by_pet_loops: Optional[FrozenSet[str]] = None
+    # the instruction ids (dp.md.instr.id) and callpath states of the ends, None for ends recorded without them
+    source_instruction_id: Optional[int] = None
+    sink_instruction_id: Optional[int] = None
+    source_state_id: Optional[str] = None
+    sink_state_id: Optional[str] = None
 
     def __init__(self, type: EdgeType):
         # Every attribute is assigned here, in one fixed order, although most have class-level
@@ -81,6 +86,15 @@ class Dependency:
         self.approximate_context = False
         self.carried_by_loop = None
         self.carried_by_pet_loops = None
+        self.source_instruction_id = None
+        self.sink_instruction_id = None
+        self.source_state_id = None
+        self.sink_state_id = None
+
+    def __hash__(self) -> int:
+        # not the address: dependencies are kept in sets (with their contexts), whose iteration order follows the
+        # hashes and would differ from run to run. Equality stays the identity, so collisions are harmless.
+        return hash((self.source_instruction_id or -1, self.sink_instruction_id or -1))
 
     def __str__(self) -> str:
         return self.var_name if self.var_name is not None else str(self.etype)

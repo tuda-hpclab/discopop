@@ -99,6 +99,8 @@ struct CU : Node {
   std::vector<std::string> successor_cus;  // keeps IDs of control dependent CUs
   std::string basic_block_name;
 
+  // the instructions of the CU in program order, written as their instruction ids (dp.md.instr.id)
+  std::vector<llvm::Instruction*> instructions;
   std::set<LID> instructions_line_numbers;
   std::set<LID> read_phase_line_numbers;
   std::set<LID> write_phase_line_numbers;

@@ -43,7 +43,10 @@ from discopop_explorer.pattern_detectors.reduction_detector import (  # noqa: F4
 from discopop_explorer.pattern_detectors.simple_gpu_patterns.gpu_pattern_detector import (  # noqa: F401  used by the commented-out code
     run_detection as detect_gpu,
 )
-from discopop_explorer.pattern_detectors.new_task_detector import run_detection as detect_tasking
+from discopop_explorer.pattern_detectors.new_task_detector import (
+    run_detection as detect_tasking,
+    identify_loop_tasking,
+)
 from discopop_explorer.pattern_detectors.new_do_all_detector import run_detection as detect_do_all_and_reduction_new
 from discopop_explorer.pattern_detectors.new_do_all_detector import DECISION_DETECTOR as DO_ALL_AND_REDUCTION_DETECTOR
 from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
@@ -52,6 +55,15 @@ try:
     from discopop_gui.Visualizers.Base import Base as Visualizer
 except (ImportError, ModuleNotFoundError):
     Visualizer = object  # type: ignore[assignment, misc]
+
+
+PATTERN_TYPES = ["reduction", "doall", "task", "pipeline", "geodec", "simplegpu"]
+
+
+def selected_pattern_types(enable_patterns: str) -> List[str]:
+    """The pattern types a comma-separated selection (or '*', i.e. all) stands for, in the order of PATTERN_TYPES."""
+    selected = [name.strip() for name in enable_patterns.split(",")]
+    return [name for name in PATTERN_TYPES if "*" in selected or name in selected]
 
 
 class PatternDetectorX(object):
@@ -123,6 +135,7 @@ class PatternDetectorX(object):
         with stage("Enforcing single function exit nodes", 5, total=5):
             self.pet.enforce_single_function_exit_node()
         res = DetectionResult(self.pet)
+        res.enabled_patterns = selected_pattern_types(enable_patterns)
 
         # create TaskGraph from pet
         dynamic_deps_file = dependencies
@@ -149,7 +162,13 @@ class PatternDetectorX(object):
         if "*" in enable_patterns or "task" in enable_patterns:
             res.patterns.task = detect_tasking(self.pet, task_graph, visualizer)
 
-        if "*" in enable_patterns or "doall" in enable_patterns or "reduction" in enable_patterns:
+        # the tasks of loops with independent iterations are derived from the do-all loops
+        if (
+            "*" in enable_patterns
+            or "doall" in enable_patterns
+            or "reduction" in enable_patterns
+            or "task" in enable_patterns
+        ):
             tmp_result = detect_do_all_and_reduction_new(
                 self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions
             )
@@ -157,13 +176,20 @@ class PatternDetectorX(object):
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]
             if "*" in enable_patterns or "reduction" in enable_patterns:
                 res.patterns.reduction = [p for p in tmp_result if isinstance(p, ReductionInfo)]
-            self.pattern_decisions.ran(
-                DO_ALL_AND_REDUCTION_DETECTOR,
-                [t for t in ("doall", "reduction") if "*" in enable_patterns or t in enable_patterns],
-            )
-            self.pattern_decisions.finalize(
-                DO_ALL_AND_REDUCTION_DETECTOR, list(res.patterns.do_all) + list(res.patterns.reduction)
-            )
+            if "*" in enable_patterns or "task" in enable_patterns:
+                first_task_group = 1 + max(
+                    (g for t in res.patterns.task for g in getattr(t, "task_group", [])), default=-1
+                )
+                res.patterns.task += identify_loop_tasking(
+                    self.pet, [p for p in tmp_result if isinstance(p, DoAllInfo)], hotspots, first_task_group
+                )
+            # only if their results are reported: the loops were analyzed for the tasks in any case
+            detected_types = [t for t in ("doall", "reduction") if "*" in enable_patterns or t in enable_patterns]
+            if len(detected_types) > 0:
+                self.pattern_decisions.ran(DO_ALL_AND_REDUCTION_DETECTOR, detected_types)
+                self.pattern_decisions.finalize(
+                    DO_ALL_AND_REDUCTION_DETECTOR, list(res.patterns.do_all) + list(res.patterns.reduction)
+                )
 
         # reduction before doall!
 
@@ -273,6 +299,7 @@ class PatternDetectorX(object):
         self.pet.calculateFunctionMetadata()
         self.pet.calculateLoopMetadata()
         res = DetectionResult(self.pet)
+        res.enabled_patterns = ["doall", "reduction"]
 
         # init pattern lists
         res.patterns.reduction = []

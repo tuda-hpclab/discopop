@@ -52,7 +52,8 @@ TOOL = Tool(
         "  4. Compile with DiscoPoP instrumentation (dp_settings.json).\n"
         "  5. Run the instrumented binary to collect runtime dependency traces.\n"
         "     NOTE: significant runtime overhead expected — use small inputs.\n"
-        "  6. Analyse with discopop_explorer to detect parallelization opportunities.\n"
+        "  6. Analyse with discopop_explorer to detect parallelization opportunities (doall, reduction and\n"
+        "     task parallelism).\n"
         "\n"
         "Each step is automatically skipped when its outputs are already current "
         "relative to the source files. Use force=true to re-run all steps unconditionally. "
@@ -598,8 +599,25 @@ def _run_profiling(
     return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
 
 
+# the pattern types gather_data detects
+DETECTED_PATTERNS = ["task", "doall", "reduction"]
+
+
+def _detected_patterns(patterns_json: Path) -> set[str]:
+    """The pattern types a patterns.json was detected for; none for results which do not say."""
+    try:
+        with open(patterns_json) as f:
+            return set(json.load(f).get("enabled_patterns") or [])
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
 def _run_pattern_detection(
-    project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext, source_mtime: Optional[float]
+    project_path: str,
+    timeout_seconds: int,
+    force: bool,
+    ctx: ToolContext,
+    source_mtime: Optional[float],
 ) -> dict[str, Any]:
     p = Path(project_path)
     discopop_dir = p / ".discopop"
@@ -615,7 +633,7 @@ def _run_pattern_detection(
             "message": "profiler/dynamic_dependencies.txt not found — profiling step must have failed.",
         }
 
-    if not force and patterns_json.exists():
+    if not force and patterns_json.exists() and _detected_patterns(patterns_json) >= set(DETECTED_PATTERNS):
         result_mtime = patterns_json.stat().st_mtime
         if source_mtime is None or source_mtime <= result_mtime:
             return {
@@ -635,7 +653,12 @@ def _run_pattern_detection(
 
     ctx.log_action(project_path, "gather_data", "Pattern detection: invoking discopop_explorer")
     try:
-        proc = ctx.run_process([explorer], timeout=timeout_seconds, cwd=str(discopop_dir), env=env)
+        proc = ctx.run_process(
+            [explorer, "--enable-patterns", ",".join(DETECTED_PATTERNS)],
+            timeout=timeout_seconds,
+            cwd=str(discopop_dir),
+            env=env,
+        )
     except subprocess.TimeoutExpired:
         _discard_partial_output(patterns_json, project_path, ctx)
         return {"status": "error", "message": f"discopop_explorer timed out after {timeout_seconds}s."}

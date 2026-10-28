@@ -7,7 +7,7 @@
 # directory for details.
 
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.patterns.PatternInfo import PatternInfo
@@ -61,6 +61,10 @@ class TaskParallelismInfo(PatternInfo):
         self.critical_sections: List[str] = []
         self.atomic_sections: List[str] = []
         self.task_group: List[int] = []
+        # the instructions of the task (instruction ids of this build), see design/instruction_focus.md
+        self.instruction_ids: List[int] = []
+        # set if one task is created per iteration of a loop: the line of the loop (file id:line)
+        self.loop_start_line: Optional[str] = None
 
     def __str__(self) -> str:
         return (
@@ -102,6 +106,16 @@ class ParallelRegionInfo(PatternInfo):
         self.type = type
         self.task_group: List[int] = [] if task_group is None else task_group
         self.contains_patterns: List[int] = [] if contained_tasks is None else [t.pattern_id for t in contained_tasks]
+        # the instructions of the contained tasks (instruction ids of this build)
+        self.instruction_ids: List[int] = list(
+            dict.fromkeys(i for t in (contained_tasks or []) for i in t.instruction_ids)
+        )
+        # set if the tasks are created per iteration of a loop: the line of the loop (file id:line)
+        self.loop_start_line: Optional[str] = None
+        # a later task depends on an earlier one: {"from_task", "to_task" (pattern ids), "variable", "kind": RAW | WAR}
+        self.task_dependences: List[Dict[str, Any]] = []
+        # the code after the region depends on a task: {"task" (pattern id), "variable", "kind": RAW | WAR, "line"}
+        self.after_dependences: List[Dict[str, Any]] = []
 
     def __str__(self) -> str:
         return (

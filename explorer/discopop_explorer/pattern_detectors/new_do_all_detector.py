@@ -625,6 +625,9 @@ def identify_simple_doall_and_reduction(
         if len(reduction) == 0:
             # register DoAll pattern
             pattern = DoAllInfo(tg.pet, tg.pet.node_at(node.pet_node_id))
+            # the loop body: the node of the pattern is the header CU of the loop, the body lies in the context
+            pattern.instruction_ids = node.created_context.get_instruction_scope(tg.pet, inclusive=True)
+            pattern.affected_line_ids = tg.pet.get_line_ids_of_instructions(pattern.instruction_ids)
             pattern.first_private = [
                 Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(firstprivate)
             ]
@@ -637,6 +640,9 @@ def identify_simple_doall_and_reduction(
             # register reduction pattern. get_pattern_key rejected a missing parent loop already.
             assert node.created_context.parent_loop is not None
             pattern = ReductionInfo(tg.pet, tg.pet.node_at(node.created_context.parent_loop), reduction=reduction_vars)
+            # the loop body: the node of the pattern is the header CU of the loop, the body lies in the context
+            pattern.instruction_ids = node.created_context.get_instruction_scope(tg.pet, inclusive=True)
+            pattern.affected_line_ids = tg.pet.get_line_ids_of_instructions(pattern.instruction_ids)
             pattern.first_private = [
                 Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
                 for v in sorted(firstprivate)

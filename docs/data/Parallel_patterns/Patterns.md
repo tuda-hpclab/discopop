@@ -9,7 +9,7 @@ nav_order: 5
 
 # Parallel patterns
 
-The [explorer](../../tools/Explorer.md) searches the [program execution graph](../Program_execution_graph.md) for code that can run in parallel and reports it as parallel patterns. The option `--enable-patterns` selects the detectors (default: `reduction,doall`).
+The [explorer](../../tools/Explorer.md) searches the [program execution graph](../Program_execution_graph.md) for code that can run in parallel and reports it as parallel patterns. The option `--enable-patterns` selects the detectors (default: `reduction,doall,task`).
 
 | Pattern | Status | Page |
 |---|---|---|
