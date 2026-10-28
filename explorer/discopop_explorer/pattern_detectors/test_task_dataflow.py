@@ -24,6 +24,7 @@ from discopop_explorer.pattern_detectors.task_dataflow import (
     AfterDependence,
     TaskDependence,
     _output_dependences,
+    _Scope,
     after_dependences_of_instructions,
     analyze_task_group,
     classify_variable,
@@ -218,6 +219,75 @@ def test_output_dependences_between_tasks_are_read_from_the_instructions_of_the_
     for instruction, cu in ((5, first_cu), (7, first_cu), (6, second_cu)):
         monkeypatch.setitem(instructionToCUIdMap, instruction, cu.id)
     assert _output_dependences(pet, [{5, 7}, {6}]) == [TaskDependence(0, 1, "d", "WAW")]
+
+
+def _callee_waw(
+    make_node: Any,
+    build_pet_graph: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    source_state: str | None,
+    sink_state: str | None,
+) -> Any:
+    """``set(&d, n); set(&d, n + 1);``: the calls are the instructions 5 and 6 of the tasks, the store ``*p = s`` is the
+    instruction 9 of the callee that both tasks call, with a WAW from 9 to 9 (the first call to the second)."""
+    task_cu = make_node("3:10", instruction_ids=[5, 6])
+    callee_cu = make_node("1:1", instruction_ids=[9])
+    dependence = Dependency(EdgeType.DATA)
+    dependence.dtype, dependence.var_name = DepType.WAW, "p"
+    dependence.source_instruction_id = dependence.sink_instruction_id = 9
+    dependence.source_state_id, dependence.sink_state_id = source_state, sink_state
+    pet = build_pet_graph([task_cu, callee_cu], [(callee_cu.id, callee_cu.id, dependence)])
+    for instruction, cu in ((5, task_cu), (6, task_cu), (9, callee_cu)):
+        monkeypatch.setitem(instructionToCUIdMap, instruction, cu.id)
+    monkeypatch.setattr(pet, "callpath_tree", {"1": ("0", "call_5"), "2": ("0", "call_6")}, raising=False)
+    return pet
+
+
+_OWN_TASKS = [{5}, {6}]
+_REACHED = [{5, 9}, {6, 9}]
+
+
+def test_a_waw_between_two_calls_of_one_function_is_found_by_the_callpath_states(
+    make_node: Any, build_pet_graph: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pet = _callee_waw(make_node, build_pet_graph, monkeypatch, "1", "2")
+    assert _output_dependences(pet, _OWN_TASKS, _REACHED) == [TaskDependence(0, 1, "p", "WAW")]
+    # without the instructions of the callees it is not seen (the old behavior)
+    assert _output_dependences(pet, _OWN_TASKS) == []
+
+
+def test_a_waw_inside_one_call_of_a_shared_function_is_no_dependence_between_tasks(
+    make_node: Any, build_pet_graph: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both accesses made by the call of the second task (a callee local, written twice by one call)."""
+    pet = _callee_waw(make_node, build_pet_graph, monkeypatch, "2", "2")
+    assert _output_dependences(pet, _OWN_TASKS, _REACHED) == []
+
+
+def test_a_waw_whose_states_are_unknown_might_be_between_the_tasks_that_reach_it(
+    make_node: Any, build_pet_graph: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pet = _callee_waw(make_node, build_pet_graph, monkeypatch, None, None)
+    assert _output_dependences(pet, _OWN_TASKS, _REACHED) == [TaskDependence(0, 1, "p", "WAW")]
+    # a state of a recursion that does not hold the call of a task tells nothing either
+    pet = _callee_waw(make_node, build_pet_graph, monkeypatch, "7", "7")
+    assert _output_dependences(pet, _OWN_TASKS, _REACHED) == [TaskDependence(0, 1, "p", "WAW")]
+    # a callee only one task reaches is no dependence between tasks
+    assert _output_dependences(pet, _OWN_TASKS, [{5, 9}, {6}]) == []
+
+
+def test_the_name_of_a_waw_in_a_callee_is_translated_into_the_scope_of_the_group(
+    make_node: Any, build_pet_graph: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The callee names the variable ``p``, which is no name of the caller: a pointer parameter the tasks pass on is
+    the name, otherwise the dependence is reported without one."""
+    pet = _callee_waw(make_node, build_pet_graph, monkeypatch, "1", "2")
+    monkeypatch.setattr("discopop_explorer.pattern_detectors.task_dataflow._declared_global_names", lambda _: set())
+    own = [{"d", "n", "set"}, {"d", "n", "set"}]
+    unnamed = _Scope(local={"d", "n"}, globals={"p"}, pointer_params=set(), instructions={5, 6})
+    assert _output_dependences(pet, _OWN_TASKS, _REACHED, unnamed, own) == [TaskDependence(0, 1, "", "WAW")]
+    passed_on = _Scope(local={"d", "n"}, globals=set(), pointer_params={"d"}, instructions={5, 6})
+    assert _output_dependences(pet, _OWN_TASKS, _REACHED, passed_on, own) == [TaskDependence(0, 1, "d", "WAW")]
 
 
 def test_classify_variable() -> None:
