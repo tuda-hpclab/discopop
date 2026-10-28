@@ -159,6 +159,8 @@ def test_the_patch_of_a_recursion_puts_the_parallel_region_around_the_entry_call
     function = "\n".join(source[source.index("long long fib(int n) {") : source.index("int main() {")])
     assert "#pragma omp parallel" not in function and "#pragma omp single" not in function
     assert function.count("#pragma omp task ") == 2
+    # the missing cutoff is a comment, so the patched program compiles (checked by _patched_run)
+    assert function.count("/* DiscoPoP TODO: add the cutoff final(<condition>)") == 2
     assert "#pragma omp taskwait" in function
     assert source[source.index("  res = fib(20);  // line 13") - 2 :][:3] == [
         "  #pragma omp parallel",

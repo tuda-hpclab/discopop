@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from discopop_library.CodeGenerator.CodeGenerator import from_json_strings
+from discopop_library.CodeGenerator.classes.UnpackedSuggestion import RECURSIVE_TASK_CUTOFF_MARKER
 
 SOURCE = """\
 int h(int k, int n) {
@@ -334,9 +335,9 @@ def test_a_recursive_group_has_no_region_in_the_function_but_tasks_and_a_taskwai
         "long fib(int n) {",
         "  long x, y;",
         "  if (n < 2) return n;",
-        "  #pragma omp task shared(x) firstprivate(n)",
+        "  #pragma omp task shared(x) firstprivate(n)" + RECURSIVE_TASK_CUTOFF_MARKER,
         "  x = fib(n - 1);",
-        "  #pragma omp task shared(y) firstprivate(n)",
+        "  #pragma omp task shared(y) firstprivate(n)" + RECURSIVE_TASK_CUTOFF_MARKER,
         "  y = fib(n - 2);",
         "  #pragma omp taskwait",
         "  return x + y;",
@@ -390,6 +391,15 @@ def test_the_reduction_taskgroup_of_a_recursion_is_the_join(tmp_path: Path) -> N
     assert "#pragma omp taskgroup task_reduction(+:sum)" in code
     assert "#pragma omp taskwait" not in code and "#pragma omp parallel" not in code
     assert code.count("{") == 2 and code.count("}") == 2
+
+
+def test_only_the_tasks_of_a_recursive_group_get_the_cutoff_marker(tmp_path: Path) -> None:
+    result = _recursive(tmp_path, ["2:4"])
+    assert result[1].count("DiscoPoP TODO: add the cutoff final(<condition>)") == 2
+    assert "final(" not in result[1].replace(RECURSIVE_TASK_CUTOFF_MARKER, "")
+    assert "DiscoPoP TODO" not in result[2]
+    tasks = [_task(0, 3, shared=["a"], first_private=["k"]), _task(1, 4, shared=["b"], first_private=["n"])]
+    assert "DiscoPoP TODO" not in _generate(tmp_path, _region([0, 1], 3, 4, entry_call_lines=[]), tasks)
 
 
 def test_a_group_without_entry_calls_keeps_its_region_in_the_function(tmp_path: Path) -> None:

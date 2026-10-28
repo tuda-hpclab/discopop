@@ -296,6 +296,7 @@ class TestTaskGroups(unittest.TestCase):
         text = self.__handle()
         self.assertIn("around the call(s) that enter the recursion (fib.c:20, fib.c:25), not into the function", text)
         self.assertIn("only the tasks and the taskwait go", text)
+        self.assertIn("  cutoff: add final(<condition>) to the task pragmas", text)
         self.assertNotIn("recursion", self.__without_entry_calls())
 
     def __without_entry_calls(self) -> str:
