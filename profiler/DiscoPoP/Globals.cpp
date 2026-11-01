@@ -16,5 +16,6 @@ unsigned int cu_id_counter;
 unsigned int bb_dep_count;
 unsigned int instruction_id_counter;
 unsigned int callpath_state_id_counter;
+unsigned int static_memory_region_id_counter;
 bool default_is_global_variable_value;
 std::int32_t file_id;

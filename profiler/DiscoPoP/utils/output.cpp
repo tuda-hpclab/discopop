@@ -86,7 +86,9 @@ std::string cu_output::XmlEscape(std::string data) {
 
 void cu_output::WriteCuGraph(Node* root, const std::map<std::string, std::string>& loop_start_lines) {
   // OriginalVariables.txt stays empty, but is created as it always was
+  profiler_files::FileLock original_variables_lock("OriginalVariables.txt");
   std::ofstream out_original_variables = profiler_files::Open("OriginalVariables.txt");
+  profiler_files::FileLock cu_graph_lock("Data.xml");
   std::ofstream out_cus = profiler_files::Open("Data.xml");
 
   out_cus << "<Nodes>" << "\n" << "\n";

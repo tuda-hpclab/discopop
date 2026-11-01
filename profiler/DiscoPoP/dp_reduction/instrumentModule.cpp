@@ -20,7 +20,10 @@
 #include "utils/profiler_files.hpp"
 
 dp_reduction::ReductionInstrumenter::ReductionInstrumenter(llvm::Module& module, Services services)
-    : module_(module), services_(std::move(services)), reduction_file_(profiler_files::Open("reduction.txt")) {}
+    : module_(module),
+      services_(std::move(services)),
+      reduction_file_lock_("reduction.txt"),
+      reduction_file_(profiler_files::Open("reduction.txt")) {}
 
 void dp_reduction::ReductionInstrumenter::Close() {
   // closing flushes
