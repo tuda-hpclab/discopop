@@ -54,9 +54,6 @@ class HybridAnalysis {
   std::string bb_dep_string_;
   // only used by the disabled dot output of the CFG and DG
   std::string file_name_;
-  // the S<n> ids of the statically predictable memory regions; persisted like the other counters,
-  // so that the ids of different translation units do not collide
-  int next_free_static_memory_region_id_;
 };
 
 }  // namespace hybrid_analysis

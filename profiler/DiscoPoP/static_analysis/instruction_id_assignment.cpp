@@ -44,7 +44,7 @@ void DiscoPoP::AssignInstructionIdsToDpReductionFunctions(Module& m) {
             if (fn.find("__dp_loop_incr") != std::string::npos) {
               // assign missing unique instruction id
               LLVMContext& ctx = bi->getContext();
-              std::int32_t llvm_ir_instruction_id = unique_llvm_ir_instruction_id_++;
+              std::int32_t llvm_ir_instruction_id = GetNextInstructionId();
               MDNode* n =
                   MDNode::get(ctx, MDString::get(ctx, "dp.md.instr.id:" + std::to_string(llvm_ir_instruction_id)));
               bi->setMetadata("dp.md.instr.id", n);

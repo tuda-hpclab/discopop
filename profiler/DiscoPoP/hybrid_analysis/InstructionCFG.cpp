@@ -16,6 +16,8 @@
 #include <string>
 #include <utility>
 
+#include "utils/profiler_files.hpp"
+
 using llvm::AllocaInst;
 using llvm::BasicBlock;
 using llvm::DebugLoc;
@@ -96,6 +98,7 @@ void InstructionCFG::HighlightInstructionNode(Instruction* instr) { highlighted_
 
 void InstructionCFG::DumpToDot(const std::string& target_path) {
   // Write the graph to a DOT file
+  profiler_files::FileLock dot_lock(target_path, true);
   std::ofstream dot_stream;
   dot_stream.open(target_path);
   dot_stream << "digraph{";

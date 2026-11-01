@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "DPUtils.hpp"
+#include "utils/profiler_files.hpp"
 
 using llvm::AllocaInst;
 using llvm::cast;
@@ -195,6 +196,7 @@ std::string InstructionDG::EdgeToInstructionBasedDpDep(
 
 void InstructionDG::DumpToDot(const std::string& target_path) {
   // Write the graph to a DOT file
+  profiler_files::FileLock dot_lock(target_path, true);
   std::ofstream dot_stream;
   dot_stream.open(target_path);
 
