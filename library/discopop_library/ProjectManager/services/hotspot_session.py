@@ -55,6 +55,7 @@ from discopop_library.ProjectManager.services.commands import (
     environment_with_interpreter_on_path,
     hotspot_analyzer_command,
 )
+from discopop_library.AnalysisRecord import clear_steps
 from discopop_library.ProjectManager.services.hotspot_build import hotspot_build_state
 from discopop_library.ProjectManager.services.jobs import JobSpec, StatusKind, WorkContext
 from discopop_library.ProjectManager.services.text import clean_ansi_output
@@ -458,3 +459,4 @@ class HotspotSession:
         target = hotspot_data.hotspot_dir(self.arguments.dot_dp)
         if os.path.isdir(target):
             shutil.rmtree(target, ignore_errors=True)
+        clear_steps(self.arguments.dot_dp, "hotspot_detection", "hotspot_analysis")

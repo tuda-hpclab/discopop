@@ -10,7 +10,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import pytest
 
@@ -415,3 +415,17 @@ def test_changed_files_names_in_reason(project: Path) -> None:
     s = step_status(str(dot), "patch_generation")
     assert s.changed_files == names
     assert "2 more" in s.reason
+
+
+def test_clear_steps_forgets_accumulated_hotspot_configs(tmp_path: Any) -> None:
+    from discopop_library.AnalysisRecord import clear_steps, record_hotspot_run, step_status
+
+    project = tmp_path / "p"
+    dot = project / ".discopop"
+    (dot / "hotspot_detection" / "private").mkdir(parents=True)
+    (project / "a.c").write_text("int main(){}")
+    (dot / "hotspot_detection" / "private" / "hotspot_result_0.txt").write_text("")
+    record_hotspot_run(str(dot), "tiny", "compile.sh")
+    clear_steps(str(dot), "hotspot_detection", "hotspot_analysis")
+    record_hotspot_run(str(dot), "small", "compile.sh")
+    assert set(step_status(str(dot), "hotspot_detection").params["configs"]) == {"small"}

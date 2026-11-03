@@ -219,6 +219,23 @@ def clear_record(dot_discopop: str) -> None:
         logger.warning("Could not remove the analysis record in %s: %s", dot_discopop, e)
 
 
+def clear_steps(dot_discopop: str, *steps: str) -> None:
+    """Forget the given steps, for a caller that deletes their outputs. Never raises.
+
+    Deleting outputs alone is not enough where a step accumulates: a later hotspot run on unchanged sources merges
+    into the recorded configurations, which would then claim runs whose data is gone.
+    """
+    try:
+        record = _read_record(dot_discopop)
+        if record is None:
+            return
+        for step in steps:
+            record["steps"].pop(step, None)
+        _write_record(dot_discopop, record)
+    except Exception as e:
+        logger.warning("Could not clear steps %s in %s: %s", ", ".join(steps), dot_discopop, e)
+
+
 # ---------------------------------------------------------------- status
 
 
