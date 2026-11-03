@@ -10,6 +10,8 @@ import shutil
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 import logging
 
+from discopop_library.AnalysisRecord import clear_record
+
 logger = logging.getLogger("ConfigurationManager")
 
 
@@ -29,6 +31,8 @@ def reset_project(arguments: ProjectManagerArguments) -> None:
                 shutil.rmtree(content_path)
             else:
                 os.remove(content_path)
+        # explicit, although the loop above already removes it: the record must not outlive the data it describes
+        clear_record(arguments.dot_dp)
 
     if arguments.reset or arguments.reset_execution_results:
         # manually delete project/execution_results.json if existent

@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     import tkinter as tk
@@ -26,6 +26,7 @@ from termcolor import colored
 from discopop_explorer.functions.PEGraph.output.json import dump_to_pickled_json
 from discopop_explorer.functions.PEGraph.output.gephi import dump_to_gephi_file
 from discopop_explorer.utilities.statistics.collect_statistics import collect_statistics
+from discopop_library.AnalysisRecord import record_step
 from discopop_library.ArgumentClasses.GeneralArguments import GeneralArguments  # type: ignore
 from discopop_library.FolderStructure.setup import setup_explorer
 from discopop_library.HostpotLoader.HotspotLoaderArguments import HotspotLoaderArguments
@@ -220,6 +221,49 @@ def __run(
     return res
 
 
+# the hotspot types the explorer analyzes when not told otherwise (see --hotspot-types)
+DEFAULT_HOTSPOT_TYPES = (HotspotType.YES, HotspotType.MAYBE)
+
+
+def result_changing_options(arguments: ExplorerArguments) -> Dict[str, Any]:
+    """The explorer options that change the detected patterns and differ from their defaults.
+
+    Recorded in the analysis record, so a consumer can tell which interpretation of the profiling data produced the
+    patterns. Options that only change output (dumps, plots, logging, statistics) or speed (``--jobs``) are left
+    out, and so are defaults: an empty dict means "a default run".
+    """
+    options: Dict[str, Any] = {}
+    if set(arguments.hotspot_types) != set(DEFAULT_HOTSPOT_TYPES):
+        options["hotspot_types"] = sorted(t.name.lower() for t in arguments.hotspot_types)
+    if arguments.ignore_dependency_states:
+        options["ignore_dependency_states"] = True
+    if arguments.load_existing_doall_and_reduction_patterns:
+        options["load_existing_doall_and_reduction_patterns"] = True
+    if arguments.detect_scheduling_clauses:
+        options["detect_scheduling_clauses"] = True
+    if arguments.plugins:
+        options["plugins"] = sorted(arguments.plugins)
+    return options
+
+
+def record_pattern_detection(arguments: ExplorerArguments, res: DetectionResult) -> None:
+    """Record the finished pattern detection in the analysis record of the analyzed ``.discopop`` directory.
+
+    Skipped when no patterns.json was written (``--json`` without a value): the record promises that file.
+    Never raises; bookkeeping must not fail an analysis.
+    """
+    try:
+        if arguments.enable_json_file is None or not os.path.isfile(arguments.enable_json_file):
+            return
+        record_step(
+            arguments.project_path,
+            "pattern_detection",
+            {"enabled_patterns": sorted(res.enabled_patterns), "options": result_changing_options(arguments)},
+        )
+    except Exception as e:
+        logging.getLogger("Explorer").warning("Could not record the pattern detection: %s", e)
+
+
 def run(arguments: ExplorerArguments) -> None:
     """Run the discopop_explorer with the given arguments"""
     logger = logging.getLogger("Explorer")
@@ -325,6 +369,9 @@ def run(arguments: ExplorerArguments) -> None:
         if pattern_decisions is not None and decisions_file is not None:
             if not arguments.load_existing_doall_and_reduction_patterns:
                 pattern_decisions.save(decisions_file)
+
+        # before the patches: the patch generation records which pattern detection it is derived from
+        record_pattern_detection(arguments, res)
 
         # create applicable patch files from the found suggestions
         with stage("Generating parallelization patches"):

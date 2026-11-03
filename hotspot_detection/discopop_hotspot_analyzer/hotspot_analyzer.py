@@ -157,6 +157,25 @@ def __print_cs_list(list: List[cs]) -> None:
     print(len(list))
 
 
+def _record_analysis(dot_discopop: str) -> None:
+    """Record the finished analysis in the analysis record of ``dot_discopop``, if DiscoPoP's library is available.
+
+    The analyzer is a package of its own and must not depend on ``discopop_library``, so the record is written only
+    when the library can be imported. Never raises: the bookkeeping must not fail the analysis.
+    """
+    try:
+        from discopop_library.AnalysisRecord import record_step, step_status
+    except ImportError:
+        return
+    try:
+        # the configurations the analyzed runs came from, as recorded by the hotspot detection runs
+        recorded = step_status(dot_discopop, "hotspot_detection").params.get("configs", [])
+        configs = sorted(str(c) for c in recorded)
+        record_step(dot_discopop, "hotspot_analysis", {"configs": configs})
+    except Exception as e:
+        print("Could not record the hotspot analysis: " + str(e))
+
+
 def run(arguments: HotspotAnalyzerArguments) -> None:
     # TO BE USED FROM WITHIN THE .discopop directory!
     discopop_dir = os.getcwd()
@@ -378,3 +397,6 @@ def run(arguments: HotspotAnalyzerArguments) -> None:
         outfile.write("}\n")
 
     print("Done")
+
+    # last: the record promises that Hotspots.json is complete
+    _record_analysis(discopop_dir)

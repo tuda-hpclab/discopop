@@ -9,6 +9,7 @@
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import List, Optional
+from discopop_library.AnalysisRecord import DEFAULT_PATTERNS
 from discopop_library.GlobalLogger.setup import setup_logger
 
 from discopop_library.HostpotLoader.HotspotType import parse_hotspot_types
@@ -81,9 +82,9 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "file; without a value, nothing is recorded. Default: explorer/pattern_decisions.json",
     )
     parser.add_argument(
-        "--enable-patterns", type=str, nargs="?", default="reduction,doall,task",
+        "--enable-patterns", type=str, nargs="?", default=",".join(DEFAULT_PATTERNS),
         help="Specify comma-separated list of pattern types to be identified. Options: "
-        "reduction,doall,task,pipeline,geodec,simplegpu. Default: reduction,doall,task",
+        "reduction,doall,task,pipeline,geodec,simplegpu. Default: " + ",".join(DEFAULT_PATTERNS),
     )
     parser.add_argument(
         "--hotspot-types", type=str, default="yes,maybe",

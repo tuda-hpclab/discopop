@@ -13,6 +13,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from discopop_library.AnalysisRecord import clear_record
 from discopop_library.ProjectManager.utilities.deriveSettingsFiles import derive_settings_files
 from discopop_library.ProjectManager.utilities.reset import reset_project
 from mcp_server.tools.helpers import (
@@ -133,6 +134,8 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             pm_args.reset = True
             pm_args.reset_execution_results = True
             reset_project(pm_args)
+            # also removed by reset_project; stated here because the record must go with the artefacts it describes
+            clear_record(str(p / ".discopop"))
             ctx.log_action(project_path, "initialize_discopop_directory", "Reset: removed analysis artefacts")
             result: dict[str, Any] = {
                 "reset": True,

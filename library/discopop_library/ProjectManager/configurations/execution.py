@@ -6,6 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
+import glob
 import logging
 import os
 import json
@@ -18,7 +19,9 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from filelock import FileLock
 
+from discopop_library.AnalysisRecord import record_hotspot_run, record_step
 from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult, read_application_result
+from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.execution_time import (
     TIME_SOURCE_CONSOLE,
@@ -44,6 +47,11 @@ PATH = str
 NOT_EXECUTED_RETURN_CODE = -1
 
 logger = logging.getLogger("ConfigurationManager")
+
+# The script whose successful run completes a profiling step; the compile script merely instruments.
+PROFILING_SCRIPT_NAME = "execute.sh"
+HOTSPOT_SETTINGS_NAME = "hd_settings.json"
+DEPENDENCE_SETTINGS_NAME = "dp_settings.json"
 
 
 # Resolution of a recorded wall clock time, in decimal places of a second.
@@ -203,6 +211,52 @@ def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) 
     if os.path.commonpath([absolute_path, absolute_root]) != absolute_root:
         return path
     return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
+
+
+def _record_profiling_run(
+    arguments: ProjectManagerArguments,
+    project_copy_root_path: PATH,
+    config_name: str,
+    script_name: str,
+    settings_name: str,
+    outcome: _RunOutcome,
+) -> None:
+    """Record a successful hotspot detection (``hd``) or dependence profiling (``dp``) run in the analysis record.
+
+    Only the run of ``execute.sh`` counts: it is the run that writes the profiling data, and callers run it only
+    after the instrumenting compilation succeeded. The compilation alone (as the MCP server's ``gather_data`` does
+    first) records nothing, since it has produced no data yet. The record goes into the ``.discopop`` of the
+    directory that was executed in -- the project copy unless the run was in place -- with that directory as the
+    project root, so a copy that is deleted afterwards takes its record with it. A run that left no profiling
+    output behind is not recorded either, whatever its exit code says. Never raises.
+    """
+    try:
+        if script_name != PROFILING_SCRIPT_NAME or outcome.returncode != 0 or outcome.timeout_expired:
+            return
+        if settings_name not in (HOTSPOT_SETTINGS_NAME, DEPENDENCE_SETTINGS_NAME):
+            return
+        dot_discopop = os.path.join(project_copy_root_path, ".discopop")
+        compile_script = resolve_compile_script_path(arguments.project_config_dir, config_name)
+        # the copy has the project's sources at the same relative locations; present the script as such
+        compile_script = _path_in_copy(compile_script, arguments.project_root, project_copy_root_path)
+        if settings_name == HOTSPOT_SETTINGS_NAME:
+            if not glob.glob(
+                os.path.join(glob.escape(dot_discopop), "hotspot_detection", "private", "hotspot_result_*.txt")
+            ):
+                return
+            record_hotspot_run(dot_discopop, config_name, compile_script, project_root=project_copy_root_path)
+        else:
+            for output in (("profiler", "Data.xml"), ("profiler", "dynamic_dependencies.txt")):
+                if not os.path.exists(os.path.join(dot_discopop, *output)):
+                    return
+            record_step(
+                dot_discopop,
+                "dependence_profiling",
+                {"config": config_name, "compile_script": compile_script},
+                project_root=project_copy_root_path,
+            )
+    except Exception as e:  # bookkeeping must never fail a run
+        logger.warning("Could not record the %s run of '%s': %s", settings_name, config_name, e)
 
 
 def execute_configuration(
@@ -407,6 +461,8 @@ def execute_configuration(
             representative.stdout,
             representative.stderr,
         )
+
+    _record_profiling_run(arguments, project_copy_root_path, config_name, script_name, settings_name, representative)
 
     # save execution results
     stored = _store_execution_result(
