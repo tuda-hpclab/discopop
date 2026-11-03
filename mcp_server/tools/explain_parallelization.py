@@ -25,7 +25,10 @@ TOOL_NAME = "explain_parallelization"
 # first, and are the ones a question about a line is usually about.
 MAX_REGIONS = 5
 # The same region can be rejected for many dependencies; the first ones are enough to see why.
+# Counted in lines of the answer: the dependencies on one variable share a line (_grouped_reasons).
 MAX_REASONS_PER_REGION = 5
+# the locations listed on such a line
+MAX_LOCATIONS_PER_REASON = 5
 
 TOOL = Tool(
     name=TOOL_NAME,
@@ -93,25 +96,89 @@ def _dependency_sentence(reason: Any, file_mapping: dict[int, Path], project_pat
     sink = _location(dep.sink_line, file_mapping, project_path)
     if sink is not None:
         text += f" to {sink}"
-    if dep.variable:
-        text += f" via {'elements of ' if dep.element_access else ''}variable {dep.variable}"
+    text += _via(dep)
     source = _location(dep.source_line, file_mapping, project_path)
     if source is not None:
         text += f" from {source}"
     text += " prevents parallelization"
     if reason.kind == UNPRIVATIZABLE_STATIC_DEPENDENCY:
-        text += (
-            ": the variable cannot be privatized, as it is neither written before it is read in each iteration "
-            "nor a reduction variable"
-        )
+        text += UNPRIVATIZABLE_EXPLANATION
+    return text + _origin(dep) + "."
+
+
+UNPRIVATIZABLE_EXPLANATION = (
+    ": the variable cannot be privatized, as it is neither written before it is read in each iteration "
+    "nor a reduction variable"
+)
+
+
+def _via(dep: Any) -> str:
+    if not dep.variable:
+        return ""
+    return f" via {'elements of ' if dep.element_access else ''}variable {dep.variable}"
+
+
+def _origin(dep: Any) -> str:
     origin = {"dynamic": "observed during profiling", "static": "found by static analysis"}.get(dep.origin or "")
-    return f"{text} ({origin})." if origin else f"{text}."
+    return f" ({origin})" if origin else ""
 
 
 def _reason_text(reason: Any, file_mapping: dict[int, Path], project_path: str) -> str:
     if reason.dependency is not None:
         return _dependency_sentence(reason, file_mapping, project_path)
     return str(reason.message)
+
+
+def _grouped_reasons(reasons: list[Any]) -> list[list[Any]]:
+    """The reasons, with the dependencies of one kind on one variable - differing only in their
+    locations - collected into one group, in the order the first of each group was recorded. The
+    detector records every dependency which prevents a loop, so a variable updated on several lines
+    would otherwise take several lines of the answer and push the other variables out of it."""
+    groups: dict[Any, list[Any]] = {}
+    for reason in reasons:
+        dep = reason.dependency
+        key = (
+            ("reason", id(reason))
+            if dep is None
+            else ("dependency", reason.kind, dep.type, dep.variable, dep.element_access, dep.origin)
+        )
+        groups.setdefault(key, []).append(reason)
+    return list(groups.values())
+
+
+def _group_text(group: list[Any], file_mapping: dict[int, Path], project_path: str) -> str:
+    """One reason as _reason_text words it; several dependencies on one variable as one sentence
+    listing their locations: 'RAW dependencies via variable f prevent parallelization (observed during
+    profiling): to md.cpp:306 from md.cpp:306, to md.cpp:310 from md.cpp:306.'"""
+    if len(group) == 1:
+        return _reason_text(group[0], file_mapping, project_path)
+    from discopop_explorer.classes.patterns.PatternDecisions import UNPRIVATIZABLE_STATIC_DEPENDENCY
+
+    dep = group[0].dependency
+    text = f"{dep.type or 'Data'} dependencies{_via(dep)} prevent parallelization"
+    if group[0].kind == UNPRIVATIZABLE_STATIC_DEPENDENCY:
+        text += UNPRIVATIZABLE_EXPLANATION
+    locations = []
+    for reason in group[:MAX_LOCATIONS_PER_REASON]:
+        sink = _location(reason.dependency.sink_line, file_mapping, project_path)
+        source = _location(reason.dependency.source_line, file_mapping, project_path)
+        locations.append(
+            " ".join(part for part in (f"to {sink}" if sink else "", f"from {source}" if source else "") if part)
+        )
+    text += _origin(dep) + ": " + ", ".join(locations)
+    if len(group) > MAX_LOCATIONS_PER_REASON:
+        text += f", and {len(group) - MAX_LOCATIONS_PER_REASON} more"
+    return text + "."
+
+
+def _reason_lines(reasons: list[Any], file_mapping: dict[int, Path], project_path: str) -> list[str]:
+    groups = _grouped_reasons(reasons)
+    shown = groups[:MAX_REASONS_PER_REGION]
+    lines = [f"- {_group_text(group, file_mapping, project_path)}" for group in shown]
+    hidden = sum(len(group) for group in groups[len(shown) :])
+    if hidden:
+        lines.append(f"- {hidden} more reasons.")
+    return lines
 
 
 def _region_text(decision: Any, file_mapping: dict[int, Path], project_path: str) -> list[str]:
@@ -130,16 +197,10 @@ def _region_lines(decision: Any, file_mapping: dict[int, Path], project_path: st
         suggested = ", ".join(f"suggestion {p['pattern_id']} ({p['type']})" for p in decision.patterns)
         return [f"{title}: {suggested}."]
     if decision.outcome == "rejected":
-        shown = decision.reasons[:MAX_REASONS_PER_REGION]
-        lines = [f"{title}: not parallelizable."] + [f"- {_reason_text(r, file_mapping, project_path)}" for r in shown]
-        if len(decision.reasons) > len(shown):
-            lines.append(f"- {len(decision.reasons) - len(shown)} more reasons.")
-        return lines
+        return [f"{title}: not parallelizable."] + _reason_lines(decision.reasons, file_mapping, project_path)
     # passed the checks without being part of the result
     lines = [f"{title}: passed the checks, but no suggestion is reported for it."]
-    return lines + [
-        f"- {_reason_text(r, file_mapping, project_path)}" for r in decision.reasons[:MAX_REASONS_PER_REGION]
-    ]
+    return lines + _reason_lines(decision.reasons, file_mapping, project_path)
 
 
 def _task_group_lines(decisions_path: Path, file_id: int, start_line: int, end_line: int, place: str) -> list[str]:

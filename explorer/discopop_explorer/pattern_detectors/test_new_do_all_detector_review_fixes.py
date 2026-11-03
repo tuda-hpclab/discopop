@@ -254,4 +254,8 @@ def test_a_while_condition_reading_a_variable_advanced_in_the_body_rejects_the_l
 
     decision = _decision(tg, "1:2")
     assert decision.outcome == REJECTED
-    assert [(r.kind, r.dependency.variable) for r in decision.reasons] == [(LOOP_CARRIED_DEPENDENCY, "i")]
+    # both reads of i are recorded, the condition's and the body's: every blocking dependency is
+    assert sorted((r.kind, r.dependency.variable, r.dependency.sink_line) for r in decision.reasons) == [
+        (LOOP_CARRIED_DEPENDENCY, "i", "1:2"),
+        (LOOP_CARRIED_DEPENDENCY, "i", "1:3"),
+    ]

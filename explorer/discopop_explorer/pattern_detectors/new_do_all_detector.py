@@ -355,6 +355,18 @@ def identify_simple_doall_and_reduction(
     show_plot(tg)
 
     prevented_loops: Set[NodeID] = set()
+    # The loops prevented by a dynamic dependency between iterations, a subset of prevented_loops.
+    # Another task-graph copy of such a loop is still scanned for dependencies - and only that -
+    # since each copy can carry a blocker of its own, and the complete set of blockers is what
+    # explains the rejection (and decides whether it could be lifted, see blockers_by_loop).
+    # A loop prevented for any other reason is rejected whatever its dependencies, so its other
+    # copies are skipped as before.
+    dependency_prevented_loops: Set[NodeID] = set()
+    # Every distinct dynamic dependency between iterations that prevents a loop, per loop, in the
+    # order found, across all copies of the loop. Distinct by its DependencyRecord, which is also
+    # what the decision log deduplicates reasons by: the copies hold separate Dependency objects
+    # for the same dependency.
+    blockers_by_loop: Dict[NodeID, Dict[DependencyRecord, Tuple[Context, Context, Dependency]]] = dict()
     # the region of each loop, for recording decisions. The task graph holds several copies of a
     # loop, so this is looked up once per loop rather than once per copy.
     decision_regions: Dict[NodeID, CodeRegion] = dict()
@@ -374,6 +386,7 @@ def identify_simple_doall_and_reduction(
     counts: Dict[str, int] = {
         "candidates": 0,
         "skipped_prevented": 0,
+        "rescanned_prevented": 0,
         "skipped_structurally": 0,
         "skipped_too_few_iterations": 0,
         "skipped_dependency_found": 0,
@@ -419,12 +432,22 @@ def identify_simple_doall_and_reduction(
                 )
                 if decisions is not None:
                     decisions.note(DECISION_DETECTOR, DECISION_PATTERN_TYPES, loop_region, recursion_note)
-        # check if loop is not already preventedvariables
+        # check if loop is not already prevented. A copy of a loop prevented by a dependency between
+        # iterations is still scanned for further such dependencies (rescan), see
+        # dependency_prevented_loops; nothing else is done for it.
+        rescan = False
         if node.pet_node_id in prevented_loops:
-            counts["skipped_prevented"] += 1
-            continue
-        rejection = structural_rejection(
-            tg, node.pet_node_id, loop_node_of(tg.pet, node.pet_node_id), profile_has_loop_data
+            if node.pet_node_id not in dependency_prevented_loops:
+                counts["skipped_prevented"] += 1
+                continue
+            rescan = True
+        # structural_rejection depends on the loop only, not on the copy: a rescanned loop passed it
+        rejection = (
+            None
+            if rescan
+            else structural_rejection(
+                tg, node.pet_node_id, loop_node_of(tg.pet, node.pet_node_id), profile_has_loop_data
+            )
         )
         if rejection is not None:
             counts["skipped_structurally"] += 1
@@ -441,6 +464,11 @@ def identify_simple_doall_and_reduction(
             key=lambda ctx: ctx.creation_index,
         )
         if len(iteration_contexts) < 2:
+            if rescan:
+                # no dependency between iterations of this copy to collect, and the loop is
+                # rejected already: this copy adds nothing to its decision
+                counts["skipped_prevented"] += 1
+                continue
             counts["skipped_too_few_iterations"] += 1
             record_rejection(
                 node.pet_node_id,
@@ -487,7 +515,6 @@ def identify_simple_doall_and_reduction(
                     (LineID(red_var_dict["reduction_line"]), red_var_dict)
                 )
         # check for dependencies
-        dependency_found = False
         reduction_info: List[Tuple[Context, Context, Dependency, Dict[str, str]]] = []
         potential_breaking_dependencies: List[Tuple[Context, Context, Dependency]] = []
         # only needed for reduction candidates, and then at most once per context
@@ -560,37 +587,29 @@ def identify_simple_doall_and_reduction(
                     + str(dep.carried_by_pet_loops)
                 )
             if dep.origin == DepOrigin.DYNAMIC_ANALYSIS:
-                # dependency is trustworthy and definitely breaks doall
-                if decisions is not None:
-                    record = DependencyRecord.from_dependency(dep)
-                    record_rejection(
-                        node.pet_node_id,
-                        DecisionReason(
-                            kind=LOOP_CARRIED_DEPENDENCY,
-                            message="A "
-                            + record.describe()
-                            + " between different iterations was observed during profiling.",
-                            dependency=record,
-                        ),
-                    )
+                # dependency is trustworthy and definitely breaks doall. Recorded by the caller,
+                # once all of them are known.
                 return True
             # dependency is static and may be too pessimistic.
             # dependency is not problematic, if the variable is first written in the loop
             potential_breaking_dependencies.append((source_ctx, out_dep_target, dep))
             return False
 
-        # the dependencies known to be carried by this loop, wherever their ends lie
-        for source_ctx, out_dep_target, dep in carried_index.get(node.pet_node_id, []):
-            # WAR dependencies between iterations are non-critical, as they overwrite data and thus can be privatized
-            if dep.etype == EdgeType.DATA and dep.dtype == DepType.WAR:
-                continue
-            if prevents_doall(source_ctx, out_dep_target, dep):
-                dependency_found = True
-                break
+        # Every dependency is examined, not only up to the first which prevents the loop: all of
+        # them are recorded, see blockers_by_loop. A loop without any is scanned exactly as before.
+        found_blockers: List[Tuple[Context, Context, Dependency]] = []
+        # the dependencies known to be carried by this loop, wherever their ends lie. Indexed by
+        # the loop rather than by the copy, so a rescanned copy has nothing to add here.
+        if not rescan:
+            for source_ctx, out_dep_target, dep in carried_index.get(node.pet_node_id, []):
+                # WAR dependencies between iterations are non-critical, as they overwrite data and thus can be
+                # privatized
+                if dep.etype == EdgeType.DATA and dep.dtype == DepType.WAR:
+                    continue
+                if prevents_doall(source_ctx, out_dep_target, dep):
+                    found_blockers.append((source_ctx, out_dep_target, dep))
         # the dependencies without a known carrying loop, by the iteration copies of their ends
         for source_index, ic_source in enumerate(iteration_contexts):
-            if dependency_found:
-                break
             # check for do-all preventing dependencies
             for subnode in subtrees[ic_source]:
                 for out_dep_target, dep in subnode.outgoing_dependencies:
@@ -613,13 +632,31 @@ def identify_simple_doall_and_reduction(
                             target_iteration_index is not None and target_iteration_index != source_index
                         )
                     if crosses_iterations and prevents_doall(subnode, out_dep_target, dep):
-                        dependency_found = True
-                        break
-                if dependency_found:
-                    break
-        if dependency_found:
+                        found_blockers.append((subnode, out_dep_target, dep))
+        if found_blockers:
+            loop_blockers = blockers_by_loop.setdefault(node.pet_node_id, dict())
+            for blocker in found_blockers:
+                record = DependencyRecord.from_dependency(blocker[2])
+                if record in loop_blockers:
+                    continue
+                loop_blockers[record] = blocker
+                record_rejection(
+                    node.pet_node_id,
+                    DecisionReason(
+                        kind=LOOP_CARRIED_DEPENDENCY,
+                        message="A "
+                        + record.describe()
+                        + " between different iterations was observed during profiling.",
+                        dependency=record,
+                    ),
+                )
+        if rescan:
+            counts["rescanned_prevented"] += 1
+            continue
+        if found_blockers:
             # node is not a valid doall loop
             prevented_loops.add(node.pet_node_id)
+            dependency_prevented_loops.add(node.pet_node_id)
             counts["skipped_dependency_found"] += 1
             continue
 

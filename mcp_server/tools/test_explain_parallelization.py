@@ -23,7 +23,7 @@ from discopop_explorer.classes.patterns.PatternDecisions import (
     PatternDecisionLog,
 )
 from mcp_server.tools import explain_parallelization
-from mcp_server.tools.explain_parallelization import MAX_REASONS_PER_REGION, MAX_REGIONS
+from mcp_server.tools.explain_parallelization import MAX_LOCATIONS_PER_REASON, MAX_REASONS_PER_REGION, MAX_REGIONS
 from mcp_server.tools.helpers import ToolContext
 
 DETECTOR = "doall_reduction"
@@ -168,6 +168,36 @@ class TestExplainParallelization(unittest.TestCase):
 
     def test_a_relative_file_path_is_taken_relative_to_the_project(self) -> None:
         self.assertIn("Loop main.cpp:6-8", self.__handle(file_path="main.cpp", start_line=7))
+
+    def test_the_dependencies_on_one_variable_share_a_line(self) -> None:
+        region = CodeRegion("1:11", 1, 10, 30, "loop")
+        for line in (12, 14, 16):
+            self.log.reject(DETECTOR, TYPES, region, _carried("row_coefs", line))
+        self.log.reject(DETECTOR, TYPES, region, _carried("x", 20))
+        self.log.finalize(DETECTOR, [])
+        self.__save()
+        lines = self.__handle(start_line=20).splitlines()
+        self.assertIn(
+            "- RAW dependencies via elements of variable row_coefs prevent parallelization (observed during "
+            "profiling): to main.cpp:12 from main.cpp:12, to main.cpp:14 from main.cpp:14, to main.cpp:16 from "
+            "main.cpp:16.",
+            lines,
+        )
+        self.assertIn(
+            "- RAW dependency to main.cpp:20 via elements of variable x from main.cpp:20 prevents "
+            "parallelization (observed during profiling).",
+            lines,
+        )
+
+    def test_the_locations_of_a_variable_are_cut(self) -> None:
+        region = CodeRegion("1:11", 1, 10, 30, "loop")
+        for line in range(11, 11 + MAX_LOCATIONS_PER_REASON + 2):
+            self.log.reject(DETECTOR, TYPES, region, _carried("a", line))
+        self.log.finalize(DETECTOR, [])
+        self.__save()
+        text = self.__handle(start_line=20)
+        self.assertEqual(text.count("from main.cpp:"), MAX_LOCATIONS_PER_REASON)
+        self.assertIn(", and 2 more.", text)
 
     def test_many_regions_and_reasons_are_cut(self) -> None:
         for i in range(MAX_REASONS_PER_REGION + 5):
