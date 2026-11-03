@@ -9,6 +9,7 @@
 import os
 from pathlib import Path
 
+from discopop_library.AnalysisRecord import record_hotspot_run
 from discopop_library.ProjectManager.services.hotspot_build import (
     BUILD_CURRENT,
     BUILD_MISMATCH,
@@ -46,3 +47,21 @@ def test_build_states(tmp_path: Path) -> None:
     _touch(project / "main.cpp", 300)
     # a changed source wins over a differing compile script
     assert hotspot_build_state(str(cs_id), str(project), lambda: True)[0] == BUILD_MISMATCH
+
+
+def test_a_recorded_build_is_judged_by_the_content_of_the_sources(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    cs_id = project / ".discopop" / "hotspot_detection" / "cs_id.txt"
+    _touch(project / "main.cpp", 100)
+    (project / "main.cpp").write_text("int main() {}\n")
+    _touch(cs_id, 200)
+    (project / ".discopop" / "hotspot_detection" / "private").mkdir()
+    (project / ".discopop" / "hotspot_detection" / "private" / "hotspot_result_1.txt").write_text("")
+    record_hotspot_run(str(project / ".discopop"), "small", "compile.sh", str(project))
+    # a newer timestamp without a new content does not invalidate the build ...
+    os.utime(project / "main.cpp", (900, 900))
+    assert hotspot_build_state(str(cs_id), str(project), lambda: False) == (BUILD_CURRENT, "")
+    # ... a changed content does, however old the file looks
+    (project / "main.cpp").write_text("int main() { return 1; }\n")
+    os.utime(project / "main.cpp", (50, 50))
+    assert hotspot_build_state(str(cs_id), str(project), lambda: False)[0] == BUILD_MISMATCH

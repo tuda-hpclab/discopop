@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from discopop_library.AnalysisRecord import StepStatus, analysis_status
+
 from mcp_server.tools.gather_data import count_suggestions, next_step_hint
 from mcp_server.tools.helpers import (
     ToolContext,
@@ -23,9 +25,11 @@ from mcp_server.tools.helpers import (
 
 logger = logging.getLogger("discopop-mcp")
 
-# The file each pipeline step leaves behind, relative to .discopop, in pipeline order.
-# Its mtime is when the step last ran; a source file newer than that makes it stale,
-# which is the same test gather_data uses to decide what to re-run.
+# The server's pipeline steps in order: the file each leaves behind (relative to .discopop; its mtime is
+# shown as `at` for results that carry no analysis record) and the analysis record step that decides
+# whether it is current. The hotspot ranking is Hotspots.json, i.e. the `hotspot_analysis` step, which also
+# turns stale when the detection runs it is derived from are replaced; instrumentation and profiling are
+# both `dependence_profiling`, since the record notes the profiling run as a whole.
 _PIPELINE_OUTPUTS = {
     "hotspot_detection": "hotspot_detection/Hotspots.json",
     "instrumentation": "profiler/Data.xml",
@@ -33,15 +37,25 @@ _PIPELINE_OUTPUTS = {
     "pattern_detection": "explorer/patterns.json",
     "patch_generation": "patch_generator",
 }
+_RECORD_STEPS = {
+    "hotspot_detection": "hotspot_analysis",
+    "instrumentation": "dependence_profiling",
+    "profiling": "dependence_profiling",
+    "pattern_detection": "pattern_detection",
+    "patch_generation": "patch_generation",
+}
 # The steps whose output the query tools depend on.
 _ANALYSIS_STEPS = ("instrumentation", "profiling", "pattern_detection", "patch_generation")
+# how many changed files a stale step lists
+_MAX_CHANGED_FILES = 20
 
 TOOL = Tool(
     name="get_project_status",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(
         "Report where a project stands in the DiscoPoP workflow: whether it is set up, which "
-        "pipeline steps have run and whether the sources changed since, and how many suggestions "
+        "pipeline steps have run and whether the sources changed since (judged by their content, so a "
+        "copy or checkout of identical sources does not count), and how many suggestions "
         "exist. Results prepared earlier or elsewhere count: with current results the queries are cheap and "
         "need no run. 'next_step' names the call to make next. Use it when starting or resuming work on a project, "
         "or when unsure what to do next, instead of probing several tools. Cheap to call; changes nothing."
@@ -67,14 +81,25 @@ def _mtime(path: Path) -> Optional[float]:
         return None
 
 
-def _pipeline_state(dot_dp: Path, source_mtime: Optional[float]) -> dict[str, dict[str, Any]]:
+def _pipeline_state(dot_dp: Path, project_path: str) -> dict[str, dict[str, Any]]:
+    statuses = analysis_status(str(dot_dp), project_path)
     state: dict[str, dict[str, Any]] = {}
     for step, relative in _PIPELINE_OUTPUTS.items():
-        mtime = _mtime(dot_dp / relative)
-        if mtime is None:
+        status: StepStatus = statuses[_RECORD_STEPS[step]]
+        if status.state == "missing":
             state[step] = {"done": False}
+            continue
+        if status.completed_at:
+            at = status.completed_at.replace("T", " ")
         else:
-            state[step] = {"at": ToolContext.fmt_ts(mtime), "stale": source_mtime is not None and source_mtime > mtime}
+            mtime = _mtime(dot_dp / relative)
+            at = ToolContext.fmt_ts(mtime) if mtime is not None else ""
+        entry: dict[str, Any] = {"at": at, "stale": status.state == "stale", "basis": status.basis}
+        if status.state == "stale":
+            entry["reason"] = status.reason
+            if status.changed_files:
+                entry["changed_files"] = status.changed_files[:_MAX_CHANGED_FILES]
+        state[step] = entry
     return state
 
 
@@ -88,9 +113,22 @@ def _next_step(
     if not pipeline["pattern_detection"].get("at") or not pipeline["profiling"].get("at"):
         return "No analysis results exist yet. " + setup_next_step(configs_dir)
     if analysis_stale:
+        stale = [pipeline[step] for step in _ANALYSIS_STEPS if pipeline[step].get("stale")]
+        changed = sorted({f for entry in stale for f in entry.get("changed_files", [])})
+        if not changed and stale and not any(entry["basis"] == "mtime" for entry in stale):
+            # not the sources: results of another project location, or of steps replaced since
+            cause = f"The analysis results do not belong to this project state ({stale[0]['reason']}). "
+        elif changed:
+            cause = (
+                "The sources changed after the last analysis ("
+                + ", ".join(changed[:5])
+                + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+                + "), so its results may not match the code. "
+            )
+        else:
+            cause = "The sources changed after the last analysis, so its results may not match the code. "
         return (
-            "The sources changed after the last analysis, so its results may not match the code. "
-            f"Call gather_data with config_name set to one of {names} (and hotspot_config_names as before, to "
+            cause + f"Call gather_data with config_name set to one of {names} (and hotspot_config_names as before, to "
             "keep the hotspot configurations); it re-runs only the stale steps."
         )
     if suggestions is None:
@@ -118,12 +156,13 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             result["configurations"] = names
 
         # Results prepared outside of the server (or by an earlier session) are usable without any setup.
-        source_mtime = ToolContext.newest_source_mtime(project_path)
-        pipeline = _pipeline_state(dot_dp, source_mtime)
+        pipeline = _pipeline_state(dot_dp, project_path)
         has_results = bool(pipeline["pattern_detection"].get("at") and pipeline["profiling"].get("at"))
         if not (set_up or has_results):
             result["next_step"] = setup_next_step(configs_dir)
             return _respond(result, ctx, project_path)
+        # informational: staleness is decided by the content of the sources, not by this time
+        source_mtime = ToolContext.newest_source_mtime(project_path)
         if source_mtime is not None:
             result["sources_modified_at"] = ToolContext.fmt_ts(source_mtime)
         result["pipeline"] = pipeline

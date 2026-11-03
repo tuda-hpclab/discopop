@@ -198,8 +198,8 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
                 "set_compile_script", {"project_path": project, "script_body": "$CXX $CXXFLAGS missing.cpp -o prog\n"}
             )
             self.assertFalse(result.is_error, result)
-            future = time.time() + 5
-            os.utime(self.source, (future, future))
+            # a changed content makes the results stale; a newer timestamp alone would not
+            self.source.write_text(self.original_source + "// edited\n")
             result = await gather_data(server, project)
             self.assertTrue(result.is_error, result)
             self.assertIn("Hotspot detection failed", result.data["message"])

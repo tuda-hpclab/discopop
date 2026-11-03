@@ -9,12 +9,15 @@
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from typing import Any, Callable, Iterator, List, Tuple
 from unittest import mock
 
+from discopop_library.AnalysisRecord import record_hotspot_run, record_step
 from mcp_server.tools import gather_data
 from mcp_server.tools.helpers import OUTPUT_TAIL_CHARS, ToolContext
 
@@ -78,7 +81,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
 
     def __run(self, step: Callable[..., dict[str, Any]], config_name: str = CONFIG_NAME) -> dict[str, Any]:
         self.script_paths.clear()
-        return step(self.project_path, config_name, 60, True, self.ctx, None)
+        return step(self.project_path, config_name, 60, True, self.ctx)
 
     def test_shared_script_is_used_without_an_override(self) -> None:
         for name, step in self.__steps():
@@ -252,7 +255,7 @@ class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
             return (-15, 1.0, "", "")
 
         with mock.patch.object(gather_data, "execute_configuration", side_effect=killed_after_writing):
-            result = gather_data._run_profiling(self.project_path, CONFIG_NAME, 60, False, self.ctx, None)
+            result = gather_data._run_profiling(self.project_path, CONFIG_NAME, 60, False, self.ctx)
         self.assertEqual(result["status"], "error")
         self.assertFalse(os.path.exists(dyn_deps))
 
@@ -274,7 +277,7 @@ class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
                     mock.patch("mcp_server.tools.gather_data.shutil.which", return_value="discopop_explorer"),
                     mock.patch.object(self.ctx, "run_process", side_effect=stop),
                 ):
-                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx, None)
+                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx)
                 self.assertEqual(result["status"], "error")
                 self.assertFalse(os.path.exists(patterns_json))
 
@@ -298,11 +301,11 @@ class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
                     mock.patch("mcp_server.tools.gather_data.shutil.which", return_value="discopop_explorer"),
                     mock.patch.object(self.ctx, "run_process", return_value=proc) as run,
                 ):
-                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx, None)
+                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx)
                 self.assertEqual(result["status"], expected_status)
                 if expected_status == "success":
                     self.assertEqual(
-                        run.call_args.args[0], ["discopop_explorer", "--enable-patterns", "task,doall,reduction"]
+                        run.call_args.args[0], ["discopop_explorer", "--enable-patterns", "doall,reduction,task"]
                     )
                 else:
                     run.assert_not_called()
@@ -336,7 +339,11 @@ class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
             os.makedirs(self.private_dir, exist_ok=True)
             with open(os.path.join(self.private_dir, f"hotspot_result_{len(self.runs)}.txt"), "w") as f:
                 f.write(config)
-            return (-15, 1.0, "", "") if config in self.failing else (0, 1.0, "", "")
+            if config in self.failing:
+                return (-15, 1.0, "", "")
+            # what the producer (execute_configuration) records for a successful hd run
+            record_hotspot_run(os.path.join(self.project_path, ".discopop"), config, "compile.sh", self.project_path)
+            return (0, 1.0, "", "")
 
         patcher = mock.patch.object(gather_data, "execute_configuration", side_effect=fake_execute_configuration)
         patcher.start()
@@ -347,12 +354,10 @@ class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
 
     def __collect(self, names: list[str]) -> list[str]:
         """instrumentation plus profiling of `names`, as gather_data runs them; the statuses"""
-        statuses = [
-            gather_data._hotspot_instrument(self.project_path, names[0], names, 60, False, self.ctx, None)["status"]
-        ]
+        statuses = [gather_data._hotspot_instrument(self.project_path, names[0], names, 60, False, self.ctx)["status"]]
         for name in names:
             statuses.append(
-                gather_data._hotspot_profiling_single(self.project_path, name, 60, False, self.ctx, None)["status"]
+                gather_data._hotspot_profiling_single(self.project_path, name, 60, False, self.ctx)["status"]
             )
         return statuses
 
@@ -374,6 +379,169 @@ class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
         self.__collect(["small"])
         self.assertEqual(self.__collect(["small", "large"]), ["success", "success", "success"])
         self.assertEqual(self.runs, ["small", "small", "large"])
+
+
+class TestSkipsFollowTheAnalysisRecord(unittest.TestCase):
+    """Every skip decision is the analysis record's, whoever produced the data."""
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+        self.project_path = os.path.realpath(self._tmp_dir.name)
+        self.dot_dp = os.path.join(self.project_path, ".discopop")
+        self.source = os.path.join(self.project_path, "main.cpp")
+        with open(self.source, "w") as f:
+            f.write("int main() {}\n")
+        configs_dir = os.path.join(self.dot_dp, "project", "configs")
+        for name in ("a", "b"):
+            os.makedirs(os.path.join(configs_dir, name))
+            with open(os.path.join(configs_dir, name, "execute.sh"), "w") as f:
+                f.write("./app\n")
+            # a per-configuration compile script, as in many benchmarks
+            with open(os.path.join(configs_dir, name, "compile.sh"), "w") as f:
+                f.write(f"# {name}\n")
+        for filename in ("compile.sh", "hd_settings.json", "dp_settings.json"):
+            with open(os.path.join(configs_dir, filename), "w") as f:
+                f.write("{}\n")
+        self.ctx = ToolContext(debug=False)
+        # a step that is not skipped runs, and fails here, which is all these tests need to see
+        patcher = mock.patch.object(gather_data, "execute_configuration", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _touch(self, relative: str, content: str = "x") -> None:
+        path = os.path.join(self.dot_dp, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+
+    def _hotspot_data(self, configs: list[str]) -> None:
+        self._touch("hotspot_detection/private/hotspot_result_1.txt")
+        for config in configs:
+            record_hotspot_run(
+                self.dot_dp, config, os.path.join(self.dot_dp, "project", "configs", config, "compile.sh")
+            )
+
+    def _hotspot_steps(self, names: list[str]) -> list[str]:
+        statuses = [gather_data._hotspot_instrument(self.project_path, names[0], names, 60, False, self.ctx)["status"]]
+        for name in names:
+            statuses.append(
+                gather_data._hotspot_profiling_single(self.project_path, name, 60, False, self.ctx)["status"]
+            )
+        return statuses
+
+    def _dp_data(self) -> None:
+        self._touch("profiler/Data.xml")
+        self._touch("profiler/dynamic_dependencies.txt")
+        record_step(self.dot_dp, "dependence_profiling", {"config": "a", "compile_script": "compile.sh"})
+
+    def test_a_record_over_two_per_configuration_compile_scripts_covers_both_configurations(self) -> None:
+        self._hotspot_data(["a", "b"])
+        result = gather_data._hotspot_instrument(self.project_path, "a", ["a", "b"], 60, False, self.ctx)
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "results_are_current")
+        self.assertEqual(result["basis"], "fingerprint")
+        self.assertIn("last_run", result)
+        self.assertEqual(self._hotspot_steps(["a", "b"]), ["skipped", "skipped", "skipped"])
+
+    def test_other_requested_configurations_than_the_recorded_ones_instrument_again(self) -> None:
+        self._hotspot_data(["a", "b"])
+        self.assertEqual(self._hotspot_steps(["a"])[0], "error")
+        self.assertEqual(self._hotspot_steps(["a", "b", "c"])[0], "error")
+
+    def test_a_single_configuration_is_skipped_when_it_is_among_the_recorded_ones(self) -> None:
+        self._hotspot_data(["a"])
+        self.assertEqual(
+            gather_data._hotspot_profiling_single(self.project_path, "a", 60, False, self.ctx)["status"], "skipped"
+        )
+        self.assertEqual(
+            gather_data._hotspot_profiling_single(self.project_path, "b", 60, False, self.ctx)["status"], "error"
+        )
+
+    def test_a_changed_source_makes_every_step_run_again(self) -> None:
+        self._hotspot_data(["a"])
+        self._dp_data()
+        self._touch("hotspot_detection/Hotspots.json")
+        record_step(self.dot_dp, "hotspot_analysis", {})
+        with open(self.source, "w") as f:
+            f.write("int main() { return 1; }\n")
+        self.assertEqual(self._hotspot_steps(["a"]), ["error", "error"])
+        self.assertEqual(
+            gather_data._instrument_project(self.project_path, "a", 60, False, self.ctx)["status"], "error"
+        )
+        self.assertEqual(gather_data._run_profiling(self.project_path, "a", 60, False, self.ctx)["status"], "error")
+
+    def test_an_unchanged_source_with_a_new_timestamp_does_not_matter(self) -> None:
+        self._dp_data()
+        os.utime(self.source, (time.time() + 3600, time.time() + 3600))
+        result = gather_data._instrument_project(self.project_path, "a", 60, False, self.ctx)
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["basis"], "fingerprint")
+        self.assertEqual(gather_data._run_profiling(self.project_path, "a", 60, False, self.ctx)["status"], "skipped")
+
+    def test_force_overrides_the_record(self) -> None:
+        self._dp_data()
+        self.assertEqual(gather_data._instrument_project(self.project_path, "a", 60, True, self.ctx)["status"], "error")
+
+    def test_hotspot_analysis_is_skipped_on_a_current_record(self) -> None:
+        self._hotspot_data(["a"])
+        self._touch("hotspot_detection/Hotspots.json")
+        record_step(self.dot_dp, "hotspot_analysis", {})
+        result = gather_data._hotspot_analysis(self.project_path, 60, False, self.ctx)
+        self.assertEqual((result["status"], result["basis"]), ("skipped", "fingerprint"))
+        # another detection run makes the analysis stale
+        record_hotspot_run(self.dot_dp, "b", "compile.sh")
+        with mock.patch("mcp_server.tools.gather_data.shutil.which", return_value=None):
+            self.assertEqual(gather_data._hotspot_analysis(self.project_path, 60, False, self.ctx)["status"], "error")
+
+    def test_pattern_detection_needs_the_default_patterns_and_default_options(self) -> None:
+        self._dp_data()
+        self._touch("explorer/patterns.json", "{}")
+        self._touch("hotspot_detection/Hotspots.json")
+        for patterns, options, expected in (
+            (["doall", "reduction", "task"], {}, "skipped"),
+            (["doall", "reduction", "task", "pipeline"], {}, "skipped"),
+            (["doall", "reduction"], {}, "error"),
+            (["doall", "reduction", "task"], {"hotspot_types": "yes"}, "error"),
+        ):
+            with self.subTest(patterns=patterns, options=options):
+                params: dict[str, Any] = {"enabled_patterns": patterns}
+                if options:
+                    params["options"] = options
+                record_step(self.dot_dp, "pattern_detection", params)
+                with mock.patch("mcp_server.tools.gather_data.shutil.which", return_value=None):
+                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx)
+                self.assertEqual(result["status"], expected)
+
+    def test_data_without_a_record_still_counts_while_it_is_newer_than_the_sources(self) -> None:
+        # written by a DiscoPoP predating the record: legacy bookkeeping file, no analysis_record.json
+        self._touch("hotspot_detection/private/hotspot_result_1.txt")
+        self._touch("hotspot_detection/profiled_configurations.json", json.dumps(["a", "b"]))
+        self._touch("profiler/Data.xml")
+        self._touch("profiler/dynamic_dependencies.txt")
+        for relative in (
+            "hotspot_detection/private/hotspot_result_1.txt",
+            "profiler/Data.xml",
+            "profiler/dynamic_dependencies.txt",
+        ):
+            os.utime(os.path.join(self.dot_dp, relative), (time.time() + 60, time.time() + 60))
+        self.assertEqual(self._hotspot_steps(["a", "b"]), ["skipped", "skipped", "skipped"])
+        result = gather_data._instrument_project(self.project_path, "a", 60, False, self.ctx)
+        self.assertEqual((result["status"], result["basis"]), ("skipped", "mtime"))
+        # an edit after the data was written makes it stale
+        os.utime(self.source, (time.time() + 600, time.time() + 600))
+        self.assertEqual(
+            gather_data._instrument_project(self.project_path, "a", 60, False, self.ctx)["status"], "error"
+        )
+
+    def test_a_copied_discopop_directory_is_not_taken_for_current(self) -> None:
+        self._dp_data()
+        moved = os.path.join(self.project_path, "moved")
+        os.makedirs(moved)
+        shutil.copy(self.source, moved)
+        shutil.copytree(self.dot_dp, os.path.join(moved, ".discopop"))
+        result = gather_data._instrument_project(moved, "a", 60, False, self.ctx)
+        self.assertEqual(result["status"], "error")  # ran, instead of being skipped
 
 
 class TestHotspotDetectionAlwaysRuns(unittest.TestCase):
@@ -428,7 +596,7 @@ class TestWarningsOfSuccessfulSteps(unittest.TestCase):
             return (0, 1.0, stdout, stderr)
 
         with mock.patch.object(gather_data, "execute_configuration", side_effect=build):
-            return gather_data._instrument_project(self.project_path, CONFIG_NAME, 60, True, self.ctx, None)
+            return gather_data._instrument_project(self.project_path, CONFIG_NAME, 60, True, self.ctx)
 
     def test_the_warnings_of_the_instrumentation_build_are_listed(self) -> None:
         result = self.__instrument("", "".join(f"a.cpp:{n}:1: warning: w{n}\n" for n in range(7)))
@@ -520,9 +688,7 @@ class TestGatherDataStderrTail(unittest.TestCase):
 
     def __instrument(self, stderr: str) -> dict[str, Any]:
         self.stderr = stderr
-        result: dict[str, Any] = gather_data._instrument_project(
-            self.project_path, CONFIG_NAME, 60, True, self.ctx, None
-        )
+        result: dict[str, Any] = gather_data._instrument_project(self.project_path, CONFIG_NAME, 60, True, self.ctx)
         return result
 
     def test_a_long_stderr_is_cut_to_its_tail(self) -> None:
@@ -548,7 +714,7 @@ class TestGatherDataStderrTail(unittest.TestCase):
             mock.patch("mcp_server.tools.gather_data.shutil.which", return_value="discopop_explorer"),
             mock.patch.object(self.ctx, "run_process", return_value=proc),
         ):
-            result = gather_data._run_pattern_detection(self.project_path, 60, True, self.ctx, None)
+            result = gather_data._run_pattern_detection(self.project_path, 60, True, self.ctx)
         self.assertEqual(len(result["stderr"]), OUTPUT_TAIL_CHARS)
         self.assertEqual(result["stderr_length"], len(self.long_stderr))
 
@@ -703,10 +869,7 @@ class TestInstrumentationSkip(unittest.TestCase):
         self._tmp_dir.cleanup()
 
     def __instrument(self) -> dict[str, Any]:
-        # source_mtime=None: the sources count as unchanged
-        result: dict[str, Any] = gather_data._instrument_project(
-            self.project_path, CONFIG_NAME, 60, False, self.ctx, None
-        )
+        result: dict[str, Any] = gather_data._instrument_project(self.project_path, CONFIG_NAME, 60, False, self.ctx)
         return result
 
     def test_reinstruments_when_profiling_never_produced_its_output(self) -> None:

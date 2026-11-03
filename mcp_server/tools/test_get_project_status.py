@@ -8,6 +8,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 from unittest import mock
 
+from discopop_library.AnalysisRecord import record_hotspot_run, record_step
 from mcp_server.tools import get_project_status
 from mcp_server.tools.helpers import COMPILE_SCRIPT_PLACEHOLDER_MARKER, ToolContext
 
@@ -149,6 +151,67 @@ class TestGetProjectStatus(unittest.TestCase):
         data = self.__handle()
         self.assertFalse(data["pipeline"]["pattern_detection"]["stale"])
         self.assertNotIn("changed", data["next_step"])
+
+    def __record(self) -> None:
+        record_hotspot_run(str(self.dot_dp), "small", "compile.sh", self.project_path)
+        record_step(str(self.dot_dp), "hotspot_analysis", {}, self.project_path)
+        record_step(str(self.dot_dp), "dependence_profiling", {"config": "small"}, self.project_path)
+        record_step(
+            str(self.dot_dp),
+            "pattern_detection",
+            {"enabled_patterns": ["doall", "reduction", "task"]},
+            self.project_path,
+        )
+        record_step(str(self.dot_dp), "patch_generation", {}, self.project_path)
+
+    def test_a_record_decides_currentness_by_content_not_by_timestamps(self) -> None:
+        self.__set_up()
+        self.__write("hotspot_detection/private/hotspot_result_1.txt")
+        self.__write("hotspot_detection/Hotspots.json")
+        # outputs older than the sources: the mtime rule would call them stale
+        self.__analyse(mtime=_OLD - 7200)
+        self.__record()
+        os.utime(self.source, (_NEW, _NEW))
+        data = self.__handle()
+        for step in ("hotspot_detection", "instrumentation", "profiling", "pattern_detection", "patch_generation"):
+            self.assertFalse(data["pipeline"][step]["stale"], step)
+            self.assertEqual(data["pipeline"][step]["basis"], "fingerprint")
+        self.assertIn("sources_modified_at", data)
+        self.assertIn("cheap", data["next_step"])
+
+    def test_a_changed_source_is_stale_and_named(self) -> None:
+        self.__set_up()
+        self.__analyse(mtime=_NEW)
+        self.__record()
+        self.source.write_text("int main() { return 1; }\n")
+        data = self.__handle()
+        for step in ("instrumentation", "profiling", "pattern_detection", "patch_generation"):
+            self.assertTrue(data["pipeline"][step]["stale"], step)
+            self.assertEqual(data["pipeline"][step]["changed_files"], ["main.cpp"])
+            self.assertEqual(data["pipeline"][step]["basis"], "fingerprint")
+        self.assertIn("main.cpp", data["next_step"])
+        self.assertIn("gather_data", data["next_step"])
+
+    def test_results_without_a_record_are_judged_by_mtime(self) -> None:
+        self.__set_up()
+        self.__analyse(mtime=_NEW)
+        data = self.__handle()
+        self.assertEqual(data["pipeline"]["pattern_detection"]["basis"], "mtime")
+        self.assertFalse(data["pipeline"]["pattern_detection"]["stale"])
+
+    def test_a_copied_discopop_directory_is_stale(self) -> None:
+        self.__set_up()
+        self.__analyse(mtime=_NEW)
+        self.__record()
+        moved = Path(self.project_path) / "moved"
+        moved.mkdir()
+        shutil.copy(self.source, moved)
+        shutil.copytree(self.dot_dp, moved / ".discopop")
+        data = json.loads(get_project_status.handle({"project_path": str(moved)}, self.ctx)[0].text)
+        self.assertTrue(data["pipeline"]["pattern_detection"]["stale"])
+        self.assertIn("another location", data["pipeline"]["pattern_detection"]["reason"])
+        self.assertIn("another location", data["next_step"])
+        self.assertIn("gather_data", data["next_step"])
 
     def test_errors_are_reported_not_raised(self) -> None:
         self.__set_up()

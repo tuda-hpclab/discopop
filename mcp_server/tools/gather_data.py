@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from discopop_library.AnalysisRecord import DEFAULT_PATTERNS, StepStatus, clear_steps, covers, step_status
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
 from mcp_server.tools.helpers import (
@@ -55,8 +56,10 @@ TOOL = Tool(
         "  6. Analyse with discopop_explorer to detect parallelization opportunities (doall, reduction and\n"
         "     task parallelism).\n"
         "\n"
-        "Each step is automatically skipped when its outputs are already current "
-        "relative to the source files. Use force=true to re-run all steps unconditionally. "
+        "Each step is automatically skipped when its outputs are current: they were produced for the "
+        "present content of the source files (no matter by which DiscoPoP tool, and not judged by "
+        "timestamps) and, for pattern detection, cover doall, reduction and task. "
+        "Use force=true to re-run all steps unconditionally. "
         "\n\n"
         "Steps 1 and 4 compile in the project itself, so the project's build directory is "
         "rebuilt plainly (par_settings.json) before this tool returns: a build left over "
@@ -127,25 +130,24 @@ def _stderr_fields(stderr: Any) -> dict[str, Any]:
     return fields
 
 
-# Which configurations the hotspot results in .discopop/hotspot_detection/private/ were
-# profiled with. The result files themselves do not say, and the classification compares
-# them across inputs: results from other configurations than the requested ones, or from
-# only some of them, would classify silently on the wrong data.
-PROFILED_CONFIGURATIONS_FILE = "profiled_configurations.json"
+def _skipped(status: StepStatus, **extra: Any) -> dict[str, Any]:
+    """The result of a step whose outputs are current, with what that was decided on."""
+    result: dict[str, Any] = {"status": "skipped", "reason": "results_are_current"}
+    if status.completed_at:
+        result["last_run"] = status.completed_at.replace("T", " ")
+    result["basis"] = status.basis
+    result.update(extra)
+    return result
 
 
-def _profiled_configurations(hotspot_dir: Path) -> list[str]:
-    try:
-        names = json.loads((hotspot_dir / PROFILED_CONFIGURATIONS_FILE).read_text())
-    except (OSError, ValueError):
-        return []
-    return [str(n) for n in names] if isinstance(names, list) else []
-
-
-def _record_profiled_configuration(hotspot_dir: Path, config_name: str) -> None:
-    names = _profiled_configurations(hotspot_dir)
-    if config_name not in names:
-        (hotspot_dir / PROFILED_CONFIGURATIONS_FILE).write_text(json.dumps(names + [config_name]))
+def _last_run(status: StepStatus, *paths: Path) -> dict[str, Any]:
+    """`_skipped` for a status; `last_run` falls back to the outputs' mtime for data without a record."""
+    extra: dict[str, Any] = {}
+    if not status.completed_at:
+        mtimes = [p.stat().st_mtime for p in paths if p.exists()]
+        if mtimes:
+            extra["last_run"] = ToolContext.fmt_ts(min(mtimes))
+    return _skipped(status, **extra)
 
 
 def _hotspot_instrument(
@@ -155,7 +157,6 @@ def _hotspot_instrument(
     timeout_seconds: int,
     force: bool,
     ctx: ToolContext,
-    source_mtime: Optional[float],
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -177,21 +178,18 @@ def _hotspot_instrument(
     # rebuild at the end of every call leaves no instrumented binary behind, so profiling a
     # configuration that is missing needs this step, and re-instrumenting clears the results
     # of every other configuration as well.
-    if not force and private_dir.exists() and set(_profiled_configurations(hotspot_dir)) == set(hotspot_config_names):
-        result_files = list(private_dir.glob("hotspot_result_*.txt"))
-        if result_files:
-            last_run_mtime = max(f.stat().st_mtime for f in result_files)
-            if source_mtime is None or source_mtime <= last_run_mtime:
-                return {
-                    "status": "skipped",
-                    "reason": "results_are_current",
-                    "last_run": ToolContext.fmt_ts(last_run_mtime),
-                    "num_runs_accumulated": len(result_files),
-                }
+    if not force:
+        status = step_status(str(p / ".discopop"), "hotspot_detection", project_path)
+        if covers(status, configs=hotspot_config_names):
+            result_files = list(private_dir.glob("hotspot_result_*.txt"))
+            return {**_last_run(status, *result_files), "num_runs_accumulated": len(result_files)}
 
     if hotspot_dir.exists():
         shutil.rmtree(str(hotspot_dir))
         ctx.log_action(project_path, "gather_data", "Deleted stale .discopop/hotspot_detection/")
+        # The record would otherwise keep listing the configurations of the deleted runs, and the
+        # runs to come (same sources) would be merged into them.
+        clear_steps(str(p / ".discopop"), "hotspot_detection", "hotspot_analysis")
 
     pm_args = ctx.make_pm_args(project_path, timeout_seconds)
     ctx.log_action(
@@ -248,7 +246,6 @@ def _hotspot_profiling_single(
     timeout_seconds: int,
     force: bool,
     ctx: ToolContext,
-    source_mtime: Optional[float],
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -262,16 +259,13 @@ def _hotspot_profiling_single(
     if not hd_settings.exists():
         return {"status": "error", "message": "hd_settings.json not found."}
 
-    if not force and private_dir.exists() and config_name in _profiled_configurations(hotspot_dir):
-        existing = list(private_dir.glob("hotspot_result_*.txt"))
-        if existing:
-            last_run_mtime = max(f.stat().st_mtime for f in existing)
-            if source_mtime is None or source_mtime <= last_run_mtime:
-                return {
-                    "status": "skipped",
-                    "reason": "results_are_current",
-                    "num_runs_accumulated": len(existing),
-                }
+    if not force:
+        status = step_status(str(p / ".discopop"), "hotspot_detection", project_path)
+        if status.state == "current" and config_name in status.params.get("configs", {}):
+            existing = list(private_dir.glob("hotspot_result_*.txt"))
+            result = _skipped(status, num_runs_accumulated=len(existing))
+            result.pop("last_run", None)
+            return result
 
     results_before = set(private_dir.glob("hotspot_result_*.txt")) if private_dir.exists() else set()
     pm_args = ctx.make_pm_args(project_path, timeout_seconds)
@@ -323,7 +317,9 @@ def _hotspot_profiling_single(
             "elapsed_time": elapsed,
             **_stderr_fields(stderr),
         }
-    _record_profiled_configuration(hotspot_dir, config_name)
+    # The run is recorded by execute_configuration (record_hotspot_run). It notes the compile script
+    # the configuration resolves to, not the one of the shared instrumented build; only the
+    # configuration names enter any skip decision.
     ctx.log_action(
         project_path,
         "gather_data",
@@ -332,9 +328,7 @@ def _hotspot_profiling_single(
     return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
 
 
-def _hotspot_analysis(
-    project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext, source_mtime: Optional[float]
-) -> dict[str, Any]:
+def _hotspot_analysis(project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext) -> dict[str, Any]:
     p = Path(project_path)
     discopop_dir = p / ".discopop"
     private_dir = discopop_dir / "hotspot_detection" / "private"
@@ -346,14 +340,10 @@ def _hotspot_analysis(
     if not result_files:
         return {"status": "error", "message": "No hotspot_result_*.txt files found."}
 
-    if not force and hotspots_json.exists():
-        analysis_mtime = hotspots_json.stat().st_mtime
-        if source_mtime is None or source_mtime <= analysis_mtime:
-            return {
-                "status": "skipped",
-                "reason": "results_are_current",
-                "last_run": ToolContext.fmt_ts(analysis_mtime),
-            }
+    if not force:
+        status = step_status(str(discopop_dir), "hotspot_analysis", project_path)
+        if status.state == "current":
+            return _last_run(status, hotspots_json)
 
     venv_bin = os.path.dirname(sys.executable)
     env = os.environ.copy()
@@ -414,7 +404,6 @@ def _instrument_project(
     timeout_seconds: int,
     force: bool,
     ctx: ToolContext,
-    source_mtime: Optional[float],
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -437,14 +426,10 @@ def _instrument_project(
     # build before returning (`_restore_plain_build`), so skipping here would have
     # profiling run an uninstrumented program that never writes its dependencies.
     dyn_deps = profiler_dir / "dynamic_dependencies.txt"
-    if not force and data_xml.exists() and dyn_deps.exists():
-        result_mtime = min(data_xml.stat().st_mtime, dyn_deps.stat().st_mtime)
-        if source_mtime is None or source_mtime <= result_mtime:
-            return {
-                "status": "skipped",
-                "reason": "results_are_current",
-                "last_run": ToolContext.fmt_ts(result_mtime),
-            }
+    if not force:
+        status = step_status(str(p / ".discopop"), "dependence_profiling", project_path)
+        if status.state == "current":
+            return _last_run(status, data_xml, dyn_deps)
 
     if profiler_dir.exists():
         shutil.rmtree(str(profiler_dir))
@@ -524,7 +509,6 @@ def _run_profiling(
     timeout_seconds: int,
     force: bool,
     ctx: ToolContext,
-    source_mtime: Optional[float],
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -540,14 +524,10 @@ def _run_profiling(
     if not dp_settings.exists():
         return {"status": "error", "message": "dp_settings.json not found."}
 
-    if not force and dyn_deps.exists():
-        result_mtime = dyn_deps.stat().st_mtime
-        if source_mtime is None or source_mtime <= result_mtime:
-            return {
-                "status": "skipped",
-                "reason": "results_are_current",
-                "last_run": ToolContext.fmt_ts(result_mtime),
-            }
+    if not force:
+        status = step_status(str(p / ".discopop"), "dependence_profiling", project_path)
+        if status.state == "current":
+            return _last_run(status, data_xml, dyn_deps)
 
     pm_args = ctx.make_pm_args(project_path, timeout_seconds)
     ctx.log_action(
@@ -595,30 +575,12 @@ def _run_profiling(
             "elapsed_time": elapsed,
             **_stderr_fields(stderr),
         }
+    # Recorded by execute_configuration, for this execute.sh run only (never for the compile).
     ctx.log_action(project_path, "gather_data", f"Profiling complete in {elapsed}s")
     return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
 
 
-# the pattern types gather_data detects
-DETECTED_PATTERNS = ["task", "doall", "reduction"]
-
-
-def _detected_patterns(patterns_json: Path) -> set[str]:
-    """The pattern types a patterns.json was detected for; none for results which do not say."""
-    try:
-        with open(patterns_json) as f:
-            return set(json.load(f).get("enabled_patterns") or [])
-    except (OSError, ValueError, AttributeError):
-        return set()
-
-
-def _run_pattern_detection(
-    project_path: str,
-    timeout_seconds: int,
-    force: bool,
-    ctx: ToolContext,
-    source_mtime: Optional[float],
-) -> dict[str, Any]:
+def _run_pattern_detection(project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext) -> dict[str, Any]:
     p = Path(project_path)
     discopop_dir = p / ".discopop"
     data_xml = discopop_dir / "profiler" / "Data.xml"
@@ -633,14 +595,12 @@ def _run_pattern_detection(
             "message": "profiler/dynamic_dependencies.txt not found — profiling step must have failed.",
         }
 
-    if not force and patterns_json.exists() and _detected_patterns(patterns_json) >= set(DETECTED_PATTERNS):
-        result_mtime = patterns_json.stat().st_mtime
-        if source_mtime is None or source_mtime <= result_mtime:
-            return {
-                "status": "skipped",
-                "reason": "results_are_current",
-                "last_run": ToolContext.fmt_ts(result_mtime),
-            }
+    if not force:
+        status = step_status(str(discopop_dir), "pattern_detection", project_path)
+        # results of an explorer run with options that change them (a hotspot filter, ...) are not what
+        # this step would produce
+        if covers(status, enabled_patterns=DEFAULT_PATTERNS) and not status.params.get("options"):
+            return _last_run(status, patterns_json)
 
     venv_bin = os.path.dirname(sys.executable)
     env = os.environ.copy()
@@ -654,7 +614,7 @@ def _run_pattern_detection(
     ctx.log_action(project_path, "gather_data", "Pattern detection: invoking discopop_explorer")
     try:
         proc = ctx.run_process(
-            [explorer, "--enable-patterns", ",".join(DETECTED_PATTERNS)],
+            [explorer, "--enable-patterns", ",".join(DEFAULT_PATTERNS)],
             timeout=timeout_seconds,
             cwd=str(discopop_dir),
             env=env,
@@ -863,18 +823,13 @@ def _pipeline(
     steps: dict[str, Any] = {}
     hotspot_ok = True
 
-    # Compute source mtime once and reuse across all staleness checks.
-    source_mtime = ToolContext.newest_source_mtime(project_path)
-
     total_steps = 6  # 3 hotspot steps, instrument + profile + detect
     step = 0
 
     # === Hotspot detection ===
     step += 1
     _progress(step, total_steps, "Hotspot instrumentation", ctx)
-    hd_instr = _hotspot_instrument(
-        project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, source_mtime
-    )
+    hd_instr = _hotspot_instrument(project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx)
     steps["hotspot_instrumentation"] = hd_instr
 
     if hd_instr["status"] in ("success", "skipped") and not ctx.cancelled:
@@ -884,14 +839,14 @@ def _pipeline(
         for hd_config in hotspot_config_names:
             if ctx.cancelled:
                 break
-            run_res = _hotspot_profiling_single(project_path, hd_config, timeout_seconds, force, ctx, source_mtime)
+            run_res = _hotspot_profiling_single(project_path, hd_config, timeout_seconds, force, ctx)
             profiling_runs.append({"config": hd_config, **run_res})
         steps["hotspot_profiling"] = profiling_runs
 
         if not ctx.cancelled and all(r["status"] in ("success", "skipped") for r in profiling_runs):
             step += 1
             _progress(step, total_steps, "Hotspot analysis", ctx)
-            hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx, source_mtime)
+            hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx)
             steps["hotspot_analysis"] = hd_analysis
             if hd_analysis["status"] not in ("success", "skipped"):
                 hotspot_ok = False
@@ -925,7 +880,7 @@ def _pipeline(
     # === Required: instrument project ===
     step += 1
     _progress(step, total_steps, "DiscoPoP instrumentation (compile)", ctx)
-    instr = _instrument_project(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
+    instr = _instrument_project(project_path, config_name, timeout_seconds, force, ctx)
     steps["instrumentation"] = instr
     # a cancel stops the running step, which then fails; that failure is not the answer
     if ctx.cancelled:
@@ -952,7 +907,7 @@ def _pipeline(
         return _cancelled_result(project_path, steps)
     step += 1
     _progress(step, total_steps, "Profiling (run instrumented binary)", ctx)
-    prof = _run_profiling(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
+    prof = _run_profiling(project_path, config_name, timeout_seconds, force, ctx)
     steps["profiling"] = prof
     if ctx.cancelled:
         return _cancelled_result(project_path, steps)
@@ -975,7 +930,7 @@ def _pipeline(
         return _cancelled_result(project_path, steps)
     step += 1
     _progress(step, total_steps, "Pattern detection (discopop_explorer)", ctx)
-    detection = _run_pattern_detection(project_path, timeout_seconds, force, ctx, source_mtime)
+    detection = _run_pattern_detection(project_path, timeout_seconds, force, ctx)
     steps["pattern_detection"] = detection
     if ctx.cancelled:
         return _cancelled_result(project_path, steps)

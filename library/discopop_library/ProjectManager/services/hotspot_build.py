@@ -11,33 +11,45 @@
 import os
 from typing import Callable, Optional, Tuple
 
+from discopop_library.AnalysisRecord import RECORD_FILENAME, source_files, step_status
+
 # Build states, as reported by hotspot_build_state.
 BUILD_NONE = "none"
 BUILD_CURRENT = "current"
 BUILD_STALE = "stale"
 BUILD_MISMATCH = "mismatch"
 
-# Source extensions considered when deciding whether a build went stale.
-SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx")
-# Directories never worth walking for source mtimes.
-PRUNED_DIRS = {".git", ".discopop", "build", "venv", "__pycache__", "node_modules", ".mypy_cache"}
-
 
 def newest_source_mtime(project_root: str) -> Optional[float]:
-    """Newest mtime among the project's C/C++ sources, or ``None`` if none found."""
+    """Newest mtime among the project's C/C++ sources, or ``None`` if none found.
+
+    The files are those of the analysis record's source walk. Only the fallback for projects whose
+    hotspot runs carry no analysis record.
+    """
     newest: Optional[float] = None
-    for root, dirnames, filenames in os.walk(project_root):
-        dirnames[:] = [d for d in dirnames if d not in PRUNED_DIRS and not d.startswith(".")]
-        for filename in filenames:
-            if not filename.endswith(SOURCE_SUFFIXES):
-                continue
-            try:
-                mtime = os.path.getmtime(os.path.join(root, filename))
-            except OSError:
-                continue
-            if newest is None or mtime > newest:
-                newest = mtime
+    for relative in source_files(project_root):
+        try:
+            mtime = os.path.getmtime(os.path.join(project_root, relative))
+        except OSError:
+            continue
+        if newest is None or mtime > newest:
+            newest = mtime
     return newest
+
+
+def _sources_changed(project_root: str, build_mtime: float) -> bool:
+    """Whether the sources differ from those the build (and the hotspot runs) were made for.
+
+    The analysis record's content fingerprint decides when the hotspot runs are recorded; a build of
+    unrecorded (older) data falls back to comparing the sources' mtimes with the build's.
+    """
+    dot_discopop = os.path.join(project_root, ".discopop")
+    if os.path.isfile(os.path.join(dot_discopop, RECORD_FILENAME)):
+        status = step_status(dot_discopop, "hotspot_detection", project_root)
+        if status.basis == "fingerprint":
+            return status.state == "stale"
+    newest_source = newest_source_mtime(project_root)
+    return newest_source is not None and newest_source > build_mtime
 
 
 def hotspot_build_state(
@@ -46,7 +58,8 @@ def hotspot_build_state(
     """Whether the current build can serve another run directly, and why not.
 
     ``cs_id_path`` is the profiler's call site id file, which the instrumented build writes; its mtime is
-    the time of the build. A non-current state only means a recompile is needed first; it no longer
+    the time of the build (used only for data without an analysis record; with one, the sources' content
+    decides). A non-current state only means a recompile is needed first; it no longer
     implies losing anything, since runs from separate builds are combined by source location.
     ``BUILD_MISMATCH`` is the one case that warrants a warning: the region set changed under the
     accumulated runs, which for a source edit means their line numbers may no longer refer to the same code.
@@ -60,8 +73,7 @@ def hotspot_build_state(
         build_mtime = os.path.getmtime(cs_id_path)
     except OSError:
         return (BUILD_NONE, "No instrumented build yet.")
-    newest_source = newest_source_mtime(project_root)
-    if newest_source is not None and newest_source > build_mtime:
+    if _sources_changed(project_root, build_mtime):
         return (BUILD_MISMATCH, "Sources changed since the instrumented build was made.")
 
     if compile_script_differs():

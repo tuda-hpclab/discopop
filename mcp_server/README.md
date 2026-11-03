@@ -203,7 +203,7 @@ Answers in one cheap, read-only call where a project stands in the DiscoPoP work
 
 **Returns** (fields that do not apply are left out):
 - `initialized`, `compile_script_configured`, `configurations` (names of the runnable configurations)
-- `pipeline`: one entry per step — `hotspot_detection`, `instrumentation`, `profiling`, `pattern_detection`, `patch_generation` — with the time it last ran (`at`) and `stale` when a source file is newer, the same test `gather_data` uses to decide what to re-run; `{"done": false}` for a step that has not run. Generated sources of a build (CMake build trees, `.git`) are not sources
+- `pipeline`: one entry per step — `hotspot_detection`, `instrumentation`, `profiling`, `pattern_detection`, `patch_generation` — with the time it last ran (`at`) and `stale` (with `reason` and `changed_files`) when the sources' content changed since, the same test `gather_data` uses to decide what to re-run; `basis` says whether the analysis record or, for older data, modification times decided; `{"done": false}` for a step that has not run. Generated sources of a build (CMake build trees, `.git`) are not sources
 - `suggestions`: the number of suggestions the pattern detection produced
 - `next_step`: the setup step still missing, `gather_data` when there is no or only stale analysis, `get_parallelization_suggestions` when suggestions exist, and so on
 
@@ -364,7 +364,7 @@ After changing the sources, call `gather_data` again: `get_project_status` marks
 
 The query tools (`get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects`) only read the results in `.discopop`; none of them starts a profiling run, so they are cheap. Results produced beforehand, by a person running `gather_data`, or `discopop_cxx`, the profiled run and `discopop_explorer` by hand (or by an earlier session), are used as they are: an agent starts with `get_project_status`, finds current results and queries them without any wait. This works without `initialize_discopop_directory` and the configuration tools; `--tools analysis` then offers just the analysis tools. A repeated `gather_data` call is cheap as well: it skips every step whose outputs are current.
 
-The results count as current while no source file is newer than them (modification time). After editing, copying or checking out the sources again, `get_project_status` reports them as stale and `gather_data` re-runs the affected steps. The results hold for the inputs that were profiled.
+Every step records the content fingerprint of the sources it ran on (`.discopop/analysis_record.json`, written by the project manager, the GUI and `gather_data` alike). The results count as current while the sources have the same content and the project has not moved: an edit makes them stale (`get_project_status` names the changed files) and `gather_data` re-runs the affected steps, while a copy or checkout that leaves the content unchanged does not. Data written by a DiscoPoP predating the record is judged by modification time. The results hold for the inputs that were profiled. The results hold for the inputs that were profiled.
 
 ### The project is left buildable
 

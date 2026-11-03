@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 
 from mcp.types import TextContent
 
+from discopop_library.AnalysisRecord import source_files
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 
 if TYPE_CHECKING:
@@ -714,34 +715,24 @@ class ToolContext:
     @staticmethod
     def newest_source_mtime(project_path: str) -> Optional[float]:
         """Return the mtime of the most recently modified source file under project_path,
-        excluding the .discopop subtree. Returns None if no source files are found."""
+        or None if no source files are found. Informational (see `source_mtimes`)."""
         return max(ToolContext.source_mtimes(project_path).values(), default=None)
 
     @staticmethod
     def source_mtimes(project_path: str) -> dict[Path, float]:
         """The mtime of every source file under project_path.
 
-        Not searched: the .discopop subtree, version control, and build trees. A CMake build tree
-        (a directory with a CMakeCache.txt, or CMakeFiles) holds generated sources such as
-        CMakeCCompilerId.c that every build rewrites, so counting them would mark the analysis stale
-        right after the pipeline's own build.
+        The files are those of the analysis record (`discopop_library.AnalysisRecord.source_files`), which
+        skips the .discopop subtrees, version control and build trees. Informational only: whether results
+        are current is decided by the content fingerprint, not by these times.
         """
-        source_exts = {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh"}
-        ignored_dirs = {".discopop", ".git", "CMakeFiles"}
         mtimes: dict[Path, float] = {}
-        for dirpath, dirnames, filenames in os.walk(project_path):
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if d not in ignored_dirs and not os.path.isfile(os.path.join(dirpath, d, "CMakeCache.txt"))
-            ]
-            for name in filenames:
-                if os.path.splitext(name)[1].lower() in source_exts:
-                    f = Path(dirpath) / name
-                    try:
-                        mtimes[f] = f.stat().st_mtime
-                    except OSError:
-                        continue  # removed while walking
+        for relative in source_files(project_path):
+            f = Path(project_path) / relative
+            try:
+                mtimes[f] = f.stat().st_mtime
+            except OSError:
+                continue  # removed while walking
         return mtimes
 
     @staticmethod
