@@ -151,13 +151,54 @@ def test_update_whose_value_is_used_is_not_a_statement(graph: nx.DiGraph[str]) -
     assert site.first_column == site.last_column == 20
 
 
-def test_braceless_loop_body_is_not_a_statement(graph: nx.DiGraph[str]) -> None:
-    # "    for (int i = 0; i < n; i++) s += x[i];"
+def test_braceless_loop_body_on_the_header_line_is_not_alone(graph: nx.DiGraph[str]) -> None:
+    # "    for (int i = 0; i < n; i++) s += x[i];": the pragma needs a line of its own
     sites = _sites(graph, BRACELESS_LINE)
     assert [(s.operator, s.variable, s.problem) for s in sites] == [
         ("++", "i", NOT_A_STATEMENT),
-        ("+=", "s", NOT_A_STATEMENT),
+        ("+=", "s", NOT_ALONE_ON_LINE),
     ]
+
+
+BRACELESS_FOR, BRACELESS_WHILE, BRACELESS_DO, THEN_BRANCH, ELSE_BRANCH = 111, 114, 116, 119, 121
+INCREMENT_ALONE, BODY_AFTER_MULTI_LINE_HEADER, IF_IN_BRACELESS_FOR, DO_ON_ITS_LINE, RANGE_FOR = (
+    124,
+    125,
+    128,
+    129,
+    133,
+)
+
+
+@pytest.mark.parametrize(
+    "line,operator",
+    [
+        (BRACELESS_FOR, "++"),
+        (BRACELESS_WHILE, "+="),
+        (BRACELESS_DO, "-="),
+        (THEN_BRANCH, "+="),
+        (BODY_AFTER_MULTI_LINE_HEADER, "+="),
+        (IF_IN_BRACELESS_FOR, "+="),
+        (RANGE_FOR, "+="),
+    ],
+)
+def test_a_braceless_body_on_a_line_of_its_own_is_a_site(graph: nx.DiGraph[str], line: int, operator: str) -> None:
+    site = _only(graph, line)
+    assert (site.operator, site.variable, site.problem) == (operator, "h", None)
+
+
+def test_an_else_branch_is_not_a_statement(graph: nx.DiGraph[str]) -> None:
+    # whether "else" stands on the line of the statement is not in the AST
+    assert _only(graph, ELSE_BRANCH).problem == NOT_A_STATEMENT
+
+
+def test_a_loop_increment_alone_on_its_line_is_not_a_statement(graph: nx.DiGraph[str]) -> None:
+    site = _only(graph, INCREMENT_ALONE)  # "         h[i]++)"
+    assert (site.operator, site.variable, site.problem) == ("++", "h", NOT_A_STATEMENT)
+
+
+def test_a_do_body_on_the_line_of_do_is_not_alone(graph: nx.DiGraph[str]) -> None:
+    assert _only(graph, DO_ON_ITS_LINE).problem == NOT_ALONE_ON_LINE
 
 
 def test_for_loop_increment_on_the_header_line_is_not_a_statement(graph: nx.DiGraph[str]) -> None:

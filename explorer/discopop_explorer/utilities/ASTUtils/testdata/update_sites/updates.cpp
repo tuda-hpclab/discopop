@@ -106,3 +106,29 @@ void upd_mixed_users(double *d, std::complex<double> *c, int k) {
     upd_mixed(d, k, 1.0);
     upd_mixed(c, k, std::complex<double>(1.0));
 }
+void upd_braceless(int *h, const int *idx, int n, int c) {
+    for (int i = 0; i < n; i++)
+        h[idx[i]]++;
+    int j = 0;
+    while (j < n)
+        h[idx[j]] += 1;
+    do
+        h[0] -= 1;
+    while (j < 0);
+    if (c)
+        h[1] += 2;
+    else
+        h[2] += 3;
+    for (int i = 0;
+         i < n;
+         h[i]++)
+        h[3] += 1;
+    for (int i = 0; i < n; i++)
+        if (c)
+            h[4] += 1;
+    do h[5] += 1;
+    while (j < 0);
+    int arr[4] = {0, 1, 2, 3};
+    for (int v : arr)
+        h[v] += 1;
+}

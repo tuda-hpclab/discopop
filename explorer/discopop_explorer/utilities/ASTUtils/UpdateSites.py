@@ -46,7 +46,7 @@ OPERATOR_CLASSES: Dict[str, str] = {
 # the problems a site can have, see UpdateSite.problem
 DEPENDENT_TYPE = "dependent_type"  # only in an uninstantiated template: no instantiation was found
 INSTANTIATIONS_DIFFER = "instantiations_differ"
-NOT_A_STATEMENT = "not_a_statement"  # not a statement of a block of its own: y = h[k]++, if (c) x++;, a for increment
+NOT_A_STATEMENT = "not_a_statement"  # not a statement of its own: y = h[k]++, a for increment, an else branch
 NOT_ALONE_ON_LINE = "not_alone_on_line"  # the pragma has to precede exactly this statement
 MULTI_LINE = "multi_line"
 MACRO = "macro"  # the expression comes from a macro: its parts share one column
@@ -244,20 +244,45 @@ def _value_unused(graph: nx.DiGraph[str], node_id: str) -> bool:
         if len(parents) != 1:
             return False
         parent_kind = graph.nodes[parents[0]].get("kind")
-        if parent_kind == "CompoundStmt":
+        if _statement_position(graph, parents[0], current):
             return True
         if parent_kind != "ExprWithCleanups":
             return False
         current = parents[0]
 
 
+# kinds whose body is their last child (clang's JSON keeps a {} placeholder for a missing for-init, ...)
+_BODY_LAST = ("ForStmt", "WhileStmt", "CXXForRangeStmt")
+
+
+def _statement_position(graph: nx.DiGraph[str], parent: str, child: str) -> bool:
+    """whether ``child`` is a statement of its own in ``parent``: a statement of a block, or the
+    brace-less body of a loop or the then branch of an if. Not an else branch: whether ``else`` is on
+    the line of the statement is not in the AST, and the pragma has to begin a line."""
+    kind = graph.nodes[parent].get("kind")
+    if kind == "CompoundStmt":
+        return True
+    inner = graph.nodes[parent].get("inner") or []
+    ids = [entry.get("id") if isinstance(entry, dict) else None for entry in inner]
+    if not ids:
+        return False
+    if kind in _BODY_LAST:
+        return ids[-1] == child
+    if kind == "DoStmt":
+        return ids[0] == child
+    if kind == "IfStmt":
+        then_index = len(ids) - 2 if graph.nodes[parent].get("has_else") else len(ids) - 1
+        return then_index >= 0 and ids[then_index] == child
+    return False
+
+
 def _alone_on_line(graph: nx.DiGraph[str], line_nodes: List[str], node_id: str, line: int) -> bool:
     """whether the statement is the only one on its line, and begins it: nothing outside of it touches
-    the line except the compound statement around it, which has to begin on an earlier line"""
+    the line except the statement around it (a block, a loop), which has to begin on an earlier line"""
     statement = node_id
     while True:
         parent = next(iter(graph.predecessors(statement)))
-        if graph.nodes[parent].get("kind") == "CompoundStmt":
+        if _statement_position(graph, parent, statement):
             break
         statement = parent
     if graph.nodes[parent].get("range", {}).get("begin_line") == line:

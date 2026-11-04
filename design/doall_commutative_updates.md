@@ -267,7 +267,7 @@ wrong (`o[i] = q[i+1]; q[i]++;`).
 
 Status markers: `[ ]` open, `[x]` done (with commit). Resume from the first open item.
 
-### A. Shared atomics when suggestions are combined (PatchApplicator) `[ ]`
+### A. Shared atomics when suggestions are combined (PatchApplicator) `[x]` a58e0928
 
 Two suggestions can insert `#pragma omp atomic update` before the same statement (miniFE: the
 element loop and the loop in `sum_into_row`, which it calls). Every patch is a diff against the
@@ -293,7 +293,7 @@ Fix in the applicator, without changing the patch layout (many tools list `patch
   (auto-tuner, PatchRepair, ProjectManager services, ParallelRegionMerger); one that runs `patch`
   itself needs the same filter.
 
-### B. `--atomic-updates` beyond the command line `[ ]`
+### B. `--atomic-updates` beyond the command line `[x]` 012ef49d, 8543a1d6
 
 - MCP `gather_data`: argument `atomic_updates` (default false) adds the flag. Skipping pattern
   detection requires the recorded options to equal the requested ones (today: any option means
@@ -307,7 +307,7 @@ Fix in the applicator, without changing the patch layout (many tools list `patch
   harness's `--llm-discopop-prep` relies on the explorer defaults.
 - Not in this batch: a harness explorer variant `atomic_updates` (other repo); offer it.
 
-### C. Brace-less loop bodies as update sites `[ ]`
+### C. Brace-less loop bodies as update sites `[x]` (commit below; else branches stay rejected: the AST has no position for `else`)
 
 `for (...)\n  h[k]++;` is rejected (`not_a_statement`), so the histogram shape is missed. Accept an
 update that is the *body* (not the condition or increment) of `for`/range-for/`while`/`do`, or a
