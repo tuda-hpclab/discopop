@@ -51,6 +51,8 @@ from discopop_library.FolderStructure.setup import setup_auto_tuner
 from discopop_library.HostpotLoader.HotspotLoaderArguments import HotspotLoaderArguments
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
+from discopop_library.HostpotLoader.detailed_hotspot_loader import load_detailed_hotspots
+from discopop_library.Amdahl.regions import build_regions
 from discopop_library.result_classes.DetectionResult import DetectionResult
 
 logger = logging.getLogger("Autotuner")
@@ -205,6 +207,11 @@ def run(arguments: AutotunerArguments) -> None:
         tmp_str = f.read()
     detection_result: DetectionResult = jsonpickle.decode(tmp_str, keys=True)
     logger.debug("loaded suggestions")
+    # Amdahl bounds for the progress events; never allowed to disturb the search
+    try:
+        progress_reporter.set_regions(build_regions(detection_result, load_detailed_hotspots(arguments.dot_dp_path)))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Amdahl bounds unavailable: " + str(e))
 
     # get metadata: highest average runtime in hotspot information. Used to filter relevant loops (1% runtime
     # contribution)
@@ -417,6 +424,7 @@ def run(arguments: AutotunerArguments) -> None:
         # no measurement exists (e.g. every candidate's patches failed to apply)
         speedup = 1.0
     parallel_efficiency = speedup * (1 / arguments.thread_count)
+    amdahl = progress_reporter.amdahl_bounds(best_suggestion_configuration[0])
 
     # show result and statistics
     if best_suggestion_configuration[1] is None:
@@ -427,6 +435,15 @@ def run(arguments: AutotunerArguments) -> None:
         print("Applied suggestions: " + str(best_suggestion_configuration[0]))
         print("Speedup: ", round(speedup, 3))
         print("Parallel efficiency: ", round(parallel_efficiency, 3))
+        if amdahl["amdahl_ceiling"] is not None:
+            print(
+                "Amdahl ceiling: ",
+                amdahl["amdahl_ceiling"],
+                "(" + str(arguments.thread_count) + " threads),",
+                amdahl["amdahl_limit"] if amdahl["amdahl_limit"] is not None else "unbounded",
+                "(unlimited threads); parallel fraction",
+                amdahl["parallel_fraction"],
+            )
         print("Optimization time: ", str(round(optimization_time_s, 1)) + "s")
         print("##############################")
 
@@ -449,6 +466,8 @@ def run(arguments: AutotunerArguments) -> None:
             ExecutionResult, best_suggestion_configuration[1].execution_result
         ).runtime
         results_dict[arguments.configuration]["not_applied_count"] = count_outcomes(debug_stats)[3]
+        # estimates from the hotspot runtimes; null where unknown
+        results_dict[arguments.configuration].update(amdahl)
 
         with open(results_json_path, "w+") as f:
             json.dump(results_dict, f, sort_keys=True, indent=4)
