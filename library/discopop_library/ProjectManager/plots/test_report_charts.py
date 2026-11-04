@@ -6,6 +6,8 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
+from typing import Any
+
 from discopop_library.ProjectManager.plots.data import ExecutionRecord
 from discopop_library.ProjectManager.plots.report_charts import (
     best_of,
@@ -121,3 +123,75 @@ def test_record_status_text_distinguishes_all_states() -> None:
     assert record_status_text(_rec("c", "par", 8, 4.0, 2.5)) == "✓ valid"
     assert record_status_text(_rec("c", "par", 8, 4.0, 2.5, valid=False)) == "✗ failed"
     assert record_status_text(_not_applied()) == "⚠ not applied"
+
+
+def Any_ax(figure: Any) -> Any:
+    return figure.axes[0]
+
+
+def _amdahl_rec(speedup: float, threads: int, p: float, valid: bool = True) -> ExecutionRecord:
+    from discopop_library.Amdahl.model import amdahl_ceiling, amdahl_limit
+
+    r = _rec("c", "par", threads, 1.0, speedup, valid)
+    r.parallel_fraction = p
+    r.amdahl_ceiling = amdahl_ceiling(p, threads)
+    r.amdahl_limit = amdahl_limit(p)
+    return r
+
+
+def test_amdahl_points_counts_records_without_ceiling() -> None:
+    from discopop_library.ProjectManager.plots.report_charts import amdahl_points
+
+    known = _amdahl_rec(2.0, 4, 0.8)
+    unknown = _rec("c", "par", 4, 1.0, 2.0)
+    usable, missing = amdahl_points([known, unknown])
+    assert usable == [known] and missing == 1
+    assert amdahl_points([known, _amdahl_rec(1.0, 4, 0.5, valid=False)], valid_only=True)[0] == [known]
+
+
+def test_amdahl_scatter_all_modes_and_clipped_limit() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import AMDAHL_X_MODES, render_amdahl_scatter
+
+    # p = 0.999 -> unlimited limit ~1000x, far beyond the axis
+    records = [_amdahl_rec(2.0, 4, 0.8), _amdahl_rec(3.5, 4, 0.999), _amdahl_rec(1.5, 2, 1.0)]
+    for mode in AMDAHL_X_MODES:
+        figure = Figure()
+        render_amdahl_scatter(figure, records, x_mode=mode)
+        ax: Any = figure.axes[0]
+        assert ax.get_xlim()[1] < 10  # the 1000x limit does not set the range
+    # in "both" mode: a filled point and a hollow limit marker per group
+    figure = Figure()
+    render_amdahl_scatter(figure, records, x_mode="both")
+    assert len(Any_ax(figure).collections) >= 2
+
+
+def test_amdahl_charts_without_data_show_a_message() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import render_amdahl_3d, render_amdahl_scatter
+
+    for render in (render_amdahl_scatter, render_amdahl_3d):
+        figure = Figure()
+        render(figure, [_rec("c", "par", 4, 1.0, 2.0)])
+        assert figure.axes
+
+
+def test_amdahl_3d_plots_ceiling_efficiency_speedup() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import render_amdahl_3d
+
+    figure = Figure()
+    render_amdahl_3d(figure, [_amdahl_rec(2.0, 4, 0.8), _amdahl_rec(3.0, 8, 0.9)])
+    ax: Any = figure.axes[0]
+    assert ax.name == "3d"
+    assert (ax.get_xlabel(), ax.get_ylabel(), ax.get_zlabel()) == ("Amdahl ceiling ×", "Efficiency", "Speedup ×")
+
+
+def test_tooltip_mentions_both_ceilings() -> None:
+    from discopop_library.ProjectManager.plots.report_charts import _format_record_tooltip
+
+    text = _format_record_tooltip(_amdahl_rec(2.0, 4, 0.75))
+    assert "Amdahl ceiling (4 threads): 2.286×" in text and "unlimited threads): 4.000×" in text

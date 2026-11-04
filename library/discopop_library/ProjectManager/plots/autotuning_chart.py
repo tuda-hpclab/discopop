@@ -47,6 +47,10 @@ class Measurement:
     # step carries no measurement at all: the configuration was skipped because its
     # code was still the unmodified original.
     failed_suggestions: List[int] = field(default_factory=list)
+    # Amdahl bounds of the suggestion set (estimates; None if unknown or from an older run):
+    # at the search's thread count, and for unlimited threads.
+    amdahl_ceiling: Optional[float] = None
+    amdahl_limit: Optional[float] = None
 
     @property
     def application_failed(self) -> bool:
@@ -94,6 +98,8 @@ class ProgressModel:
                     ),
                     generation=event.get("generation"),
                     failed_suggestions=failed_suggestions,
+                    amdahl_ceiling=event.get("amdahl_ceiling"),
+                    amdahl_limit=event.get("amdahl_limit"),
                 )
             )
         elif kind == "generation":
@@ -160,16 +166,21 @@ class ProgressModel:
         """(label, value) pairs for the summary tile row above the plot."""
         best = self.best_speedup()
         valid, invalid, failed, not_applied = self.counts()
+        ceiling_text = "—"
         if best is not None:
             best_measurement = max(self._valid(), key=lambda m: m.speedup)  # type: ignore[arg-type,return-value]
             runtime = best_measurement.runtime
             efficiency = best / self.thread_count if self.thread_count else None
+            if best_measurement.amdahl_ceiling is not None:
+                limit = best_measurement.amdahl_limit
+                ceiling_text = f"{best_measurement.amdahl_ceiling:.2f}× / " + (f"{limit:.2f}×" if limit else "∞")
         else:
             runtime = None
             efficiency = None
         return [
             ("Best speedup", f"{best:.2f}×" if best is not None else "—"),
             ("Efficiency", f"{efficiency:.2f}" if efficiency is not None else "—"),
+            ("Amdahl ceiling (N / ∞)", ceiling_text),
             ("Best runtime", f"{runtime:.2f} s" if runtime is not None else "—"),
             ("Evaluated", str(len(self.measurements))),
             ("Valid", str(valid)),
@@ -276,11 +287,50 @@ def _render_steps(ax: Any, model: ProgressModel) -> None:
     _scatter_by_status(ax, xy_by_status)
     x_right = float(model.measurements[-1].index) if model.measurements else 1.0
     _baseline_line(ax, x_right)
+    top = _amdahl_overlay(ax, model)
     ax.set_xlabel("Configurations evaluated")
     ax.set_ylabel("Speedup ×")
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=top)
     mode_style.style_legend(ax.legend(loc="upper left", fontsize=mode_style.LEGEND_SIZE, ncol=2))
     mode_style.style_axes(ax)
+
+
+def _amdahl_overlay(ax: Any, model: ProgressModel) -> Optional[float]:
+    """Overlay the Amdahl ceilings of the evaluated configurations; return a y limit or None.
+
+    Two lines in the speedup's own units: the ceiling for the search's thread count and the
+    one for unlimited threads. Steps without a known ceiling leave a gap. The unlimited
+    ceiling can dwarf everything else, so it is clipped to the plot and the axis is sized
+    to the measurements and the N-thread ceiling.
+    """
+    known = [m for m in model.measurements if m.amdahl_ceiling is not None and not m.application_failed]
+    if not known:
+        return None
+    n_label = f"Amdahl ceiling ({model.thread_count} threads)"
+    ax.plot(
+        [float(m.index) for m in known],
+        [m.amdahl_ceiling for m in known],
+        color=mode_style.CONFIG_PALETTE[3],
+        linewidth=1.6,
+        linestyle="--",
+        marker=".",
+        zorder=1,
+        label=n_label,
+    )
+    unlimited = [m for m in known if m.amdahl_limit is not None]
+    if unlimited:
+        ax.plot(
+            [float(m.index) for m in unlimited],
+            [m.amdahl_limit for m in unlimited],
+            color=mode_style.CONFIG_PALETTE[3],
+            linewidth=1.2,
+            linestyle=":",
+            zorder=1,
+            label="Amdahl ceiling (unlimited threads)",
+        )
+    heights = [float(m.amdahl_ceiling) for m in known if m.amdahl_ceiling is not None]
+    heights += [float(m.speedup) for m in model.measurements if m.status == "valid" and m.speedup is not None]
+    return max(heights + [1.0]) * 1.15
 
 
 def _render_generations(ax: Any, model: ProgressModel) -> None:
