@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import List
 
 import networkx as nx
+import dataclasses
+
 import pytest
 
 from discopop_explorer.utilities.ASTUtils.ASTGraph import ClangASTGraph
@@ -329,3 +331,14 @@ def test_an_instantiation_with_an_overloaded_operator_makes_the_instantiations_d
     graph: nx.DiGraph[str],
 ) -> None:
     assert _only(graph, MIXED_TEMPLATE_LINE).problem == INSTANTIATIONS_DIFFER
+
+
+def test_a_site_needs_only_whitespace_before_it_on_its_line(graph: nx.DiGraph[str]) -> None:
+    from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import _begins_its_line
+
+    site = _only(graph, BRACELESS_FOR)  # "        h[idx[i]]++;"
+    assert _begins_its_line(site, b"        h[idx[i]]++;").problem is None
+    # "for (int i = 0; i < n;\n  ) h[11]++;": the ")" has no AST node, the pragma would land inside the header
+    shifted = dataclasses.replace(site, begin_column=5)
+    assert _begins_its_line(shifted, b"  ) h[11]++;").problem == NOT_ALONE_ON_LINE
+    assert _begins_its_line(site, None).problem == NOT_ALONE_ON_LINE

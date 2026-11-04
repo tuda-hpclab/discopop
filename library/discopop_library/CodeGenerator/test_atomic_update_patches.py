@@ -96,4 +96,6 @@ def test_the_loop_stays_sequential_if_an_atomic_update_cannot_be_inserted(
     monkeypatch.setattr(ContentBuffer, "add_pragma", failing_atomics)
     result = _generate(tmp_path, _doall(atomic_updates=ATOMICS))
     assert "//<DiscoPoP-IGNORED> #pragma omp parallel for " in "\n".join(result[1])
-    assert "  //<DiscoPoP-IGNORED> #pragma omp atomic update" in result[2]
+    # the atomic is left out rather than commented: a comment would take the line another suggestion's
+    # atomic before the same update goes to
+    assert 2 not in result or "omp atomic" not in "\n".join(result[2])

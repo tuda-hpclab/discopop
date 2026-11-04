@@ -14,7 +14,7 @@ from typing import Dict, List
 
 from discopop_library.LineMapping.diff_modifications import apply_line_mapping_modifications_from_files
 from discopop_library.PatchApplicator.PatchApplicatorArguments import PatchApplicatorArguments
-from discopop_library.PatchApplicator.shared_atomics import FilteredPatches
+from discopop_library.PatchApplicator.shared_atomics import FilteredPatches, dry_run_all
 
 
 def rollback_patches(
@@ -101,6 +101,9 @@ def __rollback_filtered(
     patch_files = [name for name in filtered.names() if filtered.path(name) is not None]
     if arguments.verbose:
         print("\tFound patch files:", patch_files)
+    # all or nothing: a suggestion half applied would leave, e.g., a loop parallel without its atomics
+    if not dry_run_all(file_mapping, filtered, patch_files, reverse=True):
+        return False
 
     encountered_error = False
     already_patched: List[str] = []
@@ -145,6 +148,8 @@ def __rollback_filtered(
             print("STDOUT: ")
             print(result.stdout)
             encountered_error = True
+            # patch leaves the hunks it could apply in place: restore the file as it was
+            shutil.copyfile(patch_target.as_posix() + ".line_mapping_tmp", patch_target.as_posix())
             # delete temporary file
             os.remove(patch_target.as_posix() + ".line_mapping_tmp")
             break

@@ -96,7 +96,6 @@ def test_a_taken_atomic_becomes_context_and_the_header_counts_follow(tmp_path: P
     filtered = filter_patch(patch, {2})
     assert filtered is not None
     assert "+  #pragma omp atomic update" not in filtered
-    assert "\n   #pragma omp atomic update\n" in filtered
     assert "+  #pragma omp parallel for" in filtered
     # applied to a file that already has the pragma, it adds only the loop pragma
     target = tmp_path / "target.c"
@@ -163,3 +162,96 @@ def test_two_suggestions_share_the_atomic_in_every_order(
     assert source.read_text() == remaining
     assert rollback_patches([second], files, arguments, applied, generator) == 0
     assert source.read_text() == ORIGINAL
+
+
+PAIRS = """\
+int top1;
+int top2;
+void add_pair(double* f, int i, int j, double v) {
+  f[i] += v;
+  double w = v * 0.5;
+  w = w + v;
+  f[j] -= w;
+}
+int pad1, pad2;
+/* padding: the loops are further down */
+/* than the context of a hunk */
+int pad3;
+void pairs(double* f, int* a, int* b, int n) {
+  for (int k = 0; k < n; k++) {
+    add_pair(f, a[k], b[k], 1.0);
+  }
+}
+void self(double* f, int* b, int n) {
+  for (int k = 0; k < n; k++) {
+    add_pair(f, b[k], k, 1.0);
+  }
+}
+"""
+AT = "  #pragma omp atomic update\n"
+LOOP_A = "  for (int k = 0; k < n; k++) {\n    add_pair(f, a"
+LOOP_B = "  for (int k = 0; k < n; k++) {\n    add_pair(f, b"
+# the loop in pairs() needs both atomics, the loop in self() only the first: the shared atomic is three
+# lines before the second atomic, in the same hunk (found by the review of the first version)
+BOTH = PAIRS.replace("  f[i] += v;\n", AT + "  f[i] += v;\n").replace("  f[j] -= w;\n", AT + "  f[j] -= w;\n")
+PAIRS_LOOP = BOTH.replace(LOOP_A, "  #pragma omp parallel for\n" + LOOP_A)
+SELF_LOOP = PAIRS.replace("  f[i] += v;\n", AT + "  f[i] += v;\n").replace(
+    LOOP_B, "  #pragma omp parallel for\n" + LOOP_B
+)
+COMBINED = PAIRS_LOOP.replace(LOOP_B, "  #pragma omp parallel for\n" + LOOP_B)
+
+
+def _diff_of(tmp_path: Path, original: str, modified: str) -> str:
+    a = tmp_path / "o.c"
+    b = tmp_path / "m.c"
+    a.write_text(original)
+    b.write_text(modified)
+    return subprocess.run(["diff", "-u", str(a), str(b)], capture_output=True, text=True).stdout
+
+
+@pytest.mark.skipif(shutil.which("patch") is None, reason="needs patch(1)")
+@pytest.mark.parametrize("apply_order,rollback_order", list(itertools.product(itertools.permutations("12"), repeat=2)))
+def test_a_shared_atomic_next_to_other_changes_of_a_hunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, apply_order: tuple[str, ...], rollback_order: tuple[str, ...]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "a.c"
+    source.write_text(PAIRS)
+    generator = tmp_path / "patch_generator"
+    for suggestion, modified in (("1", PAIRS_LOOP), ("2", SELF_LOOP)):
+        (generator / suggestion).mkdir(parents=True)
+        (generator / suggestion / "1.patch").write_text(_diff_of(tmp_path, PAIRS, modified))
+    applied = tmp_path / "applied_suggestions.json"
+    applied.write_text(json.dumps({"applied": []}))
+    (tmp_path / "line_mapping.json").write_text(json.dumps({"1": {str(n): n for n in range(1, 40)}}))
+    arguments = PatchApplicatorArguments(
+        verbose=False, apply=[], rollback=[], clear=False, load=False, list=False, log_level="WARNING", write_log=False
+    )
+    files = {1: source}
+    for suggestion in apply_order:
+        assert apply_patches([suggestion], files, arguments, str(applied), str(generator)).applied == [suggestion]
+    assert source.read_text() == COMBINED
+    first, second = rollback_order
+    assert rollback_patches([first], files, arguments, str(applied), str(generator)) == 0
+    assert source.read_text() == (SELF_LOOP if first == "1" else PAIRS_LOOP)
+    assert rollback_patches([second], files, arguments, str(applied), str(generator)) == 0
+    assert source.read_text() == PAIRS
+
+
+def test_an_atomic_before_a_rewritten_statement_is_no_site() -> None:
+    # PatchRepair may rewrite the update and keep its pragma: which line it precedes is then not original
+    patch = (
+        "--- a.c\n+++ a.c\n@@ -1,3 +1,3 @@\n void f() {\n"
+        "-  f[a] += v;\n+  #pragma omp atomic update\n+  f[a] = f[a] + v;\n   f[b] -= v;\n"
+    )
+    assert atomic_sites(patch) == set()
+    assert filter_patch(patch, {2, 3}) == patch
+
+
+def test_a_form_feed_in_a_context_line_does_not_split_it() -> None:
+    # str.splitlines() would split the first context line in two and shift the site
+    patch = ATOMIC_ONLY.replace(" void add(double* h, int k, double v) {", " \f\nvoid", 0).replace(
+        " void add(double* h, int k, double v) {", " void add(double* h, int k, double v) { \f"
+    )
+    assert atomic_sites(patch) == {2}
+    assert filter_patch(patch, {2}) is None

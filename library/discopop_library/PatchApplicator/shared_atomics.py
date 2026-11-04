@@ -28,7 +28,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import tempfile
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 ATOMIC_PRAGMA = "#pragma omp atomic update"
@@ -50,6 +52,8 @@ class _Hunk:
         # patch is applied to, so they shift its old coordinates
         self.old_shift = 0
         self.counts_before = (0, 0)
+        # leading context lines dropped to keep the context balanced, see _balance
+        self.trimmed = 0
 
     def counts(self) -> tuple[int, int]:
         old = sum(1 for line in self.lines if line[:1] in (" ", "-"))
@@ -61,17 +65,37 @@ class _Hunk:
 
     def render(self) -> List[str]:
         old, new = self.counts()
-        old_start = self.old_start + self.old_shift
         # "-a,0" names the line an insertion follows; with context lines it names the first of them
-        if self.counts_before[0] == 0 and old > 0:
-            old_start += 1
-        return ["@@ -%d,%d +%d,%d @@%s" % (old_start, old, self.new_start, new, self.trailer)] + self.lines
+        first_old = self.old_start if self.counts_before[0] > 0 else self.old_start + 1
+        old_start = first_old + self.old_shift + self.trimmed
+        new_start = self.new_start + self.trimmed
+        return ["@@ -%d,%d +%d,%d @@%s" % (old_start, old, new_start, new, self.trailer)] + self.lines
+
+    def balance(self) -> None:
+        """drop context lines from the longer end, so that the hunk has as many leading as trailing context
+        lines: GNU patch takes a hunk with more on one side for one at the beginning or the end of the
+        file, and rejects it anywhere else - which a context line made of an atomic line can cause"""
+        leading = 0
+        while leading < len(self.lines) and self.lines[leading][:1] == " ":
+            leading += 1
+        trailing = 0
+        while trailing < len(self.lines) - leading and self.lines[len(self.lines) - 1 - trailing][:1] == " ":
+            trailing += 1
+        if leading > trailing:
+            self.trimmed = leading - trailing
+            self.lines = self.lines[self.trimmed :]
+        elif trailing > leading:
+            self.lines = self.lines[: len(self.lines) - (trailing - leading)]
 
 
 def _parse(patch_text: str) -> tuple[List[str], List[_Hunk]]:
     header: List[str] = []
     hunks: List[_Hunk] = []
-    for line in patch_text.splitlines():
+    # not splitlines(): that also splits at form feeds and other characters a source line may hold
+    lines = patch_text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    for line in (entry[:-1] if entry.endswith("\r") else entry for entry in lines):
         match = _HUNK_HEADER.match(line)
         if match:
             hunks.append(_Hunk(int(match.group(1)), int(match.group(3)), match.group(5)))
@@ -83,23 +107,20 @@ def _parse(patch_text: str) -> tuple[List[str], List[_Hunk]]:
 
 
 def _sites_of_hunk(hunk: _Hunk) -> List[Optional[int]]:
-    """per line of the hunk: the site if it is an added atomic line, else None"""
-    sites: List[Optional[int]] = []
+    """per line of the hunk: the site if it is an added atomic line followed by an unchanged line (the
+    update it protects), else None. An atomic followed by a changed line (a rewritten update) is no site:
+    which statement it ends up before is not the original line, so it is never shared - a clash then
+    fails to build rather than silently moving a pragma."""
+    sites: List[Optional[int]] = [None] * len(hunk.lines)
     old_line = hunk.old_start if hunk.counts()[0] > 0 else hunk.old_start + 1
-    pending: List[int] = []
     for index, line in enumerate(hunk.lines):
-        sites.append(None)
         kind = line[:1]
         if kind == "+" and _is_atomic_line(line[1:]):
-            pending.append(index)
+            following = hunk.lines[index + 1] if index + 1 < len(hunk.lines) else None
+            if following is not None and following[:1] == " ":
+                sites[index] = old_line
         elif kind in (" ", "-"):
-            for atomic_index in pending:
-                sites[atomic_index] = old_line
-            pending = []
             old_line += 1
-    # an atomic line at the end of a hunk precedes the line after it
-    for atomic_index in pending:
-        sites[atomic_index] = old_line
     return sites
 
 
@@ -120,11 +141,15 @@ def filter_patch(patch_text: str, taken: Set[int]) -> Optional[str]:
     for hunk in hunks:
         hunk.counts_before = hunk.counts()
         hunk.old_shift = converted
+        converted_here = 0
         for index, site in enumerate(_sites_of_hunk(hunk)):
             if site is not None and site in taken:
                 hunk.lines[index] = " " + hunk.lines[index][1:]
-                converted += 1
+                converted_here += 1
+        converted += converted_here
         if hunk.changes_something():
+            if converted_here:
+                hunk.balance()
             kept.append(hunk)
     if converted == 0:
         return patch_text
@@ -188,3 +213,20 @@ class FilteredPatches:
         if self._tempdir is not None:
             shutil.rmtree(self._tempdir, ignore_errors=True)
             self._tempdir = None
+
+
+def dry_run_all(file_mapping: Dict[int, Path], filtered: FilteredPatches, names: List[str], reverse: bool) -> bool:
+    """whether every patch file of a suggestion applies (or, with ``reverse``, reverts) cleanly, checked
+    with ``patch --dry-run`` before any of them is applied"""
+    for name in names:
+        target = file_mapping[int(name[: -len(".patch")] if name.endswith(".patch") else name)]
+        command = ["patch", "--batch", "--forward", "--dry-run"] + (["-R"] if reverse else [])
+        command += [target.as_posix(), str(filtered.path(name))]
+        result = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True
+        )
+        if result.returncode != 0:
+            print("Patch", name, "does not apply cleanly:")
+            print(result.stdout + result.stderr)
+            return False
+    return True

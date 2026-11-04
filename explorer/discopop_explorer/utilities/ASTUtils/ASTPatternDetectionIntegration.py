@@ -10,10 +10,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Union
 
 import networkx as nx
 
@@ -24,7 +25,13 @@ from discopop_explorer.utilities.ASTUtils.ASTQueries import (
     ASTVariableAndTypeQueries,
 )
 from discopop_explorer.utilities.ASTUtils.ASTVisualization import ASTVisualization
-from discopop_explorer.utilities.ASTUtils.UpdateSites import FileFacts, UpdateSite, file_facts, update_sites_on_line
+from discopop_explorer.utilities.ASTUtils.UpdateSites import (
+    NOT_ALONE_ON_LINE,
+    FileFacts,
+    UpdateSite,
+    file_facts,
+    update_sites_on_line,
+)
 from discopop_library.PathManagement.PathManagement import load_file_mapping
 
 
@@ -52,6 +59,8 @@ class ASTPatternDetectionHelper:
         self._assigned_in_loop_cache: Dict[Tuple[str, int], FrozenSet[str]] = {}
         # memoized results of get_update_sites, keyed by (file id, line)
         self._update_sites_cache: Dict[Tuple[int, int], Tuple[UpdateSite, ...]] = {}
+        # the source files read by _source_line, as lines; None if unreadable
+        self._source_lines: Dict[str, Optional[List[bytes]]] = {}
         # see get_file_facts, built on first use
         self._file_facts: Optional[Dict[str, FileFacts]] = None
 
@@ -208,9 +217,29 @@ class ASTPatternDetectionHelper:
         cached = self._update_sites_cache.get(key)
         if cached is None:
             file_path = self.file_mapping.get(file_id)
-            cached = () if file_path is None else tuple(update_sites_on_line(self.ast_graph, str(file_path), line))
+            cached = (
+                ()
+                if file_path is None
+                else tuple(
+                    _begins_its_line(site, self._source_line(file_path, line))
+                    for site in update_sites_on_line(self.ast_graph, str(file_path), line)
+                )
+            )
             self._update_sites_cache[key] = cached
         return cached
+
+    def _source_line(self, file_path: Path, line: int) -> Optional[bytes]:
+        """a line of a source file as bytes (clang's columns count bytes), None if it cannot be read"""
+        key = str(file_path)
+        if key not in self._source_lines:
+            try:
+                self._source_lines[key] = Path(file_path).read_bytes().split(b"\n")
+            except OSError:
+                self._source_lines[key] = None
+        lines = self._source_lines[key]
+        if lines is None or not 0 < line <= len(lines):
+            return None
+        return lines[line - 1]
 
     def get_file_facts(self, file_id: int) -> Optional[FileFacts]:
         """the references to variables and the indirect calls of a file (see UpdateSites.file_facts); None
@@ -293,3 +322,16 @@ class ASTPatternDetectionHelper:
             True if AST is loaded, False otherwise
         """
         return self.ast_graph is not None
+
+
+def _begins_its_line(site: UpdateSite, source_line: Optional[bytes]) -> UpdateSite:
+    """the site, or the site as not alone on its line if something other than whitespace precedes the
+    statement on its line (a token without an AST node of its own, such as the ")" of a for header
+    continued on the line of a brace-less body) or the line cannot be read: the pragma has to begin the
+    line before the statement"""
+    if site.problem is not None:
+        return site
+    prefix = None if source_line is None else source_line[: max(site.begin_column - 1, 0)]
+    if prefix is not None and prefix.strip() == b"":
+        return site
+    return dataclasses.replace(site, problem=NOT_ALONE_ON_LINE)
