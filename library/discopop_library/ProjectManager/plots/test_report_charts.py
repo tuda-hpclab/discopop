@@ -271,3 +271,25 @@ def test_3d_points_are_hit_by_projection() -> None:
         event = SimpleNamespace(inaxes=ax, x=dx + 2, y=dy - 2)
         assert interaction.find_payload_at_event(figure, event) is target
     assert interaction.find_payload_at_event(figure, SimpleNamespace(inaxes=ax, x=0, y=0)) is None
+
+
+def test_3d_fit_follows_visible_points_and_fit_view_resets_the_camera() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import AMDAHL_3D_VIEWS, render_amdahl_3d
+
+    good = _amdahl_rec(2.0, 4, 0.8)
+    failed = _amdahl_rec(9.0, 4, 0.99, valid=False)
+    figure = Figure()
+    render_amdahl_3d(figure, [good, failed])
+    with_failed = Any_ax(figure).get_zlim()[1]
+    render_amdahl_3d(figure, [good, failed], valid_only=True)
+    assert Any_ax(figure).get_zlim()[1] < with_failed  # limits shrink to the visible point
+    # the user zooms and rotates; a normal refresh keeps the camera, "fit view" does not
+    Any_ax(figure).view_init(elev=5, azim=5)
+    Any_ax(figure).set_zlim(0, 100)
+    render_amdahl_3d(figure, [good], view="free")
+    assert (Any_ax(figure).elev, Any_ax(figure).azim) == (5, 5)
+    render_amdahl_3d(figure, [good], view="free", keep_camera=False)
+    assert (Any_ax(figure).elev, Any_ax(figure).azim) == AMDAHL_3D_VIEWS["free"]
+    assert Any_ax(figure).get_zlim()[1] < 10
