@@ -37,6 +37,10 @@ METADATA_KEY = "_discopop_record"
 # How near the cursor must be (in pixels) to count as hovering an artist.
 HIT_RADIUS_PX = 12.0
 
+# Attribute of a 3D scatter collection holding its points as (xs, ys, zs) in data coordinates. Matplotlib
+# cannot pick 3D artists, so the hit test projects these itself.
+POINTS3D_KEY = "_discopop_points3d"
+
 _INTERACTION_BOUND_KEY = "_discopop_interaction_bound"
 
 # Attribute of a canvas holding the function that shows / hides its hover tooltip.
@@ -50,6 +54,11 @@ def attach(artist: Any, payload: Any) -> None:
     collection's offsets; for lines and bar patches it is a single object.
     """
     setattr(artist, METADATA_KEY, payload)
+
+
+def attach_points3d(artist: Any, xs: Any, ys: Any, zs: Any) -> None:
+    """Record a 3D scatter's data-space points so hover/click can hit-test it (payload via :func:`attach`)."""
+    setattr(artist, POINTS3D_KEY, (list(xs), list(ys), list(zs)))
 
 
 def empty_message(ax: Any, message: str) -> None:
@@ -95,11 +104,19 @@ def find_payload_at_event(figure: Any, event: Any) -> Optional[Any]:
         for collection in ax.collections:
             if not hasattr(collection, "get_offsets"):
                 continue
-            offsets = collection.get_offsets()
-            if len(offsets) == 0:
-                continue
             payloads = getattr(collection, METADATA_KEY, None)
             if not payloads:
+                continue
+            points3d = getattr(collection, POINTS3D_KEY, None)
+            if points3d is not None:
+                # 3D axes: project the data-space points with the axes' current camera
+                from mpl_toolkits.mplot3d import proj3d  # type: ignore[import-untyped]
+
+                px, py, _pz = proj3d.proj_transform(*points3d, ax.get_proj())
+                offsets = list(zip(px, py))
+            else:
+                offsets = collection.get_offsets()
+            if len(offsets) == 0:
                 continue
             distances = pixel_distances(ax, offsets)
             nearest = int(distances.argmin())

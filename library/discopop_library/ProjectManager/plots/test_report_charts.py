@@ -195,3 +195,79 @@ def test_tooltip_mentions_both_ceilings() -> None:
 
     text = _format_record_tooltip(_amdahl_rec(2.0, 4, 0.75))
     assert "Amdahl ceiling (4 threads): 2.286×" in text and "unlimited threads): 4.000×" in text
+
+
+def test_bubble_chart_sizes_follow_efficiency() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import bubble_area, render_amdahl_scatter
+
+    low, high = _amdahl_rec(1.0, 4, 0.8), _amdahl_rec(3.5, 4, 0.9)  # efficiency 0.25 and 0.875
+    figure = Figure()
+    render_amdahl_scatter(figure, [low, high], x_mode="threads", size_by_efficiency=True)
+    sizes = list(Any_ax(figure).collections[0].get_sizes())
+    assert sizes == [bubble_area(0.25), bubble_area(0.875)]
+    assert bubble_area(5.0) == bubble_area(1.2)  # outliers are capped, not off the chart
+    labels = [t.get_text() for t in Any_ax(figure).get_legend().get_texts()]
+    assert "efficiency 0.5" in labels
+
+
+def test_3d_chart_views_stems_plane_and_efficiency_axis() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import AMDAHL_3D_VIEWS, render_amdahl_3d
+
+    normal = _amdahl_rec(2.0, 4, 0.8)
+    superlinear = _amdahl_rec(5.0, 4, 0.99)  # efficiency 1.25
+    figure = Figure()
+    render_amdahl_3d(figure, [normal])
+    ax = Any_ax(figure)
+    assert ax.get_ylim() == (0.0, 1.1) and ax.get_xlim()[0] == 0.0 and ax.get_zlim()[0] == 0.0
+    for view, (elev, azim) in AMDAHL_3D_VIEWS.items():
+        render_amdahl_3d(figure, [normal], view=view)
+        ax = Any_ax(figure)
+        if view != "free":
+            assert (ax.elev, ax.azim) == (elev, azim)
+    # outliers extend the axis instead of being clipped
+    render_amdahl_3d(figure, [normal, superlinear])
+    assert Any_ax(figure).get_ylim()[1] > 1.25
+
+
+def test_3d_free_view_keeps_the_users_rotation() -> None:
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots.report_charts import render_amdahl_3d
+
+    figure = Figure()
+    render_amdahl_3d(figure, [_amdahl_rec(2.0, 4, 0.8)], view="free")
+    Any_ax(figure).view_init(elev=40, azim=10)
+    render_amdahl_3d(figure, [_amdahl_rec(2.0, 4, 0.8)], view="free")
+    assert (Any_ax(figure).elev, Any_ax(figure).azim) == (40, 10)
+
+
+def test_3d_points_are_hit_by_projection() -> None:
+    from types import SimpleNamespace
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from discopop_library.ProjectManager.plots import interaction
+    from discopop_library.ProjectManager.plots.report_charts import render_amdahl_3d
+
+    a, b = _amdahl_rec(2.0, 4, 0.8), _amdahl_rec(3.5, 4, 0.9)
+    figure = Figure()
+    FigureCanvasAgg(figure)
+    render_amdahl_3d(figure, [a, b])
+    figure.canvas.draw()
+    ax = Any_ax(figure)
+    from mpl_toolkits.mplot3d import proj3d  # type: ignore[import-untyped]
+
+    for target, (x, y, z) in (
+        (a, (a.amdahl_ceiling, a.efficiency, a.speedup)),
+        (b, (b.amdahl_ceiling, b.efficiency, b.speedup)),
+    ):
+        px, py, _ = proj3d.proj_transform(x, y, z, ax.get_proj())
+        dx, dy = ax.transData.transform((px, py))
+        event = SimpleNamespace(inaxes=ax, x=dx + 2, y=dy - 2)
+        assert interaction.find_payload_at_event(figure, event) is target
+    assert interaction.find_payload_at_event(figure, SimpleNamespace(inaxes=ax, x=0, y=0)) is None

@@ -62,6 +62,7 @@ PLOT_TYPES: Dict[str, Dict[str, str]] = {
     "spbars": {"label": "Speedup / efficiency bars", "stem": "Bars"},
     "rtbars": {"label": "Runtime bars", "stem": "Runtime"},
     "amdahl": {"label": "Speedup vs. Amdahl ceiling", "stem": "Amdahl"},
+    "amdahl_bubble": {"label": "Amdahl bubble chart (size = efficiency)", "stem": "Amdahl bubbles"},
     "amdahl3d": {"label": "Amdahl ceiling / efficiency / speedup (3D)", "stem": "Amdahl 3D"},
 }
 
@@ -355,11 +356,12 @@ class ReportPanel(Panel):
             add_combo("Metric", "metric", ["speedup", "runtime", "efficiency"], "speedup")
             add_combo("Config", "config", configs, "all")
             add_check("Ideal", "ideal", True)
-        elif tab.plot_type == "amdahl":
+        elif tab.plot_type in ("amdahl", "amdahl_bubble"):
             add_combo("Ceiling", "x_mode", list(report_charts.AMDAHL_X_MODES), "both")
             add_combo("Config", "config", configs, "all")
             add_check("Valid only", "valid_only", False)
         elif tab.plot_type == "amdahl3d":
+            add_combo("View", "view", list(report_charts.AMDAHL_3D_VIEWS), "free")
             add_combo("Config", "config", configs, "all")
             add_check("Valid only", "valid_only", False)
         # the bar charts have a fixed metric (spbars: speedup, rtbars: runtime) and no controls
@@ -389,7 +391,7 @@ class ReportPanel(Panel):
                 show_ideal=checks["ideal"].isChecked(),
                 on_select=on_select,
             )
-        elif tab.plot_type == "amdahl":
+        elif tab.plot_type in ("amdahl", "amdahl_bubble"):
             report_charts.render_amdahl_scatter(
                 tab.figure,
                 records,
@@ -397,6 +399,7 @@ class ReportPanel(Panel):
                 config_filter=combos["config"].currentText(),
                 valid_only=checks["valid_only"].isChecked(),
                 on_select=on_select,
+                size_by_efficiency=tab.plot_type == "amdahl_bubble",
             )
         elif tab.plot_type == "amdahl3d":
             report_charts.render_amdahl_3d(
@@ -404,6 +407,8 @@ class ReportPanel(Panel):
                 records,
                 config_filter=combos["config"].currentText(),
                 valid_only=checks["valid_only"].isChecked(),
+                view=combos["view"].currentText(),
+                on_select=on_select,
             )
         elif tab.plot_type == "spbars":
             report_charts.render_bars(tab.figure, records, metric="speedup", on_select=on_select)
