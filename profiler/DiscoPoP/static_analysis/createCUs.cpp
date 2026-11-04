@@ -145,7 +145,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
       } else {
         // else, create a new Node for the loop, add it as children of currentNode
         // and add it to the map.
-        Node* n = new Node;
+        Node* n = new Node(GetNextCuId());
         n->type = NodeTypes::kLoop;
         n->parent_node = current_node;
         current_node->children_nodes.push_back(n);
@@ -168,7 +168,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
       }
     }
 
-    cu = new CU;
+    cu = new CU(GetNextCuId());
 
     if (bb->getName().size() == 0) {
       bb->setName(cu->id);
@@ -202,7 +202,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
     auto new_cu = [&](CU* previous) {
       suspicious_variables.clear();
       call_line = 0;
-      CU* next = new CU;
+      CU* next = new CU(GetNextCuId());
       next->bb_id = bb->getName().str();
       next->bb = *bb;
       current_node->children_nodes.push_back(next);
@@ -245,7 +245,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
               suspicious_variables.clear();
               call_line = 0;
               CU* temp = cu;  // keep current CU to make a reference to the successor CU
-              cu = new CU;
+              cu = new CU(GetNextCuId());
 
               cu->bb_id = bb->getName().str();
               cu->bb = *bb;
@@ -395,7 +395,7 @@ void DiscoPoP::CreateCus(Region* top_region, std::set<std::string>& global_varia
             lid = "LineNotFound";
           }
 
-          Node* n = new Node;
+          Node* n = new Node(GetNextCuId());
           n->type = NodeTypes::kDummy;
           // For ordinary function calls, F has a name.
           // However, sometimes the function being called

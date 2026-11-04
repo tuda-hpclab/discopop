@@ -29,6 +29,7 @@ bool DiscoPoP::RunOnModule(Module& m, ModuleAnalysisManager& mam) {
   DoInitialization(m);
 
   // prepare saving the mapping from instructionID to lineID for backwards compatibility
+  instruction_id_to_line_id_lock = std::make_unique<profiler_files::FileLock>("instructionID_to_lineID_mapping.txt");
   instruction_id_to_line_id_file = profiler_files::Open("instructionID_to_lineID_mapping.txt");
 
   // cout << "\tFUNCTION:\n";
@@ -74,7 +75,7 @@ bool DiscoPoP::RunOnModule(Module& m, ModuleAnalysisManager& mam) {
   [[maybe_unused]] auto inverset_state_transitions_ptr = &inverse_state_transitions;
   auto static_calltree_ptr = &static_calltree;
   auto call_path_tree_ptr = static_callpaths::EnumeratePaths(static_calltree, &state_transitions,
-                                                             &inverse_state_transitions, unique_callpath_state_id_);
+                                                             &inverse_state_transitions);
   auto end = std::chrono::high_resolution_clock::now();
   auto time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
   std::cout << "Done enumerating paths.. took: " << (time / 1000.0) << "s" << std::endl;
@@ -106,17 +107,9 @@ bool DiscoPoP::RunOnModule(Module& m, ModuleAnalysisManager& mam) {
   t4.join();
   t5.join();
 
-  // save current instructionID for continuation in the next Module
-  instruction_id_counter = unique_llvm_ir_instruction_id_;
-
-  // update the global path id so the next module starts with a new id
-  unique_callpath_state_id_ = call_path_tree_ptr->GetCurrentFreePathId();
-
-  // save current stateID for continuation in the next Module
-  callpath_state_id_counter = unique_callpath_state_id_;
-
   // closing flushes
   instruction_id_to_line_id_file.close();
+  instruction_id_to_line_id_lock.reset();
   reduction.Close();
   // End DPReduction
 

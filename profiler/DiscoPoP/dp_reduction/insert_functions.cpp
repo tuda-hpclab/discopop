@@ -34,6 +34,7 @@ void dp_reduction::ReductionInstrumenter::InsertFunctions() {
   std::ofstream loop_metadata_file;
   std::string tmp(dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler"));
   tmp += "/loop_meta.txt";
+  profiler_files::FileLock loop_metadata_lock("loop_meta.txt");
   loop_metadata_file.open(tmp.data());
   // llvm::ArrayRef<llvm::Type *> loop_incr_fn_args();
   const std::vector<llvm::Type*> loop_incr_fn_args(2, llvm::Type::getInt32Ty(module_.getContext()));

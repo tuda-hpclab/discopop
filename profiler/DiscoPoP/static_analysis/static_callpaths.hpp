@@ -38,8 +38,7 @@ StaticCalltree BuildStaticCalltree(llvm::Module& m, const std::map<int32_t, Loop
 // std::unordered_map<int32_t, int32_t>>> enumerate_paths(StaticCalltree& calltree);
 StaticCallPathTree* EnumeratePaths(
     StaticCalltree& calltree, std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>>* state_transitions,
-    std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>>* inverse_state_transitions,
-    std::uint32_t start_path_id);
+    std::unordered_map<int32_t, std::unordered_map<int32_t, int32_t>>* inverse_state_transitions);
 // void save_initial_path(std::unordered_map<int32_t, std::vector<StaticCalltreeNode*>> paths);
 void SaveInitialPath(StaticCallPathTree* call_path_tree_ptr);
 // void save_enumerated_paths(std::unordered_map<int32_t, std::vector<StaticCalltreeNode*>> paths);

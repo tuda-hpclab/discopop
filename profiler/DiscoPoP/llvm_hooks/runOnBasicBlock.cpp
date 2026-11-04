@@ -92,7 +92,7 @@ void DiscoPoP::RunOnBasicBlock(BasicBlock& bb) {
   for (BasicBlock::iterator bi = bb.begin(), e = bb.end(); bi != e; ++bi) {
     // assign unique instruction ids
     LLVMContext& ctx = bi->getContext();
-    std::int32_t llvm_ir_instruction_id = unique_llvm_ir_instruction_id_++;
+    std::int32_t llvm_ir_instruction_id = GetNextInstructionId();
     MDNode* n = MDNode::get(ctx, MDString::get(ctx, "dp.md.instr.id:" + std::to_string(llvm_ir_instruction_id)));
     bi->setMetadata("dp.md.instr.id", n);
     // fill instructionID to lineID mapping file

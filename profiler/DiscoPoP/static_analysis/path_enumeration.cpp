@@ -100,7 +100,7 @@ void ProcessEnumeratePathsStack(
             continue;
           }
           // new stack element
-          auto new_path = new_current_path->GetOrRegisterSuccessor(call_path_tree, succ);
+          auto new_path = new_current_path->GetOrRegisterSuccessor(succ);
           nodes_added_by_thread.push_back(new_path);
           new_elements_buffer.push_back(std::make_tuple(new_current_path, trigger_instruction_id, new_path));
         }
@@ -135,10 +135,9 @@ StaticCallPathTree* EnumeratePaths(
     [[maybe_unused]] std::unordered_map<std::int32_t, std::unordered_map<std::int32_t, std::int32_t>>*
         state_transitions,
     [[maybe_unused]] std::unordered_map<std::int32_t, std::unordered_map<std::int32_t, std::int32_t>>*
-        inverse_state_transitions,
-    std::uint32_t start_path_id) {
+        inverse_state_transitions) {
   // start ids from start_path_id (no collisions between modules)
-  StaticCallPathTree* call_path_tree = new StaticCallPathTree(start_path_id);
+  StaticCallPathTree* call_path_tree = new StaticCallPathTree();
 
   // path id 0 is reserved for debugging and initialization purposes
   // select entry nodes
@@ -161,7 +160,7 @@ StaticCallPathTree* EnumeratePaths(
   // -> initialize
   for (auto node_ptr : entry_nodes) {
     // new stack
-    auto new_node = call_path_tree->root->GetOrRegisterSuccessor(call_path_tree, node_ptr);
+    auto new_node = call_path_tree->root->GetOrRegisterSuccessor(node_ptr);
     new_stack.push(std::make_tuple(call_path_tree->root, 0, new_node));
     call_path_tree->RegisterNodeInAllNodes(new_node);
   }
@@ -193,6 +192,7 @@ void SaveInitialPath(StaticCallPathTree* call_path_tree_ptr) {
   std::cout << "saving initial path..\n";
 
   // prepare saving the initial callpathStateID
+  profiler_files::FileLock file_lock("initial_stateID.txt");
   std::ofstream file = profiler_files::Open("initial_stateID.txt");
 
   // find candidates for initial path
@@ -218,6 +218,7 @@ void SaveInitialPath(StaticCallPathTree* call_path_tree_ptr) {
 void SaveEnumeratedPaths(StaticCallPathTree* call_path_tree_ptr) {
   std::cout << "saving enumerated paths..\n";
   // prepare saving the mapping from callpath to callpathStateID for reference
+  profiler_files::FileLock state_id_to_callpath_lock("stateID_to_callpath_mapping.txt");
   std::ofstream state_id_to_callpath_file = profiler_files::Open("stateID_to_callpath_mapping.txt");
   // write file
   std::string global_buffer = "";
@@ -258,6 +259,7 @@ void SaveEnumeratedPaths(StaticCallPathTree* call_path_tree_ptr) {
 void SavePathStateTransitions(StaticCallPathTree* call_path_tree_ptr) {
   std::cout << "saving path state transitions..\n";
   // prepare saving the callpathState transitions
+  profiler_files::FileLock callpath_state_transitions_lock("callpath_state_transitions.txt");
   std::ofstream callpath_state_transitions_file = profiler_files::Open("callpath_state_transitions.txt");
   // write file
   callpath_state_transitions_file << "# Format: <source_state_id> <instruction_id> <target_state_id>\n";
@@ -285,12 +287,14 @@ void SavePathStateTransitions(StaticCallPathTree* call_path_tree_ptr) {
   callpath_state_transitions_file << global_buffer;
   callpath_state_transitions_file.close();
 
+  profiler_files::FileLock callpath_state_return_targets_lock("callpath_state_return_targets.txt");
   std::ofstream callpath_state_return_targets_file = profiler_files::Open("callpath_state_return_targets.txt");
   callpath_state_return_targets_file << return_targets_buffer;
   callpath_state_return_targets_file.close();
 
   if (WriteCallpathDotFiles()) {
     // prepare saving the callpathState transitions as DOT file
+    profiler_files::FileLock callpath_state_transitions_dot_lock("callpath_state_transitions.dot");
     std::ofstream callpath_state_transitions_dot = profiler_files::Open("callpath_state_transitions.dot");
     // write file
     callpath_state_transitions_dot << "diGraph G {\n";
@@ -322,6 +326,7 @@ void SavePathStateTransitions(StaticCallPathTree* call_path_tree_ptr) {
 // call's transition into a function only if it leads to an entry state of the entered function,
 // and else switches to the function's root entry state (see enter_function_for_callstate).
 void SaveFunctionEntries(StaticCallPathTree* call_path_tree_ptr) {
+  profiler_files::FileLock file_lock("callpath_function_entries.txt");
   std::ofstream file = profiler_files::Open("callpath_function_entries.txt");
   file
       << "# Format: S <state_id> <function_entry_instruction_id> | E <function_entry_instruction_id> <root_state_id>\n";
@@ -349,6 +354,7 @@ void SaveStaticCalltreeToDot(StaticCalltree* calltree) {
   }
   std::cout << "saving path state transitions to dot..\n";
   // prepare saving the calltree as DOT file
+  profiler_files::FileLock calltree_dot_lock("static_calltree.dot");
   std::ofstream calltree_dot_file = profiler_files::Open("static_calltree.dot");
   // write file
   calltree_dot_file << calltree->ToDotString() << "\n";

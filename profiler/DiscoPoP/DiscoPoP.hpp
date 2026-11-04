@@ -66,6 +66,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -246,10 +247,6 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
 
   // DPInstrumentationOmission end
 
-  // InstructionID assignment
-  uint32_t unique_llvm_ir_instruction_id_;
-  uint32_t unique_callpath_state_id_;
-
  public:
   DiscoPoP() {}  // : ModulePass(ID), uniqueNum(1){};
 
@@ -313,9 +310,16 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
   void FindStartEndLineNumbers(Node* root, LID& start, LID& end);
 
   // Output function
-  void InitializeCuIdCounter();
-  void InitializeInstructionIdCounter();
-  void InitializeCallpathStateIdCounter();
+  static void InitializeCuIdCounter();
+  static void InitializeInstructionIdCounter();
+  static void InitializeCallpathStateIdCounter();
+  static void InitializeBBDepCounter();
+  static void InitializeStaticMemoryRegionIDCounter();
+  static unsigned int GetNextCuId();
+  static uint32_t GetNextInstructionId();
+  static uint32_t GetNextFreePathId();
+  static uint32_t GetNextBBDepId();
+  static uint32_t GetNextStaticMemoryRegionId();
 
   // void printOriginalVariables(set<string> &originalVariablesSet);
   // CUGeneration end
@@ -326,6 +330,7 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
                                                std::map<std::string, std::string>* true_var_names_from_metadata_map);
   std::string FindStructMemberNameStatic(llvm::MDNode* struct_node, unsigned idx, llvm::IRBuilder<>& builder);
   std::ofstream instruction_id_to_line_id_file;
+  std::unique_ptr<profiler_files::FileLock> instruction_id_to_line_id_lock;
   std::map<llvm::Loop*, int> loop_to_id;
   // per loop id of the current module: id of its loop node in Data.xml and its start
   // location (file_id:line), as written to loopstate_positions.txt

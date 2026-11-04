@@ -414,6 +414,7 @@ StaticCalltree BuildStaticCalltree(Module& m, const std::map<std::int32_t, LoopI
   std::ofstream loopstate_positions_file;
   std::string loopstate_positions_path(dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler"));
   loopstate_positions_path += "/loopstate_positions.txt";
+  profiler_files::FileLock loopstate_positions_lock("loopstate_positions.txt");
   loopstate_positions_file.open(loopstate_positions_path.data(), std::ios_base::app);
   for (Function& f : m) {
     std::cout << "BUILDING FUNCTION: " << f.getName().str() << "\n";

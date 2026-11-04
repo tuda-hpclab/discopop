@@ -10,7 +10,6 @@
  *
  */
 #pragma once
-#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -40,7 +39,7 @@ class StaticCallPathTreeNode {
 
   ~StaticCallPathTreeNode();
 
-  StaticCallPathTreeNode* GetOrRegisterSuccessor(StaticCallPathTree* tree, StaticCalltreeNode* successor_node);
+  StaticCallPathTreeNode* GetOrRegisterSuccessor(StaticCalltreeNode* successor_node);
 
   void RegisterTransition(int32_t trigger_instruction_id, std::uint32_t target_path_id);
 
@@ -50,20 +49,14 @@ class StaticCallPathTreeNode {
 
 class StaticCallPathTree {
  private:
-  std::atomic<std::uint32_t> next_free_path_id_{0};
-  // std::mutex next_free_path_id_mtx;
-
  public:
   StaticCallPathTreeNode* root = nullptr;
   std::vector<StaticCallPathTreeNode*> all_nodes;
   std::mutex all_nodes_mtx;
 
   StaticCallPathTree();
-  explicit StaticCallPathTree(std::uint32_t start_path_id);  // so that ids don't overlap between modules
   ~StaticCallPathTree();
   std::string ToDotString() const;
 
-  [[nodiscard]] std::uint32_t GetNextFreePathId();
-  std::uint32_t GetCurrentFreePathId() const;  // returns next free path id
   void RegisterNodeInAllNodes(StaticCallPathTreeNode* node_ptr);
 };
