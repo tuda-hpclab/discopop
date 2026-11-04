@@ -262,3 +262,84 @@ iterations are non-critical"), but nothing checks that the variable is then priv
 `o[i] = q[i+1]; q[i] = 0;` is suggested as doall without clauses, and with `--atomic-updates` a loop
 like `ob[i] = qb[i+1]; qb[i] = 0; hb[idx[i]]++;` is accepted. A hidden read can also make a plain doall
 wrong (`o[i] = q[i+1]; q[i]++;`).
+
+## Follow-ups after the review (plan of 2026-11-04)
+
+Status markers: `[ ]` open, `[x]` done (with commit). Resume from the first open item.
+
+### A. Shared atomics when suggestions are combined (PatchApplicator) `[ ]`
+
+Two suggestions can insert `#pragma omp atomic update` before the same statement (miniFE: the
+element loop and the loop in `sum_into_row`, which it calls). Every patch is a diff against the
+original sources, so applying both inserts the pragma twice and the build fails. The auto-tuner
+loses every combination of the two, and a search that picks the inner loop first can never add the
+outer one.
+
+Fix in the applicator, without changing the patch layout (many tools list `patch_generator/`):
+- An *atomic line* of a patch is an added line whose text is exactly `#pragma omp atomic update`
+  (the commented `//<DiscoPoP-IGNORED>` fallback is not one). Its *site* is (file id, line number in
+  the original file of the line after it), read from the hunk header. All patches share that
+  coordinate system, so the key is the same across suggestions.
+- Apply S: an atomic line whose site is also in a suggestion already applied becomes a context line
+  (the pragma is checked to be there, and left alone). The filtered patch is written to a temp file.
+- Roll back S: the original patch, filtered against the suggestions that stay applied. So the pragma
+  is removed by whichever sharing suggestion is rolled back last, in any order.
+- The filter is a pure function (patch text, set of sites taken) -> patch text, unit tested; plus an
+  end-to-end test with two suggestions in both apply and rollback orders.
+- Traps: the hunk header's old count grows by one per converted line; a hunk whose only change was
+  the atomic is dropped, and a file patch left without hunks is skipped (success, no `patch` call).
+  The pragma is matched with whitespace stripped (PatchRepair may reindent).
+- First check that every tool combining suggestions goes through `apply_patches`/`rollback_patches`
+  (auto-tuner, PatchRepair, ProjectManager services, ParallelRegionMerger); one that runs `patch`
+  itself needs the same filter.
+
+### B. `--atomic-updates` beyond the command line `[ ]`
+
+- MCP `gather_data`: argument `atomic_updates` (default false) adds the flag. Skipping pattern
+  detection requires the recorded options to equal the requested ones (today: any option means
+  "not current"), so switching it on or off reruns the explorer. The tool text says it is
+  experimental.
+- ProjectManager: `ExplorerRequest.atomic_updates`, `explorer_command`, a checkbox in the Tk mixin
+  (subprocess and in-process paths) and the Qt pattern detection panel. (Sonnet helper, own
+  worktree, reviewed by me.)
+- Every reader of the recorded explorer options (`get_project_status`, `analysis_status`, ...)
+  must agree with `gather_data` on what counts as current. The default stays false, since the
+  harness's `--llm-discopop-prep` relies on the explorer defaults.
+- Not in this batch: a harness explorer variant `atomic_updates` (other repo); offer it.
+
+### C. Brace-less loop bodies as update sites `[ ]`
+
+`for (...)\n  h[k]++;` is rejected (`not_a_statement`), so the histogram shape is missed. Accept an
+update that is the *body* (not the condition or increment) of `for`/range-for/`while`/`do`, or a
+branch of `if`, when it is alone on its line. First check that clang accepts
+`for (...)\n#pragma omp atomic update\n  h[k]++;` (an atomic construct is a statement). A one-line
+`for (...) h[k]++;` stays rejected (the pragma needs a line of its own), and so do `else h[k]++;`
+and `do h[k]++; while (...)` on one line. The body is identified by position (clang's JSON `ForStmt`
+has `{}` placeholders; the body is the last child), with negative tests for the increment and the
+condition.
+
+### D. LULESH `[ ]`
+
+Re-profile a scratch copy of LULESH, never inside the harness's `benchmarks/` (the ProjectManager
+rewrites tracked settings files there). Time-boxed. The profiling data on disk is in the old format.
+Re-profile it and run the explorer with the
+flag. Expected: the force accumulation `domain.fx(n) += ...` is rejected as `referenced_elsewhere`,
+because the check is name-based and `domain` is used everywhere. If so, decide whether a refinement
+by member (`fx`) is sound enough to do: it needs its own argument and an Opus review.
+
+### E. Review `[ ]`
+
+Opus review of A-D (code, not my conclusions), then fixes.
+
+### F. Next: soundness of plain doall (after A-E) `[ ]`
+
+Pre-existing, affects every doall suggestion, so a separate change with its own plan:
+1. A carried WAR dependency is skipped as "privatizable" without checking that the variable then is
+   private. Accept it only if the variable ends up in a private/firstprivate/lastprivate clause of
+   the suggestion or is declared inside the loop; otherwise it blocks, with a reason. Only sound for
+   scalars: for a pointer or array base (`q` in `o[i] = q[i+1]; q[i] = 0;`) a private copy is of
+   the pointer, not the data, so such a WAR always blocks. Measure how
+   many current suggestions this removes (miniFE, the trivial suite, polybench, rodinia).
+2. Hidden reads: the profiler keeps one last reader per address, so a read followed by a write of
+   another iteration can vanish. Find where the profiler drops it, decide between keeping several
+   readers and a cheaper conservative marker, and measure the profiling overhead.
