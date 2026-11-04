@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from unittest import mock
 
 import pytest
+from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import widgets
@@ -138,3 +139,13 @@ def test_reset_asks_first_and_publishes_results_changed(panel: ReportPanel, dial
     panel.reset_results_button.click()
     assert panel.table.rowCount() == 0
     assert panel.status.text() == "Execution results reset successfully"
+
+
+def test_3d_tab_has_hide_failed_and_fit_view(panel: ReportPanel) -> None:
+    write_results(panel)
+    tab = panel.add_plot("amdahl3d")
+    assert "valid_only" in tab.checks and tab.checks["valid_only"].text() == "Hide failed"
+    tab.checks["valid_only"].setChecked(True)  # re-renders without an error
+    buttons = {b.text() for b in tab.widget.findChildren(QPushButton)}
+    assert "Fit view" in buttons
+    next(b for b in tab.widget.findChildren(QPushButton) if b.text() == "Fit view").click()

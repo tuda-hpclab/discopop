@@ -359,15 +359,22 @@ class ReportPanel(Panel):
         elif tab.plot_type in ("amdahl", "amdahl_bubble"):
             add_combo("Ceiling", "x_mode", list(report_charts.AMDAHL_X_MODES), "both")
             add_combo("Config", "config", configs, "all")
-            add_check("Valid only", "valid_only", False)
+            add_check("Hide failed", "valid_only", False)
         elif tab.plot_type == "amdahl3d":
             add_combo("View", "view", list(report_charts.AMDAHL_3D_VIEWS), "free")
             add_combo("Config", "config", configs, "all")
-            add_check("Valid only", "valid_only", False)
+            add_check("Hide failed", "valid_only", False)
+            fit = widgets.create_button(
+                "Fit view",
+                lambda: self._render(tab, reset_camera=True),
+                tooltip="Resize all axes to the visible points and reset the camera to the selected view "
+                "(undoes zooming and rotating)",
+            )
+            items.extend([fit, 8])
         # the bar charts have a fixed metric (spbars: speedup, rtbars: runtime) and no controls
         return widgets.hbox(*items, None)
 
-    def _render(self, tab: PlotTab) -> None:
+    def _render(self, tab: PlotTab, reset_camera: bool = False) -> None:
         records = [record for record in self.records() if record.script == "execute.sh"]
         on_select = functools.partial(self._on_record_selected, tab)
         combos, checks = tab.combos, tab.checks
@@ -409,6 +416,7 @@ class ReportPanel(Panel):
                 valid_only=checks["valid_only"].isChecked(),
                 view=combos["view"].currentText(),
                 on_select=on_select,
+                keep_camera=not reset_camera,
             )
         elif tab.plot_type == "spbars":
             report_charts.render_bars(tab.figure, records, metric="speedup", on_select=on_select)

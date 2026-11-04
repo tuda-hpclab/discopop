@@ -640,6 +640,7 @@ def render_amdahl_3d(
     valid_only: bool = False,
     view: str = "free",
     on_select: Optional[Callable[[ExecutionRecord], None]] = None,
+    keep_camera: bool = True,
 ) -> None:
     """Amdahl ceiling (x, record's thread count), efficiency (y) and speedup (z) in one 3D scatter.
 
@@ -651,14 +652,19 @@ def render_amdahl_3d(
     (``AMDAHL_3D_VIEWS``; ``free`` keeps the user's rotation across refreshes). Hover and click work as in
     the 2D charts: matplotlib cannot pick 3D artists, so ``interaction`` projects the points itself.
     Failed runs are hollow, as everywhere. All axes start at 0; efficiency spans 0 to 1.1 unless a run
-    exceeds 1, in which case the axis grows to include it and the run is ringed.
+    exceeds 1, in which case the axis grows to include it and the run is ringed. Every render recomputes
+    the axis limits from the *visible* points (``valid_only`` hides failed runs), so a re-render fits the
+    view; ``keep_camera=False`` additionally discards a ``free`` rotation (the GUI's "Fit view").
     """
     from mpl_toolkits.mplot3d import Axes3D  # type: ignore[import-untyped]  # noqa: F401  registers the 3d projection
 
     previous = figure.axes[0] if figure.axes else None
     previous_camera = (
         (previous.elev, previous.azim)
-        if previous is not None and previous.name == "3d" and getattr(figure, "_amdahl3d_view", None) == "free"
+        if keep_camera
+        and previous is not None
+        and previous.name == "3d"
+        and getattr(figure, "_amdahl3d_view", None) == "free"
         else None
     )
     figure.clear()
