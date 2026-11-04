@@ -467,7 +467,7 @@ def render_amdahl_scatter(
     second as a hollow marker joined to it by a thin line. A point on the dashed diagonal
     reaches its ceiling; the distance below it is what the parallelization leaves unused.
     The unlimited ceiling can lie far beyond everything else, so it is clipped to the axis
-    and drawn as an arrow marker at the edge.
+    and drawn at the edge with its real value labelled (same marker shape, hollow).
     """
     figure.clear()
     ax = figure.add_subplot(111)
@@ -528,14 +528,12 @@ def render_amdahl_scatter(
                 ly.append(float(r.speedup))
                 lrecs.append(r)
                 clipped.append(lim > x_right)
-            for is_clipped in (False, True):
-                sel = [i for i, c in enumerate(clipped) if c == is_clipped]
-                if not sel:
-                    continue
+            if lx:
+                # same marker shape as the filled point (hollow instead), also where the limit is clipped
                 coll = ax.scatter(
-                    [lx[i] for i in sel],
-                    [ly[i] for i in sel],
-                    marker=">" if is_clipped else mode_style.mode_marker(mode),
+                    lx,
+                    ly,
+                    marker=mode_style.mode_marker(mode),
                     facecolors="none",
                     edgecolors=color,
                     linewidths=1.4,
@@ -543,7 +541,19 @@ def render_amdahl_scatter(
                     zorder=2,
                     clip_on=False,
                 )
-                interaction.attach(coll, [lrecs[i] for i in sel])
+                interaction.attach(coll, lrecs)
+            for x, y, rec, is_clipped in zip(lx, ly, lrecs, clipped):
+                if is_clipped and rec.amdahl_limit is not None:
+                    # the marker sits at the axis edge; say where the limit really is
+                    ax.annotate(
+                        f"→ {rec.amdahl_limit:.0f}×",
+                        (x, y),
+                        xytext=(-6, 6),
+                        textcoords="offset points",
+                        ha="right",
+                        fontsize=mode_style.ANNOTATION_SIZE,
+                        color=color,
+                    )
 
     diagonal = [0.0, x_right]
     ax.plot(diagonal, diagonal, color=mode_style.REFERENCE_COLOR, linestyle="--", linewidth=1.2, zorder=0)
