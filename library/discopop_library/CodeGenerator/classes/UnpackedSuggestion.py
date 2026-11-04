@@ -228,7 +228,24 @@ class UnpackedSuggestion(object):
         pragma.start_line = self.start_line
         pragma.end_line = self.end_line
 
+        # the updates of shared memory the loop is parallel only with if they are atomic (the explorer's
+        # --atomic-updates), possibly in other files. Before the loop's own pragma, so that the loop is
+        # left sequential if one of them cannot be inserted (see CodeGenerator._insert_pragmas).
+        pragmas.extend(self.atomic_update_pragmas())
         pragmas.append(pragma)
+        return pragmas
+
+    def atomic_update_pragmas(self) -> List[Pragma]:
+        """`#pragma omp atomic update` before each update statement listed in the suggestion's atomic_updates"""
+        pragmas: List[Pragma] = []
+        for entry in self.values.get("atomic_updates") or []:
+            atomic = Pragma()
+            atomic.pragma_str = "#pragma omp atomic update"
+            atomic.file_id = int(entry["file_id"])
+            atomic.start_line = int(entry["line"])
+            atomic.end_line = int(entry["line"])
+            atomic.pragma_position = PragmaPosition.BEFORE_START
+            pragmas.append(atomic)
         return pragmas
 
     def __task_data_sharing_clauses(self) -> str:

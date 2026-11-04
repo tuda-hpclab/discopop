@@ -80,12 +80,18 @@ def _insert_pragmas(
             )
         # get pragma objects represented by the UnpackedSuggestion
         pragmas = suggestion.get_pragmas(contained_patterns=contained_patterns)
+        # The atomic updates come first (see UnpackedSuggestion.atomic_update_pragmas): the loop of such a
+        # suggestion is only parallel if all of them are in place, so once one of them cannot be inserted,
+        # every following pragma of the suggestion is added as a comment. An atomic update already
+        # inserted is harmless on its own.
+        atomic_failed = False
+        atomic_positions = {(p.file_id, p.start_line) for p in suggestion.atomic_update_pragmas()}
         # add each pragma to the ContentBuffer object of the file it belongs to
         for pragma in pragmas:
             target = pragma.file_id if pragma.file_id is not None else suggestion.file_id
             if target not in file_id_to_content_buffer:
                 file_id_to_content_buffer[target] = ContentBuffer(target, file_mapping[target])
-            successful = file_id_to_content_buffer[target].add_pragma(
+            successful = (not atomic_failed) and file_id_to_content_buffer[target].add_pragma(
                 file_mapping,
                 pragma,
                 [],
@@ -96,6 +102,8 @@ def _insert_pragmas(
             )
             # if the addition resulted in a non-compilable file, add the pragma as a comment
             if not successful:
+                if (pragma.file_id, pragma.start_line) in atomic_positions:
+                    atomic_failed = True
                 file_id_to_content_buffer[target].add_pragma(
                     file_mapping,
                     pragma,
