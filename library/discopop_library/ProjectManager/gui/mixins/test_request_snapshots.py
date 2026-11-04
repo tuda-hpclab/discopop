@@ -118,8 +118,9 @@ def test_explorer_snapshot() -> None:
         pattern_types_vars={"reduction": _Var(False), "doall": _Var(False)},
         jobs_var=_Var("auto"),
     )
-    namespace = SimpleNamespace(**panel, _ignore_dependency_states=lambda: True)
+    namespace = SimpleNamespace(**panel, _ignore_dependency_states=lambda: True, _atomic_updates=lambda: True)
     request = ExplorerIntegrationMixin._snapshot_explorer_request(namespace)  # type: ignore[arg-type]
     assert request.enable_patterns == "reduction,doall"
     assert request.jobs == "auto"
     assert request.ignore_dependency_states is True
+    assert request.atomic_updates is True

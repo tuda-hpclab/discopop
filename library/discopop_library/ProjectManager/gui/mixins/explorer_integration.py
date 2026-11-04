@@ -69,6 +69,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
     jobs_var: Optional[tk.StringVar] = None
     collect_stats_var: Optional[tk.BooleanVar] = None
     visualize_var: Optional[tk.BooleanVar] = None
+    atomic_updates_var: Optional[tk.BooleanVar] = None
     explorer_visualization_frame: Optional[tk.Frame] = None
     explorer_visualization_placeholder: Optional[ttk.Label] = None
     pattern_detection_output_tabs: Optional[ttk.Notebook] = None
@@ -151,6 +152,20 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         jobs_combo = widgets.thread_selector(jobs_frame, self.jobs_var)
         jobs_combo.pack(side=tk.LEFT, padx=5)
         caption_label(jobs_frame, "(auto = unlimited; custom counts can be typed)").pack(side=tk.LEFT, padx=5)
+
+        # Atomic updates option (experimental)
+        atomic_frame = ttk.Frame(settings_frame)
+        atomic_frame.pack(fill=tk.X, pady=5)
+
+        self.atomic_updates_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(atomic_frame, text="Atomic updates (experimental)", variable=self.atomic_updates_var).pack(
+            side=tk.TOP, anchor=tk.W, padx=5
+        )
+        caption_label(
+            atomic_frame,
+            "Also accept doall loops whose only blocking dependencies are commutative updates\n"
+            "(x += e, h[k]++), made safe with #pragma omp atomic update. Experimental.",
+        ).pack(side=tk.TOP, anchor=tk.W, padx=25)
 
         # Visualization option
         visualize_frame = ttk.Frame(settings_frame)
@@ -364,6 +379,10 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         """Whether the selected detection mode discards the callpath state markers."""
         return self.detection_mode_var is not None and self.detection_mode_var.get() == NO_STATES_DETECTION_MODE
 
+    def _atomic_updates(self) -> bool:
+        """Whether the experimental atomic-updates option is ticked."""
+        return self.atomic_updates_var is not None and self.atomic_updates_var.get()
+
     def _check_explorer_prerequisites(self) -> bool:
         return explorer_state.explorer_prerequisites_met(self.arguments.dot_dp)
 
@@ -445,8 +464,11 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         output_callback(
             "  Dependency data: "
             + (NO_STATES_DETECTION_MODE if request.ignore_dependency_states else DEFAULT_DETECTION_MODE)
-            + "\n\n"
+            + "\n"
         )
+        if request.atomic_updates:
+            output_callback("  Atomic updates: enabled (experimental)\n")
+        output_callback("\n")
         output_callback("Running pattern detection...\n\n")
 
         events: "queue.Queue[JobEvent]" = queue.Queue()
@@ -540,6 +562,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             enable_patterns=",".join(selected_patterns) if selected_patterns else "reduction,doall",
             jobs=widgets.thread_value(self.jobs_var),
             ignore_dependency_states=self._ignore_dependency_states(),
+            atomic_updates=self._atomic_updates(),
         )
 
     def _invoke_explorer_in_process(self, output_callback: Callable[[str], None]) -> None:
@@ -567,11 +590,14 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         enable_patterns = ",".join(selected_patterns) if selected_patterns else "reduction,doall"
         jobs_value = widgets.thread_value(self.jobs_var)
         ignore_states = self._ignore_dependency_states()
+        atomic_updates = self._atomic_updates()
 
         output_callback("Configuration:\n")
         output_callback(f"  Patterns: {enable_patterns}\n")
         output_callback(f"  Threads: {jobs_value}\n")
         output_callback(f"  Dependency data: {NO_STATES_DETECTION_MODE if ignore_states else DEFAULT_DETECTION_MODE}\n")
+        if atomic_updates:
+            output_callback("  Atomic updates: enabled (experimental)\n")
         output_callback("  Graph visualization: enabled\n\n")
 
         # discard widgets from a previous visualized run; WithSidebar always builds
@@ -592,6 +618,8 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
             argv.extend(["-j", jobs_value])
         if ignore_states:
             argv.append("--ignore-dependency-states")
+        if atomic_updates:
+            argv.append("--atomic-updates")
 
         # lazy import: discopop_explorer is only needed for this in-process path,
         # mirroring discopop_explorer's own lazy import of discopop_gui

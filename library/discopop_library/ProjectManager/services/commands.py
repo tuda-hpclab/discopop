@@ -32,6 +32,8 @@ def explorer_command(request: ExplorerRequest, python: Optional[str] = None) -> 
         command.append("--ignore-dependency-states")
     if request.visualize:
         command.append("--visualize")
+    if request.atomic_updates:
+        command.append("--atomic-updates")
     return command
 
 

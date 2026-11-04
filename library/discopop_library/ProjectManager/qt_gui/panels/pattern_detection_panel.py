@@ -189,6 +189,11 @@ class PatternDetectionPanel(Panel):
         self.visualize_check.setToolTip(
             "The explorer opens the graphs in a window of its own; this window stays responsive while it runs."
         )
+        self.atomic_updates_check = QCheckBox("Atomic updates (experimental)")
+        self.atomic_updates_check.setToolTip(
+            "Also accept doall loops whose only blocking dependencies are commutative updates (x += e, h[k]++), "
+            "made safe with #pragma omp atomic update. Experimental."
+        )
         visualize_caption = widgets.caption_label("(the graphs open in a window of their own)")
 
         return widgets.group_box(
@@ -199,6 +204,7 @@ class PatternDetectionPanel(Panel):
                 mode_column,
                 mode_caption,
                 widgets.hbox(widgets.heading_label("Threads:"), self.jobs_selector, jobs_caption, None),
+                widgets.hbox(self.atomic_updates_check, None),
                 widgets.hbox(self.visualize_check, visualize_caption, None),
             ),
         )
@@ -234,6 +240,7 @@ class PatternDetectionPanel(Panel):
             jobs=self.jobs_selector.value(),
             ignore_dependency_states=self.mode_buttons[NO_STATES_DETECTION_MODE].isChecked(),
             visualize=self.visualize_check.isChecked(),
+            atomic_updates=self.atomic_updates_check.isChecked(),
         )
 
     # ── running ─────────────────────────────────────────────────────────────
@@ -284,6 +291,8 @@ class PatternDetectionPanel(Panel):
         self.console.append_text(f"  Patterns: {request.enable_patterns}\n")
         self.console.append_text(f"  Threads: {request.jobs}\n")
         self.console.append_text(f"  Dependency data: {mode}\n")
+        if request.atomic_updates:
+            self.console.append_text("  Atomic updates: enabled (experimental)\n")
         if request.visualize:
             self.console.append_text("  Graph visualization: enabled (opens in a window of its own)\n")
         self.console.append_text("\nRunning pattern detection...\n\n")
