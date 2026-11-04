@@ -146,7 +146,10 @@ def test_3d_tab_has_hide_failed_and_fit_view(panel: ReportPanel) -> None:
     write_results(panel)
     tab = panel.add_plot("amdahl3d")
     assert "valid_only" in tab.checks and tab.checks["valid_only"].text() == "Hide failed"
-    tab.checks["valid_only"].setChecked(True)  # re-renders without an error
+    # failed runs are hidden by default on every Amdahl chart
+    for plot_type in ("amdahl", "amdahl_bubble", "amdahl3d"):
+        assert panel.add_plot(plot_type).checks["valid_only"].isChecked()
+    tab.checks["valid_only"].setChecked(False)  # re-renders without an error
     buttons = {b.text() for b in tab.widget.findChildren(QPushButton)}
     assert "Fit view" in buttons
     next(b for b in tab.widget.findChildren(QPushButton) if b.text() == "Fit view").click()
