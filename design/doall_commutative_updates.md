@@ -388,6 +388,36 @@ Pre-existing, affects every doall suggestion, so a separate change with its own 
    Open: the user decides between taking that loss, recording the WAR as a reason without rejecting,
    and the profiler work first.
 
+   Analysis of the five LULESH heap cases (2026-11-04, debug print of the rejecting record and its
+   callpath states). In every one the two ends access **different objects** at a reused heap
+   address: the read is of one temporary, the write of another one allocated later at the same
+   address (2003: read `compression[i]`, write `pbvc[i]`; 2041: `e_old` / `e_new`; 2053 and 2211:
+   `compHalfStep` / `q_new` and `pbvc`; 2348: `compression` / `bvc`). The report names the sink's
+   variable, which hides this. `__dp_new` and `__dp_delete` are instrumented (malloc/new/free/delete),
+   but both are no-ops in the runtime.
+   - 2041, 2053, 2211: the ends lie in different invocations of the function. The callpath states
+     are identical because every enclosing loop's bucket (iteration mod 3) happens to match, and the
+     loop's own bucket differs because the two objects' offsets differ. So the record is attributed
+     to that loop.
+   - 2348 (the region loop): the ends are in different iterations of the *same* run, since each
+     region allocates its own temporaries in `EvalEOSForElems`.
+   - 2003: the ends come through different call sites, so the states already say "not carried"
+     (`__carried_frame_and_position` returns None). `carried_by_pet_loops` is then None, which the
+     detector treats as unknown and decides from the iteration copies instead. Fixable in the
+     explorer: when both ends have states and the callpaths part, the record is carried by no loop
+     past the parting frame.
+   Encoding a loop run in the loopstate (the user's question) does not reach these cases. The
+   callee's state is derived from (caller state, call site) on every entry, so a static run digit
+   restarts with each invocation. Within one invocation a loop is re-entered only through an
+   enclosing loop, whose bucket already changes. A run counter kept by the runtime across calls,
+   encoded into spare bits of the 32-bit state field, would cover 2041/2053/2211, but not 2348 (same
+   run). Clearing the shadow memory of the range `__dp_new` reports covers all five. That is the
+   profiler change to make first: it forgets information instead of tracking more. The cost is
+   proportional to the allocated bytes. The clear has to be ordered with the queued accesses of
+   every worker; check `access_queue_workers.cpp`. Stack objects reused across calls have the same
+   problem (`__dp_alloca`). The other remaining false rejections (miniFE 12:462 and `this1`, LULESH
+   1004/1495) are naming and proof issues, not run issues.
+
    Original plan for F.1 (from reading `identify_simple_doall_and_reduction`):
    - Where: both scans skip `EdgeType.DATA` + `DepType.WAR` (the carried index of the loop, and the
      dependencies by iteration copies). Instead of dropping them, collect them per loop and decide
