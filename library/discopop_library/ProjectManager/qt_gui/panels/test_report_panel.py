@@ -57,8 +57,10 @@ def write_results(panel: ReportPanel) -> None:
 def test_without_results_the_table_is_empty_and_no_report_can_be_generated(panel: ReportPanel) -> None:
     assert panel.table.rowCount() == 0
     assert not panel.generate_report_button.isEnabled() and not panel.view_report_button.isEnabled()
-    # the default scatter tab is open next to the table
-    assert [panel.notebook.tabText(i) for i in range(panel.notebook.count())] == ["Table", "Scatter 1"]
+    # one chart of every type is open next to the table, the first of them shown
+    titles = [panel.notebook.tabText(i) for i in range(panel.notebook.count())]
+    assert titles[:3] == ["Table", "Scatter 1", "Scaling 2"] and len(titles) == 1 + len(report_panel.PLOT_TYPES)
+    assert panel.notebook.currentIndex() == 1
 
 
 def test_results_changed_refreshes_the_table(panel: ReportPanel) -> None:
@@ -74,13 +76,12 @@ def test_results_changed_refreshes_the_table(panel: ReportPanel) -> None:
 
 def test_chart_tabs_are_added_from_the_menu_and_closed(panel: ReportPanel) -> None:
     write_results(panel)
+    opened = len(panel.plot_tabs)
     tab = panel.add_plot("scaling")
-    assert panel.notebook.tabText(2) == "Scaling 2" and panel.notebook.currentWidget() is tab.widget
+    assert panel.notebook.currentWidget() is tab.widget and len(panel.plot_tabs) == opened + 1
     tab.combos["metric"].setCurrentText("runtime")  # re-renders without an error
-    for plot_type in ("spbars", "rtbars", "amdahl", "amdahl_bubble", "amdahl3d"):
-        panel.add_plot(plot_type)
     panel.notebook.tabCloseRequested.emit(2)
-    assert len(panel.plot_tabs) == 6 and panel.notebook.count() == 7
+    assert len(panel.plot_tabs) == opened and panel.notebook.count() == opened + 1
     # the table cannot be closed
     panel.notebook.tabCloseRequested.emit(0)
     assert panel.notebook.tabText(0) == "Table"

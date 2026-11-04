@@ -217,8 +217,10 @@ class ReportPanel(Panel):
         layout.addWidget(self.notebook, 1)
 
         project_state.subscribe(ResultsChanged, lambda _event: self.update_display())
-        # open with a trade-off scatter shown by default
-        self.add_plot("pareto")
+        # open with one chart of every type; more can be added from the "+" menu
+        for plot_type in PLOT_TYPES:
+            self.add_plot(plot_type)
+        self.notebook.setCurrentIndex(1)  # the first chart, not whichever was added last
         self.update_display()
 
     # ── the table ───────────────────────────────────────────────────────────
