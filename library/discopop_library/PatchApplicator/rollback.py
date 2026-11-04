@@ -14,6 +14,7 @@ from typing import Dict, List
 
 from discopop_library.LineMapping.diff_modifications import apply_line_mapping_modifications_from_files
 from discopop_library.PatchApplicator.PatchApplicatorArguments import PatchApplicatorArguments
+from discopop_library.PatchApplicator.shared_atomics import FilteredPatches
 
 
 def rollback_patches(
@@ -50,7 +51,8 @@ def rollback_patches(
         if suggestion_id in applicable_suggestions:
             if arguments.verbose:
                 print("Rollback suggestion ", suggestion_id)
-            successul = __rollback_file_patches(file_mapping, suggestion_id, patch_generator_dir, arguments)
+            others = [other for other in applied_suggestions["applied"] if other != suggestion_id]
+            successul = __rollback_file_patches(file_mapping, suggestion_id, patch_generator_dir, arguments, others)
             if successul:
                 applied_suggestions["applied"].remove(suggestion_id)
                 # write updated applied suggestions to file
@@ -78,10 +80,25 @@ def rollback_patches(
 
 
 def __rollback_file_patches(
-    file_mapping: Dict[int, Path], suggestion_id: str, patch_generator_dir: str, arguments: PatchApplicatorArguments
+    file_mapping: Dict[int, Path],
+    suggestion_id: str,
+    patch_generator_dir: str,
+    arguments: PatchApplicatorArguments,
+    others: List[str],
 ) -> bool:
-    # get a list of patches for the given suggestion
-    patch_files = sorted(os.listdir(os.path.join(patch_generator_dir, suggestion_id)))
+    # atomic pragmas the suggestions staying applied share with this one are left in place
+    filtered = FilteredPatches(patch_generator_dir, suggestion_id, others)
+    try:
+        return __rollback_filtered(file_mapping, filtered, arguments)
+    finally:
+        filtered.close()
+
+
+def __rollback_filtered(
+    file_mapping: Dict[int, Path], filtered: FilteredPatches, arguments: PatchApplicatorArguments
+) -> bool:
+    # get a list of patches for the given suggestion; None: nothing left to do for that file
+    patch_files = [name for name in filtered.names() if filtered.path(name) is not None]
     if arguments.verbose:
         print("\tFound patch files:", patch_files)
 
@@ -90,7 +107,7 @@ def __rollback_file_patches(
     for patch_file_name in patch_files:
         patch_file_id = int(patch_file_name.rstrip(".patch"))
         patch_target = file_mapping[patch_file_id]
-        patch_file_path = os.path.join(patch_generator_dir, suggestion_id, patch_file_name)
+        patch_file_path = str(filtered.path(patch_file_name))
         # save original version to calculate diff to calculate line mapping
         shutil.copyfile(patch_target.as_posix(), patch_target.as_posix() + ".line_mapping_tmp")
         # --batch: never ask. Without it patch turns interactive on a reversed or
@@ -145,7 +162,7 @@ def __rollback_file_patches(
         for patch_file_name in already_patched:
             patch_file_id = int(patch_file_name.rstrip(".patch"))
             patch_target = file_mapping[patch_file_id]
-            patch_file_path = os.path.join(patch_generator_dir, suggestion_id, patch_file_name)
+            patch_file_path = str(filtered.path(patch_file_name))
             # save original version to calculate diff to calculate line mapping
             shutil.copyfile(patch_target.as_posix(), patch_target.as_posix() + ".line_mapping_tmp")
             command = [
