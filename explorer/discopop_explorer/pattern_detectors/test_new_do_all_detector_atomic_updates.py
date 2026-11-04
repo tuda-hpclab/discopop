@@ -40,7 +40,7 @@ from discopop_explorer.pattern_detectors.new_do_all_detector import (
     identify_simple_doall_and_reduction,
 )
 from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import ASTPatternDetectionHelper
-from discopop_explorer.utilities.ASTUtils.UpdateSites import UpdateSite
+from discopop_explorer.utilities.ASTUtils.UpdateSites import FileFacts, UpdateSite
 
 Copy = Tuple[WorkContext, WorkContext]
 
@@ -61,6 +61,9 @@ class _SitesHelper(ASTPatternDetectionHelper):
 
     def is_ast_loaded(self) -> bool:
         return self._loaded
+
+    def get_file_facts(self, file_id: int) -> Optional[FileFacts]:
+        return FileFacts(references={}, indirect_calls=[])
 
     def get_update_sites(self, file_id: int, line: int) -> Tuple[UpdateSite, ...]:
         if file_id != 1 or line != SITE_LINE:

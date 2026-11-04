@@ -84,3 +84,25 @@ void upd_none(double *a, int n) {
         a[k] = 1.0;
     }
 }
+struct upd_Base {
+    virtual int rd(int k) const;
+    int plain(int k) const;
+};
+int upd_helper(int k);
+void upd_calls(int *h, int *idx, int (*fp)(int), const upd_Base *b, int n) {
+    for (int i = 0; i < n; i++) {
+        h[idx[i]] += fp(i);
+        h[idx[i]] += b->rd(i);
+        h[idx[i]] += b->plain(i);
+        h[idx[i]] += upd_helper(i);
+    }
+}
+template <typename T> void upd_mixed(T *a, int k, T v) {
+    for (int i = 0; i < k; i++) {
+        a[k] += v;
+    }
+}
+void upd_mixed_users(double *d, std::complex<double> *c, int k) {
+    upd_mixed(d, k, 1.0);
+    upd_mixed(c, k, std::complex<double>(1.0));
+}

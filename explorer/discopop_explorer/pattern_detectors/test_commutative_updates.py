@@ -32,7 +32,7 @@ from discopop_explorer.pattern_detectors.commutative_updates import (
     CommutativeUpdateClassifier,
     SiteKey,
 )
-from discopop_explorer.utilities.ASTUtils.UpdateSites import NOT_A_STATEMENT, UpdateSite
+from discopop_explorer.utilities.ASTUtils.UpdateSites import FileFacts, NOT_A_STATEMENT, UpdateSite
 
 CU_A = "1:3"  # a CU of the loop
 CU_B = "1:4"  # another CU of the loop
@@ -70,11 +70,16 @@ class _StubAST:
 
     def __init__(self, sites: Sequence[UpdateSite]) -> None:
         self.sites: Dict[Tuple[int, int], List[UpdateSite]] = {}
+        # the static facts of each file, none by default
+        self.facts: Dict[int, FileFacts] = {}
         for site in sites:
             self.sites.setdefault((1, site.line), []).append(site)
 
     def get_update_sites(self, file_id: int, line: int) -> List[UpdateSite]:
         return self.sites.get((file_id, line), [])
+
+    def get_file_facts(self, file_id: int) -> FileFacts:
+        return self.facts.get(file_id, FileFacts(references={}, indirect_calls=[]))
 
 
 class _Scene:
@@ -308,5 +313,53 @@ def test_edges_of_a_loop_are_collected_once(scene_factory: Any, monkeypatch: Any
     first = classifier.classify(scene.loop, blocker)
     second = classifier.classify(scene.loop, blocker)
     assert first == second and first.fixable
-    assert len(calls) == 1
+    # once for the CUs of the loop, once for the functions it calls (the scope of the static checks)
+    assert len(calls) == 2
     assert len(classifier._incident) == 1
+    classifier.forget(scene.loop)
+    assert classifier._incident == {} and classifier._scopes == {}
+
+
+def _scatter_add(scene: Any) -> Dependency:
+    update = scene.instr(100, 10, 20)
+    return scene.dep(CU_A, update, CU_A, update, DepType.RAW)  # type: ignore[no-any-return]
+
+
+def test_a_reference_to_the_variable_elsewhere_in_the_loop_is_referenced_elsewhere(scene_factory: Any) -> None:
+    """a read before the first update of an address leaves no dependency (one last reader per address in the
+    profiler), so it is found by name: here h[i] read on line 15"""
+    scene = scene_factory(_site(10, 20))
+    blocker = _scatter_add(scene)
+    scene.ast.facts[1] = FileFacts(references={"h": [(10, 5), (15, 9)]}, indirect_calls=[])
+    result = scene.classifier().classify(scene.loop, blocker)
+    assert result.problem == "referenced_elsewhere"
+    assert result.location == "1:15:9"
+
+
+def test_references_in_the_update_itself_or_outside_of_the_loop_do_not_count(scene_factory: Any) -> None:
+    scene = scene_factory(_site(10, 20))
+    blocker = _scatter_add(scene)
+    scene.ast.facts[1] = FileFacts(references={"h": [(3, 1), (10, 5), (60, 2)], "g": [(15, 9)]}, indirect_calls=[])
+    assert scene.classifier().classify(scene.loop, blocker).fixable
+
+
+def test_an_indirect_call_in_the_loop_makes_it_not_fixable(scene_factory: Any) -> None:
+    """the PET has no edge to a function called through a pointer, so its accesses are not among the loop's"""
+    scene = scene_factory(_site(10, 20))
+    blocker = _scatter_add(scene)
+    scene.ast.facts[1] = FileFacts(references={}, indirect_calls=[(12, 7)])
+    result = scene.classifier().classify(scene.loop, blocker)
+    assert result.problem == "indirect_call"
+    assert result.location == "1:12:7"
+
+
+def test_an_update_of_an_unknown_variable_is_not_fixable(scene_factory: Any) -> None:
+    scene = scene_factory(_site(10, 20, variable=None))
+    assert scene.classifier().classify(scene.loop, _scatter_add(scene)).problem == "unknown_variable"
+
+
+def test_a_dependency_without_an_instruction_id_on_an_update_is_unresolved(scene_factory: Any) -> None:
+    scene = scene_factory(_site(10, 20))
+    blocker = _scatter_add(scene)
+    scene.dep(CU_B, None, CU_A, 100, DepType.RAW)
+    assert scene.classifier().classify(scene.loop, blocker).problem == "unresolved_instruction"

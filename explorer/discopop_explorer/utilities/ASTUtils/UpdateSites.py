@@ -88,8 +88,14 @@ def update_sites_on_line(graph: nx.DiGraph[str], filename: str, line: int) -> Li
     and its uninstantiated pattern are one site), ordered by column."""
     nodes = ASTQueries.find_nodes_at_location(graph, filename, line)
     by_range: Dict[Tuple[Any, ...], List[str]] = {}
+    # the statements of a template's instantiations for a class type, with an overloaded operator: the
+    # same source range as the builtin operator of another instantiation, which the pragma would not fit
+    overloaded: Set[Tuple[Any, ...]] = set()
     for node_id in nodes:
         attrs = graph.nodes[node_id]
+        if attrs.get("kind") == "CXXOperatorCallExpr" and attrs.get("range", {}).get("begin_line") == line:
+            overloaded.add(_range_key(attrs.get("range", {})))
+            continue
         if attrs.get("kind") not in ("CompoundAssignOperator", "UnaryOperator"):
             continue
         if attrs.get("opcode") not in OPERATOR_CLASSES:
@@ -101,6 +107,18 @@ def update_sites_on_line(graph: nx.DiGraph[str], filename: str, line: int) -> Li
     sites = []
     for key in sorted(by_range):
         site = _site(graph, nodes, by_range[key], line)
+        if site is not None and key in overloaded and site.problem is None:
+            site = UpdateSite(
+                line=site.line,
+                first_column=site.first_column,
+                last_column=site.last_column,
+                operator=site.operator,
+                operator_class=site.operator_class,
+                variable=site.variable,
+                begin_column=site.begin_column,
+                end_column=site.end_column,
+                problem=INSTANTIATIONS_DIFFER,
+            )
         if site is not None:
             sites.append(site)
     return sites
@@ -305,3 +323,82 @@ def _referenced_ids(graph: nx.DiGraph[str], node_id: str) -> Set[str]:
             ids.add(str(referenced))
         stack.extend(graph.successors(current))
     return ids
+
+
+# the callee expressions of a CallExpr which name the function called, i.e. a direct call
+_DIRECT_CALLEE_KINDS = {"FunctionDecl", "CXXMethodDecl", "CXXConstructorDecl", "CXXDestructorDecl", "CXXConversionDecl"}
+
+
+def is_indirect_call(graph: nx.DiGraph[str], node_id: str) -> bool:
+    """whether a call expression calls a function the profiler cannot attribute statically: through a
+    function pointer (or a member holding one), or a virtual method. The PET has no edge to the function
+    called then, so its accesses are invisible to an analysis of the loop's callees."""
+    attrs = graph.nodes[node_id]
+    kind = attrs.get("kind")
+    children = list(graph.successors(node_id))
+    if not children:
+        return False
+    if kind == "CXXMemberCallExpr":
+        member = children[0]
+        while graph.nodes[member].get("kind") in _TRANSPARENT_KINDS:
+            following = list(graph.successors(member))
+            if not following:
+                return False
+            member = following[0]
+        if graph.nodes[member].get("kind") != "MemberExpr":
+            return True  # e.g. (obj.*method)(), a call through a member pointer
+        declaration = graph.nodes[member].get("referenced_member_id")
+        if declaration is None or declaration not in graph:
+            return False  # e.g. a method of a library class whose declaration is not in the dump
+        return bool(graph.nodes[declaration].get("virtual"))
+    if kind != "CallExpr":
+        return False
+    callee = children[0]
+    while graph.nodes[callee].get("kind") in _TRANSPARENT_KINDS:
+        following = list(graph.successors(callee))
+        if not following:
+            return True
+        callee = following[0]
+    callee_attrs = graph.nodes[callee]
+    if callee_attrs.get("kind") == "DeclRefExpr":
+        return callee_attrs.get("referenced_kind") not in _DIRECT_CALLEE_KINDS
+    # UnresolvedLookupExpr etc. only occur in uninstantiated templates, whose instantiations are checked
+    if callee_attrs.get("kind") in ("UnresolvedLookupExpr", "UnresolvedMemberExpr", "CXXDependentScopeMemberExpr"):
+        return False
+    return True
+
+
+@dataclass
+class FileFacts:
+    """What the static checks of commutative_updates need to know of a file: the references to variables
+    by name ((line, column) each), and the positions of the indirect calls, both sorted by position."""
+
+    references: Dict[str, List[Tuple[int, int]]]
+    indirect_calls: List[Tuple[int, int]]
+
+
+def file_facts(graph: nx.DiGraph[str]) -> Dict[str, FileFacts]:
+    """FileFacts of every file of the AST, keyed by the file path stored in the nodes"""
+    facts: Dict[str, FileFacts] = {}
+    for node_id, attrs in graph.nodes(data=True):
+        kind = attrs.get("kind")
+        if kind not in ("DeclRefExpr", "CallExpr", "CXXMemberCallExpr"):
+            continue
+        file_name = (attrs.get("loc") or {}).get("file")
+        range_info = attrs.get("range") or {}
+        line = range_info.get("begin_line")
+        column = range_info.get("begin_column")
+        if file_name is None or line is None or column is None:
+            continue
+        entry = facts.setdefault(str(file_name), FileFacts(references={}, indirect_calls=[]))
+        if kind == "DeclRefExpr":
+            name = attrs.get("referenced_name")
+            if name:
+                entry.references.setdefault(str(name), []).append((line, column))
+        elif is_indirect_call(graph, node_id):
+            entry.indirect_calls.append((line, column))
+    for entry in facts.values():
+        for positions in entry.references.values():
+            positions.sort()
+        entry.indirect_calls.sort()
+    return facts

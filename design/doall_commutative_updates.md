@@ -236,3 +236,29 @@ in a callee, profiled with `discopop_cxx`, and the miniFE profile):
 - A site in a callee called from inside and outside `L`: PET edges are context-insensitive, so
   `D(L)` also contains edges from other call contexts. That only adds edges, i.e. can only reject
   more — conservative.
+
+## Review of phase 2 (2026-11-04) and what followed
+
+An Opus review profiled small counterexamples against c4cc4d0b. Fixed afterwards:
+
+- **Hidden reads.** The profiler keeps one last reader per address. Before an update's store, its own
+  RMW load is that reader, so a read of the address earlier in the loop (`out[i] = g[i]; g[i/2]++;`)
+  is never an end of any dependency. Such a loop was classified fixable and races. This is a profiler
+  limitation; the principled fix is to keep the readers since the last write. Stopgap in the classifier:
+  the variable an update reaches its memory through must not be named anywhere else in the loop or its
+  callees (`referenced_elsewhere`). Aliases under other names are not covered.
+- **Indirect calls.** A function called through a pointer or a virtual method has no CALLSNODE edge,
+  so its accesses are not in `D(L)`. Any such call in the loop or its callees now rejects the loop
+  (`indirect_call`).
+- An edge with an unknown end fails closed (`unresolved_instruction`). A template instantiated with
+  a class type (an overloaded operator) is `instantiations_differ`. Locations are deterministic. The
+  per-loop caches are dropped after the loop is classified.
+- `explain_parallelization` no longer claims that the atomics make a rejected loop parallel. It names
+  them as what would make the blocking dependencies safe.
+
+Not fixed here, because it is pre-existing and affects plain doall in the same way: dependencies between
+iterations of type WAR are skipped as privatizable (`new_do_all_detector.py`, "WAR dependencies between
+iterations are non-critical"), but nothing checks that the variable is then privatized. So
+`o[i] = q[i+1]; q[i] = 0;` is suggested as doall without clauses, and with `--atomic-updates` a loop
+like `ob[i] = qb[i+1]; qb[i] = 0; hb[idx[i]]++;` is accepted. A hidden read can also make a plain doall
+wrong (`o[i] = q[i+1]; q[i]++;`).

@@ -30,12 +30,14 @@ from discopop_explorer.utilities.ASTUtils.ASTLoader import ClangASTLoader
 from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import ASTPatternDetectionHelper
 from discopop_explorer.utilities.ASTUtils.UpdateSites import (
     DEPENDENT_TYPE,
+    INSTANTIATIONS_DIFFER,
     MACRO,
     MULTI_LINE,
     NOT_A_STATEMENT,
     NOT_ALONE_ON_LINE,
     RHS_REFERENCES_LHS,
     UpdateSite,
+    file_facts,
     update_sites_on_line,
 )
 
@@ -261,3 +263,28 @@ def test_helper_returns_nothing_for_unknown_file_id(tmp_path: Path) -> None:
 
 def test_helper_returns_nothing_without_loaded_ast() -> None:
     assert ASTPatternDetectionHelper().get_update_sites(1, BASIC_LINE) == ()
+
+
+CALLS_FP_LINE, CALLS_VIRTUAL_LINE, CALLS_PLAIN_METHOD_LINE, CALLS_FUNCTION_LINE = 94, 95, 96, 97
+MIXED_TEMPLATE_LINE = 102  # a[k] += v; instantiated for double and std::complex<double>
+
+
+def test_calls_through_a_function_pointer_or_a_virtual_method_are_indirect(graph: nx.DiGraph[str]) -> None:
+    facts = file_facts(graph)[SOURCE]
+    lines = {line for line, _column in facts.indirect_calls}
+    assert CALLS_FP_LINE in lines
+    assert CALLS_VIRTUAL_LINE in lines
+    assert CALLS_PLAIN_METHOD_LINE not in lines
+    assert CALLS_FUNCTION_LINE not in lines
+
+
+def test_the_references_to_a_variable_are_listed_by_position(graph: nx.DiGraph[str]) -> None:
+    references = file_facts(graph)[SOURCE].references["h"]
+    assert [line for line, _ in references if CALLS_FP_LINE <= line <= CALLS_FUNCTION_LINE] == [94, 95, 96, 97]
+    assert references == sorted(references)
+
+
+def test_an_instantiation_with_an_overloaded_operator_makes_the_instantiations_differ(
+    graph: nx.DiGraph[str],
+) -> None:
+    assert _only(graph, MIXED_TEMPLATE_LINE).problem == INSTANTIATIONS_DIFFER

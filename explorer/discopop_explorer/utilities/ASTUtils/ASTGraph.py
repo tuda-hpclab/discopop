@@ -106,6 +106,8 @@ class ClangASTGraph:
                 "opcode": node.get("opcode"),
                 # whether a UnaryOperator ("++", "--") is postfix; None for every other kind
                 "is_postfix": node.get("isPostfix"),
+                # whether a CXXMethodDecl is declared virtual; None for every other kind
+                "virtual": node.get("virtual"),
                 # name of the declaration a DeclRefExpr resolves to. Clang keeps it in
                 # "referencedDecl", not in the node's own "name", so without lifting it here a
                 # DeclRefExpr carries no indication of which variable it reads or writes.

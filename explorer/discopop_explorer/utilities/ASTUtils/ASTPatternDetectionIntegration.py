@@ -24,7 +24,7 @@ from discopop_explorer.utilities.ASTUtils.ASTQueries import (
     ASTVariableAndTypeQueries,
 )
 from discopop_explorer.utilities.ASTUtils.ASTVisualization import ASTVisualization
-from discopop_explorer.utilities.ASTUtils.UpdateSites import UpdateSite, update_sites_on_line
+from discopop_explorer.utilities.ASTUtils.UpdateSites import FileFacts, UpdateSite, file_facts, update_sites_on_line
 from discopop_library.PathManagement.PathManagement import load_file_mapping
 
 
@@ -52,6 +52,8 @@ class ASTPatternDetectionHelper:
         self._assigned_in_loop_cache: Dict[Tuple[str, int], FrozenSet[str]] = {}
         # memoized results of get_update_sites, keyed by (file id, line)
         self._update_sites_cache: Dict[Tuple[int, int], Tuple[UpdateSite, ...]] = {}
+        # see get_file_facts, built on first use
+        self._file_facts: Optional[Dict[str, FileFacts]] = None
 
     def load_ast_from_project(self, project_path: str) -> None:
         """Load and build AST graph from project.
@@ -76,6 +78,7 @@ class ASTPatternDetectionHelper:
         self._variables_at_location_cache.clear()
         self._assigned_in_loop_cache.clear()
         self._update_sites_cache.clear()
+        self._file_facts = None
 
         ast_dict = ClangASTLoader.load_ast_from_project(project_path)
         if ast_dict is None:
@@ -208,6 +211,18 @@ class ASTPatternDetectionHelper:
             cached = () if file_path is None else tuple(update_sites_on_line(self.ast_graph, str(file_path), line))
             self._update_sites_cache[key] = cached
         return cached
+
+    def get_file_facts(self, file_id: int) -> Optional[FileFacts]:
+        """the references to variables and the indirect calls of a file (see UpdateSites.file_facts); None
+        if the file is unknown or the AST has not been loaded"""
+        if not self.ast_graph:
+            return None
+        file_path = self.file_mapping.get(file_id)
+        if file_path is None:
+            return None
+        if self._file_facts is None:
+            self._file_facts = file_facts(self.ast_graph)
+        return self._file_facts.get(str(file_path), FileFacts(references={}, indirect_calls=[]))
 
     def get_variable_declarations_in_scope(self, scope_name: str) -> list[tuple[str, Optional[str]]]:
         """Get variables declared in a scope by function/loop name

@@ -371,6 +371,8 @@ def record_blockers(
                     details=details,
                 ),
             )
+        if classifier is not None and loop_node is not None:
+            classifier.forget(loop_node)
     return classifications
 
 

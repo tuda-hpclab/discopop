@@ -198,7 +198,10 @@ class TestExplainParallelization(unittest.TestCase):
         self.log.finalize(DETECTOR, [])
         self.__save()
         text = self.__handle(start_line=45)
-        self.assertIn("`#pragma omp atomic` before the update at main.cpp:42, main.cpp:44.", text)
+        self.assertIn(
+            "`#pragma omp atomic update` before the update at main.cpp:42, main.cpp:44 would make them safe", text
+        )
+        self.assertIn("no guarantee", text)
 
     def test_a_loop_with_one_blocker_that_is_no_commutative_update_names_no_atomics(self) -> None:
         region = CodeRegion("1:41", 1, 41, 60, "loop")

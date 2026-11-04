@@ -198,9 +198,12 @@ def _atomic_update_line(reasons: list[Any], file_mapping: dict[int, Path], proje
         return None
     locations = sorted((_location(site, file_mapping, project_path) or site for site in sites), key=lambda text: text)
     return (
-        "- These dependencies are all commutative updates of shared memory, so the loop would be parallel if "
-        "the updates were made atomic: `#pragma omp atomic` before the update at " + ", ".join(locations) + ". "
-        "Atomic updates change the order of floating-point additions, so results may differ in the last digits."
+        "- The dependencies that prevent this loop are all commutative updates of shared memory: "
+        "`#pragma omp atomic update` before the update at " + ", ".join(locations) + " would make them safe. "
+        "This is no guarantee that the loop is parallel then: the other conditions (variables that must be "
+        "private, dependencies that need no atomics) are checked only by the analysis with --atomic-updates. "
+        "Atomic updates also change the order of the operations, so floating-point results may differ in the "
+        "last digits."
     )
 
 

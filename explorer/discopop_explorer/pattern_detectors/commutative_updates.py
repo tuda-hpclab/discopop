@@ -25,6 +25,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.PEGraph.CUNode import CUNode
 from discopop_explorer.classes.PEGraph.Dependency import Dependency
+from discopop_explorer.classes.PEGraph.FunctionNode import FunctionNode
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.enums.DepType import DepType
@@ -38,6 +39,16 @@ UNRESOLVED_INSTRUCTION = "unresolved_instruction"  # an end has no instruction i
 END_NOT_AT_UPDATE = "end_not_at_update"  # an end is no update statement, e.g. the read in a[i+1] += a[i]
 ACCESSED_ELSEWHERE = "accessed_elsewhere"  # the memory is accessed outside of the updates in the loop
 MIXED_OPERATORS = "mixed_operators"  # e.g. += and *= on the same memory, which do not commute
+# The profiler keeps one last reader per address, so a read of the memory before the first update of an
+# address in the loop leaves no dependency at all. As a stopgap, the variable an update reaches its memory
+# through must not be named anywhere else in the loop or the functions it calls. (Aliases are not covered.)
+REFERENCED_ELSEWHERE = "referenced_elsewhere"
+UNKNOWN_VARIABLE = "unknown_variable"  # the variable of an update is unknown, so the check above cannot run
+# a call through a function pointer or a virtual method in the loop or its callees: the PET has no edge to
+# the function called, so its accesses are not among the loop's
+INDIRECT_CALL = "indirect_call"
+# stands for the unknown end of a dependency whose other end is known, see _incident_in_loop
+_UNRESOLVED = -1
 
 DETAILS_KEY = "atomic_update"
 # the kind of the decision log note on a loop accepted with atomic updates
@@ -114,6 +125,8 @@ class CommutativeUpdateClassifier:
         self._by_line: Dict[NodeID, Dict[Tuple[int, int], List[Tuple[int, int]]]] = {}
         # every update statement a classification has named
         self._sites: Dict[SiteKey, UpdateSite] = {}
+        # per loop, see _scope
+        self._scopes: Dict[NodeID, List[Tuple[int, int, int]]] = {}
 
     def classify(self, loop: Node, dependency: Dependency) -> Classification:
         """whether a dependency between iterations of the loop (its LoopNode) is fixable by atomic updates"""
@@ -150,7 +163,8 @@ class CommutativeUpdateClassifier:
             if instruction in visited:
                 continue
             visited.add(instruction)
-            for other in incident.get(instruction, ()):
+            # sorted, so that the problem reported first does not depend on the order of a set
+            for other in sorted(incident.get(instruction, ())):
                 if other in visited:
                     continue
                 resolved = self._site_of(other)
@@ -162,12 +176,56 @@ class CommutativeUpdateClassifier:
         operator_classes = {site.operator_class for site in sites.values()}
         if len(operator_classes) != 1:
             return _not_fixable(MIXED_OPERATORS, self._position(ends[0]))  # type: ignore[arg-type]
+        static_problem = self._static_check(loop, sites)
+        if static_problem is not None:
+            return static_problem
         first = min(sites, key=lambda key: (key.file_id, key.line, key.first_column))
         return Classification(
             sites=frozenset(sites),
             operator_class=next(iter(operator_classes)),
             variable=sites[first].variable,
         )
+
+    def forget(self, loop: Node) -> None:
+        """drops what was collected for a loop: the dependencies of an outer loop and its callees can come
+        close to those of the whole program"""
+        self._incident.pop(loop.id, None)
+        self._by_line.pop(loop.id, None)
+        self._scopes.pop(loop.id, None)
+
+    def _scope(self, loop: Node) -> List[Tuple[int, int, int]]:
+        """(file id, first line, last line) of the loop and of every function it calls"""
+        scope = self._scopes.get(loop.id)
+        if scope is None:
+            scope = [(int(loop.file_id), int(loop.start_line), int(loop.end_line))]
+            for function in subtree_of_type(self._pet, loop, FunctionNode, ignore_called_functions=False):
+                scope.append((int(function.file_id), int(function.start_line), int(function.end_line)))
+            self._scopes[loop.id] = scope
+        return scope
+
+    def _static_check(self, loop: Node, sites: Dict[SiteKey, UpdateSite]) -> Optional[Classification]:
+        """what the profile cannot show: reads of the updated memory before any update of the same address,
+        and accesses in functions called indirectly. None if neither is found."""
+        names = {site.variable for site in sites.values()}
+        if None in names or "this" in names:
+            first = min(sites, key=lambda key: (key.file_id, key.line, key.first_column))
+            return _not_fixable(UNKNOWN_VARIABLE, (first.file_id, first.line, first.first_column))
+        statements = {(key.file_id, key.line, site.begin_column, site.end_column) for key, site in sites.items()}
+        for file_id, first_line, last_line in self._scope(loop):
+            facts = self._ast.get_file_facts(file_id)
+            if facts is None:
+                return _not_fixable(UNRESOLVED_INSTRUCTION)
+            for line, column in facts.indirect_calls:
+                if first_line <= line <= last_line:
+                    return _not_fixable(INDIRECT_CALL, (file_id, line, column))
+            for name in sorted(names):  # type: ignore[type-var]
+                for line, column in facts.references.get(str(name), []):
+                    if not first_line <= line <= last_line:
+                        continue
+                    if any(f == file_id and n == line and begin <= column <= end for f, n, begin, end in statements):
+                        continue
+                    return _not_fixable(REFERENCED_ELSEWHERE, (file_id, line, column))
+        return None
 
     def site(self, key: SiteKey) -> UpdateSite:
         """an update statement named by a classification"""
@@ -207,14 +265,18 @@ class CommutativeUpdateClassifier:
         by_line: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
         cus = subtree_of_type(self._pet, loop, CUNode, ignore_called_functions=False)
         cu_ids = {cu.id for cu in cus}
-        for cu_id in cu_ids:
+        for cu_id in sorted(cu_ids):
             for _sink_cu, source_cu, dependency in self._data_edges.out_edges(cu_id):
                 if source_cu not in cu_ids or dependency.dtype not in (DepType.RAW, DepType.WAR, DepType.WAW):
                     continue
+                # an end without instruction id stands for an access no site can account for, so the known
+                # end leads to _UNRESOLVED rather than being skipped
                 source = dependency.source_instruction_id
                 sink = dependency.sink_instruction_id
-                if source is None or sink is None:
+                if source is None and sink is None:
                     continue
+                source = _UNRESOLVED if source is None else source
+                sink = _UNRESOLVED if sink is None else sink
                 incident.setdefault(source, set()).add(sink)
                 incident.setdefault(sink, set()).add(source)
         for instruction in incident:
