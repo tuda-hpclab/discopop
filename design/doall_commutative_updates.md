@@ -318,7 +318,23 @@ and `do h[k]++; while (...)` on one line. The body is identified by position (cl
 has `{}` placeholders; the body is the last child), with negative tests for the increment and the
 condition.
 
-### D. LULESH `[ ]`
+### D. LULESH `[x]` (no code change)
+
+Result (scratch copy, `-s 5`, `--enable-patterns doall,reduction --atomic-updates`): no loop gets
+atomics. The two force loops are rejected only by `referenced_elsewhere`: IntegrateStressForElems
+520-558 (3 blockers, other reference `domain.nodelist(k)` at 522) and its inner node loop 551-556,
+and the hourglass loop 779-961 (51 blockers, all `referenced_elsewhere`, other reference
+`domain.nodelist(i2)` at 788). So a refinement would make the hourglass loop fixable. It is not a
+matter of member names alone: `domain.fx(n)` and `domain.nodelist(k)` are method calls, so a sound
+refinement has to show that no other method reached through `domain` in the loop touches the
+member `fx` returns (`m_fx`), transitively, since the profiler may hide those reads too. Not done:
+offered to the user.
+
+Also found (pre-existing, not this branch): with the default patterns the explorer crashes on
+LULESH in the task detector, `task_dataflow._sharing`: `sorted(variables.items())` with a None
+name (TypeError: '<' not supported between 'str' and 'NoneType').
+
+Original plan for D:
 
 Re-profile a scratch copy of LULESH, never inside the harness's `benchmarks/` (the ProjectManager
 rewrites tracked settings files there). Time-boxed. The profiling data on disk is in the old format.
