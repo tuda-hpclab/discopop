@@ -7,7 +7,7 @@
 # directory for details.
 import itertools
 import logging
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.NodeID import NodeID
@@ -43,6 +43,7 @@ from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_explorer.functions.PEGraph.queries.edges import in_edges
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
+from discopop_explorer.pattern_detectors.commutative_updates import CommutativeUpdateClassifier
 from discopop_explorer.pattern_detectors.clause_classification import filter_classifications, merge_classifications
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
 from discopop_explorer.pattern_detectors.loop_collapse_analysis import identify_collapsible_loop_nests
@@ -329,6 +330,35 @@ def structural_rejection(
                 },
             )
     return None
+
+
+def record_blockers(
+    tg: TaskGraph,
+    ast_helper: ASTPatternDetectionHelper,
+    data_edges: DataEdgeIndex,
+    blockers_by_loop: Dict[NodeID, Dict[DependencyRecord, Tuple[Context, Context, Dependency]]],
+    record_rejection: Callable[[NodeID, DecisionReason], None],
+) -> None:
+    """Records the dependencies between iterations which prevent each loop, each with whether
+    `#pragma omp atomic` on update statements would make it safe (see commutative_updates). Done
+    once every copy of a loop has been scanned, since the classification of one blocker depends on
+    the loop only, not on the copy it was found in."""
+    classifier = CommutativeUpdateClassifier(tg.pet, data_edges, ast_helper) if ast_helper.is_ast_loaded() else None
+    for pet_node_id, loop_blockers in blockers_by_loop.items():
+        loop_node = loop_node_of(tg.pet, pet_node_id) if classifier is not None else None
+        for record, (_source_ctx, _target_ctx, dependency) in loop_blockers.items():
+            details: Dict[str, Any] = {}
+            if classifier is not None and loop_node is not None:
+                details = classifier.classify(loop_node, dependency).to_details()
+            record_rejection(
+                pet_node_id,
+                DecisionReason(
+                    kind=LOOP_CARRIED_DEPENDENCY,
+                    message="A " + record.describe() + " between different iterations was observed during profiling.",
+                    dependency=record,
+                    details=details,
+                ),
+            )
 
 
 def identify_simple_doall_and_reduction(
@@ -634,22 +664,12 @@ def identify_simple_doall_and_reduction(
                     if crosses_iterations and prevents_doall(subnode, out_dep_target, dep):
                         found_blockers.append((subnode, out_dep_target, dep))
         if found_blockers:
+            # recorded as reasons once every copy of the loop has been scanned, see below
             loop_blockers = blockers_by_loop.setdefault(node.pet_node_id, dict())
             for blocker in found_blockers:
                 record = DependencyRecord.from_dependency(blocker[2])
-                if record in loop_blockers:
-                    continue
-                loop_blockers[record] = blocker
-                record_rejection(
-                    node.pet_node_id,
-                    DecisionReason(
-                        kind=LOOP_CARRIED_DEPENDENCY,
-                        message="A "
-                        + record.describe()
-                        + " between different iterations was observed during profiling.",
-                        dependency=record,
-                    ),
-                )
+                if record not in loop_blockers:
+                    loop_blockers[record] = blocker
         if rescan:
             counts["rescanned_prevented"] += 1
             continue
@@ -788,6 +808,7 @@ def identify_simple_doall_and_reduction(
         known_pattern_tags[pattern.pattern_tag] = pattern
         patterns.append(pattern)
 
+    record_blockers(tg, ast_helper, data_edges, blockers_by_loop, record_rejection)
     logger.info("Doall/reduction candidates: " + ", ".join(k + "=" + str(v) for k, v in counts.items()))
 
     # clean patterns agains prevented loops

@@ -25,6 +25,9 @@ readlineToCUIdMap = defaultdict(set)  # type: ignore
 instructionToCUIdMap: Dict[int, str] = dict()
 # Map from the id of an instruction to its line (file id:line). Instructions without position are not listed.
 instructionToLineMap: Dict[int, str] = dict()
+# Map from the id of an instruction to its column. The profiler reports the load and store of a read-modify-write
+# (x += e, x++) at the column of the operator, which is what tells them apart from the other accesses of a line.
+instructionToColumnMap: Dict[int, int] = dict()
 # the instructions that only jump (br, switch, ret, unreachable), as listed in the CUs of Data.xml
 jumpInstructionIds: Set[int] = set()
 # Map to record which line belongs to write set of nodes. LID -> NodeIds
@@ -156,9 +159,10 @@ def __parse_dep_file(dep_fd: TextIOWrapper, output_path: str) -> Tuple[List[Depe
                 line_id_split = line_id.split(":")
                 file_id = line_id_split[0]
                 line_num = line_id_split[1]
-                _column_num = line_id_split[2]
                 instruction_to_line_id_mapping[instruction_id] = str(file_id) + ":" + str(line_num)
                 instructionToLineMap[int(instruction_id)] = str(file_id) + ":" + str(line_num)
+                if len(line_id_split) > 2 and line_id_split[2].isdigit():
+                    instructionToColumnMap[int(instruction_id)] = int(line_id_split[2])
 
     for line in dep_fd.readlines() + static_dependency_lines:
         dep_fields = line.split()

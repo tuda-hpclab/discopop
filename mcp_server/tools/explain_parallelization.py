@@ -181,6 +181,29 @@ def _reason_lines(reasons: list[Any], file_mapping: dict[int, Path], project_pat
     return lines
 
 
+def _atomic_update_line(reasons: list[Any], file_mapping: dict[int, Path], project_path: str) -> Optional[str]:
+    """For a loop rejected only for dependencies which are commutative updates of shared memory (x += e,
+    x++, see the explorer's commutative_updates): which statements `#pragma omp atomic` would have to
+    protect to make it parallel. None for every other loop."""
+    if not reasons:
+        return None
+    # one operation per updated memory, but different memory may be updated with different operations
+    sites: set[str] = set()
+    for reason in reasons:
+        details = reason.details.get("atomic_update") if isinstance(reason.details, dict) else None
+        if not isinstance(details, dict) or not details.get("fixable"):
+            return None
+        sites.update(str(site) for site in details.get("sites", []))
+    if not sites:
+        return None
+    locations = sorted((_location(site, file_mapping, project_path) or site for site in sites), key=lambda text: text)
+    return (
+        "- These dependencies are all commutative updates of shared memory, so the loop would be parallel if "
+        "the updates were made atomic: `#pragma omp atomic` before the update at " + ", ".join(locations) + ". "
+        "Atomic updates change the order of floating-point additions, so results may differ in the last digits."
+    )
+
+
 def _region_text(decision: Any, file_mapping: dict[int, Path], project_path: str) -> list[str]:
     notes = [f"- Note: {note.message}" for note in getattr(decision, "notes", [])]
     return _region_lines(decision, file_mapping, project_path) + notes
@@ -197,7 +220,9 @@ def _region_lines(decision: Any, file_mapping: dict[int, Path], project_path: st
         suggested = ", ".join(f"suggestion {p['pattern_id']} ({p['type']})" for p in decision.patterns)
         return [f"{title}: {suggested}."]
     if decision.outcome == "rejected":
-        return [f"{title}: not parallelizable."] + _reason_lines(decision.reasons, file_mapping, project_path)
+        lines = [f"{title}: not parallelizable."] + _reason_lines(decision.reasons, file_mapping, project_path)
+        atomic = _atomic_update_line(decision.reasons, file_mapping, project_path)
+        return lines + ([atomic] if atomic is not None else [])
     # passed the checks without being part of the result
     lines = [f"{title}: passed the checks, but no suggestion is reported for it."]
     return lines + _reason_lines(decision.reasons, file_mapping, project_path)

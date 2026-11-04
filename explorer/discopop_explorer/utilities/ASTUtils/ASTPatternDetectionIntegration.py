@@ -24,6 +24,7 @@ from discopop_explorer.utilities.ASTUtils.ASTQueries import (
     ASTVariableAndTypeQueries,
 )
 from discopop_explorer.utilities.ASTUtils.ASTVisualization import ASTVisualization
+from discopop_explorer.utilities.ASTUtils.UpdateSites import UpdateSite, update_sites_on_line
 from discopop_library.PathManagement.PathManagement import load_file_mapping
 
 
@@ -49,6 +50,8 @@ class ASTPatternDetectionHelper:
         # for the same reason: the answer is a property of the source, and pattern detection asks
         # about one loop header once per copy of that loop in the task graph.
         self._assigned_in_loop_cache: Dict[Tuple[str, int], FrozenSet[str]] = {}
+        # memoized results of get_update_sites, keyed by (file id, line)
+        self._update_sites_cache: Dict[Tuple[int, int], Tuple[UpdateSite, ...]] = {}
 
     def load_ast_from_project(self, project_path: str) -> None:
         """Load and build AST graph from project.
@@ -72,6 +75,7 @@ class ASTPatternDetectionHelper:
 
         self._variables_at_location_cache.clear()
         self._assigned_in_loop_cache.clear()
+        self._update_sites_cache.clear()
 
         ast_dict = ClangASTLoader.load_ast_from_project(project_path)
         if ast_dict is None:
@@ -189,6 +193,20 @@ class ASTPatternDetectionHelper:
                 ASTVariableAndTypeQueries.find_variables_assigned_in_loop_at(self.ast_graph, file_path_str, line)
             )
             self._assigned_in_loop_cache[cache_key] = cached
+        return cached
+
+    def get_update_sites(self, file_id: int, line: int) -> Tuple[UpdateSite, ...]:
+        """The update statements (``x op= e``, ``x++``, ...) beginning on a line, see
+        :func:`UpdateSites.update_sites_on_line`. Empty when the file is unknown or the AST has not been
+        loaded."""
+        if not self.ast_graph:
+            return ()
+        key = (file_id, line)
+        cached = self._update_sites_cache.get(key)
+        if cached is None:
+            file_path = self.file_mapping.get(file_id)
+            cached = () if file_path is None else tuple(update_sites_on_line(self.ast_graph, str(file_path), line))
+            self._update_sites_cache[key] = cached
         return cached
 
     def get_variable_declarations_in_scope(self, scope_name: str) -> list[tuple[str, Optional[str]]]:

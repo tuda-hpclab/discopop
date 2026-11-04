@@ -148,9 +148,23 @@ No new suggestions; the decision log and the explanation become precise.
   "would be parallel with `#pragma omp atomic` at SparseMatrix_functions.hpp:157, Vector_functions.hpp:104"
   or, per variable group, why not.
 - Validation: miniFE decision log — element loop fixable with both sites; the prefix sum
-  `generate_matrix_structure.hpp:139` not fixable (`end_not_at_update`). Before writing the AST
-  query, confirm the column claim for `++`/`--` (postfix: is the operator location the
-  `UnaryOperator` loc, i.e. after the operand?) on a small end-to-end case.
+  `generate_matrix_structure.hpp:139` not fixable (`end_not_at_update`).
+
+Checked before implementing (2026-11-04, a small `h[idx[i]]++` / `++h[…]` / `h[…]--` / `acc[k] += v`
+in a callee, profiled with `discopop_cxx`, and the miniFE profile):
+
+- Every profiled dependency is its own PET edge with both instruction ids (`PEGraphX` is a
+  `MultiDiGraph`, one edge per `DependenceItem`, nothing merged by line).
+- The RMW load and store sit at the operator column for all forms: postfix `++` `11:18`, prefix
+  `++` `12:9`, postfix `--` `13:29`, `+=` `6:12`. The three `h` statements form one closure; their
+  other ends (`17:38` in a later sum loop, `printf`) lie outside the loop. miniFE: the other ends of
+  `157:34` and `104:20` are all in functions run outside the element loop (MatrixInitOp, the
+  Vector constructor, `zero_row_and_put_1_on_diagonal`, `matvec`), so scoping to `D(L)` removes them.
+- Clang's JSON gives expressions no `loc`, only a `range`. The operator column therefore is: prefix
+  unary `range.begin.col`; postfix unary `range.end.col` (the last token is the operator);
+  `op=` strictly between the LHS's `range.end.col` and the RHS's `range.begin.col`. Only sites whose
+  range lies on one line are accepted (clang omits `line` in range ends when unchanged, and a
+  multi-line update is rare).
 
 ### Phase 3 — accept loops whose blockers are all fixable
 
@@ -217,9 +231,8 @@ No new suggestions; the decision log and the explanation become precise.
 
 ## Open points
 
-- The column rule rests on the debug locations clang gives the RMW load/store; confirmed for
-  compound assignment on miniFE, unconfirmed for `++`/`--` and for `-O` levels other than the
-  profiling build's.
+- The column rule rests on the debug locations clang gives the RMW load/store at `-O0` (the
+  profiling build); confirmed for `op=`, prefix and postfix `++`/`--`.
 - A site in a callee called from inside and outside `L`: PET edges are context-insensitive, so
   `D(L)` also contains edges from other call contexts. That only adds edges, i.e. can only reject
   more — conservative.

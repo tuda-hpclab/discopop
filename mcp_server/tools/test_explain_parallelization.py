@@ -189,6 +189,31 @@ class TestExplainParallelization(unittest.TestCase):
             lines,
         )
 
+    def test_a_loop_blocked_only_by_commutative_updates_names_the_atomics(self) -> None:
+        region = CodeRegion("1:41", 1, 41, 60, "loop")
+        for line in (42, 44):
+            reason = _carried(f"v{line}", line)
+            reason.details = {"atomic_update": {"fixable": True, "operation": "+", "sites": [f"1:{line}"]}}
+            self.log.reject(DETECTOR, TYPES, region, reason)
+        self.log.finalize(DETECTOR, [])
+        self.__save()
+        text = self.__handle(start_line=45)
+        self.assertIn("`#pragma omp atomic` before the update at main.cpp:42, main.cpp:44.", text)
+
+    def test_a_loop_with_one_blocker_that_is_no_commutative_update_names_no_atomics(self) -> None:
+        region = CodeRegion("1:41", 1, 41, 60, "loop")
+        fixable = _carried("a", 42)
+        fixable.details = {"atomic_update": {"fixable": True, "operation": "+", "sites": ["1:42"]}}
+        other = _carried("b", 44)
+        other.details = {"atomic_update": {"fixable": False, "problem": "accessed_elsewhere"}}
+        self.log.reject(DETECTOR, TYPES, region, fixable)
+        self.log.reject(DETECTOR, TYPES, region, other)
+        self.log.finalize(DETECTOR, [])
+        self.__save()
+        self.assertNotIn("omp atomic", self.__handle(start_line=45))
+        # a loop without classified dependencies
+        self.assertNotIn("omp atomic", self.__handle(start_line=20))
+
     def test_the_locations_of_a_variable_are_cut(self) -> None:
         region = CodeRegion("1:11", 1, 10, 30, "loop")
         for line in range(11, 11 + MAX_LOCATIONS_PER_REASON + 2):

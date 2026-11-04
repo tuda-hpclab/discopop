@@ -51,6 +51,7 @@ except (ImportError, ModuleNotFoundError):
 
 from discopop_explorer.utilities.PEGraphConstruction.parser import (
     instructionToCUIdMap,
+    instructionToColumnMap,
     instructionToLineMap,
     jumpInstructionIds,
     readlineToCUIdMap,
@@ -111,6 +112,8 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
     # line (file id:line) of the instructions that have one, keyed by the instruction id as str (json keys).
     # The lines are a view derived from the instructions, see design/instruction_focus.md.
     instruction_lines: Dict[str, str]
+    # column of the instructions that have one, keyed like instruction_lines
+    instruction_columns: Dict[str, int]
     # lines (file id:line) whose instructions all jump (the closing brace of a loop, the jump over an else): they hold
     # no statement. Empty if the profiler listed no jumps.
     jump_only_lines: Set[str]
@@ -133,6 +136,7 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
                 self.main = node
         self.pos = pos
         self.instruction_lines = dict()
+        self.instruction_columns = dict()
         self.jump_only_lines = set()
         self.callpath_tree = dict()
 
@@ -245,6 +249,7 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
                         g.add_edge(sink_cu_id, source_cu_id, data=parse_dependency(dep))
         pet = cls(g, reduction_vars, pos, visualizer)
         pet.instruction_lines = {str(i): line for i, line in instructionToLineMap.items()}
+        pet.instruction_columns = {str(i): column for i, column in instructionToColumnMap.items()}
         lines_with_other_instructions = {
             line for instruction_id, line in instructionToLineMap.items() if instruction_id not in jumpInstructionIds
         }
