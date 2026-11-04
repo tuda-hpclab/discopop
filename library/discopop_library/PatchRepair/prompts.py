@@ -49,6 +49,11 @@ BUILTIN_PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 # The ladder, in the order attempts walk it. Cycled when --prompts exceeds its length.
 PROMPT_LADDER = ("minimal", "context", "guided")
 RETRY_TEMPLATE = "retry"
+# Completion has one rung: there is no diagnostic to add on a later attempt, so a further attempt is a new draw.
+COMPLETION_LADDER = ("completion",)
+COMPLETION_RETRY_TEMPLATE = "completion_retry"
+# Every template a prompt directory can replace, by the name of its file without ``.md``.
+TEMPLATE_NAMES = (*PROMPT_LADDER, RETRY_TEMPLATE, *COMPLETION_LADDER, COMPLETION_RETRY_TEMPLATE)
 
 # Clause fields of a pattern worth showing: what DiscoPoP decided, in its own words.
 PATTERN_CLAUSE_FIELDS = (
@@ -60,9 +65,10 @@ PATTERN_CLAUSE_FIELDS = (
 )
 
 
-def output_contract(file_ids: List[int]) -> str:
+def output_contract(file_ids: List[int], mode: str = "repair") -> str:
     """The answer format, spelled out. The single most load-bearing part of the prompt."""
     example_id = file_ids[0] if file_ids else 0
+    complete = mode == "complete"
     lines = [
         "## How to answer",
         "",
@@ -99,8 +105,18 @@ def output_contract(file_ids: List[int]) -> str:
         "* **Keep the parallelization.** Do not delete the `#pragma omp` directives: a",
         "  patch that fixes the error by removing them compiles, but silently turns the",
         "  suggestion into a no-op, and will be rejected.",
-        "* Prefer correcting the directive's clauses (`private`, `firstprivate`,",
-        "  `shared`, `reduction`, `collapse`) over restructuring the code.",
+        *(
+            [
+                "* **No placeholder may remain.** Every `/* DiscoPoP TODO: ... */` comment has to be",
+                "  replaced by what it asks for, on the same line.",
+                "* Change the directive and the placeholder only; leave every other line as it is.",
+            ]
+            if complete
+            else [
+                "* Prefer correcting the directive's clauses (`private`, `firstprivate`,",
+                "  `shared`, `reduction`, `collapse`) over restructuring the code.",
+            ]
+        ),
         "* Change nothing outside the region the original patch touches.",
         "* Exact line numbers in the `@@` headers are not critical -- the patch is",
         "  re-derived after it applies -- but the context lines must match the real code.",
@@ -124,11 +140,15 @@ class PromptContext:
     pattern: Optional[Dict[str, Any]] = None
     # The line ranges each file's patch touches, used to window the source.
     touched_lines: Dict[int, List[int]] = field(default_factory=dict)
+    # Completion mode: what has to be filled in, as described to the agent
+    placeholders: str = ""
+    mode: str = "repair"
 
 
-def template_for_attempt(attempt: int, prompt_dir: Optional[str] = None) -> str:
+def template_for_attempt(attempt: int, prompt_dir: Optional[str] = None, mode: str = "repair") -> str:
     """The ladder rung attempt ``attempt`` (1-based) uses."""
-    return PROMPT_LADDER[(attempt - 1) % len(PROMPT_LADDER)]
+    ladder = COMPLETION_LADDER if mode == "complete" else PROMPT_LADDER
+    return ladder[(attempt - 1) % len(ladder)]
 
 
 def load_template(name: str, prompt_dir: Optional[str] = None) -> str:
@@ -206,10 +226,10 @@ def render(
     return _render_once(context, template, lines, errors, include_all_sources)
 
 
-def render_retry(failure: str, file_ids: List[int], prompt_dir: Optional[str] = None) -> str:
+def render_retry(failure: str, file_ids: List[int], prompt_dir: Optional[str] = None, mode: str = "repair") -> str:
     """The follow-up turn: the task is already in context, only the failure is new."""
-    template = load_template(RETRY_TEMPLATE, prompt_dir)
-    return _substitute(template, {"failure": failure, "output_contract": output_contract(file_ids)})
+    template = load_template(COMPLETION_RETRY_TEMPLATE if mode == "complete" else RETRY_TEMPLATE, prompt_dir)
+    return _substitute(template, {"failure": failure, "output_contract": output_contract(file_ids, mode)})
 
 
 def _render_once(
@@ -231,7 +251,8 @@ def _render_once(
             "patched_source": _sources(context, context.patched_sources, shown, context_lines, "after"),
             "diagnostics": truncate_diagnostics(context.diagnostics_text, max_error_chars).strip() or "(none)",
             "pattern_metadata": _pattern_metadata(context),
-            "output_contract": output_contract(file_ids),
+            "placeholders": context.placeholders or "(none)",
+            "output_contract": output_contract(file_ids, context.mode),
         },
     )
 

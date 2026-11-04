@@ -25,6 +25,15 @@ DEFAULT_HOTSPOT_TYPES = "yes,maybe"
 
 VALID_HOTSPOT_TYPES = ("yes", "no", "maybe")
 
+# What a run does with the patches: fix those that do not compile, or replace the placeholders the patch generator
+# left in them (``/* DiscoPoP TODO: ... */``).
+MODE_REPAIR = "repair"
+MODE_COMPLETE = "complete"
+VALID_MODES = (MODE_REPAIR, MODE_COMPLETE)
+
+# The project's own prompt templates: every template found here replaces the built-in one of the same name.
+PROJECT_PROMPT_DIR_NAME = "prompts"
+
 
 @dataclass
 class PatchRepairArguments(GeneralArguments):
@@ -32,6 +41,9 @@ class PatchRepairArguments(GeneralArguments):
 
     dot_dp_path: str
     configuration: str
+
+    # -- what to do --------------------------------------------------------------
+    mode: str = MODE_REPAIR
 
     # -- what to repair ----------------------------------------------------------
     hotspot_types: str = DEFAULT_HOTSPOT_TYPES
@@ -70,6 +82,7 @@ class PatchRepairArguments(GeneralArguments):
     model: Optional[str] = None
     agent_timeout: float = 300.0
     llm_config: Optional[str] = None
+    # None: ``<dot-dp-path>/patch_repair/prompts`` if it exists, else the built-in templates only.
     prompt_dir: Optional[str] = None
 
     # -- prompt shaping ----------------------------------------------------------
@@ -96,6 +109,10 @@ class PatchRepairArguments(GeneralArguments):
         self.configuration_path = os.path.join(self.dot_dp_path, "project", "configs", self.configuration)
         self.patch_generator_path = os.path.join(self.dot_dp_path, "patch_generator")
         self.patch_repair_path = os.path.join(self.dot_dp_path, "patch_repair")
+        if self.prompt_dir is None:
+            project_prompts = os.path.join(self.patch_repair_path, PROJECT_PROMPT_DIR_NAME)
+            if os.path.isdir(project_prompts):
+                self.prompt_dir = project_prompts
         self.__validate()
 
     def log(self) -> None:
@@ -114,6 +131,8 @@ class PatchRepairArguments(GeneralArguments):
 
     def __validate(self) -> None:
         """Check the arguments, e.g. whether the files the run depends on exist."""
+        if self.mode not in VALID_MODES:
+            raise ValueError("Unknown mode: " + self.mode + ". Options: " + ", ".join(VALID_MODES))
         for hotspot_type in self.selected_hotspot_types():
             if hotspot_type not in VALID_HOTSPOT_TYPES:
                 raise ValueError(

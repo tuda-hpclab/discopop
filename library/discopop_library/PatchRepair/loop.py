@@ -33,9 +33,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from discopop_library.PatchRepair import llm_backends
-from discopop_library.PatchRepair.PatchRepairArguments import PatchRepairArguments
+from discopop_library.PatchRepair.PatchRepairArguments import MODE_COMPLETE, PatchRepairArguments
 from discopop_library.PatchRepair.backups import backup_patch_set, record_written_patch_set
 from discopop_library.PatchRepair.candidates import Candidate
+from discopop_library.PatchRepair.completion import describe_placeholders, placeholders_of, remaining_placeholders
 from discopop_library.PatchRepair.compilation import CompileCheckError, CompileOutcome, run_compile_check
 from discopop_library.PatchRepair.diagnostics import implicated_file_ids, parse_diagnostics
 from discopop_library.PatchRepair.patching import (
@@ -63,6 +64,7 @@ from discopop_library.PatchRepair.prompts import (
     template_for_attempt,
 )
 from discopop_library.PatchRepair.results import (
+    STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_REPAIRED,
     STATUS_UNREACHABLE,
@@ -80,6 +82,7 @@ GATE_EXTRACTION = "extraction"
 GATE_APPLY = "apply"
 GATE_CANONICALIZE = "canonicalize"
 GATE_PRAGMAS = "pragmas"
+GATE_PLACEHOLDERS = "placeholders"
 GATE_COMPILE = "compile"
 GATE_ACCEPTED = "accepted"
 
@@ -97,11 +100,14 @@ _BASE_REMINDER = (
 def repair_suggestion(
     arguments: PatchRepairArguments,
     candidate: Candidate,
-    outcome: CompileOutcome,
+    outcome: Optional[CompileOutcome],
     reporter: ProgressReporter,
     profile: Dict[str, object],
 ) -> SuggestionRecord:
-    """Try to repair one suggestion's patch set, and report what happened."""
+    """Try to repair (or, in completion mode, complete) one suggestion's patch set, and report what happened.
+
+    ``outcome`` is the compile check of the suggestion; completion mode does not run one, since its patches build.
+    """
     started = time.time()
     suggestion_id = candidate.suggestion_id
     record = SuggestionRecord(
@@ -110,7 +116,7 @@ def repair_suggestion(
         status=STATUS_FAILED,
         backend=llm_backends.backend_of(profile),
         model=str(profile.get("model") or "") or None,
-        first_error=outcome.first_error(),
+        first_error=outcome.first_error() if outcome is not None else "",
     )
 
     file_mapping = load_file_mapping(os.path.join(arguments.dot_dp_path, "FileMapping.txt"))
@@ -165,7 +171,7 @@ def _run_turns(
     for attempt in range(1, arguments.prompts + 1):
         if charged >= arguments.max_attempts:
             break
-        template = template_for_attempt(attempt, arguments.prompt_dir)
+        template = template_for_attempt(attempt, arguments.prompt_dir, arguments.mode)
         message = render(
             context,
             template,
@@ -230,7 +236,7 @@ def _run_turns(
 
             if accepted and canonical is not None:
                 _write_back(arguments, original, canonical, record)
-                record.status = STATUS_REPAIRED
+                record.status = STATUS_COMPLETED if arguments.mode == MODE_COMPLETE else STATUS_REPAIRED
                 record.accepted_attempt = calls
                 return record
 
@@ -241,7 +247,7 @@ def _run_turns(
                 # template -- which says "that did not work" to a model with no "that".
                 logger.debug("No session to continue for suggestion " + str(suggestion_id) + "; starting over.")
                 break
-            message = render_retry(failure, original.file_ids, arguments.prompt_dir)
+            message = render_retry(failure, original.file_ids, arguments.prompt_dir, arguments.mode)
 
     return record
 
@@ -352,6 +358,13 @@ def _one_turn(
     if pragma_failure is not None:
         return reject(GATE_PRAGMAS, pragma_failure)
 
+    # -- gate 5b (completion): is every placeholder gone? A marker left in is a patch that compiles and completes
+    # nothing, so it is the one thing the compiler cannot tell the agent.
+    if arguments.mode == MODE_COMPLETE:
+        placeholder_failure = remaining_placeholders(canonical)
+        if placeholder_failure is not None:
+            return reject(GATE_PLACEHOLDERS, placeholder_failure)
+
     # -- gate 6: does it compile? The only gate that costs a build, so it runs last.
     try:
         verification = _verify_by_building(arguments, original, canonical)
@@ -399,11 +412,12 @@ def _build_context(
     arguments: PatchRepairArguments,
     suggestion_id: int,
     patch_set: PatchSet,
-    outcome: CompileOutcome,
+    outcome: Optional[CompileOutcome],
     file_mapping: Dict[int, Path],
 ) -> PromptContext:
     """Everything the prompt can be built from, gathered once per suggestion."""
-    diagnostics = parse_diagnostics(outcome.stderr, file_mapping)
+    stderr = outcome.stderr if outcome is not None else ""
+    diagnostics = parse_diagnostics(stderr, file_mapping)
     pattern = load_pattern_metadata(arguments.dot_dp_path, suggestion_id)
 
     original_sources: Dict[int, str] = {}
@@ -425,11 +439,13 @@ def _build_context(
         patch_set=patch_set,
         original_sources=original_sources,
         patched_sources=patched_sources,
-        diagnostics_text=outcome.stderr,
+        diagnostics_text=stderr,
         diagnostics=diagnostics,
         implicated_file_ids=implicated_file_ids(diagnostics),
         pattern=pattern,
         touched_lines=touched,
+        placeholders=describe_placeholders(placeholders_of(patch_set)) if arguments.mode == MODE_COMPLETE else "",
+        mode=arguments.mode,
     )
 
 

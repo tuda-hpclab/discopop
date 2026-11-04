@@ -20,16 +20,27 @@ and only the far smaller set of failures costs a per-suggestion invocation after
 import logging
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from discopop_library.FolderStructure.setup import setup_patch_repair
 from discopop_library.PatchRepair import llm_config
-from discopop_library.PatchRepair.PatchRepairArguments import PatchRepairArguments
+from discopop_library.PatchRepair.PatchRepairArguments import MODE_COMPLETE, PatchRepairArguments
 from discopop_library.PatchRepair.backups import restore_patch_sets
 from discopop_library.PatchRepair.candidates import Candidate, collect_candidates
-from discopop_library.PatchRepair.compilation import CompileCheckError, CompileReport, run_compile_check
+from discopop_library.PatchRepair.compilation import (
+    CompileCheckError,
+    CompileOutcome,
+    CompileReport,
+    run_compile_check,
+)
+from discopop_library.PatchRepair.completion import placeholders_of
+from discopop_library.PatchRepair.patchset import load_patch_set
 from discopop_library.ProjectManager.configurations.execution import read_applied_suggestions
+from discopop_library.PathManagement.PathManagement import load_file_mapping
 from discopop_library.PatchRepair.results import (
+    STATUS_COMPLETED,
+    progress_file_name,
+    results_file_name,
     STATUS_NOT_APPLIED,
     STATUS_OK,
     STATUS_REPAIRED,
@@ -71,9 +82,13 @@ def run(arguments: PatchRepairArguments) -> int:
         return EXIT_OK
 
     start_time = time.time()
-    reporter = ProgressReporter(os.path.join(arguments.patch_repair_path, "progress.jsonl"))
-    results = ResultsWriter(os.path.join(arguments.patch_repair_path, "results.json"))
+    reporter = ProgressReporter(
+        os.path.join(arguments.patch_repair_path, progress_file_name(arguments.mode)), arguments.mode
+    )
+    results = ResultsWriter(os.path.join(arguments.patch_repair_path, results_file_name(arguments.mode)))
     try:
+        if arguments.mode == MODE_COMPLETE:
+            return _run_completion(arguments, reporter, results, start_time)
         return _run(arguments, reporter, results, start_time)
     finally:
         reporter.close()
@@ -159,7 +174,14 @@ def _run(
         print("WARNING: " + warning)
     print("Repairing with " + llm_config.describe_connection(profile) + ".")
 
-    repaired, failed, unreachable = _repair_all(arguments, repairable, report, reporter, results, profile)
+    repaired, failed, unreachable = _repair_all(
+        arguments,
+        repairable,
+        {c.suggestion_id: report.outcomes[c.suggestion_id] for c in repairable},
+        reporter,
+        results,
+        profile,
+    )
 
     duration = time.time() - start_time
     reporter.done(repaired, failed, len(candidates), duration, unreachable=unreachable)
@@ -171,6 +193,54 @@ def _run(
         # judged by a model, so the run says nothing about them -- and the thing to fix
         # is the agent, not the prompt or the budget.
         print("Agent unreachable: " + str(unreachable) + " (no answer; not a failed repair)")
+    print("Time: " + str(round(duration, 1)) + "s")
+    print("##############################")
+    return EXIT_OK
+
+
+def _run_completion(
+    arguments: PatchRepairArguments,
+    reporter: ProgressReporter,
+    results: ResultsWriter,
+    start_time: float,
+) -> int:
+    """Replace the placeholders of the patches that have some.
+
+    No discovery phase: a placeholder is a comment, so the patches build as generated, and every candidate is checked
+    by the build that verifies its completion anyway.
+    """
+    file_mapping = load_file_mapping(os.path.join(arguments.dot_dp_path, "FileMapping.txt"))
+    candidates = [
+        candidate
+        for candidate in collect_candidates(arguments)
+        if placeholders_of(load_patch_set(arguments.patch_generator_path, candidate.suggestion_id, file_mapping))
+    ]
+    reporter.start([c.suggestion_id for c in candidates], arguments.backend, arguments.model, arguments.dry_run)
+    if not candidates:
+        print("No suggestion with a placeholder to complete.")
+        reporter.done(0, 0, 0, time.time() - start_time)
+        return EXIT_OK
+    print("Completing " + str(len(candidates)) + " suggestion(s): " + str([c.suggestion_id for c in candidates]))
+
+    try:
+        profile = _resolve_profile(arguments)
+    except ValueError as error:
+        print("ERROR: " + str(error))
+        return EXIT_ERROR
+    for warning in llm_config.check_connection(profile):
+        print("WARNING: " + warning)
+    print("Completing with " + llm_config.describe_connection(profile) + ".")
+
+    completed, failed, unreachable = _repair_all(
+        arguments, candidates, {c.suggestion_id: None for c in candidates}, reporter, results, profile
+    )
+    duration = time.time() - start_time
+    reporter.done(completed, failed, len(candidates), duration, unreachable=unreachable)
+    print("##############################")
+    print("Completed: " + str(completed))
+    print("Not completed: " + str(failed))
+    if unreachable:
+        print("Agent unreachable: " + str(unreachable) + " (no answer; not a failed completion)")
     print("Time: " + str(round(duration, 1)) + "s")
     print("##############################")
     return EXIT_OK
@@ -219,7 +289,7 @@ def _resolve_profile(arguments: PatchRepairArguments) -> Dict[str, Any]:
 def _repair_all(
     arguments: PatchRepairArguments,
     repairable: List[Candidate],
-    report: CompileReport,
+    outcomes: Dict[int, Optional[CompileOutcome]],
     reporter: ProgressReporter,
     results: ResultsWriter,
     profile: Dict[str, Any],
@@ -239,11 +309,11 @@ def _repair_all(
     failed = 0
     unreachable = 0
     for candidate in repairable:
-        record = repair_suggestion(arguments, candidate, report.outcomes[candidate.suggestion_id], reporter, profile)
+        record = repair_suggestion(arguments, candidate, outcomes[candidate.suggestion_id], reporter, profile)
         results.record(record)
         # Counted by what the record says rather than by "not failed": a status this
         # loop does not know about must never be added to the repaired total.
-        if record.status == STATUS_REPAIRED:
+        if record.status in (STATUS_REPAIRED, STATUS_COMPLETED):
             repaired += 1
         elif record.status == STATUS_UNREACHABLE:
             unreachable += 1

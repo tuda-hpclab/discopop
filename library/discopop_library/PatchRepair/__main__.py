@@ -11,7 +11,12 @@ import os
 import sys
 
 from discopop_library.GlobalLogger.setup import setup_logger
-from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES, PatchRepairArguments
+from discopop_library.PatchRepair.PatchRepairArguments import (
+    DEFAULT_HOTSPOT_TYPES,
+    MODE_REPAIR,
+    VALID_MODES,
+    PatchRepairArguments,
+)
 from discopop_library.PatchRepair.llm_backends import available_backends
 from discopop_library.PatchRepair.llm_config import CONFIG_ENV_VAR, CONFIG_FILE_NAME
 from discopop_library.PatchRepair.repair import run
@@ -27,6 +32,9 @@ def parse_args() -> PatchRepairArguments:
     # fmt: off
     parser.add_argument("--dot-dp-path", type=str, default=os.getcwd(), help="Path to the .discopop folder. Default: "
     "$(cwd)")
+    parser.add_argument("--mode", choices=VALID_MODES, default=MODE_REPAIR, help="'repair' fixes the patches that do "
+    "not compile; 'complete' replaces the placeholders the patch generator left in the patches (e.g. the cutoff of a "
+    "recursive task group, '/* DiscoPoP TODO: ... */'). Default: " + MODE_REPAIR)
     parser.add_argument("-c", "--config", default="tiny", help="Execution configuration used to build the suggestions. "
     "Default: tiny")
     parser.add_argument("-ht", "--hotspot-types", type=str, default=DEFAULT_HOTSPOT_TYPES, help="Hotspot types to be "
@@ -65,7 +73,8 @@ def parse_args() -> PatchRepairArguments:
     "(connections and backends). Default: <dot-dp-path>/patch_repair/" + CONFIG_FILE_NAME + ", overridable with "
     "$" + CONFIG_ENV_VAR + ".")
     parser.add_argument("--prompt-dir", dest="prompt_dir", default=None, help="Directory holding the prompt templates "
-    "to use instead of the built-in ones.")
+    "to use instead of the built-in ones. Default: <dot-dp-path>/patch_repair/prompts if it exists. A template missing "
+    "there falls back to the built-in one.")
 
     parser.add_argument("--context-lines", dest="context_lines", type=int, default=60, help="Source lines of context "
     "included around each patched region. Default: 60")
@@ -91,6 +100,7 @@ def parse_args() -> PatchRepairArguments:
             log_level=arguments.log.upper(),
             write_log=arguments.write_log,
             dot_dp_path=arguments.dot_dp_path,
+            mode=arguments.mode,
             configuration=arguments.config,
             hotspot_types=arguments.hotspot_types,
             suggestions=arguments.suggestions,

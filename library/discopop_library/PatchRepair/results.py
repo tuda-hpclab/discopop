@@ -43,6 +43,16 @@ STATUS_SKIPPED = "skipped"  # not considered (budget exhausted, or interrupted)
 # Reporting an unreachable endpoint as a failed repair would be a measurement of
 # nothing, read as a measurement of the model.
 STATUS_UNREACHABLE = "agent_unreachable"
+STATUS_COMPLETED = "completed"  # completion mode: the placeholders were replaced and the result builds
+
+
+def results_file_name(mode: str) -> str:
+    """The record of a run; completion has files of its own so the two runs do not overwrite each other."""
+    return "completion_results.json" if mode == "complete" else "results.json"
+
+
+def progress_file_name(mode: str) -> str:
+    return "completion_progress.jsonl" if mode == "complete" else "progress.jsonl"
 
 
 @dataclass
@@ -70,7 +80,8 @@ class SuggestionRecord:
 class ProgressReporter:
     """Emits repair events to stdout and to ``progress.jsonl``."""
 
-    def __init__(self, jsonl_path: Optional[str] = None) -> None:
+    def __init__(self, jsonl_path: Optional[str] = None, mode: str = "repair") -> None:
+        self._mode = mode
         self._fh = open(jsonl_path, "w") if jsonl_path is not None else None
         self._start = time.time()
 
@@ -87,6 +98,7 @@ class ProgressReporter:
         self._emit(
             {
                 "event": "start",
+                "mode": self._mode,
                 "candidates": [int(c) for c in candidates],
                 "candidate_count": len(candidates),
                 "backend": backend,
@@ -141,6 +153,7 @@ class ProgressReporter:
         self._emit(
             {
                 "event": "done",
+                "mode": self._mode,
                 "repaired": int(repaired),
                 "failed": int(failed),
                 # Suggestions the agent never answered for. Counted apart from
