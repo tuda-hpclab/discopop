@@ -76,10 +76,10 @@ def test_chart_tabs_are_added_from_the_menu_and_closed(panel: ReportPanel) -> No
     tab = panel.add_plot("scaling")
     assert panel.notebook.tabText(2) == "Scaling 2" and panel.notebook.currentWidget() is tab.widget
     tab.combos["metric"].setCurrentText("runtime")  # re-renders without an error
-    for plot_type in ("spbars", "rtbars", "amdahl", "amdahl3d"):
+    for plot_type in ("spbars", "rtbars", "amdahl", "amdahl_bubble", "amdahl3d"):
         panel.add_plot(plot_type)
     panel.notebook.tabCloseRequested.emit(2)
-    assert len(panel.plot_tabs) == 5 and panel.notebook.count() == 6
+    assert len(panel.plot_tabs) == 6 and panel.notebook.count() == 7
     # the table cannot be closed
     panel.notebook.tabCloseRequested.emit(0)
     assert panel.notebook.tabText(0) == "Table"
