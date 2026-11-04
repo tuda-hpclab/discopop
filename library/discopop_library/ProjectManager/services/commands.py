@@ -87,6 +87,8 @@ def patch_repair_command(request: PatchRepairRequest, dot_dp_path: str, python: 
         "--log",
         request.log_level,
     ]
+    if request.mode != "repair":
+        command += ["--mode", request.mode]
     if request.backend:
         command += ["--backend", request.backend]
     if request.model:

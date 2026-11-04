@@ -57,3 +57,5 @@ class PatchRepairRequest:
     dry_run: bool
     # None: all suggestions
     suggestion_ids: Optional[Tuple[str, ...]]
+    # "repair": fix patches that do not compile; "complete": replace the placeholders of the patch generator
+    mode: str = "repair"

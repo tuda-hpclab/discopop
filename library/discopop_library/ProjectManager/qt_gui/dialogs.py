@@ -15,7 +15,7 @@ replace them here, as a modal dialog would block a test (and does not show at al
 from typing import List, Optional, Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit, QMessageBox, QWidget
+from PySide6.QtWidgets import QDialog, QFileDialog, QInputDialog, QLineEdit, QMessageBox, QWidget
 
 
 def _message_box(parent: Optional[QWidget], icon: QMessageBox.Icon, title: str, message: str) -> QMessageBox:
@@ -35,6 +35,15 @@ def show_warning(parent: Optional[QWidget], title: str, message: str) -> None:
 
 def show_error(parent: Optional[QWidget], title: str, message: str) -> None:
     _message_box(parent, QMessageBox.Icon.Critical, title, message).exec()
+
+
+def show_dialog(parent: Optional[QWidget], title: str, dialog: QDialog) -> None:
+    """Show a dialog of its own (an editor, ...) modally and return when it is closed.
+
+    The tests replace this too, and record the dialog (third element of the recorded call) instead of blocking.
+    """
+    dialog.setWindowTitle(title)
+    dialog.exec()
 
 
 def ask_yes_no(parent: Optional[QWidget], title: str, message: str) -> bool:
@@ -83,6 +92,7 @@ __all__: List[str] = [
     "show_message",
     "show_warning",
     "show_error",
+    "show_dialog",
     "ask_yes_no",
     "ask_string",
     "ask_choice",

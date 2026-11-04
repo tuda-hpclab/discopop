@@ -10,7 +10,7 @@ nav_order: 8
 `discopop_patch_repair`
 
 ## Purpose
-Find the parallelization suggestions whose generated patch does not compile, ask a configurable LLM agent to fix the patch, verify the fix, and write it back.
+Find the parallelization suggestions whose generated patch does not compile, ask a configurable LLM agent to fix the patch, verify the fix, and write it back. In the second mode, `--mode complete`, the agent instead completes the placeholders of a patch (see [Patch completion](#patch-completion)).
 
 A suggestion whose patch does not build is one the [autotuner](Autotuner.md) can only ever record as a failure: it is compiled, it fails, and it is dropped from the search. This tool sits between pattern detection and tuning and tries to turn those into usable suggestions. Suggestions that already compile, and suggestions whose repair does not succeed within the configured budget, are **left exactly as they were**.
 
@@ -73,6 +73,20 @@ A candidate must pass all six of these checks, cheapest first.
 5. **The parallelization is still there** -- every OpenMP directive the original patch added must still be added. This check is what keeps a green build honest: an agent can always make a compiler error go away by deleting the directive, which compiles and silently turns the suggestion into a no-op. Changing a directive's *clauses* is allowed, and is the expected fix.
 6. **It compiles** -- the suggestion is rebuilt with the candidate in place.
 
+## Patch completion
+Some parts of a parallelization cannot be derived from the profile. The cutoff of a recursive task group is the example: `final(n <= 25)` depends on what the arguments *mean*. The [patch generator](Patch_generator.md) therefore leaves a marker, `/* DiscoPoP TODO: add the cutoff final(<condition>) */`, behind the task pragma; the patch compiles with it. `discopop_patch_repair --mode complete` asks the agent to replace such markers.
+
+- **Candidates** are the suggestions (after the hotspot filter and `-s`) whose patches *add* a `/* DiscoPoP TODO: ... */` comment. There is no discovery build: the patches are expected to compile as generated (run the repair first if they do not).
+- **Prompts** are their own templates, `completion` and `completion_retry`, with the markers and what each one asks for in the prompt. The answer format is the one of the repair, so the same checks apply.
+- **Accepted** is a completion that passes the checks of the repair and in addition contains **no placeholder any more**: a patch that still holds the marker compiles and completes nothing, which the compiler cannot tell the agent. The suggestion is recorded as `completed`.
+- A new kind of placeholder is one entry of `PLACEHOLDER_KINDS` in `PatchRepair/completion.py`; any other `/* DiscoPoP TODO: ... */` is found as well and has to be replaced.
+- The results go to `completion_results.json` and `completion_progress.jsonl` next to the repair's files; the backups, `--restore` and `--dry-run` work as for the repair.
+
+The threshold of a cutoff is a guess from the code, not a measurement. Check it with a measured run (the [autotuner](Autotuner.md), or the project manager's execute tab).
+
+## Customizing the prompts
+The built-in templates are the files of `library/discopop_library/PatchRepair/prompts/` (`minimal`, `context`, `guided`, `retry`, `completion`, `completion_retry`). A template of the same name in `.discopop/patch_repair/prompts/` replaces the built-in one for this project, the others stay as they are; `--prompt-dir` names another directory. Placeholders (`{patch_blocks}`, `{original_source}`, `{diagnostics}`, `{placeholders}`, `{failure}`, `{output_contract}`, ...) are replaced by the tool; an unknown one stays in the text. `{output_contract}` is fixed by the tool, as the answer is parsed by it. The [GUI](GUI.md#patch-repair) edits these files (*Configuration -> Patch Repair and Completion...*).
+
 ## Choosing a model
 The agent, the model and their settings are configured in `.discopop/patch_repair/llm_config.json`, in two sections:
 
@@ -93,6 +107,7 @@ Written to `.discopop/patch_repair/`:
 | Path | Contents |
 |------|----------|
 | `results.json` | One record per considered suggestion: status (`ok`, `repaired`, `failed`, `not_applied`, `agent_unreachable`, `skipped`), hotspot type, the files in its patch set and which of them a repair changed, attempts and how many of them went unanswered, backend, model, first error |
+| `completion_results.json`, `completion_progress.jsonl` | The same for a completion run (status `completed` instead of `repaired`) |
 | `progress.jsonl` | The structured event stream, so a finished run can be redisplayed without repeating it |
 | `backups/<id>/` | The patch set as the generator produced it, copied aside before the first overwrite. `backups/<id>.written` records the digest of the patch set a repair left in place |
 | `attempts/<id>/<n>/` | What was sent, what came back, the extracted and canonicalized patches, and which check rejected them |
@@ -115,6 +130,7 @@ Run the tool from inside `.discopop`, or pass `--dot-dp-path`.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--dot-dp-path` | current directory | Path to the `.discopop` folder. |
+| `--mode` | `repair` | `repair` fixes patches that do not compile, `complete` replaces the placeholders of the patch generator. |
 | `-c`, `--config` | `tiny` | Execution configuration used to build the suggestions. |
 | `-ht`, `--hotspot-types` | `yes,maybe` | Hotspot types to consider (`yes`, `no`, `maybe`). |
 | `-s`, `--suggestions` | none | Comma-separated suggestion ids to repair. Overrides the hotspot filter. |
@@ -129,7 +145,7 @@ Run the tool from inside `.discopop`, or pass `--dot-dp-path`.
 | `--model` | from the connection | Backend-specific model id. |
 | `--agent-timeout` | `300` | Timeout in seconds of a single agent call. |
 | `--llm-config` | `<dot-dp-path>/patch_repair/llm_config.json` | LLM configuration; `$DISCOPOP_PATCH_REPAIR_LLM_CONFIG` overrides the default. |
-| `--prompt-dir` | built-in | Directory with prompt templates to use instead of the built-in ones. |
+| `--prompt-dir` | `<dot-dp-path>/patch_repair/prompts` if it exists, else built-in | Directory with prompt templates to use instead of the built-in ones; a template missing there is the built-in one. |
 | `--context-lines` | `60` | Source lines of context around each patched region. |
 | `--max-error-chars` | `8000` | Maximum characters of compiler diagnostics in a prompt. |
 | `--max-prompt-chars` | `60000` | Maximum prompt size; the patches themselves are never dropped. |

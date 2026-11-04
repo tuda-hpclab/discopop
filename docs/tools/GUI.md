@@ -46,6 +46,7 @@ Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the co
 
 - **Run Configs** (left): the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`. Select one to work on it. A right click offers *Copy*, *Rename* and *Delete*. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). **Edit Compilation** opens the [Compilation Editor](#compilation-editor).
 - **Tabs** (right), in workflow order: *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair*, *Autotuning*. Most tabs work on the selected configuration.
+- **Menu bar** (top): *Configuration* holds *LLM Configuration...* (the connections and agent installations of the [patch repair](Patch_repair.md), the file `patch_repair/llm_config.json`) and *Patch Repair and Completion...* (the prompts sent to the agent, see [Patch Repair](#patch-repair)).
 - **Status bar** (bottom): the current activity and the path of the `.discopop` directory.
 
 The tabs for later steps explain on mouse over which prerequisite is missing. For example, *Pattern Detection* needs profiling data and *Autotuning* needs pattern detection results.
@@ -162,7 +163,14 @@ Results are the files described in [Explorer](Explorer.md): `explorer/patterns.j
 ## Patch Repair
 ![Patch Repair tab after a run in which all considered patches compile](../assets/screenshots/gui_patch_repair.svg)
 
-The tab runs [`discopop_patch_repair`](Patch_repair.md): an LLM agent repairs generated patches that do not compile. Settings are the hotspot types (`NO` is off by default), log level, *Dry run*, the LLM backend and model, the agent timeout, the number of prompts and retries, and the suggestions to consider. The right side shows *Results*, the repaired *Patch* as a diff and the *Console*.
+The tab runs [`discopop_patch_repair`](Patch_repair.md). The **Mode** selects what the LLM agent does:
+
+- *Repair* fixes generated patches that do not compile.
+- *Completion* replaces the placeholders the patch generator leaves where the profile cannot decide, e.g. the `final(<condition>)` cutoff of recursive tasks (`/* DiscoPoP TODO: ... */`). Only suggestions that contain a placeholder are considered. The patches must compile as generated; run the repair first if they do not.
+
+Each mode shows its own results. Settings are the hotspot types (`NO` is off by default), log level, *Dry run*, the LLM backend and model, the agent timeout, the number of prompts and retries, and the suggestions to consider. The right side shows *Results*, the changed *Patch* as a diff and the *Console*.
+
+**Prompts and LLM connections.** *Configuration -> Patch Repair and Completion...* edits the prompt templates of both modes: one entry per template (the three repair prompts, the repair follow-up turn, the completion prompt and its follow-up turn). The placeholders a template can use (`{patch_blocks}`, `{original_source}`, ...) are listed above the editor; the dialog warns about a missing required one. *Save* writes the template to `.discopop/patch_repair/prompts/<name>.md`, which the tool reads in place of the built-in text (`●` marks a customized template); *Reset to default* removes it again. *Configuration -> LLM Configuration...* edits the connections (model, agent, prompts, retries, timeout) and the agent installations.
 
 ## Autotuning
 ![Autotuning tab](../assets/screenshots/gui_autotuning.svg)

@@ -85,6 +85,10 @@ def test_patch_repair_command() -> None:
     assert command[-7:] == ["--backend", "claude", "--model", "m", "--dry-run", "-s", "3"]
     bare = patch_repair_command(PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "", "", False, None), "d", "py")
     assert bare[-2:] == ["--log", "INFO"]
+    assert "--mode" not in bare
+    completion = PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "", "", False, None, mode="complete")
+    command = patch_repair_command(completion, "d", "py")
+    assert command[command.index("--mode") + 1] == "complete"
 
 
 def test_hotspot_analyzer_command() -> None:

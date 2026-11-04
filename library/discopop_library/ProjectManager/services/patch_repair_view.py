@@ -25,6 +25,7 @@ TONE_STOP = "stop"
 # Status values as results.json records them, with the text and tone the table shows.
 STATUS_DISPLAY: Dict[str, Tuple[str, str]] = {
     "repaired": ("Repaired", TONE_OK),
+    "completed": ("Completed", TONE_OK),
     "ok": ("Compiles", TONE_IDLE),
     "failed": ("Not repaired", TONE_FAIL),
     "not_applied": ("Patch not applicable", TONE_FAIL),
@@ -43,13 +44,19 @@ def sort_key(suggestion_id: str) -> Tuple[int, str]:
         return (1 << 30, suggestion_id)
 
 
-def results_path(dot_dp: str) -> str:
-    return os.path.join(dot_dp, "patch_repair", "results.json")
+MODE_REPAIR = "repair"
+MODE_COMPLETE = "complete"
 
 
-def load_results(dot_dp: str) -> Optional[Dict[str, Dict[str, Any]]]:
-    """The records of ``results.json`` by suggestion id (as a string); None without a readable file."""
-    path = results_path(dot_dp)
+def results_path(dot_dp: str, mode: str = MODE_REPAIR) -> str:
+    """Where a run of ``mode`` records its results (completion has a file of its own)."""
+    name = "completion_results.json" if mode == MODE_COMPLETE else "results.json"
+    return os.path.join(dot_dp, "patch_repair", name)
+
+
+def load_results(dot_dp: str, mode: str = MODE_REPAIR) -> Optional[Dict[str, Dict[str, Any]]]:
+    """The records of a run's results file by suggestion id (as a string); None without a readable file."""
+    path = results_path(dot_dp, mode)
     if not os.path.exists(path):
         return None
     try:
@@ -108,7 +115,7 @@ def preferred_row(rows: List[ResultRow], previous: Optional[str]) -> Optional[st
         return None
     if previous in ids:
         return previous
-    return next((row.suggestion_id for row in rows if row.status == "repaired"), ids[0])
+    return next((row.suggestion_id for row in rows if row.status in ("repaired", "completed")), ids[0])
 
 
 def patch_files_on_disk(dot_dp: str, suggestion_id: str) -> List[str]:
@@ -189,6 +196,8 @@ def budget_text(prompts: int, retries: int) -> str:
 def progress_summary(event: Dict[str, Any]) -> List[Tuple[str, str]]:
     """The outcome texts (text, tone) one progress event sets, in order; the last one wins."""
     kind = str(event.get("event") or "")
+    if event.get("mode") == MODE_COMPLETE:
+        return _completion_summary(kind, event)
     if kind == "discovery":
         failing = event.get("failing") or []
         built = event.get("built") or []
@@ -217,6 +226,26 @@ def progress_summary(event: Dict[str, Any]) -> List[Tuple[str, str]]:
                 + " not repaired, "
                 + str(event.get("considered") or 0)
                 + " considered.",
+                tone,
+            )
+        ]
+    return []
+
+
+def _completion_summary(kind: str, event: Dict[str, Any]) -> List[Tuple[str, str]]:
+    if kind == "start":
+        count = int(event.get("candidate_count") or 0)
+        if not count:
+            return [("No suggestion with a placeholder to complete.", TONE_IDLE)]
+        return [("Completing " + str(count) + " suggestion(s)...", TONE_BUSY)]
+    if kind == "done":
+        completed = int(event.get("repaired") or 0)
+        failed = int(event.get("failed") or 0)
+        considered = int(event.get("considered") or 0)
+        tone = TONE_OK if completed and not failed else (TONE_FAIL if failed and not completed else TONE_IDLE)
+        return [
+            (
+                str(completed) + " completed, " + str(failed) + " not completed, " + str(considered) + " considered.",
                 tone,
             )
         ]

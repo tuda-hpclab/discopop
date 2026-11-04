@@ -540,3 +540,69 @@ def test_results_of_an_earlier_session_are_shown_when_the_panel_opens(qtbot: QtB
     write_results(first, {"1": {"status": "failed", "first_error": "bad"}})
     second = make_panel(qtbot, tmp_path)
     assert row_texts(second) == [["1", "", "Not repaired", "-", "0", "bad"]]
+
+
+# ── completion mode ──────────────────────────────────────────────────────────
+
+
+def select_mode(panel: PatchRepairPanel, mode: str) -> None:
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(mode))
+
+
+def write_completion_results(panel: PatchRepairPanel, suggestions: Dict[str, Any]) -> None:
+    directory = Path(panel.arguments.dot_dp, "patch_repair")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "completion_results.json").write_text(json.dumps({"suggestions": suggestions}))
+
+
+def test_the_mode_defaults_to_repair(panel: PatchRepairPanel) -> None:
+    assert panel.mode() == "repair"
+    assert panel.run_button.text() == "Run Patch Repair"
+
+
+def test_the_mode_names_the_run_button_and_the_diff_panes(panel: PatchRepairPanel) -> None:
+    select_mode(panel, "complete")
+    assert panel.mode() == "complete"
+    assert panel.run_button.text() == "Run Patch Completion"
+    assert "placeholders" in panel.mode_hint.text()
+    assert "before completion" in panel.diff_titles[panel.diff_original].text()
+    select_mode(panel, "repair")
+    assert panel.run_button.text() == "Run Patch Repair"
+    assert "before repair" in panel.diff_titles[panel.diff_original].text()
+
+
+def test_each_mode_shows_its_own_results(panel: PatchRepairPanel) -> None:
+    write_results(panel, {"1": {"status": "repaired", "files": ["0"], "changed_files": ["0"], "attempts": 1}})
+    write_completion_results(panel, {"2": {"status": "completed", "files": ["0"], "changed_files": ["0"]}})
+    panel._load_results_from_file()
+    assert panel.table.item(0, 0).text() == "1"  # type: ignore[union-attr]
+    select_mode(panel, "complete")
+    assert panel.table.rowCount() == 1
+    assert [panel.table.item(0, c).text() for c in range(3)] == ["2", "", "Completed"]  # type: ignore[union-attr]
+    select_mode(panel, "repair")
+    assert panel.table.item(0, 0).text() == "1"  # type: ignore[union-attr]
+
+
+def test_a_completion_run_passes_the_mode_and_reports_in_its_words(qtbot: QtBot, panel: PatchRepairPanel) -> None:
+    select_mode(panel, "complete")
+    commands: List[Any] = []
+    code = (
+        'print(\'@@PR_PROGRESS {"event": "suggestion", "mode": "complete", "suggestion_id": "1", '
+        '"status": "completed", "files": ["0"], "changed_files": ["0"], "attempts": 1}\'); '
+        'print(\'@@PR_PROGRESS {"event": "done", "mode": "complete", "repaired": 1, "failed": 0, "considered": 1}\')'
+    )
+    ready(panel)
+
+    def command(request: Any, *_args: Any, **_kwargs: Any) -> List[str]:
+        commands.append(request)
+        return _program(code)
+
+    with mock.patch.object(patch_repair_panel, "patch_repair_command", command):
+        panel.run_button.click()
+        assert not panel.mode_combo.isEnabled()
+        qtbot.waitUntil(lambda: not panel.running, timeout=20000)
+    assert commands[0].mode == "complete"
+    assert "Starting patch completion..." in panel.console.text()
+    assert panel.summary_label.text() == "1 completed, 0 not completed, 1 considered."
+    assert status_text(panel) == "Patch completion finished - 1 patch set(s) completed"
+    assert panel.run_button.text() == "Run Patch Completion" and panel.mode_combo.isEnabled()

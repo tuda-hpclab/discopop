@@ -6,7 +6,10 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The Patch Repair tab: fixing suggestions whose patch does not compile.
+"""The Patch Repair tab: fixing suggestions whose patch does not compile, or completing the placeholders of a patch.
+
+The mode selector at the top switches between the two; both run ``discopop_library.PatchRepair`` (``--mode``) and show
+their own results (``results.json`` resp. ``completion_results.json``).
 
 Ported from ``gui/mixins/patch_repair_panel.py``; what the tab shows is computed by
 ``services/patch_repair_view.py``. The backend and model selectors are built from the ``llm_backends`` registry, so a
@@ -71,7 +74,19 @@ from discopop_library.ProjectManager.services.project_state import (
 from discopop_library.ProjectManager.services.requests import PatchRepairRequest
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 
-RUN_TEXT = "Run Patch Repair"
+MODE_REPAIR = patch_repair_view.MODE_REPAIR
+MODE_COMPLETE = patch_repair_view.MODE_COMPLETE
+# mode -> (selector text, run button text, noun used in the messages, what the tool did to a patch)
+_MODES = {
+    MODE_REPAIR: ("Repair: fix patches that do not compile", "Run Patch Repair", "Patch repair", "repaired"),
+    MODE_COMPLETE: (
+        "Completion: replace the placeholders of the patches (e.g. the cutoff of recursive tasks)",
+        "Run Patch Completion",
+        "Patch completion",
+        "completed",
+    ),
+}
+RUN_TEXT = _MODES[MODE_REPAIR][1]
 RUNNING_TEXT = "⟳ Running..."
 _SETTINGS_WIDTH = 650
 
@@ -108,6 +123,12 @@ class PatchRepairPanel(Panel):
         self._records: Dict[str, Dict[str, Any]] = {}
 
         self.console = widgets.OutputConsole()
+        self.mode_combo = QComboBox()
+        for mode, texts in _MODES.items():
+            self.mode_combo.addItem(texts[0], mode)
+        self.mode_hint = widgets.caption_label("")
+        self.mode_hint.setWordWrap(True)
+        self.mode_combo.currentIndexChanged.connect(lambda _index: self._on_mode_changed())
         self._build_settings()
         self._build_agent_settings()
         self.selector = SuggestionSelector(arguments.dot_dp, "patch_repair_scope")
@@ -122,6 +143,10 @@ class PatchRepairPanel(Panel):
         scope_layout.addWidget(self.selector)
         column = QWidget()
         column_layout = QVBoxLayout(column)
+        mode_layout = QVBoxLayout()
+        mode_layout.addWidget(self.mode_combo)
+        mode_layout.addWidget(self.mode_hint)
+        column_layout.addWidget(widgets.group_box("Mode", mode_layout))
         column_layout.addWidget(self._settings_box)
         column_layout.addWidget(self._agent_box)
         column_layout.addWidget(widgets.group_box("Suggestion Scope", scope_layout))
@@ -155,6 +180,7 @@ class PatchRepairPanel(Panel):
         self._on_backend_changed()
         self._update_budget()
         self._update_ui()
+        self._apply_mode()
         self._load_results_from_file()
         # no results.json yet means nothing rendered the diff panes, which would leave them blank rather than saying why
         self._show_diff()
@@ -273,14 +299,15 @@ class PatchRepairPanel(Panel):
         # stacked rather than side by side: what a repair changes is almost always the pragma, which is the longest
         # line in the patch
         panes = QSplitter(Qt.Orientation.Vertical)
-        for title, view in (
-            ("Generated patch (before repair)", self.diff_original),
-            ("Patch in use (after repair)", self.diff_repaired),
-        ):
+        self.diff_titles = {
+            self.diff_original: widgets.heading_label(""),
+            self.diff_repaired: widgets.heading_label(""),
+        }
+        for view in (self.diff_original, self.diff_repaired):
             pane = QWidget()
             pane_layout = QVBoxLayout(pane)
             pane_layout.setContentsMargins(0, 0, 0, 0)
-            pane_layout.addWidget(widgets.heading_label(title))
+            pane_layout.addWidget(self.diff_titles[view])
             pane_layout.addWidget(view, 1)
             panes.addWidget(pane)
         diff_tab = QWidget()
@@ -291,6 +318,44 @@ class PatchRepairPanel(Panel):
 
         notebook.addTab(self.console, "🖥 Console")
         return notebook
+
+    # ── mode ────────────────────────────────────────────────────────────────
+
+    def mode(self) -> str:
+        return str(self.mode_combo.currentData() or MODE_REPAIR)
+
+    def _noun(self) -> str:
+        return _MODES[self.mode()][2]
+
+    def _finished_word(self) -> str:
+        # "Patch completion completed" would read badly
+        return "completed" if self.mode() == MODE_REPAIR else "finished"
+
+    def _on_mode_changed(self) -> None:
+        self._apply_mode()
+        self._records = {}
+        self._load_results_from_file()
+        self._refresh_table()
+        self._set_summary("(not run yet)", widgets.STATUS_IDLE)
+
+    def _apply_mode(self) -> None:
+        """Texts that name the mode; what is selected does not change while a run is going."""
+        mode = self.mode()
+        if not self.running:
+            self.run_button.setText(_MODES[mode][1])
+        if mode == MODE_COMPLETE:
+            self.mode_hint.setText(
+                "Replaces the '/* DiscoPoP TODO: ... */' placeholders the patch generator leaves where the profile "
+                "cannot decide (e.g. final(<condition>) of recursive tasks). The patches must compile as generated; "
+                "run the repair first if they do not."
+            )
+            self.diff_titles[self.diff_original].setText("Generated patch (before completion)")
+            self.diff_titles[self.diff_repaired].setText("Patch in use (after completion)")
+        else:
+            self.mode_hint.setText("Finds the suggestions whose patch does not compile and lets the agent fix it.")
+            self.diff_titles[self.diff_original].setText("Generated patch (before repair)")
+            self.diff_titles[self.diff_repaired].setText("Patch in use (after repair)")
+        self.mode_combo.setEnabled(not self.running)
 
     # ── state ───────────────────────────────────────────────────────────────
 
@@ -359,6 +424,7 @@ class PatchRepairPanel(Panel):
             return
         self.run_button.setEnabled(self._prerequisites_met())
         self.selector.refresh()
+        self.mode_combo.setEnabled(True)
 
     def _prerequisites_met(self) -> bool:
         """Patches must exist: without them there is nothing to build and nothing to fix."""
@@ -372,17 +438,18 @@ class PatchRepairPanel(Panel):
 
     def _run(self) -> None:
         if self.running:
-            dialogs.show_error(self, "Already Running", "Patch repair is already running.")
+            dialogs.show_error(self, "Already Running", self._noun() + " is already running.")
             return
         if not self.project_state.current_config:
             dialogs.show_error(self, "No Configuration Selected", "Please select a configuration first.")
             return
 
         self.running = True
+        self.mode_combo.setEnabled(False)
         self.run_button.setEnabled(False)
         self.run_button.setText(RUNNING_TEXT)
         self.stop_button.setEnabled(True)
-        self.status.set("⏳ Patch repair in progress...", widgets.STATUS_BUSY)
+        self.status.set("⏳ " + self._noun() + " in progress...", widgets.STATUS_BUSY)
 
         self.console.clear()
         self._records = {}
@@ -391,7 +458,7 @@ class PatchRepairPanel(Panel):
         # the job's thread must not read widgets or selectors
         request = self._snapshot_request()
         dot_discopop = self.arguments.dot_dp
-        self.console.append_text("Starting patch repair...\n")
+        self.console.append_text("Starting " + self._noun().lower() + "...\n")
         self._announce_request(request)
 
         events: "queue.Queue[JobEvent]" = queue.Queue()
@@ -430,6 +497,7 @@ class PatchRepairPanel(Panel):
             model=self.model_combo.currentText().strip(),
             dry_run=self.dry_run_check.isChecked(),
             suggestion_ids=suggestion_ids,
+            mode=self.mode(),
         )
 
     def _announce_request(self, request: PatchRepairRequest) -> None:
@@ -437,6 +505,7 @@ class PatchRepairPanel(Panel):
             self.console.append_text(
                 "Restricting to suggestion IDs: " + (", ".join(request.suggestion_ids) or "(none)") + "\n"
             )
+        self.console.append_text("Mode: " + request.mode + "\n")
         self.console.append_text("Configuration:\n")
         self.console.append_text("  Configuration: " + request.configuration + "\n")
         self.console.append_text("  Hotspot Types: " + request.hotspot_types + "\n")
@@ -455,15 +524,15 @@ class PatchRepairPanel(Panel):
         elif isinstance(event, JobFinished):
             self._job = None
             if event.cancelled:
-                self.console.append_text("\nPatch repair stopped.\n")
+                self.console.append_text("\n" + self._noun() + " stopped.\n")
                 self._on_complete(stopped=True)
             elif event.returncode != 0:
                 self.console.append_text(
-                    "\nError: Patch repair exited with return code " + str(event.returncode) + "\n"
+                    "\nError: " + self._noun() + " exited with return code " + str(event.returncode) + "\n"
                 )
                 self._on_complete(error=True)
             else:
-                self.console.append_text("\nPatch repair completed.\n")
+                self.console.append_text("\n" + self._noun() + " " + self._finished_word() + ".\n")
                 self._on_complete()
         elif isinstance(event, JobFailedToStart):
             self._job = None
@@ -482,7 +551,7 @@ class PatchRepairPanel(Panel):
         if self._job is not None:
             self._job.cancel()
         self.stop_button.setEnabled(False)
-        self.status.set("Stopping patch repair...", widgets.STATUS_STOP)
+        self.status.set("Stopping " + self._noun().lower() + "...", widgets.STATUS_STOP)
 
     def _on_complete(self, error: bool = False, stopped: bool = False) -> None:
         self.running = False
@@ -490,25 +559,27 @@ class PatchRepairPanel(Panel):
         # was missed
         self._load_results_from_file()
         self.run_button.setEnabled(True)
-        self.run_button.setText(RUN_TEXT)
         self.stop_button.setEnabled(False)
+        self._apply_mode()
+        noun = self._noun()
 
         if error:
-            self.status.set("Patch repair failed", widgets.STATUS_FAIL, reset_ms=4000)
+            self.status.set(noun + " failed", widgets.STATUS_FAIL, reset_ms=4000)
             return
         if stopped:
-            self.status.set("Patch repair stopped", widgets.STATUS_IDLE, reset_ms=4000)
+            self.status.set(noun + " stopped", widgets.STATUS_IDLE, reset_ms=4000)
             return
 
-        repaired = sum(1 for r in self._records.values() if r.get("status") == "repaired")
+        done_status = _MODES[self.mode()][3]
+        repaired = sum(1 for r in self._records.values() if r.get("status") == done_status)
         if repaired:
             self.status.set(
-                "Patch repair completed - " + str(repaired) + " patch set(s) repaired",
+                noun + " " + self._finished_word() + " - " + str(repaired) + " patch set(s) " + done_status,
                 widgets.STATUS_OK,
                 reset_ms=6000,
             )
         else:
-            self.status.set("Patch repair completed", widgets.STATUS_IDLE, reset_ms=6000)
+            self.status.set(noun + " " + self._finished_word(), widgets.STATUS_IDLE, reset_ms=6000)
 
         # a repaired patch changes what the tuner and the report show
         self.project_state.publish(AutotuningChanged())
@@ -523,7 +594,7 @@ class PatchRepairPanel(Panel):
     # ── results display ─────────────────────────────────────────────────────
 
     def _load_results_from_file(self) -> None:
-        records = patch_repair_view.load_results(self.arguments.dot_dp)
+        records = patch_repair_view.load_results(self.arguments.dot_dp, self.mode())
         if records is not None:
             self._records = records
             self._refresh_table()

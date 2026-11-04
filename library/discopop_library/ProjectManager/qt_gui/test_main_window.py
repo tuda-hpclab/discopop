@@ -141,3 +141,37 @@ def test_the_report_follows_the_autotuner_and_waits_for_executions(qtbot: QtBot,
     window.report_panel.generate_report_button.setEnabled(True)
     window.execute_panel._begin_run(window.execute_panel.run_button, "running", "running")
     assert not window.report_panel.generate_report_button.isEnabled()
+
+
+def test_the_configuration_menu_offers_the_two_editors(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    (menu_action,) = window.menuBar().actions()
+    assert menu_action.text() == "&Configuration"
+    menu = menu_action.menu()
+    assert menu is not None
+    assert [action.text() for action in menu.actions()] == [  # type: ignore[attr-defined]
+        "&LLM Configuration...",
+        "&Patch Repair and Completion...",
+    ]
+
+
+def test_the_menu_entries_open_the_editors_of_the_project(
+    qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from discopop_library.ProjectManager.qt_gui.llm_config_dialog import LlmConfigDialog
+    from discopop_library.ProjectManager.qt_gui.prompt_config_dialog import PromptConfigDialog
+
+    monkeypatch.delenv("DISCOPOP_PATCH_REPAIR_LLM_CONFIG", raising=False)
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+
+    window.prompt_config_action.trigger()
+    shown = dialog_answers.calls[-1]
+    assert shown[:2] == ("show_dialog", "Patch Repair and Completion")
+    assert isinstance(shown[2], PromptConfigDialog) and shown[2].dot_dp == str(tmp_path / ".discopop")
+
+    window.llm_config_action.trigger()
+    shown = dialog_answers.calls[-1]
+    assert shown[:2] == ("show_dialog", "LLM Configuration")
+    assert isinstance(shown[2], LlmConfigDialog)

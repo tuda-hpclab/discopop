@@ -19,8 +19,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import QLabel, QMainWindow, QSplitter, QTabWidget, QWidget
 
+from discopop_library.PatchRepair import llm_config
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.qt_gui import widgets
+from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.llm_config_dialog import LlmConfigDialog
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
@@ -30,6 +32,7 @@ from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotP
 from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
 from discopop_library.ProjectManager.qt_gui.panels.pattern_detection_panel import PatternDetectionPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
+from discopop_library.ProjectManager.qt_gui.prompt_config_dialog import PromptConfigDialog
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
@@ -98,12 +101,30 @@ class MainWindow(QMainWindow):
         self._pending_tab_state: Dict[str, Tuple[bool, str]] = {}
         self._pending_tab_titles: Dict[str, str] = {}
 
+        self._build_menu()
         self._build_panels()
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([280, 1320])
 
     # --- assembly ---
+
+    def _build_menu(self) -> None:
+        """The menu bar: the configuration that is not tied to one project run."""
+        configuration = self.menuBar().addMenu("&Configuration")
+        self.llm_config_action = configuration.addAction("&LLM Configuration...", self.open_llm_configuration)
+        self.prompt_config_action = configuration.addAction(
+            "&Patch Repair and Completion...", self.open_prompt_configuration
+        )
+
+    def open_llm_configuration(self) -> None:
+        """The connections (model, agent) and agent installations of the patch repair and completion."""
+        path = llm_config.default_config_path(os.path.join(self.arguments.dot_dp, "patch_repair"))
+        dialogs.show_dialog(self, "LLM Configuration", LlmConfigDialog(path, self))
+
+    def open_prompt_configuration(self) -> None:
+        """The prompts sent to the agent by the patch repair and the patch completion."""
+        dialogs.show_dialog(self, "Patch Repair and Completion", PromptConfigDialog(self.arguments.dot_dp, self))
 
     def _build_panels(self) -> None:
         """Create the panels and wire them: the events each one reacts to beyond its own, and the callbacks."""
