@@ -498,20 +498,41 @@ class TestSkipsFollowTheAnalysisRecord(unittest.TestCase):
         self._dp_data()
         self._touch("explorer/patterns.json", "{}")
         self._touch("hotspot_detection/Hotspots.json")
-        for patterns, options, expected in (
-            (["doall", "reduction", "task"], {}, "skipped"),
-            (["doall", "reduction", "task", "pipeline"], {}, "skipped"),
-            (["doall", "reduction"], {}, "error"),
-            (["doall", "reduction", "task"], {"hotspot_types": "yes"}, "error"),
+        atomic = {"atomic_updates": True}
+        for patterns, options, requested_atomic, expected in (
+            (["doall", "reduction", "task"], {}, False, "skipped"),
+            (["doall", "reduction", "task", "pipeline"], {}, False, "skipped"),
+            (["doall", "reduction"], {}, False, "error"),
+            (["doall", "reduction", "task"], {"hotspot_types": "yes"}, False, "error"),
+            # atomic updates: current only if asked for the same way
+            (["doall", "reduction", "task"], atomic, False, "error"),
+            (["doall", "reduction", "task"], {}, True, "error"),
+            (["doall", "reduction", "task"], atomic, True, "skipped"),
+            (["doall", "reduction", "task"], {**atomic, "hotspot_types": "yes"}, True, "error"),
         ):
-            with self.subTest(patterns=patterns, options=options):
+            with self.subTest(patterns=patterns, options=options, requested_atomic=requested_atomic):
                 params: dict[str, Any] = {"enabled_patterns": patterns}
                 if options:
                     params["options"] = options
                 record_step(self.dot_dp, "pattern_detection", params)
                 with mock.patch("mcp_server.tools.gather_data.shutil.which", return_value=None):
-                    result = gather_data._run_pattern_detection(self.project_path, 60, False, self.ctx)
+                    result = gather_data._run_pattern_detection(
+                        self.project_path, 60, False, self.ctx, requested_atomic
+                    )
                 self.assertEqual(result["status"], expected)
+
+    def test_atomic_updates_reach_the_explorer_only_when_asked_for(self) -> None:
+        self._dp_data()
+        self._touch("hotspot_detection/Hotspots.json")
+        proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        for requested, expected in ((False, False), (True, True)):
+            with self.subTest(requested=requested):
+                with (
+                    mock.patch("mcp_server.tools.gather_data.shutil.which", return_value="/bin/discopop_explorer"),
+                    mock.patch.object(self.ctx, "run_process", return_value=proc) as run,
+                ):
+                    gather_data._run_pattern_detection(self.project_path, 60, True, self.ctx, requested)
+                self.assertEqual("--atomic-updates" in run.call_args.args[0], expected)
 
     def test_data_without_a_record_still_counts_while_it_is_newer_than_the_sources(self) -> None:
         # written by a DiscoPoP predating the record: legacy bookkeeping file, no analysis_record.json

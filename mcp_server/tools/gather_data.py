@@ -103,6 +103,14 @@ TOOL = Tool(
                 "type": "boolean",
                 "description": ("Set to true to re-run all steps even if outputs are already current. Default: false."),
             },
+            "atomic_updates": {
+                "type": "boolean",
+                "description": (
+                    "Experimental. Also suggest doall loops whose only blocking dependencies are commutative "
+                    "updates (x += e, h[k]++); such a suggestion names the updates that need "
+                    "#pragma omp atomic update. Changing it re-runs pattern detection only. Default: false."
+                ),
+            },
         },
         "required": ["project_path", "config_name"],
         "additionalProperties": False,
@@ -580,7 +588,9 @@ def _run_profiling(
     return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
 
 
-def _run_pattern_detection(project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext) -> dict[str, Any]:
+def _run_pattern_detection(
+    project_path: str, timeout_seconds: int, force: bool, ctx: ToolContext, atomic_updates: bool = False
+) -> dict[str, Any]:
     p = Path(project_path)
     discopop_dir = p / ".discopop"
     data_xml = discopop_dir / "profiler" / "Data.xml"
@@ -595,11 +605,13 @@ def _run_pattern_detection(project_path: str, timeout_seconds: int, force: bool,
             "message": "profiler/dynamic_dependencies.txt not found — profiling step must have failed.",
         }
 
+    # what the explorer records as its result-changing options (result_changing_options) for this call
+    options: dict[str, Any] = {"atomic_updates": True} if atomic_updates else {}
     if not force:
         status = step_status(str(discopop_dir), "pattern_detection", project_path)
-        # results of an explorer run with options that change them (a hotspot filter, ...) are not what
-        # this step would produce
-        if covers(status, enabled_patterns=DEFAULT_PATTERNS) and not status.params.get("options"):
+        # results of an explorer run with other options that change them (a hotspot filter, atomic updates
+        # when none were asked for, ...) are not what this step would produce
+        if covers(status, enabled_patterns=DEFAULT_PATTERNS) and (status.params.get("options") or {}) == options:
             return _last_run(status, patterns_json)
 
     venv_bin = os.path.dirname(sys.executable)
@@ -612,9 +624,12 @@ def _run_pattern_detection(project_path: str, timeout_seconds: int, force: bool,
         return {"status": "error", "message": "discopop_explorer not found on PATH."}
 
     ctx.log_action(project_path, "gather_data", "Pattern detection: invoking discopop_explorer")
+    command = [explorer, "--enable-patterns", ",".join(DEFAULT_PATTERNS)]
+    if atomic_updates:
+        command.append("--atomic-updates")
     try:
         proc = ctx.run_process(
-            [explorer, "--enable-patterns", ",".join(DEFAULT_PATTERNS)],
+            command,
             timeout=timeout_seconds,
             cwd=str(discopop_dir),
             env=env,
@@ -811,6 +826,7 @@ def _pipeline(
     timeout_seconds: int,
     force: bool,
     ctx: ToolContext,
+    atomic_updates: bool = False,
 ) -> dict[str, Any]:
     """The data collection pipeline itself, as a result dict.
 
@@ -930,7 +946,7 @@ def _pipeline(
         return _cancelled_result(project_path, steps)
     step += 1
     _progress(step, total_steps, "Pattern detection (discopop_explorer)", ctx)
-    detection = _run_pattern_detection(project_path, timeout_seconds, force, ctx)
+    detection = _run_pattern_detection(project_path, timeout_seconds, force, ctx, atomic_updates)
     steps["pattern_detection"] = detection
     if ctx.cancelled:
         return _cancelled_result(project_path, steps)
@@ -972,6 +988,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         hotspot_config_names: list[str] = arguments.get("hotspot_config_names") or [config_name]
         timeout_seconds: int = arguments.get("timeout_seconds", 3600)
         force: bool = arguments.get("force", False)
+        atomic_updates: bool = arguments.get("atomic_updates", False)
         for name in [config_name, *hotspot_config_names]:
             name_error = invalid_configuration_name(name)
             if name_error is not None:
@@ -979,7 +996,9 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         # A single step (an instrumented run, above all) can take an hour; the heartbeat
         # keeps reporting the step in progress so the client knows the call is alive.
         with ctx.heartbeat():
-            result = _pipeline(project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx)
+            result = _pipeline(
+                project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, atomic_updates
+            )
 
             # Leave the project buildable by hand again. Only when something was
             # actually compiled in place: a call that skipped every instrumentation
