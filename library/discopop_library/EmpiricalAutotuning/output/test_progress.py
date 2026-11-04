@@ -125,3 +125,19 @@ def test_generation_event_omits_the_measured_average_when_unknown(tmp_path: Path
     reporter.close()
 
     assert "generation_avg_fitness" not in _read_jsonl(jsonl)[0]
+
+
+def test_events_carry_amdahl_bounds(capsys: pytest.CaptureFixture[str]) -> None:
+    from discopop_library.Amdahl.model import SuggestionRegion
+
+    reporter = ProgressReporter("cfg")
+    reporter.baseline(10.0, True, 4)
+    reporter.set_regions({1: SuggestionRegion(1, 1, 10, 20, 0.5)})
+    reporter.measurement([1], 5.0, 0, True, True)
+    reporter.measurement([7], 5.0, 0, True, True)  # unknown suggestion
+    events = [json.loads(line.split(PROGRESS_PREFIX)[1]) for line in capsys.readouterr().out.splitlines()]
+    known, unknown = events[1], events[2]
+    assert known["parallel_fraction"] == 0.5
+    assert known["amdahl_ceiling"] == round(1 / (0.5 + 0.5 / 4), 4)
+    assert known["amdahl_limit"] == 2.0
+    assert unknown["amdahl_ceiling"] is None and unknown["amdahl_limit"] is None

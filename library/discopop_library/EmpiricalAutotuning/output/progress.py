@@ -26,6 +26,13 @@ Event kinds (field ``event``):
 * ``generation``  -- one evolutionary generation summary (evolutionary only).
 * ``result``      -- the final best configuration + run statistics.
 
+``measurement`` and ``result`` events additionally carry the Amdahl bound of their
+suggestion set once :meth:`ProgressReporter.set_regions` was given the suggestions'
+runtime shares: ``parallel_fraction``, ``amdahl_ceiling`` (at the baseline's thread count)
+and ``amdahl_limit`` (unlimited threads). All three are null when unknown, and the
+bounds hold relative to the unsuggested reference run, which is what ``speedup`` is
+relative to as well.
+
 The reference for speedups is the *full-parallel* reference configuration, so
 ``speedup = reference_runtime / runtime`` is a speedup relative to full
 parallelization, not to sequential execution.
@@ -44,6 +51,13 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from discopop_library.Amdahl.model import (
+    SuggestionRegion,
+    amdahl_ceiling,
+    amdahl_limit,
+    finite_or_none,
+    parallel_fraction,
+)
 from discopop_library.EmpiricalAutotuning.Types import SUGGESTION_ID
 
 PROGRESS_PREFIX = "@@AT_PROGRESS "
@@ -66,6 +80,8 @@ class ProgressReporter:
         self.reference_runtime: Optional[float] = None
         self._index = 0
         self._start = time.time()
+        self.thread_count: Optional[int] = None
+        self._regions: Optional[Dict[int, SuggestionRegion]] = None
         self._fh = open(jsonl_path, "w") if jsonl_path is not None else None
 
     # -- emission ----------------------------------------------------------------
@@ -86,10 +102,27 @@ class ProgressReporter:
             return None
         return round(self.reference_runtime / runtime, 4)
 
+    def set_regions(self, regions: Optional[Dict[int, SuggestionRegion]]) -> None:
+        """Provide the suggestions' runtime shares so events can carry Amdahl bounds."""
+        self._regions = regions
+
+    def amdahl_bounds(self, suggestions: List[SUGGESTION_ID]) -> Dict[str, Any]:
+        if self._regions is None or self.thread_count is None:
+            p = None
+        else:
+            p = parallel_fraction([int(s) for s in suggestions], self._regions)
+        ceiling = amdahl_ceiling(p, self.thread_count) if self.thread_count is not None else None
+        return {
+            "parallel_fraction": finite_or_none(p),
+            "amdahl_ceiling": finite_or_none(ceiling),
+            "amdahl_limit": finite_or_none(amdahl_limit(p)),
+        }
+
     # -- events ------------------------------------------------------------------
 
     def baseline(self, runtime: float, valid: bool, thread_count: int) -> None:
         self.reference_runtime = runtime
+        self.thread_count = int(thread_count)
         self._emit(
             {
                 "event": "baseline",
@@ -124,6 +157,7 @@ class ProgressReporter:
             "application_failed": application_failed,
             "failed_suggestions": [int(s) for s in (failed_suggestions or [])],
         }
+        obj.update(self.amdahl_bounds(suggestions))
         if generation is not None:
             obj["generation"] = int(generation)
         self._emit(obj)
@@ -169,8 +203,10 @@ class ProgressReporter:
         optimization_time_s: float,
         not_applied_count: int = 0,
     ) -> None:
+        obj = self.amdahl_bounds(suggestions)
         self._emit(
             {
+                **obj,
                 "event": "result",
                 "not_applied_count": int(not_applied_count),
                 "suggestions": [int(s) for s in suggestions],

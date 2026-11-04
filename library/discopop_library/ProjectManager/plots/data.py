@@ -25,6 +25,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from discopop_library.Amdahl.model import SuggestionRegion, amdahl_ceiling, amdahl_limit, parallel_fraction
 from discopop_library.EmpiricalAutotuning.output.progress import PROGRESS_PREFIX
 from discopop_library.ProjectManager.plots import mode_style
 
@@ -55,6 +56,12 @@ class ExecutionRecord:
     failed_suggestions: List[int] = field(default_factory=list)
     application_failed: bool = False
     executed: bool = True
+    # Amdahl bounds of the applied suggestions (estimates from the hotspot runtimes);
+    # None where the runtime shares are unknown. ``amdahl_ceiling`` is for this record's
+    # thread count, ``amdahl_limit`` for unlimited threads (math.inf if p == 1).
+    parallel_fraction: Optional[float] = None
+    amdahl_ceiling: Optional[float] = None
+    amdahl_limit: Optional[float] = None
 
     @property
     def status(self) -> str:
@@ -119,8 +126,14 @@ def _unsuggested_runtime(executions: Sequence[Dict[str, Any]]) -> Optional[float
     return _best_valid_runtime(unsuggested)
 
 
-def parse_execution_results(data: Dict[str, Any]) -> List[ExecutionRecord]:
-    """Flatten the nested ``execution_results.json`` structure into records."""
+def parse_execution_results(
+    data: Dict[str, Any], regions: Optional[Dict[int, SuggestionRegion]] = None
+) -> List[ExecutionRecord]:
+    """Flatten the nested ``execution_results.json`` structure into records.
+
+    With ``regions`` (see :mod:`discopop_library.Amdahl.regions`) every executed record also
+    gets the Amdahl bounds of its applied suggestions.
+    """
     records: List[ExecutionRecord] = []
     for config in data:
         for script in data[config]:
@@ -151,6 +164,10 @@ def parse_execution_results(data: Dict[str, Any]) -> List[ExecutionRecord]:
                     else:
                         speedup = None
                     efficiency = speedup / thread_count if (speedup is not None and thread_count > 0) else None
+                    applied = [int(s) for s in execution.get("applied_suggestions", [])]
+                    p_frac: Optional[float] = None
+                    if regions is not None and executed:
+                        p_frac = parallel_fraction(applied, regions)
                     records.append(
                         ExecutionRecord(
                             config=config,
@@ -169,6 +186,9 @@ def parse_execution_results(data: Dict[str, Any]) -> List[ExecutionRecord]:
                             failed_suggestions=failed_suggestions,
                             application_failed=application_failed,
                             executed=executed,
+                            parallel_fraction=p_frac,
+                            amdahl_ceiling=amdahl_ceiling(p_frac, thread_count),
+                            amdahl_limit=amdahl_limit(p_frac),
                         )
                     )
     return records

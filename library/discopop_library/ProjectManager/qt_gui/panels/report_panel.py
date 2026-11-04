@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from discopop_library.Amdahl.model import SuggestionRegion
+from discopop_library.Amdahl.regions import load_regions
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.plots import mode_style, report_charts
 from discopop_library.ProjectManager.plots.data import ExecutionRecord, parse_execution_results
@@ -99,9 +101,19 @@ def load_execution_records(project_dir: str) -> List[ExecutionRecord]:
         return []
     try:
         with open(path, "r") as f:
-            return parse_execution_results(json.load(f))
+            data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
+    return parse_execution_results(data, _load_regions(project_dir))
+
+
+def _load_regions(project_dir: str) -> Optional[Dict[int, SuggestionRegion]]:
+    """Suggestion runtime shares for the Amdahl ceilings; None if they cannot be derived."""
+    try:
+        # execution_results.json lives in <.discopop>/project
+        return load_regions(os.path.dirname(os.path.normpath(project_dir))) or None
+    except Exception:  # noqa: BLE001 -- the report must work without the ceilings
+        return None
 
 
 def record_fields(record: ExecutionRecord) -> List[tuple[str, str]]:
@@ -120,6 +132,11 @@ def record_fields(record: ExecutionRecord) -> List[tuple[str, str]]:
         fields.append(("Speedup", f"{record.speedup:.3f}×"))
     if record.efficiency is not None:
         fields.append(("Efficiency", f"{record.efficiency:.3f}"))
+    if record.amdahl_ceiling is not None:
+        fields.append(("Amdahl ceiling", f"{record.amdahl_ceiling:.3f}× ({record.thread_count} threads)"))
+        limit = record.amdahl_limit
+        fields.append(("Amdahl limit", "unbounded" if limit is None or limit == float("inf") else f"{limit:.3f}×"))
+        fields.append(("Parallel fraction", f"{record.parallel_fraction:.3f} (estimate)"))
     fields.append(("Script", record.script))
     fields.append(("Label", record.label or "(unnamed)"))
     return fields
