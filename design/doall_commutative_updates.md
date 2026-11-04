@@ -343,9 +343,20 @@ flag. Expected: the force accumulation `domain.fx(n) += ...` is rejected as `ref
 because the check is name-based and `domain` is used everywhere. If so, decide whether a refinement
 by member (`fx`) is sound enough to do: it needs its own argument and an Opus review.
 
-### E. Review `[ ]`
+### E. Review `[x]` 43c9f65e
 
-Opus review of A-D (code, not my conclusions), then fixes.
+Opus review of A-D (code, not my conclusions). Five findings, all fixed in 43c9f65e; the reviewer's
+reproducers and 40 seeds of their fuzzer (4 of which failed before) are clean:
+1. a context line made of a shared atomic could unbalance a hunk's context, which GNU patch rejects
+   away from the file's start/end; it then left the other hunks (the loop's `parallel for`) in place
+   while the suggestion counted as not applied - a loop parallel without its atomic. Now: balanced
+   hunks, a dry run of every file of a suggestion first, a failed file restored from its copy;
+2. an atomic followed by a changed line (a rewritten update) got the next statement as its site;
+3. the commented atomics of the CodeGenerator fallback took the line of another suggestion's atomic;
+4. `str.splitlines` also splits at form feeds;
+5. a `)` without an AST node before a brace-less body: now only whitespace may precede a site.
+Also found and fixed on the way: AST paths beginning with `../` matched no FileMapping entry
+(104fe204), so every AST query for miniFE's `utils/` headers found nothing.
 
 ### F. Next: soundness of plain doall (after A-E) `[ ]`
 
@@ -356,6 +367,48 @@ Pre-existing, affects every doall suggestion, so a separate change with its own 
    scalars: for a pointer or array base (`q` in `o[i] = q[i+1]; q[i] = 0;`) a private copy is of
    the pointer, not the data, so such a WAR always blocks. Measure how
    many current suggestions this removes (miniFE, the trivial suite, polybench, rodinia).
+   Status: implemented on branch `feature/doall-war-soundness` (see its commit). The rule as built
+   (replacing the plan below, whose "not visible at the loop" rule does not work: the visibility query
+   knows only the function's own locals, not globals, parameters or members):
+   - harmless if the variable gets a copy per thread (a clause, a reduction, a loop variable) and the
+     access is to its own storage (not `GEPRESULT_`);
+   - or proven at the *sink* (the profiler names a dependency after the access that completes it,
+     `AddDep(..., access.var, ...)` in `profiler/rtlib/dependency_analysis.cpp`): the name is an
+     automatic variable there (`ASTUtils/LocalStorage.py`: resolved by scope, no static variable of
+     that name a bare name could mean), of a callee or declared in the loop body, and an element
+     access only through an array or an object by value, a direct one not through a reference;
+   - or, with atomic updates, between two update sites the pattern makes atomic.
+   Measured: the races of the test programs (`scratchpad/war`, `war2`: shared array, pointer
+   parameter of a callee, pointer declared in the body) are rejected, the per-iteration arrays
+   accepted. False rejections that remain, all because the profiler does not say which object or
+   which execution of the loop a dependency belongs to: miniFE 12:462 (a body-local pointer written
+   through a reference parameter), the miniFE element loop with `--atomic-updates` (named `this1`, by
+   the ElemData constructor), LULESH 1004/1495 (array parameters, i.e. pointers), LULESH
+   2003/2041/2053/2211/2348 (temporary heap arrays reused from call to call, reported as carried).
+   Open: the user decides between taking that loss, recording the WAR as a reason without rejecting,
+   and the profiler work first.
+
+   Original plan for F.1 (from reading `identify_simple_doall_and_reduction`):
+   - Where: both scans skip `EdgeType.DATA` + `DepType.WAR` (the carried index of the loop, and the
+     dependencies by iteration copies). Instead of dropping them, collect them per loop and decide
+     after `detect_doall_sharing_clauses`, where the clause sets are known.
+   - A carried WAR on `v` is harmless iff the storage it is on is per iteration once the loop runs in
+     parallel:
+     a. `v` is not visible at the loop (`ast_helper.get_variables_at_location` at the loop line):
+        declared in the body, or a local of a callee, so every iteration has its own (caveat: a
+        `static` local of a callee; checked via the AST if cheap, else noted);
+     b. or the access is to `v`'s own storage (not `is_gep_result_dependency`: the profiler marks
+        element accesses `GEPRESULT_v`) and `v` is in private/firstprivate/lastprivate or a
+        reduction variable of the suggestion;
+     c. anything else blocks, recorded as its own reason kind (`UNPRIVATIZED_WAR`), with the
+        dependency. Without an AST, (a) cannot be decided and only (b) accepts.
+   - The second pass (atomic updates) uses the same rule; a WAR is never an atomic site.
+   - Measure: patterns before/after on miniFE, hist, LULESH, the review programs, and a few of the
+     harness benchmarks; every removed suggestion is inspected (a real race, or an imprecision of
+     the rule?).
+3. Found on the way (pre-existing): a reduction variable used for something else in the loop. In
+   miniFE `fem/Hex8.hpp` the loop over m gets `reduction(+:offset)`, but `offset++` is the index of
+   `elem_mat[offset++]`, so each thread writes the wrong elements.
 2. Hidden reads: the profiler keeps one last reader per address, so a read followed by a write of
    another iteration can vanish. Find where the profiler drops it, decide between keeping several
    readers and a cheaper conservative marker, and measure the profiling overhead.
