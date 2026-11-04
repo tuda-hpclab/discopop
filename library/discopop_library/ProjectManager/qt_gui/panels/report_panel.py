@@ -361,11 +361,11 @@ class ReportPanel(Panel):
         elif tab.plot_type in ("amdahl", "amdahl_bubble"):
             add_combo("Ceiling", "x_mode", list(report_charts.AMDAHL_X_MODES), "both")
             add_combo("Config", "config", configs, "all")
-            add_check("Hide failed", "valid_only", False)
+            add_check("Hide failed", "valid_only", True)
         elif tab.plot_type == "amdahl3d":
             add_combo("View", "view", list(report_charts.AMDAHL_3D_VIEWS), "free")
             add_combo("Config", "config", configs, "all")
-            add_check("Hide failed", "valid_only", False)
+            add_check("Hide failed", "valid_only", True)
             fit = widgets.create_button(
                 "Fit view",
                 lambda: self._render(tab, reset_camera=True),
