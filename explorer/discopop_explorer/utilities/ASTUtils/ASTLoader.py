@@ -169,9 +169,24 @@ class ClangASTLoader:
 
             # Find a FileMapping entry whose path ends with /<normalized>.
             # The separator guard prevents "other_test.cpp".endswith("/test.cpp") from matching.
+            matched = False
             for fm_entry in filemapping_entries:
                 if fm_entry.endswith("/" + normalized) or fm_entry.endswith("\\" + normalized):
                     mapping[ast_path] = fm_entry
+                    matched = True
                     break
+            if matched:
+                continue
+
+            # A path leaving the compilation directory ("../utils/box_utils.hpp") keeps its leading ".."
+            # segments: match what follows them, if exactly one entry ends with it.
+            parts = normalized.replace("\\", "/").split("/")
+            while parts and parts[0] == "..":
+                parts = parts[1:]
+            if len(parts) < len(normalized.replace("\\", "/").split("/")) and parts:
+                suffix = "/" + "/".join(parts)
+                candidates = [e for e in filemapping_entries if e.replace("\\", "/").endswith(suffix)]
+                if len(set(candidates)) == 1:
+                    mapping[ast_path] = candidates[0]
 
         return mapping

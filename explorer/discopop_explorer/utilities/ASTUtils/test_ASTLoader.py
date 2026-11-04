@@ -200,6 +200,23 @@ class TestBuildPathMapping:
 
             assert mapping["/proj/./sub/../test.cpp"] == "/proj/test.cpp"
 
+    def test_path_leaving_the_compilation_directory_matched_by_what_follows(self) -> None:
+        """miniFE compiles in src/ and includes "../utils/box_utils.hpp": the leading ".." cannot be collapsed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fmap = Path(tmpdir) / "FileMapping.txt"
+            fmap.write_text("1\t/proj/utils/box_utils.hpp\n2\t/proj/src/main.cpp\n")
+
+            mapping = ClangASTLoader.build_path_mapping(str(fmap), {"../utils/box_utils.hpp"})
+
+            assert mapping == {"../utils/box_utils.hpp": "/proj/utils/box_utils.hpp"}
+
+    def test_path_leaving_the_compilation_directory_ambiguous_is_not_matched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fmap = Path(tmpdir) / "FileMapping.txt"
+            fmap.write_text("1\t/a/utils/x.hpp\n2\t/b/utils/x.hpp\n")
+
+            assert ClangASTLoader.build_path_mapping(str(fmap), {"../utils/x.hpp"}) == {}
+
     def test_already_canonical_path_not_remapped(self) -> None:
         """Paths that already match a FileMapping entry are not included in the result."""
         with tempfile.TemporaryDirectory() as tmpdir:
