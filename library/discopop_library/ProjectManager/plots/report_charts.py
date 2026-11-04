@@ -176,7 +176,9 @@ def _setup_record_interaction(figure: Any, on_select: Optional[Callable[[Executi
     interaction.setup_interaction(figure, _format_record_tooltip, on_select)
 
 
-def _config_mode_legends(ax: Any, configs: Sequence[str], modes: Sequence[str], colors: Dict[str, str]) -> None:
+def _config_mode_legends(
+    ax: Any, configs: Sequence[str], modes: Sequence[str], colors: Dict[str, str], extra_handles: Sequence[Any] = ()
+) -> None:
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
@@ -188,6 +190,7 @@ def _config_mode_legends(ax: Any, configs: Sequence[str], modes: Sequence[str], 
         first = ax.legend(handles=config_handles, title="config", loc="upper left", fontsize=mode_style.LEGEND_SIZE)
         mode_style.style_legend(first)
         ax.add_artist(first)
+    mode_handles = list(mode_handles) + list(extra_handles)
     if mode_handles:
         second = ax.legend(handles=mode_handles, title="mode", loc="lower right", fontsize=mode_style.LEGEND_SIZE)
         mode_style.style_legend(second)
@@ -464,10 +467,10 @@ def render_amdahl_scatter(
 
     ``x_mode``: ``threads`` plots the ceiling for each record's own thread count,
     ``unlimited`` the ceiling for unlimited threads, ``both`` the first as the point and the
-    second as a hollow marker joined to it by a thin line. A point on the dashed diagonal
+    second as a light-tinted marker joined to it by a thin line. A point on the dashed diagonal
     reaches its ceiling; the distance below it is what the parallelization leaves unused.
     The unlimited ceiling can lie far beyond everything else, so it is clipped to the axis
-    and drawn at the edge with its real value labelled (same marker shape, hollow).
+    and drawn at the edge with its real value labelled (same marker shape, tinted; hollow means a failed run).
     """
     figure.clear()
     ax = figure.add_subplot(111)
@@ -529,14 +532,15 @@ def render_amdahl_scatter(
                 lrecs.append(r)
                 clipped.append(lim > x_right)
             if lx:
-                # same marker shape as the filled point (hollow instead), also where the limit is clipped
+                # Same marker shape as the point, but a light tint: hollow already means "failed run" here.
                 coll = ax.scatter(
                     lx,
                     ly,
                     marker=mode_style.mode_marker(mode),
-                    facecolors="none",
+                    facecolors=color,
                     edgecolors=color,
-                    linewidths=1.4,
+                    alpha=0.35,
+                    linewidths=1.0,
                     s=mode_style.SCATTER_SIZE * 0.7,
                     zorder=2,
                     clip_on=False,
@@ -567,7 +571,7 @@ def render_amdahl_scatter(
         color=mode_style.REFERENCE_COLOR,
     )
     x_label = {
-        "both": "Amdahl ceiling × (filled: record's threads, hollow: unlimited threads)",
+        "both": "Amdahl ceiling × (filled: record's threads, light: unlimited threads)",
         "threads": "Amdahl ceiling × (record's thread count)",
         "unlimited": "Amdahl ceiling × (unlimited threads)",
     }.get(x_mode, "Amdahl ceiling ×")
@@ -575,7 +579,14 @@ def render_amdahl_scatter(
     ax.set_ylabel("Achieved speedup ×")
     ax.set_xlim(0, x_right)
     ax.set_ylim(0, x_right)
-    _config_mode_legends(ax, sorted({r.config for r in usable}), sorted({r.mode for r in usable}), colors)
+    from matplotlib.lines import Line2D
+
+    extra: List[Any] = []
+    if show_limit:
+        extra.append(
+            Line2D([], [], marker="o", color="0.35", alpha=0.35, linestyle="None", label="ceiling, unlimited threads")
+        )
+    _config_mode_legends(ax, sorted({r.config for r in usable}), sorted({r.mode for r in usable}), colors, extra)
     _annotate_missing_ceilings(ax, missing)
     mode_style.style_axes(ax)
     _setup_record_interaction(figure, on_select)
