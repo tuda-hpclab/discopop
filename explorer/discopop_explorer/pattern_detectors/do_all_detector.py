@@ -7,7 +7,7 @@
 # directory for details.
 import sys
 from multiprocessing import Pool
-from typing import List, Dict, Optional, Set, Tuple, cast
+from typing import Any, List, Dict, Optional, Set, Tuple, cast
 import warnings
 
 from discopop_explorer.functions.PEGraph.properties.depends_ignore_readonly import depends_ignore_readonly
@@ -46,6 +46,11 @@ from discopop_explorer.classes.variable import Variable
 
 class DoAllInfo(PatternInfo):
     """Class, that contains do-all detection result"""
+
+    # the update statements which the pattern makes atomic to be parallel (see commutative_updates), each
+    # {"file_id", "line", "operation", "variable"}. Set on an instance only when there are any, so the JSON
+    # of every other pattern stays as it was.
+    atomic_updates: List[Dict[str, Any]] = []
 
     def __init__(self, pet: PEGraphX, node: Node):
         """

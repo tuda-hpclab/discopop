@@ -40,6 +40,8 @@ ACCESSED_ELSEWHERE = "accessed_elsewhere"  # the memory is accessed outside of t
 MIXED_OPERATORS = "mixed_operators"  # e.g. += and *= on the same memory, which do not commute
 
 DETAILS_KEY = "atomic_update"
+# the kind of the decision log note on a loop accepted with atomic updates
+ATOMIC_UPDATES_NOTE = "atomic_updates"
 
 # a position of an instruction: file id, line, column
 Position = Tuple[int, int, int]
@@ -110,6 +112,8 @@ class CommutativeUpdateClassifier:
         # instructions of the loop by line, to find every instruction of a site
         self._incident: Dict[NodeID, Dict[int, Set[int]]] = {}
         self._by_line: Dict[NodeID, Dict[Tuple[int, int], List[Tuple[int, int]]]] = {}
+        # every update statement a classification has named
+        self._sites: Dict[SiteKey, UpdateSite] = {}
 
     def classify(self, loop: Node, dependency: Dependency) -> Classification:
         """whether a dependency between iterations of the loop (its LoopNode) is fixable by atomic updates"""
@@ -165,6 +169,10 @@ class CommutativeUpdateClassifier:
             variable=sites[first].variable,
         )
 
+    def site(self, key: SiteKey) -> UpdateSite:
+        """an update statement named by a classification"""
+        return self._sites[key]
+
     def _position(self, instruction: int) -> Optional[Position]:
         line_id = self._pet.instruction_lines.get(str(instruction))
         column = self._pet.instruction_columns.get(str(instruction))
@@ -183,7 +191,9 @@ class CommutativeUpdateClassifier:
             if site.covers(column):
                 if site.problem is not None:
                     return _not_fixable(site.problem, position)
-                return SiteKey(file_id, line, site.first_column), site
+                key = SiteKey(file_id, line, site.first_column)
+                self._sites[key] = site
+                return key, site
         return _not_fixable(END_NOT_AT_UPDATE, position)
 
     def _incident_in_loop(self, loop: Node) -> Dict[int, Set[int]]:

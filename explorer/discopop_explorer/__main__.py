@@ -121,6 +121,12 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "and generated suggestions."
     )
     experimental_parser.add_argument(
+        "--atomic-updates", action="store_true",
+        help="Also suggest doall loops whose only dependencies between iterations are commutative updates of shared "
+        "memory (x += e, x++, ...), with #pragma omp atomic on those updates. Off by default: the updates then happen "
+        "in another order, which changes floating-point results in the last digits.",
+    )
+    experimental_parser.add_argument(
         "--ignore-dependency-states", action="store_true",
         help="Ignore the callpath state markers (\"@<state_id>\") contained in the dependency data. Dependencies are "
         "then interpreted as if the profiler had not distinguished between callpath states, which also reclassifies "
@@ -192,6 +198,7 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         write_log=arguments.write_log,
         load_existing_doall_and_reduction_patterns=arguments.load_existing_doall_and_reduction_patterns,
         ignore_dependency_states=arguments.ignore_dependency_states,
+        atomic_updates=arguments.atomic_updates,
         collect_statistics=arguments.enable_statistics,
         jobs=arguments.jobs,
         enable_pet_plot_file=arguments.plot_pet,

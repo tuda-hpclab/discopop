@@ -7,7 +7,7 @@
 # directory for details.
 import itertools
 import logging
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Optional, Set, Tuple
 
 from discopop_explorer.aliases.LineID import LineID
 from discopop_explorer.aliases.NodeID import NodeID
@@ -43,7 +43,11 @@ from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_explorer.functions.PEGraph.queries.edges import in_edges
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
-from discopop_explorer.pattern_detectors.commutative_updates import CommutativeUpdateClassifier
+from discopop_explorer.pattern_detectors.commutative_updates import (
+    ATOMIC_UPDATES_NOTE,
+    Classification,
+    CommutativeUpdateClassifier,
+)
 from discopop_explorer.pattern_detectors.clause_classification import filter_classifications, merge_classifications
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
 from discopop_explorer.pattern_detectors.loop_collapse_analysis import identify_collapsible_loop_nests
@@ -68,19 +72,25 @@ def run_detection(
     task_graph: TaskGraph,
     ast_helper: ASTPatternDetectionHelper,
     decisions: Optional[PatternDecisionLog] = None,
+    atomic_updates: bool = False,
 ) -> List[DoAllInfo | ReductionInfo]:
     """decisions, if given, receives every loop considered and why it was rejected. It is not
-    finalized here, since the caller decides which of the returned patterns are reported."""
+    finalized here, since the caller decides which of the returned patterns are reported.
+    atomic_updates: also accept the loops whose only dependencies between iterations are commutative
+    updates, which the patterns then make atomic (see commutative_updates)."""
     logger.info("Starting new do_all and reduction detection...")
     result: List[DoAllInfo | ReductionInfo] = []
     # built once, since the PET graph is not modified during pattern detection
     data_edges = DataEdgeIndex(pet)
 
     with stage("Identifying doall and reduction loops", 1, total=2):
-        result += identify_simple_doall_and_reduction(task_graph, ast_helper, data_edges, decisions)
-    # collapsible nests are derived from the identified patterns, so this must run afterwards
+        result += identify_simple_doall_and_reduction(
+            task_graph, ast_helper, data_edges, decisions, atomic_updates=atomic_updates
+        )
+    # collapsible nests are derived from the identified patterns, so this must run afterwards. Not from
+    # the ones with atomic updates: a collapsed pattern would not carry them.
     with stage("Identifying collapsible loop nests", 2, total=2):
-        result += identify_collapsible_loop_nests(task_graph, ast_helper, result)
+        result += identify_collapsible_loop_nests(task_graph, ast_helper, [p for p in result if not p.atomic_updates])
 
     show_plot(task_graph)
 
@@ -334,22 +344,24 @@ def structural_rejection(
 
 def record_blockers(
     tg: TaskGraph,
-    ast_helper: ASTPatternDetectionHelper,
-    data_edges: DataEdgeIndex,
+    classifier: Optional[CommutativeUpdateClassifier],
     blockers_by_loop: Dict[NodeID, Dict[DependencyRecord, Tuple[Context, Context, Dependency]]],
     record_rejection: Callable[[NodeID, DecisionReason], None],
-) -> None:
+) -> Dict[NodeID, Dict[DependencyRecord, Classification]]:
     """Records the dependencies between iterations which prevent each loop, each with whether
-    `#pragma omp atomic` on update statements would make it safe (see commutative_updates). Done
-    once every copy of a loop has been scanned, since the classification of one blocker depends on
-    the loop only, not on the copy it was found in."""
-    classifier = CommutativeUpdateClassifier(tg.pet, data_edges, ast_helper) if ast_helper.is_ast_loaded() else None
+    `#pragma omp atomic` on update statements would make it safe (see commutative_updates), and
+    returns those classifications per loop - complete for every loop with a classifier, empty
+    without one (no AST). Done once every copy of a loop has been scanned, since the classification
+    of one blocker depends on the loop only, not on the copy it was found in."""
+    classifications: Dict[NodeID, Dict[DependencyRecord, Classification]] = dict()
     for pet_node_id, loop_blockers in blockers_by_loop.items():
         loop_node = loop_node_of(tg.pet, pet_node_id) if classifier is not None else None
         for record, (_source_ctx, _target_ctx, dependency) in loop_blockers.items():
             details: Dict[str, Any] = {}
             if classifier is not None and loop_node is not None:
-                details = classifier.classify(loop_node, dependency).to_details()
+                classification = classifier.classify(loop_node, dependency)
+                classifications.setdefault(pet_node_id, dict())[record] = classification
+                details = classification.to_details()
             record_rejection(
                 pet_node_id,
                 DecisionReason(
@@ -359,6 +371,24 @@ def record_blockers(
                     details=details,
                 ),
             )
+    return classifications
+
+
+def atomic_update_entries(
+    classifier: CommutativeUpdateClassifier, classifications: Iterable[Classification]
+) -> List[Dict[str, Any]]:
+    """the update statements a pattern makes atomic, as recorded in DoAllInfo.atomic_updates, ordered by
+    their position"""
+    sites = sorted(
+        {site for c in classifications for site in c.sites}, key=lambda k: (k.file_id, k.line, k.first_column)
+    )
+    entries = []
+    for key in sites:
+        site = classifier.site(key)
+        entries.append(
+            {"file_id": key.file_id, "line": key.line, "operation": site.operator, "variable": site.variable}
+        )
+    return entries
 
 
 def identify_simple_doall_and_reduction(
@@ -366,6 +396,7 @@ def identify_simple_doall_and_reduction(
     ast_helper: ASTPatternDetectionHelper,
     data_edges: DataEdgeIndex,
     decisions: Optional[PatternDecisionLog] = None,
+    atomic_updates: bool = False,
 ) -> List[DoAllInfo | ReductionInfo]:
     """Analyzes the results of the graph simplification and create simple doall patterns.
     Implementation is fundamentally similar to the original doall detector, but implemented in a more maintainable
@@ -423,6 +454,7 @@ def identify_simple_doall_and_reduction(
         "skipped_before_classification": 0,
         "classified": 0,
         "discarded_after_classification": 0,
+        "accepted_with_atomic_updates": 0,
     }
 
     # collect the candidates up front so the scan has a known length and can report progress.
@@ -437,7 +469,41 @@ def identify_simple_doall_and_reduction(
     # the loops checked for recursion, once each: the task graph holds several copies of a loop
     recursion_checked: Set[NodeID] = set()
 
-    for node in progress(loop_parent_nodes, desc="Checking loops for doall/reduction"):
+    # Loops made parallel by atomic updates (atomic_updates): a loop is accepted that way only if every
+    # blocker found in any of its copies is fixable, which is known once all copies have been scanned. Such
+    # loops are therefore checked a second time, after the first pass over all loops, with those blockers
+    # allowed; their classifications are kept here.
+    classifier = CommutativeUpdateClassifier(tg.pet, data_edges, ast_helper) if ast_helper.is_ast_loaded() else None
+    atomic_loops: Dict[NodeID, Dict[DependencyRecord, Classification]] = dict()
+    # the patterns registered per loop, with their keys, to withdraw those of a loop checked again
+    registered_by_loop: Dict[NodeID, List[Tuple[Any, DoAllInfo | ReductionInfo]]] = dict()
+
+    def second_pass_candidates() -> Iterator[Tuple[Any, bool]]:
+        """after the first pass: records the blockers, and yields the copies of the loops to check again"""
+        classifications = record_blockers(tg, classifier, blockers_by_loop, record_rejection)
+        if not atomic_updates or classifier is None:
+            return
+        for pet_node_id, by_record in classifications.items():
+            if (
+                pet_node_id in dependency_prevented_loops
+                and len(by_record) == len(blockers_by_loop[pet_node_id])
+                and all(c.fixable for c in by_record.values())
+            ):
+                atomic_loops[pet_node_id] = by_record
+        for pet_node_id in atomic_loops:
+            prevented_loops.discard(pet_node_id)
+            dependency_prevented_loops.discard(pet_node_id)
+            # registered by a copy scanned before another one found the blockers: built without the atomics
+            for key, registered in registered_by_loop.pop(pet_node_id, []):
+                known_pattern_keys.discard(key)
+                known_pattern_tags.pop(registered.pattern_tag, None)
+                patterns.remove(registered)
+        for candidate in loop_parent_nodes:
+            if candidate.pet_node_id in atomic_loops:
+                yield candidate, True
+
+    first_pass = ((n, False) for n in progress(loop_parent_nodes, desc="Checking loops for doall/reduction"))
+    for node, second_pass in itertools.chain(first_pass, second_pass_candidates()):
         # check if node is LoopParent
         if not isinstance(node.created_context, LoopParentContext):
             continue
@@ -663,8 +729,28 @@ def identify_simple_doall_and_reduction(
                         )
                     if crosses_iterations and prevents_doall(subnode, out_dep_target, dep):
                         found_blockers.append((subnode, out_dep_target, dep))
+        if second_pass:
+            # the blockers found in the first pass are made atomic. One it did not find is recorded
+            # directly, since the first pass's blockers have been recorded already.
+            found_blockers = [
+                b
+                for b in found_blockers
+                if DependencyRecord.from_dependency(b[2]) not in atomic_loops[node.pet_node_id]
+            ]
+            for blocker in found_blockers:
+                record = DependencyRecord.from_dependency(blocker[2])
+                record_rejection(
+                    node.pet_node_id,
+                    DecisionReason(
+                        kind=LOOP_CARRIED_DEPENDENCY,
+                        message="A "
+                        + record.describe()
+                        + " between different iterations was observed during profiling.",
+                        dependency=record,
+                    ),
+                )
         if found_blockers:
-            # recorded as reasons once every copy of the loop has been scanned, see below
+            # recorded as reasons once every copy of the loop has been scanned, see second_pass_candidates
             loop_blockers = blockers_by_loop.setdefault(node.pet_node_id, dict())
             for blocker in found_blockers:
                 record = DependencyRecord.from_dependency(blocker[2])
@@ -797,6 +883,16 @@ def identify_simple_doall_and_reduction(
                 if v not in reduction
             ]
 
+        atomic_classifications = atomic_loops.get(node.pet_node_id)
+        if atomic_classifications is not None:
+            assert classifier is not None
+            pattern.atomic_updates = atomic_update_entries(classifier, atomic_classifications.values())
+            # the updated memory is shared, whatever names the classification of the variables found for it
+            updated = {e["variable"] for e in pattern.atomic_updates} | {r.variable for r in atomic_classifications}
+            pattern.first_private = [v for v in pattern.first_private if v.name not in updated]
+            pattern.private = [v for v in pattern.private if v.name not in updated]
+            pattern.last_private = [v for v in pattern.last_private if v.name not in updated]
+
         # two different nodes can still collide on a tag, so the exact check remains - it is just
         # no longer the one which every duplicate has to be built for.
         # The pattern registered first can still be removed afterwards (prevented_loops below, or
@@ -807,8 +903,22 @@ def identify_simple_doall_and_reduction(
             continue
         known_pattern_tags[pattern.pattern_tag] = pattern
         patterns.append(pattern)
+        registered_by_loop.setdefault(node.pet_node_id, []).append((pattern_key, pattern))
+        if atomic_classifications is not None:
+            counts["accepted_with_atomic_updates"] += 1
+            if decisions is not None:
+                decisions.note(
+                    DECISION_DETECTOR,
+                    DECISION_PATTERN_TYPES,
+                    decision_regions.get(node.pet_node_id) or region_of_pet_node(tg.pet, node.pet_node_id),
+                    DecisionReason(
+                        kind=ATOMIC_UPDATES_NOTE,
+                        message="Parallel only with the updates of shared memory its iterations have in common "
+                        "made atomic.",
+                        details={"atomic_updates": pattern.atomic_updates},
+                    ),
+                )
 
-    record_blockers(tg, ast_helper, data_edges, blockers_by_loop, record_rejection)
     logger.info("Doall/reduction candidates: " + ", ".join(k + "=" + str(v) for k, v in counts.items()))
 
     # clean patterns agains prevented loops

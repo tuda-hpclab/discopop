@@ -8,7 +8,7 @@
 
 
 from multiprocessing import Pool
-from typing import Dict, List, Optional, cast, Set, Tuple
+from typing import Any, Dict, List, Optional, cast, Set, Tuple
 
 from discopop_explorer.functions.PEGraph.properties.is_loop_index import is_loop_index
 from discopop_explorer.functions.PEGraph.properties.is_readonly_inside_loop_body import is_readonly_inside_loop_body
@@ -44,6 +44,11 @@ from discopop_explorer.classes.variable import Variable
 
 class ReductionInfo(PatternInfo):
     """Class, that contains reduction detection result"""
+
+    # the update statements which the pattern makes atomic to be parallel (see commutative_updates), each
+    # {"file_id", "line", "operation", "variable"}. Set on an instance only when there are any, so the JSON
+    # of every other pattern stays as it was.
+    atomic_updates: List[Dict[str, Any]] = []
 
     def __init__(self, pet: PEGraphX, node: Node, reduction: Optional[List[Variable]] = None):
         """

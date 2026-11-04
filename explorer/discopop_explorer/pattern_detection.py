@@ -118,6 +118,7 @@ class PatternDetectorX(object):
         enable_context_graph_plot: bool,
         visualizer: Visualizer | None = None,
         ignore_dependency_states: bool = False,
+        atomic_updates: bool = False,
     ) -> DetectionResult:
         """Runs pattern discovery on the CU graph"""
         with stage("Loading AST"):
@@ -172,7 +173,7 @@ class PatternDetectorX(object):
             or "task" in enable_patterns
         ):
             tmp_result = detect_do_all_and_reduction_new(
-                self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions
+                self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions, atomic_updates=atomic_updates
             )
             if "*" in enable_patterns or "doall" in enable_patterns:
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]
@@ -182,9 +183,10 @@ class PatternDetectorX(object):
                 first_task_group = 1 + max(
                     (g for t in res.patterns.task for g in getattr(t, "task_group", [])), default=-1
                 )
-                # the loops with a cursor (while (v) { f(v); v = v->next; }) are tasks per iteration as well
+                # the loops with a cursor (while (v) { f(v); v = v->next; }) are tasks per iteration as well.
+                # Not the loops made parallel by atomic updates: their tasks would not carry the atomics.
                 loop_sources: List[LoopTaskSource] = [
-                    p for p in tmp_result if isinstance(p, (DoAllInfo, ReductionInfo))
+                    p for p in tmp_result if isinstance(p, (DoAllInfo, ReductionInfo)) and not p.atomic_updates
                 ]
                 loop_sources += find_cursor_loops(task_graph, {p.node_id for p in tmp_result})
                 res.patterns.task += identify_loop_tasking(

@@ -88,6 +88,8 @@ class ExplorerArguments(GeneralArguments):
     visualize_on: Optional["tk.Frame"]
     # None means no file, otherwise the path. Why candidates were (not) suggested, see PatternDecisions
     enable_pattern_decisions_file: Optional[str] = None
+    # doall loops made parallel by atomic updates, see design/doall_commutative_updates.md
+    atomic_updates: bool = False
 
     def __post_init__(self) -> None:
         self.__validate()
@@ -141,6 +143,7 @@ def __run(
     visualize_on: Optional["tk.Frame"] = None,
     ignore_dependency_states: bool = False,
     pattern_decisions: Optional[PatternDecisionLog] = None,
+    atomic_updates: bool = False,
 ) -> DetectionResult:
     """pattern_decisions, if given, receives which candidates the pattern detection considered and
     why it rejected them. It stays empty when existing patterns are loaded."""
@@ -211,6 +214,7 @@ def __run(
             enable_context_graph_plot,
             visualizer,
             ignore_dependency_states=ignore_dependency_states,
+            atomic_updates=atomic_updates,
         )
 
     for plugin_name in plugins:
@@ -237,6 +241,8 @@ def result_changing_options(arguments: ExplorerArguments) -> Dict[str, Any]:
         options["hotspot_types"] = sorted(t.name.lower() for t in arguments.hotspot_types)
     if arguments.ignore_dependency_states:
         options["ignore_dependency_states"] = True
+    if arguments.atomic_updates:
+        options["atomic_updates"] = True
     if arguments.load_existing_doall_and_reduction_patterns:
         options["load_existing_doall_and_reduction_patterns"] = True
     if arguments.detect_scheduling_clauses:
@@ -327,6 +333,7 @@ def run(arguments: ExplorerArguments) -> None:
                 visualize_on=arguments.visualize_on,
                 ignore_dependency_states=arguments.ignore_dependency_states,
                 pattern_decisions=pattern_decisions,
+                atomic_updates=arguments.atomic_updates,
             )
 
         end = time.time()
