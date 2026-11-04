@@ -120,6 +120,8 @@ def _suggestion_facts(dot_discopop: Path) -> dict[str, dict[str, Any]]:
                 pass
             if isinstance(pattern.get("collapse_level"), int) and pattern["collapse_level"] > 1:
                 entry["collapse"] = pattern["collapse_level"]
+            if pattern.get("atomic_updates"):
+                entry["atomic_updates"] = list(pattern["atomic_updates"])
             facts[str(pattern.get("pattern_id"))] = entry
     return facts
 
@@ -231,6 +233,11 @@ def _describe(suggestion: dict[str, Any], hotspot: Optional[HotspotRegionInfo], 
     weight = f" ({runtime_text(hotspot, total)})" if hotspot is not None else ""
     text = f"Suggestion {suggestion['pattern_id']}: {hotspot_prefix(hotspot)}{place}{weight}: {suggestion['type']}"
     text += f", {suggestion['pragma']}"
+    if "atomic_updates" in suggestion:
+        text += (
+            f", and `#pragma omp atomic update` before {', '.join(suggestion['atomic_updates'])} "
+            "(required: without them the loop is not safe in parallel)"
+        )
     if "contains" in suggestion:
         text += f"; contains task group {', '.join(sorted(suggestion['contains'], key=int))}"
     if "nested_in" in suggestion:
@@ -280,9 +287,15 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             fact = facts.get(pid, {})
             region = regions.get(pid)
             line = fact.get("line") or (region[1] if region else None)
+            # a loop made parallel by atomic updates has a patch per file holding one of them; they are part of
+            # the loop's entry rather than suggestions of their own
+            atomics = fact.get("atomic_updates") or []
+            atomic_files = {int(a["file_id"]) for a in atomics}
             for patch_file in sorted(pattern_dir.glob("*.patch")):
                 file_id = int(patch_file.stem) if patch_file.stem.isdigit() else None
-                if file_id_filter is not None and file_id != file_id_filter:
+                if atomics and file_id != fact.get("file_id"):
+                    continue
+                if file_id_filter is not None and file_id != file_id_filter and file_id_filter not in atomic_files:
                     continue
                 patch_content = patch_file.read_text()
                 mapped = file_mapping.get(file_id) if file_id is not None else None
@@ -318,6 +331,11 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 }
                 if region is not None:
                     suggestion["end_line"] = region[2]
+                if atomics:
+                    suggestion["atomic_updates"] = [
+                        f"{display_path(project_path, file_mapping.get(int(a['file_id'])))}:{a['line']}"
+                        for a in atomics
+                    ]
                 suggestion.update(_relations(pid, regions))
                 kind = suggestion["kind"].lower()
                 hotspot = (

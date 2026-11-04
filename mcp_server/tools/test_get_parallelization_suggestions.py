@@ -137,6 +137,25 @@ class TestGetParallelizationSuggestions(unittest.TestCase):
             self.assertIn("3 parallelization suggestions", self.__handle(file_path=path))
         self.assertIn("is not part of the analysed program", self.__handle(file_path="other.cpp"))
 
+    def test_a_loop_with_atomic_updates_is_one_suggestion_naming_them(self) -> None:
+        callee = Path(self.project_path) / "add.cpp"
+        callee.write_text("void add() {}\n")
+        (self.dot_discopop / "FileMapping.txt").write_text(f"1\t{self.source}\n2\t{callee}\n")
+        patterns = json.loads((self.dot_discopop / "explorer" / "patterns.json").read_text())
+        for pattern in patterns["patterns"]["do_all"]:
+            if pattern["pattern_id"] == 7:
+                pattern["atomic_updates"] = [{"file_id": 2, "line": 4, "operation": "+=", "variable": "h"}]
+        (self.dot_discopop / "explorer" / "patterns.json").write_text(json.dumps(patterns))
+        (self.dot_discopop / "patch_generator" / "7" / "2.patch").write_text(_patch(4, "#pragma omp atomic update"))
+        text = self.__handle()
+        self.assertIn("3 parallelization suggestions", text)
+        self.assertEqual(text.count("Suggestion 7:"), 1)
+        self.assertIn(
+            "#pragma omp parallel for shared(a), and `#pragma omp atomic update` before add.cpp:4 (required", text
+        )
+        # found through the file of an atomic update as well
+        self.assertIn("Suggestion 7:", self.__handle(file_path="add.cpp"))
+
     def test_nested_and_alternative_suggestions_are_marked(self) -> None:
         log = PatternDecisionLog()
         log.ran(DETECTOR, TYPES)
