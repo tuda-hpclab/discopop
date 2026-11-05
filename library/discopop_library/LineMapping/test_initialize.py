@@ -31,4 +31,4 @@ def test_non_utf8_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     modified.write_bytes(b"/* \xd7 */\nint x;\n")  # the diff quotes the non-UTF-8 line
     initialize_line_mapping({1: str(original)}, str(tmp_path))
     apply_line_mapping_modifications_from_files(1, str(original), str(modified))
-    assert load_line_mapping(str(tmp_path))["1"] == {"1": 1, "2": 2}
+    assert load_line_mapping(str(tmp_path))["1"] == {"1": -1, "2": 2}  # the changed line is dropped from the mapping
