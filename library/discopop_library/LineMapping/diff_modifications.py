@@ -31,6 +31,8 @@ def apply_line_mapping_modifications_from_files(file_id: int, original_file: str
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         universal_newlines=True,
+        encoding="utf-8",
+        errors="replace",  # the diff quotes source lines, which need not be UTF-8
     )
     if result.returncode == 1:
         # print("RESULT: ", result.returncode)

@@ -27,7 +27,9 @@ def initialize_line_mapping(
         if str(file_id) not in line_mapping_dict:
             line_mapping_dict[str(file_id)] = dict()
         line_id = 1
-        with open(file_mapping[file_id], "r") as f:
+        # only the number of lines is of interest. Sources are not necessarily UTF-8 (e.g. a Latin-1 author name in
+        # a comment), and a strict decode must not abort the analysis for that. Nothing is written back.
+        with open(file_mapping[file_id], "r", encoding="utf-8", errors="replace") as f:
             for line in f.readlines():
                 line_mapping_dict[str(file_id)][str(line_id)] = line_id
                 line_id += 1
