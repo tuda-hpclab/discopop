@@ -478,6 +478,8 @@ def _sharing(
         sharing = Sharing()
         file_id, first, last = task_lines[index]
         for name, (read, written, def_line) in sorted(variables.items()):
+            if name == "":
+                continue  # an access to a variable the profiler could not name: there is no clause to write for it
             global_variable = def_line == "GlobalVar"
             declared = False
             if not global_variable and ":" in def_line:

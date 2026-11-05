@@ -50,6 +50,13 @@ def parse_dependency(dep: DependenceItem) -> Dependency:
     return d
 
 
+def _variable_name(element: ObjectifiedElement) -> str:
+    """The name of a variable of a CU. The profiler lists an access whose variable it cannot determine with an empty
+    name; lxml reads an empty element as None, which is not a name. The access stays in the CU (it is part of what the
+    CU does), but as the empty name, which no dependence or clause refers to."""
+    return element.text or ""
+
+
 def parse_cu(node: ObjectifiedElement) -> Node:
     node_id = node.get("id")
     node_type = NodeType(int(node.get("type")))
@@ -60,12 +67,12 @@ def parse_cu(node: ObjectifiedElement) -> Node:
         n = CUNode(node_id)
         if hasattr(node.localVariables, "local"):
             n.local_vars = [
-                Variable(v.get("type"), v.text, v.get("defLine"), v.get("accessMode"), 0)
+                Variable(v.get("type"), _variable_name(v), v.get("defLine"), v.get("accessMode"), 0)
                 for v in node.localVariables.local
             ]
         if hasattr(node.globalVariables, "global"):
             n.global_vars = [
-                Variable(v.get("type"), v.text, v.get("defLine"), v.get("accessMode"), 0)
+                Variable(v.get("type"), _variable_name(v), v.get("defLine"), v.get("accessMode"), 0)
                 for v in getattr(node.globalVariables, "global")
             ]
         if hasattr(node, "BasicBlockID"):

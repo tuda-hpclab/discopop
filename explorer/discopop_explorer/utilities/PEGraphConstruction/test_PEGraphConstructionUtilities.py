@@ -86,3 +86,16 @@ def test_the_ends_of_a_dependency_record_keep_their_instruction_ids_and_states()
     dependency = parse_dependency(DependenceItem("1:22", "1:22", "WAR", "g_caught", "7", False, 98, 100, "31", "31"))
     assert (dependency.source_instruction_id, dependency.sink_instruction_id) == (98, 100)
     assert (dependency.source_state_id, dependency.sink_state_id) == ("31", "31")
+
+
+def test_a_variable_without_a_name_keeps_its_access_and_gets_the_empty_name() -> None:
+    """the profiler writes ``<global ...></global>`` for an access whose variable it cannot determine; lxml reads the
+    empty element as None, and a None name made ``sorted()`` fail in the task detector"""
+    node = _cu("1:10", "1:11", "10,11")
+    node.globalVariables.append(objectify.fromstring('<global type="ptr" defLine="GlobalVar" accessMode="W"></global>'))
+    node.globalVariables.append(objectify.fromstring('<global type="int" defLine="1:3" accessMode="R">n</global>'))
+    cu = cast(CUNode, parse_cu(node))
+    assert [(v.name, v.type, v.defLine, v.accessMode) for v in cu.global_vars] == [
+        ("", "ptr", "GlobalVar", "W"),
+        ("n", "int", "1:3", "R"),
+    ]

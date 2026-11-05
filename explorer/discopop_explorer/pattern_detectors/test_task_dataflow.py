@@ -359,3 +359,14 @@ def test_variables_of_instructions(monkeypatch: pytest.MonkeyPatch, make_node: A
     assert variables_of_instructions(pet, [5]) == {"out", "k"}
     assert variables_of_instructions(pet, [2]) == set()
     assert variables_of_instructions(pet, [999]) == set()
+
+
+def test_a_variable_without_a_name_is_no_data_sharing_clause() -> None:
+    """an access the profiler could not name (empty name) neither fails the analysis nor ends up in a clause"""
+    first = _Ctx([_var("", "GlobalVar", "W"), _var("a", "3:20", "R"), _var("g", "GlobalVar", "R")])
+    second = _Ctx([_var("", "GlobalVar", "W"), _var("a", "3:20", "W")])
+    flow = _analyze(_pet({}), [first, second])
+    for sharing in flow.sharing:
+        assert "" not in sharing.shared + sharing.private + sharing.first_private
+        assert all(not clause.endswith(":") for clause in sharing.reduction)
+    assert flow.sharing[0].shared == ["a", "g"]
