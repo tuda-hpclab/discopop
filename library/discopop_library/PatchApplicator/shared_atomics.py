@@ -168,7 +168,7 @@ def sites_taken(patch_generator_dir: str, suggestion_ids: List[str], patch_file_
     for suggestion_id in suggestion_ids:
         path = os.path.join(patch_generator_dir, suggestion_id, patch_file_name)
         if os.path.isfile(path):
-            with open(path, "r", newline="") as f:
+            with open(path, "r", newline="", encoding="utf-8", errors="surrogateescape") as f:
                 taken |= atomic_sites(f.read())
     return taken
 
@@ -188,7 +188,7 @@ class FilteredPatches:
             if not taken:
                 self._paths[name] = original
                 continue
-            with open(original, "r", newline="") as f:
+            with open(original, "r", newline="", encoding="utf-8", errors="surrogateescape") as f:
                 text = f.read()
             filtered = filter_patch(text, taken)
             if filtered is None:
@@ -199,7 +199,7 @@ class FilteredPatches:
                 if self._tempdir is None:
                     self._tempdir = tempfile.mkdtemp(prefix="discopop_shared_atomics_")
                 path = os.path.join(self._tempdir, name)
-                with open(path, "w", newline="") as f:
+                with open(path, "w", newline="", encoding="utf-8", errors="surrogateescape") as f:
                     f.write(filtered)
                 self._paths[name] = path
 

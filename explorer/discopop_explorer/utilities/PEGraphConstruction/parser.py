@@ -286,9 +286,9 @@ def is_reduction(reduction_line: str, fmap_lines: List[str], file_mapping: str) 
     filepath = get_filepath(file_id, fmap_lines, file_mapping)
     if not os.path.exists(filepath):
         return False
-    src_file = open(filepath)
-    src_lines = src_file.read().splitlines()
-    src_file.close()
+    # the sources are only inspected; they need not be UTF-8 (e.g. a Latin-1 name in a comment)
+    with open(filepath, encoding="utf-8", errors="replace") as src_file:
+        src_lines = src_file.read().splitlines()
 
     return possible_reduction(file_line, src_lines)
 

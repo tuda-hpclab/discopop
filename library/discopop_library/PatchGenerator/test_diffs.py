@@ -119,3 +119,27 @@ def test_patch_for_an_lf_source_still_applies(tmp_path: Path) -> None:
     assert applied.returncode == 0, applied.stdout.decode() + applied.stderr.decode()
     with open(tmp_path / "main.c", "rb") as fb:
         assert b"\r\n" not in fb.read()
+
+
+def test_non_utf8_source_yields_applicable_patch(tmp_path: Path) -> None:
+    """a Latin-1 byte in a context line (rodinia's avilib.c) must survive the patch round trip.
+
+    The sources are not necessarily UTF-8. The patch has to quote such a line byte for byte,
+    or ``patch`` cannot find its context and the suggestion is unapplicable.
+    """
+    original_bytes = b"/* Thomas \xd6streich */\nint main() {\n  return 0;\n}\n"
+    source = tmp_path / "avilib.c"
+    source.write_bytes(original_bytes)
+
+    # what ContentBuffer produces: the source read back with undecodable bytes preserved
+    with open(source, "r", encoding="utf-8", errors="surrogateescape") as f:
+        code = f.read().replace("  return 0;", "  // added\n  return 0;")
+
+    patches = get_diffs_from_modified_code({1: source}, {1: code}, _arguments())
+    patch_bytes = patches[1].encode("utf-8", errors="surrogateescape")
+    assert b"\xd6streich" in patch_bytes  # context line quoted verbatim, no U+FFFD
+
+    patch_file = tmp_path / "1.patch"
+    patch_file.write_bytes(patch_bytes)
+    subprocess.run(["patch", "-p0", source.as_posix(), patch_file.as_posix()], check=True, capture_output=True)
+    assert source.read_bytes() == original_bytes.replace(b"  return 0;", b"  // added\n  return 0;")

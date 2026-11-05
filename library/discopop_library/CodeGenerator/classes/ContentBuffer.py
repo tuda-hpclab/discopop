@@ -33,7 +33,8 @@ class ContentBuffer(object):
         self.lines = []
         self.max_line_num = 0
         # load source code
-        with open(source_code_path, "r") as f:
+        # sources need not be UTF-8: undecodable bytes become surrogates and are written back unchanged
+        with open(source_code_path, "r", encoding="utf-8", errors="surrogateescape") as f:
             lines = f.readlines()
             for idx, line in enumerate(lines):
                 idx = idx + 1  # start with line number 1
@@ -193,7 +194,7 @@ class ContentBuffer(object):
             tmp_file_name = str(file_mapping[self.file_id]) + ".discopop_tmp.cpp"
         tmp_file_out_name = str(file_mapping[self.file_id]) + ".discopop_tmp.o"
 
-        with open(tmp_file_name, "w+") as f:
+        with open(tmp_file_name, "w+", encoding="utf-8", errors="surrogateescape") as f:
             f.write(self.get_modified_source_code())
             f.flush()
             f.close()

@@ -79,7 +79,7 @@ def get_diffs_from_modified_code(
 
         try:
             # newline="" keeps the terminators above byte-for-byte
-            with open(modified_file_path, "w", newline="") as f:
+            with open(modified_file_path, "w", newline="", encoding="utf-8", errors="surrogateescape") as f:
                 f.write(modified_code)
         except PermissionError:
             continue
@@ -101,7 +101,7 @@ def get_diffs_from_modified_code(
             stderr=subprocess.PIPE,
             cwd=os.getcwd(),
         )
-        diff_output = result.stdout.decode("utf-8", errors="replace")
+        diff_output = result.stdout.decode("utf-8", errors="surrogateescape")
         if result.returncode != 0:
             if arguments.verbose:
                 print("RESULT: ", result.returncode)

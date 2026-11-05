@@ -111,5 +111,5 @@ def from_json_patterns(
             os.mkdir(suggestion_folder_path)
             for file_id in file_id_to_patches:
                 patch_path = os.path.join(suggestion_folder_path, str(file_id) + ".patch")
-                with open(patch_path, "w", newline="") as f:
+                with open(patch_path, "w", newline="", encoding="utf-8", errors="surrogateescape") as f:
                     f.write(file_id_to_patches[file_id])
