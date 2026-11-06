@@ -12,8 +12,10 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <unordered_set>
@@ -64,6 +66,61 @@ constexpr std::size_t kDeferredDedupTrial = 4096;
 // to be worth a hash insert per access. Code that walks a new address every time -- a linked
 // list, a large array touched once -- finds nothing and drops far below this.
 constexpr double kDeferredDedupMinHitRate = 0.25;
+
+// Where the thread that processes the second access queue spends its time. It is the only consumer of
+// the queue, so it is the bottleneck of the whole profiling run whenever the first queue workers
+// have to wait for it. Printed to stderr at the end of the thread when DP_SAQ_PHASE_TIMING is set in
+// the environment; costs a few clock reads per chunk (not per access) otherwise.
+class SecondQueuePhaseTimes {
+ public:
+  using Clock = std::chrono::steady_clock;
+
+  enum Phase : std::size_t {
+    kGetElement,    // taking an element out of the queue (lock)
+    kWaitEntry,     // blocked until the first queue worker published the entry accesses
+    kAnalyze,       // dependency analysis of the entry accesses against the persistent shadow
+    kWaitExit,      // blocked until the first queue worker published the exit shadow
+    kMerge,         // bringing the persistent shadow up to the end state of the chunk
+    kRelease,       // deleting the chunk's data structures
+    kIdle,          // sleeping, as the queue was empty
+    kNumPhases
+  };
+
+  SecondQueuePhaseTimes() : enabled_(std::getenv("DP_SAQ_PHASE_TIMING") != nullptr), last_(Clock::now()) {}
+
+  // Attributes the time since the previous call (or the start) to `phase`.
+  void Lap(Phase phase) {
+    const auto now = Clock::now();
+    total_[phase] += std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_);
+    last_ = now;
+  }
+
+  void CountChunk(std::size_t entry_accesses) {
+    ++chunks_;
+    entry_accesses_ += entry_accesses;
+  }
+
+  void Report(std::intptr_t id) const {
+    if (!enabled_) {
+      return;
+    }
+    static constexpr const char* kNames[kNumPhases] = {"get_element", "wait_entry", "analyze", "wait_exit",
+                                                       "merge",       "release",    "idle"};
+    std::cerr << "[DP_SAQ_PHASE_TIMING] thread " << id << ": chunks=" << chunks_
+              << " entry_accesses=" << entry_accesses_;
+    for (std::size_t i = 0; i < kNumPhases; ++i) {
+      std::cerr << " " << kNames[i] << "=" << static_cast<double>(total_[i].count()) * 1e-9 << "s";
+    }
+    std::cerr << "\n";
+  }
+
+ private:
+  bool enabled_;
+  Clock::time_point last_;
+  std::chrono::nanoseconds total_[kNumPhases] = {};
+  std::size_t chunks_ = 0;
+  std::size_t entry_accesses_ = 0;
+};
 
 }  // namespace
 
@@ -182,15 +239,18 @@ void* ProcessSecondAccessQueue(void* arg) {
 
   SecondAccessQueueElement* current = nullptr;
   AbstractShadow* smem = new PerfectShadow2();
+  SecondQueuePhaseTimes phase_times;
 
   while (true) {
     // get chunk from queue
     current = second_access_queue.Get();
+    phase_times.Lap(SecondQueuePhaseTimes::kGetElement);
 
     // check if chunk aquired
     if (current) {
       // check entry boundary conditions for data dependencies
       auto promised_first_accesses_vector_ptr = current->entry_boundary_first_addr_accesses.get();
+      phase_times.Lap(SecondQueuePhaseTimes::kWaitEntry);
       for (auto& entry_accesses : *(promised_first_accesses_vector_ptr)) {
         // ignore unused entries of the vector
         if (!(entry_accesses.addr || entry_accesses.lid)) {
@@ -199,8 +259,12 @@ void* ProcessSecondAccessQueue(void* arg) {
         AnalyzeSingleAccess(smem, entry_accesses);
       }
 
+      phase_times.Lap(SecondQueuePhaseTimes::kAnalyze);
+      phase_times.CountChunk(promised_first_accesses_vector_ptr->size());
+
       // update persistent SMem with exit boundary conditions (aka merge the local into the persistent shadow memories)
       AbstractShadow* promised_last_smem_ptr = current->exit_boundary_smem.get();
+      phase_times.Lap(SecondQueuePhaseTimes::kWaitExit);
 
       auto sig_read = static_cast<PerfectShadow2*>(promised_last_smem_ptr)->GetSigRead();
       auto sig_write = static_cast<PerfectShadow2*>(promised_last_smem_ptr)->GetSigWrite();
@@ -213,11 +277,14 @@ void* ProcessSecondAccessQueue(void* arg) {
         smem->UpdateInWrite(it->addr, sig_write->at(it->addr));
       }
 
+      phase_times.Lap(SecondQueuePhaseTimes::kMerge);
+
       // cleanup promises
       delete promised_first_accesses_vector_ptr;
       delete promised_last_smem_ptr;
 
       delete current;
+      phase_times.Lap(SecondQueuePhaseTimes::kRelease);
 
     } else {
       if (finalize_parallelization_called) {
@@ -229,10 +296,12 @@ void* ProcessSecondAccessQueue(void* arg) {
           break;
         }
         usleep(1000);
+        phase_times.Lap(SecondQueuePhaseTimes::kIdle);
 
       } else {
         // let thread sleep and try fetching a chunk again
         usleep(1000);
+        phase_times.Lap(SecondQueuePhaseTimes::kIdle);
       }
     }
   }
@@ -242,6 +311,7 @@ void* ProcessSecondAccessQueue(void* arg) {
   // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete my_map;
   my_map = nullptr;
+  phase_times.Report(id);
 
   if (dp_debug) {
 #ifdef __linux__
