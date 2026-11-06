@@ -41,6 +41,9 @@ void* ProcessFirstAccessQueue(void* arg);
 
 void* ProcessSecondAccessQueue(void* arg);
 
+// frees the chunks the consumer of the second access queue retires
+void* ProcessGarbageQueue(void* arg);
+
 void AnalyzeSingleAccess(dp::AbstractShadow* smem, dp::AccessInfo& access);
 
 // the dependency analysis of one access on the calling thread, used if NUM_WORKERS==0

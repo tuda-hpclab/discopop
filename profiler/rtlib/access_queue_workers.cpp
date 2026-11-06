@@ -76,13 +76,13 @@ class SecondQueuePhaseTimes {
   using Clock = std::chrono::steady_clock;
 
   enum Phase : std::size_t {
-    kGetElement,    // taking an element out of the queue (lock)
-    kWaitEntry,     // blocked until the first queue worker published the entry accesses
-    kAnalyze,       // dependency analysis of the entry accesses against the persistent shadow
-    kWaitExit,      // blocked until the first queue worker published the exit shadow
-    kMerge,         // bringing the persistent shadow up to the end state of the chunk
-    kRelease,       // deleting the chunk's data structures
-    kIdle,          // sleeping, as the queue was empty
+    kGetElement,  // taking an element out of the queue (lock)
+    kWaitEntry,   // blocked until the first queue worker published the entry accesses
+    kAnalyze,     // dependency analysis of the entry accesses against the persistent shadow
+    kWaitExit,    // blocked until the first queue worker published the exit shadow
+    kMerge,       // bringing the persistent shadow up to the end state of the chunk
+    kRelease,     // deleting the chunk's data structures
+    kIdle,        // sleeping, as the queue was empty
     kNumPhases
   };
 
@@ -279,11 +279,14 @@ void* ProcessSecondAccessQueue(void* arg) {
 
       phase_times.Lap(SecondQueuePhaseTimes::kMerge);
 
-      // cleanup promises
-      delete promised_first_accesses_vector_ptr;
-      delete promised_last_smem_ptr;
-
-      delete current;
+      // cleanup promises: handed to the cleanup workers, unless there are none or they have fallen behind
+      RetiredChunk retired;
+      retired.entry_accesses = promised_first_accesses_vector_ptr;
+      retired.exit_shadow = promised_last_smem_ptr;
+      retired.element = current;
+      if (!garbage_queue.TryRetire(retired)) {
+        retired.Destroy();
+      }
       phase_times.Lap(SecondQueuePhaseTimes::kRelease);
 
     } else {
@@ -321,6 +324,15 @@ void* ProcessSecondAccessQueue(void* arg) {
 #endif
   }
 
+  pthread_exit(nullptr);
+  return nullptr;
+}
+
+void* ProcessGarbageQueue(void* /*arg*/) {
+  RetiredChunk chunk;
+  while (garbage_queue.Take(&chunk)) {
+    chunk.Destroy();
+  }
   pthread_exit(nullptr);
   return nullptr;
 }

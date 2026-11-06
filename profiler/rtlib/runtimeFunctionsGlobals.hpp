@@ -114,10 +114,18 @@ constexpr int kFirstAccessQueueChunkSize = 100000;
 // FIRST_ACCESS_QUEUE_CHUNK_SIZE accesses (~4 MB), a second queue element up to ~11 MB.
 constexpr int kDefaultFirstAccessQueueChunksPerWorker = 4;
 constexpr int kDefaultSecondAccessQueueElementsPerWorker = 4;
+// threads that free what the consumer of the second access queue is done with (CLEANUP_WORKERS); 0 makes the
+// consumer free it itself
+constexpr int kDefaultCleanupWorkers = 1;
+// chunks the cleanup workers may have pending per worker; freeing is fast, so a few are enough to absorb the
+// bursts, and every pending chunk keeps its shadow memory alive
+constexpr int kCleanupQueueElementsPerCleanupWorker = 2;
 
 extern FirstAccessQueue& first_access_queue;
 extern SecondAccessQueue& second_access_queue;
 extern pthread_t* second_access_queue_worker_thread;
+extern GarbageQueue& garbage_queue;
+extern pthread_t* cleanup_worker_threads;
 extern FirstAccessQueueChunkBuffer& first_access_queue_chunk_buffer;
 
 extern AbstractShadow* single_threaded_execution_smem;
@@ -125,6 +133,7 @@ extern AbstractShadow* single_threaded_execution_smem;
 extern int32_t num_workers;
 extern int32_t first_access_queue_chunks_per_worker;
 extern int32_t second_access_queue_elements_per_worker;
+extern int32_t cleanup_workers;
 
 extern thread_local DepMap* my_map;
 

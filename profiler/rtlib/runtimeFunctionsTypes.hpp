@@ -14,7 +14,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <mutex>
 #include <queue>
@@ -309,6 +312,86 @@ class SecondAccessQueue {
   // the size of internal_queue, readable without holding internal_mtx
   std::atomic<std::size_t> queued_elements_{0};
   std::size_t max_size_;
+};
+
+// What the consumer of the second access queue is done with once it has merged a chunk. Freeing it
+// is not free (a shadow memory of a whole chunk, the entry accesses, the promise state), and the
+// consumer is the one thread the whole profiling run waits for, so it hands the pieces to the
+// cleanup workers instead.
+struct RetiredChunk {
+  std::vector<AccessInfo>* entry_accesses = nullptr;
+  AbstractShadow* exit_shadow = nullptr;
+  SecondAccessQueueElement* element = nullptr;
+
+  void Destroy() {
+    delete entry_accesses;
+    delete exit_shadow;
+    delete element;
+    entry_accesses = nullptr;
+    exit_shadow = nullptr;
+    element = nullptr;
+  }
+};
+
+// Collects retired chunks for the cleanup workers. Bounded: every pending item keeps a chunk's shadow
+// memory alive, and the bound on the second access queue exists to keep that in check. When the
+// cleanup workers fall behind, TryRetire refuses and the caller frees the chunk itself, which is
+// what it did before the queue existed.
+class GarbageQueue {
+ public:
+  explicit GarbageQueue(std::size_t arg_max_pending) : max_pending_(arg_max_pending) {}
+
+  void SetMaxPending(std::size_t arg_max_pending) {
+    const std::lock_guard<std::mutex> lock(internal_mtx_);
+    max_pending_ = arg_max_pending;
+  }
+
+  // Returns false (and keeps nothing) if the queue is full or closed.
+  bool TryRetire(const RetiredChunk& chunk) {
+    {
+      const std::lock_guard<std::mutex> lock(internal_mtx_);
+      if (closed_ || internal_queue_.size() >= max_pending_) {
+        return false;
+      }
+      internal_queue_.push_back(chunk);
+    }
+    not_empty_.notify_one();
+    return true;
+  }
+
+  // Blocks until a chunk is available. Returns false once the queue is closed and drained.
+  bool Take(RetiredChunk* chunk) {
+    std::unique_lock<std::mutex> lock(internal_mtx_);
+    not_empty_.wait(lock, [this] { return closed_ || !internal_queue_.empty(); });
+    if (internal_queue_.empty()) {
+      return false;
+    }
+    *chunk = internal_queue_.front();
+    internal_queue_.pop_front();
+    return true;
+  }
+
+  // No further chunks are accepted; the workers finish what is pending and Take returns false.
+  void Close() {
+    {
+      const std::lock_guard<std::mutex> lock(internal_mtx_);
+      closed_ = true;
+    }
+    not_empty_.notify_all();
+  }
+
+  // Makes the queue usable again after Close, for the next initialization of the runtime.
+  void Reopen() {
+    const std::lock_guard<std::mutex> lock(internal_mtx_);
+    closed_ = false;
+  }
+
+ private:
+  std::deque<RetiredChunk> internal_queue_;
+  std::mutex internal_mtx_;
+  std::condition_variable not_empty_;
+  bool closed_ = false;
+  std::size_t max_pending_;
 };
 
 class FirstAccessQueue {

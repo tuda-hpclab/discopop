@@ -35,6 +35,7 @@ namespace {
 ImmortalStorage<std::unordered_map<char*, int64_t>> cuec_storage;
 ImmortalStorage<FirstAccessQueue> first_access_queue_storage;
 ImmortalStorage<SecondAccessQueue> second_access_queue_storage;
+ImmortalStorage<GarbageQueue> garbage_queue_storage;
 ImmortalStorage<FirstAccessQueueChunkBuffer> first_access_queue_chunk_buffer_storage;
 
 bool immortal_globals_constructed = false;
@@ -73,6 +74,8 @@ FirstAccessQueueChunk* main_thread_access_info_buffer = nullptr;
 FirstAccessQueue& first_access_queue = first_access_queue_storage.value;
 SecondAccessQueue& second_access_queue = second_access_queue_storage.value;
 pthread_t* second_access_queue_worker_thread = nullptr;
+GarbageQueue& garbage_queue = garbage_queue_storage.value;
+pthread_t* cleanup_worker_threads = nullptr;
 FirstAccessQueueChunkBuffer& first_access_queue_chunk_buffer = first_access_queue_chunk_buffer_storage.value;
 
 #define XSTR(x) STR(x)
@@ -86,6 +89,7 @@ int32_t num_workers = 4;  // default number of worker threads (multiple workers
 
 int32_t first_access_queue_chunks_per_worker = kDefaultFirstAccessQueueChunksPerWorker;
 int32_t second_access_queue_elements_per_worker = kDefaultSecondAccessQueueElementsPerWorker;
+int32_t cleanup_workers = kDefaultCleanupWorkers;
 
 AbstractShadow* single_threaded_execution_smem = nullptr;  // used if NUM_WORKERS==0
 
@@ -131,6 +135,7 @@ void ConstructImmortalGlobals() {
   // the limits are scaled by NUM_WORKERS in initParallelization
   first_access_queue_storage.Construct(kDefaultFirstAccessQueueChunksPerWorker);
   second_access_queue_storage.Construct(kDefaultSecondAccessQueueElementsPerWorker);
+  garbage_queue_storage.Construct(kCleanupQueueElementsPerCleanupWorker);
   first_access_queue_chunk_buffer_storage.Construct(10);
   immortal_globals_constructed = true;
 }
@@ -143,6 +148,7 @@ void DestroyImmortalGlobals() {
     return;
   }
   first_access_queue_chunk_buffer_storage.Destroy();
+  garbage_queue_storage.Destroy();
   second_access_queue_storage.Destroy();
   first_access_queue_storage.Destroy();
   cuec_storage.Destroy();

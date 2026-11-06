@@ -40,6 +40,7 @@ target_sources(
   access_queues/test_first_access_queue_chunk_buffer.cpp
   access_queues/test_second_access_queue_element.cpp
   access_queues/test_second_access_queue.cpp
+  access_queues/test_garbage_queue.cpp
   access_queues/test_first_access_queue.cpp
   access_queues/test_integration.cpp
   functions/function_manager/test_function_manager.cpp

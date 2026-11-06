@@ -50,7 +50,10 @@ void ReadRuntimeInfo() {
         value.erase(std::remove_if(value.begin(), value.end(), func), value.end());
 
         std::int32_t int_value = std::atoi(value.c_str());
-        if (int_value > 0) {
+        if (variable.compare("CLEANUP_WORKERS") == 0) {
+          // 0 is a valid value: the consumer of the second access queue frees everything itself
+          cleanup_workers = std::max(int_value, 0);
+        } else if (int_value > 0) {
           if (variable.compare("DP_DEBUG") == 0) {
             dp_debug = true;
           } else if (variable.compare("SIG_ELEM_BIT") == 0) {
@@ -81,6 +84,7 @@ void ReadRuntimeInfo() {
     std::cout << "num_workers  = " << num_workers << "\n";
     std::cout << "faq_chunks_per_worker   = " << first_access_queue_chunks_per_worker << "\n";
     std::cout << "saq_elements_per_worker = " << second_access_queue_elements_per_worker << "\n";
+    std::cout << "cleanup_workers         = " << cleanup_workers << "\n";
     sleep(2);
   }
 
@@ -122,6 +126,15 @@ void InitParallelization() {
   second_access_queue_worker_thread = new pthread_t();
   pthread_create(second_access_queue_worker_thread, &attr, ProcessSecondAccessQueue,
                  reinterpret_cast<void*>(static_cast<std::intptr_t>(num_workers)));
+
+  // create the threads that free what the consumer is done with
+  garbage_queue.Reopen();
+  garbage_queue.SetMaxPending(static_cast<std::size_t>(kCleanupQueueElementsPerCleanupWorker) *
+                              static_cast<std::size_t>(cleanup_workers));
+  cleanup_worker_threads = new pthread_t[cleanup_workers > 0 ? cleanup_workers : 1];
+  for (std::int32_t i = 0; i < cleanup_workers; ++i) {
+    pthread_create(&cleanup_worker_threads[i], &attr, ProcessGarbageQueue, reinterpret_cast<void*>(i));
+  }
 
   pthread_attr_destroy(&attr);
 }
@@ -186,8 +199,15 @@ void FinalizeParallelization() {
     pthread_join(workers[i], nullptr);
   }
   pthread_join(*second_access_queue_worker_thread, nullptr);
+  // the consumer is the only producer of garbage: once it is gone, the cleanup workers finish what is pending
+  garbage_queue.Close();
+  for (std::int32_t i = 0; i < cleanup_workers; ++i) {
+    pthread_join(cleanup_worker_threads[i], nullptr);
+  }
 
   // delete allocated memory
+  delete[] cleanup_worker_threads;
+  cleanup_worker_threads = nullptr;
   delete[] workers;
   delete second_access_queue_worker_thread;
   delete[] num_accesses;
