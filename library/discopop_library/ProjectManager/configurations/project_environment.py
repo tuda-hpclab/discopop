@@ -324,3 +324,61 @@ def migrate_settings_files(project_config_dir: str) -> List[str]:
             + "."
         )
     return messages
+
+
+# Written into DOT_DISCOPOP by every instrumented build: the scope its data was instrumented with, per mode.
+INSTRUMENTED_SCOPE_FILE = "instrumented_scope.json"
+
+
+def record_instrumented_scope(dot_discopop: str, mode: str, scope: str) -> None:
+    """Note that the data of ``mode`` ("dp" or "hd") in ``dot_discopop`` was instrumented with ``scope``
+    (normalized, as stored). Best effort: a failure only costs the stale data warning."""
+    path = os.path.join(dot_discopop, INSTRUMENTED_SCOPE_FILE)
+    try:
+        with open(path, "r") as f:
+            recorded = json.load(f)
+        if not isinstance(recorded, dict):
+            recorded = {}
+    except (OSError, ValueError):
+        recorded = {}
+    recorded[mode] = scope
+    try:
+        with open(path, "w") as f:
+            json.dump(recorded, f, indent=2)
+    except OSError:
+        pass
+
+
+def instrumented_scope(dot_discopop: str, mode: str) -> Optional[str]:
+    """The scope the data of ``mode`` in ``dot_discopop`` was instrumented with; ``None`` if unknown."""
+    try:
+        with open(os.path.join(dot_discopop, INSTRUMENTED_SCOPE_FILE), "r") as f:
+            recorded = json.load(f)
+    except (OSError, ValueError):
+        return None
+    value = recorded.get(mode) if isinstance(recorded, dict) else None
+    return value if isinstance(value, str) else None
+
+
+def stale_scope_message(dot_discopop: str, mode: str, project_root: str, project_config_dir: str) -> Optional[str]:
+    """A message if the data of ``mode`` was instrumented with another scope than the configured one."""
+    recorded = instrumented_scope(dot_discopop, mode)
+    if recorded is None:
+        return None
+    try:
+        configured = normalize_scope(project_root, load_project_environment(project_config_dir).instrumentation_scope)
+    except ProjectEnvironmentError:
+        return None
+    if recorded == configured:
+        return None
+    return (
+        "The "
+        + ("profiling" if mode == "dp" else "hotspot detection")
+        + " data was instrumented with the scope '"
+        + recorded
+        + "', the project's instrumentation scope is now '"
+        + configured
+        + "'. Run the "
+        + mode
+        + " mode again to update it."
+    )

@@ -27,6 +27,8 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     extract_execution_time,
 )
 from discopop_library.ProjectManager.configurations.instrumentation_checks import (
+    DP_SETTINGS,
+    HD_SETTINGS,
     CheckResult,
     check_build,
     check_profiling_run,
@@ -42,6 +44,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     ignored_settings_warning,
     load_project_environment,
     normalize_scope,
+    record_instrumented_scope,
     scope_variable_warning,
 )
 from discopop_library.ProjectManager.configurations.repetitions import (
@@ -235,6 +238,9 @@ def project_environment_of(arguments: ProjectManagerArguments) -> ProjectEnviron
         return ProjectEnvironment(instrumentation_scope=arguments.dp_project_root_dir)
     return load_project_environment(arguments.project_config_dir)
 
+
+# The settings files of the instrumented modes, and the modes' names.
+_INSTRUMENTED_MODES = {DP_SETTINGS: "dp", HD_SETTINGS: "hd"}
 
 # What makes a script that succeeded fail its instrumentation checks.
 INSTRUMENTATION_CHECK_FAILED_RETURN_CODE = 1
@@ -483,6 +489,13 @@ def execute_configuration(
                 my_env[DOT_DISCOPOP_VARIABLE],
                 my_env[SCOPE_VARIABLE],
             )
+            mode = _INSTRUMENTED_MODES.get(settings_name)
+            if mode is not None and not checks.errors:
+                record_instrumented_scope(
+                    my_env[DOT_DISCOPOP_VARIABLE],
+                    mode,
+                    normalize_scope(arguments.project_root, project_environment.instrumentation_scope),
+                )
         elif script_name == "execute.sh":
             checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
     for warning in (ignored_settings_warning(settings, settings_name), scope_variable_warning(script_path, my_env)):
