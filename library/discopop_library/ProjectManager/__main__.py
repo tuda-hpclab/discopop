@@ -101,6 +101,12 @@ def _build_parser() -> ArgumentParser:
                         "string to disable the search even where a configuration enables it. If omitted, each "
                         "configuration's own setting applies.")
 
+    parser.add_argument("--dp-project-root-dir", default=None,
+                        help="Instrumentation scope (DP_PROJECT_ROOT_DIR) for this invocation: only functions defined "
+                        "below this directory are instrumented by the profiler and the hotspot detection. Relative "
+                        "to the project root, which is the default. Overrides the scope stored in "
+                        "project_environment.json.")
+
     parser.add_argument("--log", type=str, default="WARNING", help="Specify log level: DEBUG, INFO, WARNING, ERROR, "
     "CRITICAL")
     parser.add_argument("--write-log", action="store_true", help="Create Logfile.")
@@ -154,6 +160,7 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         execution_time_regex=arguments.execution_time_regex,
         execution_repetitions=arguments.execution_repetitions,
         gui_toolkit=arguments.gui_toolkit,
+        dp_project_root_dir=arguments.dp_project_root_dir,
     )
 
 

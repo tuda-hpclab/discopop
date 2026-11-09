@@ -110,11 +110,16 @@ def toggle(directories: Sequence[str], relative: str) -> List[str]:
     return minimal([directory for directory in current if not _is_below(directory, path)] + [path])
 
 
-def environment_value(directories: Sequence[str], existing: str = "") -> str:
+def environment_value(directories: Sequence[str], existing: str = "", root: Optional[str] = None) -> str:
     """``DP_PROJECT_EXCLUDE_DIRS`` for a build: the entries already set (e.g. in a configuration's settings) and the
-    stored directories, without duplicates."""
+    stored directories, without duplicates. With ``root`` the stored directories are passed as absolute paths below
+    it, as relative entries of the variable are taken relative to ``DP_PROJECT_ROOT_DIR`` (the instrumentation
+    scope), which need not be the project directory."""
+    stored = minimal(directories)
+    if root is not None:
+        stored = [os.path.join(root, *directory.split("/")) for directory in stored]
     entries: List[str] = []
-    for entry in [*existing.split(":"), *minimal(directories)]:
+    for entry in [*existing.split(":"), *stored]:
         if entry and entry not in entries:
             entries.append(entry)
     return ":".join(entries)

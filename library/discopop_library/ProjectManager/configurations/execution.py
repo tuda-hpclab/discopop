@@ -26,6 +26,20 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     TIME_SOURCE_WALL_CLOCK,
     extract_execution_time,
 )
+from discopop_library.ProjectManager.configurations.instrumentation_checks import (
+    CheckResult,
+    check_build,
+    check_profiling_run,
+    take_snapshot,
+)
+from discopop_library.ProjectManager.configurations.project_environment import (
+    DOT_DISCOPOP_VARIABLE,
+    SCOPE_VARIABLE,
+    ProjectEnvironment,
+    build_environment,
+    describe_project_variables,
+    load_project_environment,
+)
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -210,6 +224,33 @@ def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) 
     return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
 
 
+def project_environment_of(arguments: ProjectManagerArguments) -> ProjectEnvironment:
+    """The project environment of the runs of ``arguments``: the stored one, with the scope given on the
+    command line (``--dp-project-root-dir``) in place of the stored one."""
+    if arguments.dp_project_root_dir is not None:
+        return ProjectEnvironment(instrumentation_scope=arguments.dp_project_root_dir)
+    return load_project_environment(arguments.project_config_dir)
+
+
+# What makes a script that succeeded fail its instrumentation checks.
+INSTRUMENTATION_CHECK_FAILED_RETURN_CODE = 1
+
+
+def _apply_instrumentation_checks(outcome: _RunOutcome, checks: CheckResult) -> _RunOutcome:
+    """``outcome`` with the messages of ``checks`` appended to its stderr; a failed check fails it."""
+    messages = checks.messages()
+    if not messages:
+        return outcome
+    for message in messages:
+        logger.warning(message)
+    stderr = outcome.stderr + ("\n" if outcome.stderr and not outcome.stderr.endswith("\n") else "")
+    stderr += "\n".join("DiscoPoP " + message for message in messages) + "\n"
+    returncode = outcome.returncode
+    if checks.errors and returncode == 0:
+        returncode = INSTRUMENTATION_CHECK_FAILED_RETURN_CODE
+    return outcome._replace(stderr=stderr, returncode=returncode)
+
+
 def execute_configuration(
     arguments: ProjectManagerArguments,
     project_copy_root_path: PATH,
@@ -296,18 +337,25 @@ def execute_configuration(
     # The process-wide working directory is deliberately left alone: this function runs in
     # worker threads, and os.chdir would change the directory of every other thread.
     # The script is started with cwd=project_copy_root_path instead (see _run_once).
-    my_env: Dict[str, str] = os.environ.copy()
-    for key in settings:
-        my_env[key] = settings[key]
-    my_env["DP_PROJECT_ROOT_DIR"] = project_copy_root_path
-    # the directories of the project that are no project code (Setup stage), relative to the project directory, so
-    # they hold for the copy as well; entries set in the settings are kept
+    my_env: Dict[str, str] = build_environment(
+        os.environ,
+        settings,
+        project_environment_of(arguments),
+        arguments.project_root,
+        project_copy_root_path,
+        settings_name,
+    )
+    # the directories of the project that are no project code (Setup stage), stored relative to the project
+    # directory: made absolute in the copy, as relative entries of the variable are taken relative to the
+    # instrumentation scope; entries set in the settings are kept
     excluded_directories = load_excluded_directories(arguments.project_dir)
     if excluded_directories:
         my_env[EXCLUDE_DIRECTORIES_VARIABLE] = environment_value(
-            excluded_directories, my_env.get(EXCLUDE_DIRECTORIES_VARIABLE, "")
+            excluded_directories,
+            my_env.get(EXCLUDE_DIRECTORIES_VARIABLE, ""),
+            root=os.path.abspath(project_copy_root_path),
         )
-    my_env["DOT_DISCOPOP"] = project_copy_dp_path
+    logger.info(describe_project_variables(my_env))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
 
     # Ensure the PATH includes the directory where discopop tools are found
@@ -333,6 +381,7 @@ def execute_configuration(
     # for key in my_env:
     #    print("--> ", key, " : ", my_env[key])
 
+    snapshot = take_snapshot(my_env[DOT_DISCOPOP_VARIABLE])
     outcomes: List[_RunOutcome] = []
     for repetition in range(repetitions):
         if repetitions > 1:
@@ -411,6 +460,24 @@ def execute_configuration(
             + str([outcome.time for outcome in usable])
             + ")"
         )
+
+    # An instrumented build or run can succeed without producing what DiscoPoP needs; see instrumentation_checks.
+    if representative.returncode == 0 and not representative.timeout_expired:
+        if script_name.startswith("compile"):
+            checks = check_build(
+                snapshot,
+                settings_name,
+                project_copy_root_path,
+                my_env[DOT_DISCOPOP_VARIABLE],
+                my_env[SCOPE_VARIABLE],
+            )
+        elif script_name == "execute.sh":
+            checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
+        else:
+            checks = CheckResult()
+        representative = _apply_instrumentation_checks(representative, checks)
+        if representative.returncode != 0:
+            time_aggregate = TIME_AGGREGATE_FAILED_RUN
 
     if not store_result:
         return (

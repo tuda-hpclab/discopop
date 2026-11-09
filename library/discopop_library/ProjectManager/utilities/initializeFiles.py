@@ -11,6 +11,7 @@ import os
 from typing import Dict
 import warnings
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.project_environment import write_default_project_environment
 import logging
 
 logger = logging.getLogger("ConfigurationManager")
@@ -64,6 +65,9 @@ def initialize_configuration_files(arguments: ProjectManagerArguments) -> None:
                     f.write(initial_script_content)
                     logger.info("Created configuration file: " + str(file))
                 _make_executable(file)
+
+    # The project wide environment: the instrumentation scope, written so that it can be found and edited
+    write_default_project_environment(arguments.project_config_dir)
 
     # Create configuration-specific files (execute.sh only)
     for configuration_path in [f.path for f in os.scandir(arguments.project_config_dir) if f.is_dir()]:
