@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Optional
 from unittest import mock
 
-from mcp_server.tools import get_project_status
+from discopop_library.ProjectManager.configurations.project_environment import PROJECT_ENVIRONMENT_FILE
+from mcp_server.tools import get_project_status, set_compile_script
 from mcp_server.tools.helpers import COMPILE_SCRIPT_PLACEHOLDER_MARKER, ToolContext
 
 # Analysis outputs are dated this far before the sources (or after them), so the
@@ -158,6 +159,46 @@ class TestGetProjectStatus(unittest.TestCase):
         self.assertIn("boom", data["message"])
         missing = json.loads(get_project_status.handle({"project_path": "/does/not/exist"}, self.ctx)[0].text)
         self.assertEqual(missing["status"], "error")
+
+    def test_an_uninitialized_project_reports_no_instrumentation_scope(self) -> None:
+        data = self.__handle()
+        self.assertNotIn("instrumentation_scope", data)
+        self.assertNotIn("instrumentation_scope_error", data)
+
+    def test_the_instrumentation_scope_is_the_project_root_by_default(self) -> None:
+        self.__set_up()
+        data = self.__handle()
+        self.assertEqual(data["instrumentation_scope"], ".")
+        self.assertNotIn("instrumentation_scope_error", data)
+
+    def test_the_instrumentation_scope_reports_the_scope_set_by_set_compile_script(self) -> None:
+        self.__set_up()
+        (Path(self.project_path) / "src").mkdir()
+        set_compile_script.handle(
+            {
+                "project_path": self.project_path,
+                "script_body": "$CXX $CXXFLAGS main.cpp\n",
+                "instrumentation_scope": "src",
+            },
+            self.ctx,
+        )
+        data = self.__handle()
+        self.assertEqual(data["instrumentation_scope"], "src")
+        self.assertNotIn("instrumentation_scope_error", data)
+
+    def test_the_stored_instrumentation_scope_is_reported_normalized(self) -> None:
+        self.__set_up()
+        self.__write(f"project/configs/{PROJECT_ENVIRONMENT_FILE}", '{"DP_PROJECT_ROOT_DIR": "./src/"}')
+        self.assertEqual(self.__handle()["instrumentation_scope"], "src")
+
+    def test_a_broken_project_environment_is_reported_as_an_error(self) -> None:
+        self.__set_up()
+        self.__write(f"project/configs/{PROJECT_ENVIRONMENT_FILE}", "{not json")
+        data = self.__handle()
+        self.assertNotIn("status", data)
+        self.assertTrue(data["initialized"])
+        self.assertNotIn("instrumentation_scope", data)
+        self.assertIn(PROJECT_ENVIRONMENT_FILE, data["instrumentation_scope_error"])
 
 
 if __name__ == "__main__":

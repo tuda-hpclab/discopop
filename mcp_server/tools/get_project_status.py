@@ -13,6 +13,11 @@ from typing import Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from discopop_library.ProjectManager.configurations.project_environment import (
+    ProjectEnvironmentError,
+    load_project_environment,
+    normalize_scope,
+)
 from mcp_server.tools.gather_data import count_suggestions, next_step_hint
 from mcp_server.tools.helpers import (
     ToolContext,
@@ -116,6 +121,12 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         if result["initialized"]:
             result["compile_script_configured"] = compile_script_configured(configs_dir)
             result["configurations"] = names
+            try:
+                result["instrumentation_scope"] = normalize_scope(
+                    str(project_path), load_project_environment(str(configs_dir)).instrumentation_scope
+                )
+            except ProjectEnvironmentError as error:
+                result["instrumentation_scope_error"] = str(error)
 
         # Results prepared outside of the server (or by an earlier session) are usable without any setup.
         source_mtime = ToolContext.newest_source_mtime(project_path)

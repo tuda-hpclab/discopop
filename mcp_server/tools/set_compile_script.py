@@ -19,6 +19,12 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     get_shared_compile_script_path,
     get_shared_validation_compile_script_path,
 )
+from discopop_library.ProjectManager.configurations.project_environment import (
+    ProjectEnvironment,
+    normalize_scope,
+    save_project_environment,
+    validate_project_environment,
+)
 from discopop_library.ProjectManager.configurations.validation import VALIDATE_SCRIPT_NAME
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 from mcp_server.tools.helpers import (
@@ -74,6 +80,11 @@ TOOL = Tool(
         "configurations that have no validate.sh (see create_execution_configuration). "
         "Without it, validate.sh runs against the execute.sh build. "
         "\n\n"
+        "Pass instrumentation_scope (e.g. 'src') to instrument only the code below that directory "
+        "of the project: for a project that brings third-party libraries along in its tree, "
+        "this shortens profiling runs considerably. It applies to the whole project, independent "
+        "of config_name and purpose. "
+        "\n\n"
         "After setting the compile script, call create_execution_configuration to define "
         "how to run the compiled binary."
     ),
@@ -115,6 +126,14 @@ TOOL = Tool(
                     "compile_validate.sh takes precedence over a per-configuration compile.sh "
                     "override, i.e. the shared one also applies to configurations that have "
                     "their own compile.sh."
+                ),
+            },
+            "instrumentation_scope": {
+                "type": "string",
+                "description": (
+                    "Optional. Directory, relative to the project root, whose code is instrumented by "
+                    "the profiler and the hotspot detection; '.' is the whole project (the default). "
+                    "Omit to keep the current scope."
                 ),
             },
         },
@@ -180,6 +199,16 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         else:
             compile_sh = Path(get_shared_compile_script_path(str(configs_dir)))
 
+        scope_result: Optional[dict[str, Any]] = None
+        scope = arguments.get("instrumentation_scope")
+        if scope is not None:
+            environment = ProjectEnvironment(instrumentation_scope=str(scope))
+            save_project_environment(str(configs_dir), project_path, environment)
+            scope_result = {
+                "scope": normalize_scope(project_path, environment.instrumentation_scope),
+                "warnings": validate_project_environment(project_path, environment),
+            }
+
         write_script_file(str(compile_sh), script_body)
         ctx.log_action(project_path, "set_compile_script", f"Wrote {compile_sh.name} ({len(script_body)} bytes)")
 
@@ -191,6 +220,8 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             result["config_name"] = config_name
         if purpose == "validate":
             result["applies_to"] = __describe_validation_scope(configs_dir, config_name)
+        if scope_result is not None:
+            result["instrumentation_scope"] = scope_result
         result["next_step"] = setup_next_step(configs_dir)
         ctx.log_response("set_compile_script", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]

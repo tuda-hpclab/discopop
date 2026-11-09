@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from typing import Any
 
+from discopop_library.ProjectManager.configurations.project_environment import PROJECT_ENVIRONMENT_FILE
 from mcp_server.tools import set_compile_script
 from mcp_server.tools.helpers import ToolContext
 
@@ -100,6 +101,69 @@ class TestSetCompileScript(unittest.TestCase):
             result = set_compile_script.handle(arguments, self.ctx)
             data = json.loads(result[0].text)
             self.assertEqual(data["status"], "error")
+
+    def _stored_environment(self) -> Any:
+        with open(os.path.join(self.configs_dir, PROJECT_ENVIRONMENT_FILE)) as f:
+            return json.load(f)
+
+    def test_instrumentation_scope_is_stored_relative_to_the_project_root(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        data = self._handle(instrumentation_scope="src")
+        self.assertEqual(data["instrumentation_scope"], {"scope": "src", "warnings": []})
+        self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": "src"})
+
+    def test_absolute_instrumentation_scope_inside_the_project_is_stored_relative(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        data = self._handle(instrumentation_scope=os.path.join(self.project_path, "src"))
+        self.assertEqual(data["instrumentation_scope"], {"scope": "src", "warnings": []})
+        self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": "src"})
+
+    def test_nonexistent_instrumentation_scope_is_stored_with_a_warning(self) -> None:
+        data = self._handle(instrumentation_scope="missing")
+        self.assertEqual(data["instrumentation_scope"]["scope"], "missing")
+        self.assertEqual(len(data["instrumentation_scope"]["warnings"]), 1)
+        self.assertIn("not an existing directory", data["instrumentation_scope"]["warnings"][0])
+        # the scope is stored and the script is still written: the directory may be created by the build
+        self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": "missing"})
+        self.assertTrue(os.path.exists(data["path"]))
+
+    def test_instrumentation_scope_outside_the_project_is_stored_absolute_with_a_warning(self) -> None:
+        outside = os.path.normpath(os.path.join(self.project_path, "..", "outside_scope"))
+        data = self._handle(instrumentation_scope="../outside_scope")
+        self.assertEqual(data["instrumentation_scope"]["scope"], outside)
+        self.assertIn("outside the project root", data["instrumentation_scope"]["warnings"][0])
+        self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": outside})
+
+    def test_omitted_instrumentation_scope_leaves_the_stored_scope_alone(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        stored = os.path.join(self.configs_dir, PROJECT_ENVIRONMENT_FILE)
+        with open(stored, "w") as f:
+            f.write('{"DP_PROJECT_ROOT_DIR": "src"}\n')
+        data = self._handle()
+        self.assertNotIn("instrumentation_scope", data)
+        with open(stored) as f:
+            self.assertEqual(f.read(), '{"DP_PROJECT_ROOT_DIR": "src"}\n')
+
+    def test_omitted_instrumentation_scope_creates_no_environment_file(self) -> None:
+        data = self._handle()
+        self.assertNotIn("instrumentation_scope", data)
+        self.assertFalse(os.path.exists(os.path.join(self.configs_dir, PROJECT_ENVIRONMENT_FILE)))
+
+    def test_instrumentation_scope_with_config_name_is_stored_project_wide(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        data = self._handle(config_name="default", instrumentation_scope="src")
+        self.assertEqual(data["config_name"], "default")
+        self.assertEqual(data["instrumentation_scope"]["scope"], "src")
+        self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": "src"})
+        self.assertFalse(os.path.exists(os.path.join(self.configs_dir, "default", PROJECT_ENVIRONMENT_FILE)))
+
+    def test_instrumentation_scope_with_purpose_validate_is_stored_project_wide(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        data = self._handle(purpose="validate", instrumentation_scope="src")
+        self.assertEqual(data["purpose"], "validate")
+        self.assertEqual(data["instrumentation_scope"]["scope"], "src")
+        self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": "src"})
+        self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "compile_validate.sh")))
 
 
 if __name__ == "__main__":
