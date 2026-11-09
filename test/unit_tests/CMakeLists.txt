@@ -51,6 +51,7 @@ target_sources(
   callback_scope/test_callback_scope.cpp
   runtime_functions/test_runtime_functions.cpp
   runtime_functions/test_single_threaded_execution.cpp
+  runtime_functions/test_slot_analysis.cpp
   runtime_functions/test_read_runtime_info.cpp
   lifecycle/test_runtime_shutdown.cpp
   static_callstate_transitions/call_state/test_call_state.cpp
