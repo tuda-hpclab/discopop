@@ -36,9 +36,13 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     DOT_DISCOPOP_VARIABLE,
     SCOPE_VARIABLE,
     ProjectEnvironment,
+    ProjectEnvironmentError,
     build_environment,
     describe_project_variables,
+    ignored_settings_warning,
     load_project_environment,
+    normalize_scope,
+    scope_variable_warning,
 )
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
@@ -337,10 +341,17 @@ def execute_configuration(
     # The process-wide working directory is deliberately left alone: this function runs in
     # worker threads, and os.chdir would change the directory of every other thread.
     # The script is started with cwd=project_copy_root_path instead (see _run_once).
+    try:
+        project_environment = project_environment_of(arguments)
+    except ProjectEnvironmentError as error:
+        # Reported as a failed run rather than raised: every caller (GUI, command line, MCP, autotuner)
+        # shows a failed script, while not every one of them expects an exception here.
+        logger.error(str(error))
+        return (INSTRUMENTATION_CHECK_FAILED_RETURN_CODE, 0.0, "", "DiscoPoP ERROR: " + str(error) + "\n")
     my_env: Dict[str, str] = build_environment(
         os.environ,
         settings,
-        project_environment_of(arguments),
+        project_environment,
         arguments.project_root,
         project_copy_root_path,
         settings_name,
@@ -462,6 +473,7 @@ def execute_configuration(
         )
 
     # An instrumented build or run can succeed without producing what DiscoPoP needs; see instrumentation_checks.
+    checks = CheckResult()
     if representative.returncode == 0 and not representative.timeout_expired:
         if script_name.startswith("compile"):
             checks = check_build(
@@ -473,11 +485,12 @@ def execute_configuration(
             )
         elif script_name == "execute.sh":
             checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
-        else:
-            checks = CheckResult()
-        representative = _apply_instrumentation_checks(representative, checks)
-        if representative.returncode != 0:
-            time_aggregate = TIME_AGGREGATE_FAILED_RUN
+    for warning in (ignored_settings_warning(settings, settings_name), scope_variable_warning(script_path, my_env)):
+        if warning is not None:
+            checks.warnings.append(warning)
+    representative = _apply_instrumentation_checks(representative, checks)
+    if checks.errors and time_aggregate != TIME_AGGREGATE_FAILED_RUN:
+        time_aggregate = TIME_AGGREGATE_FAILED_RUN
 
     if not store_result:
         return (
@@ -513,6 +526,9 @@ def execute_configuration(
             # recorded but excluded from the choice above.
             "repetition_time_sources": [outcome.time_source for outcome in outcomes],
             "time_aggregate": time_aggregate,
+            # the scope the run was instrumented with, relative to the project root as stored; profiling
+            # results of another scope are stale
+            "instrumentation_scope": normalize_scope(arguments.project_root, project_environment.instrumentation_scope),
         },
     )
     if measurement is not None:

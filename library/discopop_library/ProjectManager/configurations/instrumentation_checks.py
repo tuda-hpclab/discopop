@@ -22,7 +22,7 @@ import glob
 import os
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 
 # Mode of a run, as the name of its settings file tells it.
 DP_SETTINGS = "dp_settings.json"
@@ -44,7 +44,6 @@ class Snapshot:
     """What is known before a script runs."""
 
     started: float
-    instruction_counter: Optional[str]
 
 
 @dataclass
@@ -58,20 +57,38 @@ class CheckResult:
         return ["ERROR: " + e for e in self.errors] + ["WARNING: " + w for w in self.warnings]
 
 
-def _instruction_counter_path(dot_discopop: str) -> str:
-    return os.path.join(dot_discopop, "profiler", "DP_InstructionIDCounter.txt")
-
-
-def _read(path: str) -> Optional[str]:
-    try:
-        with open(path, "r") as f:
-            return f.read().strip()
-    except OSError:
-        return None
+# Touched by take_snapshot; its modification time is when the script started, by the clock of the file
+# system the results are written to.
+START_MARKER = ".script_started"
 
 
 def take_snapshot(dot_discopop: str) -> Snapshot:
-    return Snapshot(started=time.time(), instruction_counter=_read(_instruction_counter_path(dot_discopop)))
+    """The start of a script, as the modification time of a marker in ``dot_discopop``.
+
+    Taken from the file system rather than from this host's clock: on a network file system (NFS, Lustre)
+    the two can differ by more than any sensible slack, and the files the build writes carry the time of
+    the file system. Falls back to the local clock if the marker cannot be written.
+    """
+    marker = os.path.join(dot_discopop, START_MARKER)
+    try:
+        with open(marker, "w") as f:
+            f.write(str(time.time()) + "\n")
+        return Snapshot(started=os.path.getmtime(marker))
+    except OSError:
+        return Snapshot(started=time.time())
+
+
+def file_mapping_covers(dot_discopop: str, scope: str) -> bool:
+    """Whether ``FileMapping.txt`` names a file below ``scope``.
+
+    The passes register every instrumented file there; they decide whether a file belongs to the scope
+    by whether its path contains the scope, which is repeated here.
+    """
+    try:
+        with open(os.path.join(dot_discopop, "FileMapping.txt"), "r", errors="replace") as f:
+            return any(scope in line for line in f)
+    except OSError:
+        return False
 
 
 def _written_since(path: str, since: float) -> bool:
@@ -122,12 +139,14 @@ def check_build(snapshot: Snapshot, settings_name: str, run_root: str, dot_disco
             + ". DOT_DISCOPOP did not reach every compiler call (e.g. the build resets the environment, or "
             "it runs a compiler other than $CC / $CXX), so the data of the build does not fit together."
         )
-    if settings_name == DP_SETTINGS and _read(_instruction_counter_path(dot_discopop)) == snapshot.instruction_counter:
+    if not file_mapping_covers(dot_discopop, scope):
         result.warnings.append(
-            "The build instrumented no code below the instrumentation scope DP_PROJECT_ROOT_DIR="
+            "No instrumented file lies below the instrumentation scope DP_PROJECT_ROOT_DIR="
             + scope
-            + ". Either everything was up to date, or the scope matches none of the compiled files (e.g. the "
-            "build compiles sources outside the run root, as a CMake cache of another directory does)."
+            + " (none is registered in "
+            + os.path.join(dot_discopop, "FileMapping.txt")
+            + "). The scope matches none of the compiled files, or the build compiles sources outside the run "
+            "root (e.g. through a CMake cache of another directory), so nothing will be profiled."
         )
     return result
 

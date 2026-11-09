@@ -30,6 +30,7 @@ discopop_project_manager --init
 
 - `.discopop/project/configs/compile.sh`: a placeholder that prints a hint and exits with `1`, so a run fails until you edit it. It is already executable.
 - `.discopop/project/configs/seq_settings.json`: `{"CC": "clang", "CXX": "clang++", "CFLAGS": "", "CXXFLAGS": ""}`
+- `.discopop/project/configs/project_environment.json`: `{"DP_PROJECT_ROOT_DIR": "."}`, the [instrumentation scope](#instrumentation-scope)
 
 It creates no configuration. You create one by adding a directory with an `execute.sh` below `configs`:
 
@@ -56,6 +57,7 @@ All configurations live below `.discopop/project/configs/`:
 ├── dp_settings.json            # derived from seq_settings.json
 ├── hd_settings.json            # derived from seq_settings.json
 ├── par_settings.json           # derived from seq_settings.json
+├── project_environment.json    # instrumentation scope, see below
 └── <configuration_name>/
     ├── execute.sh              # required: the timed run
     ├── validate.sh             # optional: untimed correctness check
@@ -78,12 +80,35 @@ Every script is executed with the project root as its working directory, so rela
 |---|---|
 | `$CC`, `$CXX` | compiler executables, taken from the settings file of the active mode |
 | `$CFLAGS`, `$CXXFLAGS` | compiler flags, likewise from the settings file |
-| `$DP_PROJECT_ROOT_DIR` | absolute path of the (possibly copied) project root |
-| `$DP_PROJECT_EXCLUDE_DIRS` | the excluded directories of the project (`.discopop/project/excluded_directories.json`, edited in the *Project Setup* stage of the GUI), relative to the project root and separated by `:`, after the entries a settings file may set; only set if there are any |
+| `$DP_RUN_ROOT_DIR` | absolute path of the (possibly copied) project root; use it to refer to the project, e.g. `cmake -S "$DP_RUN_ROOT_DIR" -B build` |
+| `$DP_PROJECT_EXCLUDE_DIRS` | the excluded directories of the project (`.discopop/project/excluded_directories.json`, edited in the *Project Setup* stage of the GUI), as absolute paths inside that root, separated by `:`, after the entries a settings file may set; only set if there are any |
 | `$DOT_DISCOPOP` | absolute path of the `.discopop` directory inside that root |
+| `$DP_PROJECT_ROOT_DIR` | the [instrumentation scope](#instrumentation-scope) inside that root, with a trailing `/`; equal to `$DP_RUN_ROOT_DIR/` unless the scope is narrowed |
 | `$OMP_NUM_THREADS` | thread count of the current run |
 
 Build scripts must use `$CC` / `$CXX` and `$CFLAGS` / `$CXXFLAGS` rather than hard-coded compiler names. The same script is reused for sequential builds, DiscoPoP instrumentation, hotspot detection and parallel builds; only the settings file changes between them. A bare `clang` / `clang++` in the settings is replaced by the highest installed `clang-<N>` / `clang++-<N>` if no unversioned compiler is on the `PATH`.
+
+### Instrumentation scope
+Only functions defined in a file below the instrumentation scope are instrumented, by the profiler and by the hotspot detection; the scope is passed to them as `DP_PROJECT_ROOT_DIR`. By default it is the whole project. For a code that brings third-party libraries along in its tree, narrowing it to the code of interest shortens the instrumented build and, considerably, the profiling run. On Kripke (RAJA, CHAI and Umpire below `tpl/`), the scope `src/` cut the profiling run from 14 s to under one second, with a quarter of the dependencies to analyze.
+
+The scope is stored in `project_environment.json`, relative to the project root, so that it applies to the copies of the project as well:
+
+```json
+{"DP_PROJECT_ROOT_DIR": "src"}
+```
+
+Edit it in the GUI (Editor -> Project environment) or in the file; `--dp-project-root-dir <dir>` overrides it for one invocation. The passes test whether a file's path *contains* the scope, so only one directory can be given; the project manager always passes it as an absolute path with a trailing `/`. A scope outside the project root is possible, but the copies of the project are then not instrumented.
+
+`DP_PROJECT_ROOT_DIR`, `DOT_DISCOPOP` and `DP_RUN_ROOT_DIR` are set by the project manager for every run and cannot be set in a settings file: a value found there is ignored with a warning, and the command line removes it from the settings files. Before the scope could be configured, `$DP_PROJECT_ROOT_DIR` held the project root; a script that uses it that way has to use `$DP_RUN_ROOT_DIR` once the scope is narrowed, and every run of such a script warns about it.
+
+### Checks of instrumented builds and runs
+An instrumented build only produces consistent data if every compiler call gets the same absolute `DOT_DISCOPOP`. Without it, the compiler wrappers fall back to a `.discopop` directory in the current directory, so a build that compiles in several directories (every CMake build) spreads its data over several of them, with file and instruction numbers that do not fit together; the instrumented program then reports success while writing its results nowhere. Therefore, in the `dp` and `hd` modes:
+
+- a build fails if DiscoPoP data was written into a `.discopop` directory below the project other than `$DOT_DISCOPOP` (the build lost the variable on the way to a compiler, e.g. because it resets the environment or runs a compiler other than `$CC` / `$CXX`)
+- a build warns if `FileMapping.txt` names no file below the instrumentation scope (nothing will be profiled)
+- a profiling run (`execute.sh`) fails if it did not write `profiler/dynamic_dependencies.txt` (`dp`) or a `hotspot_detection/private/hotspot_result_*.txt` (`hd`)
+
+The messages are appended to the stderr output of the script.
 
 ### Execution modes
 A run selects one of four modes, each backed by its own settings file:
@@ -270,6 +295,7 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `-tov`, `--timeout-validation` | 3600 | Timeout of each validation in seconds; 0 disables it. |
 | `-xr`, `--execution-repetitions N` | 3 | Repetitions of `execute.sh` in `seq` and `par`; the median is reported. |
 | `-etr`, `--execution-time-regex [RE]` | per configuration | Read the time from the output. Without a value: the `<DP_EXEC_TIME>` tag; `''` disables the search. |
+| `--dp-project-root-dir DIR` | `project_environment.json` | [Instrumentation scope](#instrumentation-scope) for this invocation, relative to the project root. |
 | `-v`, `--verbose` | off | Verbose output. |
 | `--log LEVEL` | `WARNING` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
 | `--write-log` | off | Write a log file. |

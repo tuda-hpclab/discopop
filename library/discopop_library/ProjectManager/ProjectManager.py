@@ -41,7 +41,7 @@ def run(arguments: ProjectManagerArguments) -> None:
             return
 
     if os.path.isdir(arguments.project_config_dir):
-        for message in migrate_settings_files(arguments.project_config_dir, arguments.project_root):
+        for message in migrate_settings_files(arguments.project_config_dir):
             print("NOTE: " + message)
 
     if arguments.gui:

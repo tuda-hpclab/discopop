@@ -31,14 +31,14 @@ into the copies of the project, and resolved per run by :func:`resolve_project_v
 :func:`build_environment` is the single place that stacks the layers of a run's environment.
 
 The variables cannot be set in the settings files (``seq_settings.json`` and the files derived from it):
-:func:`build_environment` rejects them there, and :func:`migrate_settings_files` moves an existing scope
-out of them.
+every run overrides them, :func:`ignored_settings_warning` reports a value found there, and
+:func:`migrate_settings_files` removes them.
 """
 
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 
 PROJECT_ENVIRONMENT_FILE = "project_environment.json"
 
@@ -208,23 +208,9 @@ def build_environment(
     inherited from ``base`` are overridden, so that a run depends on the project files only. What is
     specific to one run (``OMP_NUM_THREADS``, ``PATH``) is up to the caller.
 
-    Raises :class:`ProjectEnvironmentError` if ``settings`` sets one of the project variables: it was
-    ignored by earlier versions, and silently ignoring it again would profile something else than the
-    user asked for.
+    A project variable in ``settings`` is overridden like one inherited from ``base``;
+    :func:`ignored_settings_warning` tells the user about it.
     """
-    reserved = reserved_variables_in(settings)
-    if reserved:
-        raise ProjectEnvironmentError(
-            settings_name
-            + " sets "
-            + ", ".join(reserved)
-            + ", which the project manager sets for every run. Remove them from the settings files; the "
-            "instrumentation scope ("
-            + SCOPE_VARIABLE
-            + ") is configured in "
-            + PROJECT_ENVIRONMENT_FILE
-            + " (GUI: Editor -> Project environment, command line: --dp-project-root-dir)."
-        )
     result: Dict[str, str] = dict(base)
     for key, value in settings.items():
         result[key] = value
@@ -232,25 +218,79 @@ def build_environment(
     return result
 
 
+def ignored_settings_warning(settings: Mapping[str, str], settings_name: str) -> Optional[str]:
+    """A warning if ``settings`` sets project variables, which every run overrides; ``None`` otherwise."""
+    reserved = reserved_variables_in(settings)
+    if not reserved:
+        return None
+    return (
+        settings_name
+        + " sets "
+        + ", ".join(reserved)
+        + ", which the project manager sets for every run; the values in the settings file are ignored. "
+        "Remove them there. The instrumentation scope ("
+        + SCOPE_VARIABLE
+        + ") is configured in "
+        + PROJECT_ENVIRONMENT_FILE
+        + " (GUI: Editor -> Project environment, command line: --dp-project-root-dir)."
+    )
+
+
+def scripts_using_scope_variable(script_paths: Iterable[str]) -> List[str]:
+    """The scripts among ``script_paths`` that mention ``DP_PROJECT_ROOT_DIR``; unreadable ones are skipped.
+
+    Before the scope could be configured, the variable held the project root, and scripts used it as
+    such (``cmake -S "$DP_PROJECT_ROOT_DIR"``). With a narrowed scope they have to use
+    ``DP_RUN_ROOT_DIR`` instead.
+    """
+    found: List[str] = []
+    for path in script_paths:
+        try:
+            with open(path, "r", errors="replace") as f:
+                if SCOPE_VARIABLE in f.read():
+                    found.append(path)
+        except OSError:
+            continue
+    return found
+
+
+def scope_variable_warning(script_path: str, variables: Mapping[str, str]) -> Optional[str]:
+    """A warning if the scope of ``variables`` is narrowed and the script still uses its variable."""
+    run_root = variables.get(RUN_ROOT_VARIABLE, "")
+    if variables.get(SCOPE_VARIABLE, "").rstrip(os.sep) == run_root.rstrip(os.sep):
+        return None
+    if not scripts_using_scope_variable([script_path]):
+        return None
+    return (
+        os.path.basename(script_path)
+        + " uses "
+        + SCOPE_VARIABLE
+        + ", which holds the instrumentation scope "
+        + variables.get(SCOPE_VARIABLE, "")
+        + " rather than the project root. Use "
+        + RUN_ROOT_VARIABLE
+        + " for the root of the project ("
+        + run_root
+        + ")."
+    )
+
+
 def describe_project_variables(variables: Mapping[str, str]) -> str:
     """One line naming the values a run uses, for its log."""
     return "Environment: " + " ".join(name + "=" + variables.get(name, "") for name in RESERVED_VARIABLES)
 
 
-def migrate_settings_files(project_config_dir: str, project_root: str) -> List[str]:
-    """Move the project variables out of the settings files; returns what was done, one message each.
+def migrate_settings_files(project_config_dir: str) -> List[str]:
+    """Remove the project variables from the settings files; returns what was done, one message each.
 
-    A ``DP_PROJECT_ROOT_DIR`` in ``seq_settings.json`` becomes the stored instrumentation scope, unless
-    one is stored already. All other occurrences of the project variables are removed: they were
-    overridden by every run anyway.
+    Every run overrode them, so they never had an effect. A ``DP_PROJECT_ROOT_DIR`` found there is not
+    turned into the instrumentation scope: it may be stale (e.g. the path of an old checkout), and a scope
+    that never applied should not start to apply unasked. The message names it, so that it can be set
+    deliberately.
     """
     messages: List[str] = []
-    stored_path = project_environment_path(project_config_dir)
-    migrated_scope: Optional[str] = None
     for name in SETTINGS_FILES:
         path = os.path.join(project_config_dir, name)
-        if not os.path.exists(path):
-            continue
         try:
             with open(path, "r") as f:
                 settings = json.load(f)
@@ -261,22 +301,21 @@ def migrate_settings_files(project_config_dir: str, project_root: str) -> List[s
         reserved = reserved_variables_in(settings)
         if not reserved:
             continue
-        if name == "seq_settings.json" and SCOPE_VARIABLE in settings and not os.path.exists(stored_path):
-            migrated_scope = str(settings[SCOPE_VARIABLE])
-        for key in reserved:
-            del settings[key]
-        with open(path, "w") as f:
+        removed = ", ".join(key + "=" + str(settings.pop(key)) for key in reserved)
+        temporary = path + ".tmp"
+        with open(temporary, "w") as f:
             json.dump(settings, f, indent=2)
-        messages.append("Removed " + ", ".join(reserved) + " from " + path + " (set by the project manager).")
-    if migrated_scope is not None:
-        save_project_environment(
-            project_config_dir, project_root, ProjectEnvironment(instrumentation_scope=migrated_scope)
-        )
+        os.replace(temporary, path)
         messages.append(
-            "Moved the instrumentation scope "
-            + migrated_scope
-            + " from seq_settings.json to "
-            + stored_path
-            + " (it had no effect there)."
+            "Removed "
+            + removed
+            + " from "
+            + path
+            + ": the project manager sets these variables for every run, the values had no effect. The "
+            "instrumentation scope ("
+            + SCOPE_VARIABLE
+            + ") is configured in "
+            + project_environment_path(project_config_dir)
+            + "."
         )
     return messages
