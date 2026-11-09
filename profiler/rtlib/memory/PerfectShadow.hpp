@@ -32,6 +32,23 @@ struct ShadowSummaryEntry {
   SigElement last_write;
 };
 
+// What a first queue worker hands the second access queue per address of its chunk: the state the chunk leaves
+// behind (as ShadowSummaryEntry) and how many of the chunk's entry accesses, grouped by address in the order of the
+// records, belong to the address. The consumer analyzes them and stores the exit state with one lookup per address.
+struct AddressRecord {
+  std::int64_t addr;
+  SigElement last_read;
+  SigElement last_write;
+  std::uint32_t num_entry_accesses;
+};
+
+// The persistent shadow of the second access queue's consumer: the last read and the last write of an address in one
+// bucket, so that a single lookup serves the analysis and the update of an address. 0 means "no access of this kind".
+struct ShadowSlot {
+  SigElement last_read = 0;
+  SigElement last_write = 0;
+};
+
 class PerfectShadow : public AbstractShadow {
  public:
   PerfectShadow(int /*slot_size*/, int /*size*/, int /*num_hash*/) : PerfectShadow() {}

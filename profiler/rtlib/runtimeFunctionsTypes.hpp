@@ -237,15 +237,16 @@ class FirstAccessQueueChunk {
 
   std::future<std::vector<AccessInfo>*> GetEntryFuture() { return entry_boundary_first_addr_accesses.get_future(); }
 
-  std::future<std::vector<ShadowSummaryEntry>*> GetExitFuture() { return exit_boundary_summary.get_future(); }
+  std::future<std::vector<AddressRecord>*> GetExitFuture() { return exit_boundary_summary.get_future(); }
 
   inline std::vector<AccessInfo>* GetBuffer() { return &buffer_; }
 
   inline std::size_t GetElementCount() const { return element_count_; }
 
+  // grouped by address, in the order of the records of exit_boundary_summary (GroupEntryAccessesByAddress)
   std::promise<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
-  // the state of every address the chunk touched, as its last access left it (PerfectShadow2::Summarize)
-  std::promise<std::vector<ShadowSummaryEntry>*> exit_boundary_summary;
+  // one record per address the chunk touched: the state its last access left, and its number of entry accesses
+  std::promise<std::vector<AddressRecord>*> exit_boundary_summary;
 
  private:
   std::vector<AccessInfo> buffer_;
@@ -256,13 +257,13 @@ class FirstAccessQueueChunk {
 class SecondAccessQueueElement {
  public:
   SecondAccessQueueElement(std::future<std::vector<AccessInfo>*> fut_first_addr_accesses,
-                           std::future<std::vector<ShadowSummaryEntry>*> fut_exit_summary) {
+                           std::future<std::vector<AddressRecord>*> fut_exit_summary) {
     entry_boundary_first_addr_accesses = std::move(fut_first_addr_accesses);
     exit_boundary_summary = std::move(fut_exit_summary);
   }
 
   std::future<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
-  std::future<std::vector<ShadowSummaryEntry>*> exit_boundary_summary;
+  std::future<std::vector<AddressRecord>*> exit_boundary_summary;
 };
 
 class SecondAccessQueue {

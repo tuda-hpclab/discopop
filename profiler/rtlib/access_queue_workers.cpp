@@ -136,12 +136,14 @@ void* ProcessFirstAccessQueue(void* arg) {
           AnalyzeSingleAccess(smem, access);
         }
       }
+      // The second queue needs only the end state of each address, not the shadow, and gets it together with the
+      // entry accesses of the address, so that it looks the address up once: grouping them here, on one of several
+      // workers, takes that work and the freeing of the shadow off the single consumer thread.
+      std::vector<AddressRecord>* records =
+          new std::vector<AddressRecord>(GroupEntryAccessesByAddress(*entry_condition_accesses, *smem));
       // publish the values of the promises in the current chunk
       current->entry_boundary_first_addr_accesses.set_value(entry_condition_accesses);
-      // The second queue needs only the end state of each address, not the shadow: summarizing it here, on one of
-      // several workers, takes the lookups into a large, cache cold shadow (once per entry access, i.e. repeatedly
-      // for an address with several entry LIDs) and the freeing of it off the single consumer thread.
-      current->exit_boundary_summary.set_value(new std::vector<ShadowSummaryEntry>(smem->Summarize()));
+      current->exit_boundary_summary.set_value(records);
       delete smem;
 
       // the thread's dependencies stay in myMap across chunks, deduplicated, and are merged into
@@ -185,7 +187,9 @@ void* ProcessSecondAccessQueue(void* arg) {
   my_map = new DepMap();
 
   SecondAccessQueueElement* current = nullptr;
-  AbstractShadow* smem = new PerfectShadow2();
+  // the last read and the last write of every address in one bucket, see AnalyzeChunkOnSlots
+  HashMap<std::int64_t, ShadowSlot> shadow;
+  shadow.reserve(1024);
 
   while (true) {
     // get chunk from queue
@@ -193,23 +197,11 @@ void* ProcessSecondAccessQueue(void* arg) {
 
     // check if chunk aquired
     if (current) {
-      // check entry boundary conditions for data dependencies
+      // check entry boundary conditions for data dependencies and bring the persistent shadow up to the end state of
+      // the chunk, address by address (the first queue worker skipped the unused entries of its buffer)
       auto promised_first_accesses_vector_ptr = current->entry_boundary_first_addr_accesses.get();
-      for (auto& entry_accesses : *(promised_first_accesses_vector_ptr)) {
-        // ignore unused entries of the vector
-        if (!(entry_accesses.addr || entry_accesses.lid)) {
-          continue;
-        }
-        AnalyzeSingleAccess(smem, entry_accesses);
-      }
-
-      // update persistent SMem with exit boundary conditions (aka merge the local into the persistent shadow memories)
-      std::vector<ShadowSummaryEntry>* promised_exit_summary_ptr = current->exit_boundary_summary.get();
-
-      for (const auto& entry : *promised_exit_summary_ptr) {
-        smem->UpdateInRead(entry.addr, entry.last_read);
-        smem->UpdateInWrite(entry.addr, entry.last_write);
-      }
+      std::vector<AddressRecord>* promised_exit_summary_ptr = current->exit_boundary_summary.get();
+      AnalyzeChunkOnSlots(shadow, *promised_first_accesses_vector_ptr, *promised_exit_summary_ptr);
 
       // cleanup promises
       delete promised_first_accesses_vector_ptr;
@@ -235,7 +227,6 @@ void* ProcessSecondAccessQueue(void* arg) {
     }
   }
 
-  delete smem;
   MergeDeps();
   // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete my_map;
