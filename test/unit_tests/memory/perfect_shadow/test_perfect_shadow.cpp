@@ -792,3 +792,28 @@ TEST_F(PerfectShadow2Test, testPrint) {
   // the table lists one line per read, and takes the write of the same address from the write cache
   ASSERT_NE(output.find("| 4\t| 100\t| 200\t|"), std::string::npos) << output;
 }
+
+TEST_F(PerfectShadow2Test, testSummarize) {
+  auto shadow = dp::PerfectShadow2{};
+  ASSERT_TRUE(shadow.Summarize().empty());
+
+  // 8: read, written, read again; 16: only read; 24: only written; 32: only asked for, as a first queue worker does
+  shadow.InsertToRead(8, 1);
+  shadow.InsertToWrite(8, 2);
+  shadow.InsertToRead(8, 3);
+  shadow.InsertToRead(16, 4);
+  shadow.InsertToRead(16, 5);
+  shadow.InsertToWrite(24, 6);
+  shadow.TestInWrite(32);
+
+  auto summary = shadow.Summarize();
+  std::sort(summary.begin(), summary.end(), [](const auto &lhs, const auto &rhs) { return lhs.addr < rhs.addr; });
+
+  ASSERT_EQ(summary.size(), 4);
+  const std::int64_t expected[4][3] = {{8, 3, 2}, {16, 5, 0}, {24, 0, 6}, {32, 0, 0}};
+  for (std::size_t i = 0; i < 4; ++i) {
+    ASSERT_EQ(summary[i].addr, expected[i][0]);
+    ASSERT_EQ(summary[i].last_read, expected[i][1]);
+    ASSERT_EQ(summary[i].last_write, expected[i][2]);
+  }
+}

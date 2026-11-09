@@ -84,7 +84,7 @@ void* ProcessFirstAccessQueue(void* arg) {
     // check if chunk aquired
     if (current) {
       // process chunk
-      AbstractShadow* smem = new PerfectShadow2();
+      PerfectShadow2* smem = new PerfectShadow2();
       std::vector<AccessInfo>* entry_condition_accesses = new std::vector<AccessInfo>();
       std::unordered_set<DeferredAccess, DeferredAccessHash> already_deferred;
       // Given up once the chunk turns out not to repeat its accesses.
@@ -138,7 +138,11 @@ void* ProcessFirstAccessQueue(void* arg) {
       }
       // publish the values of the promises in the current chunk
       current->entry_boundary_first_addr_accesses.set_value(entry_condition_accesses);
-      current->exit_boundary_smem.set_value(smem);
+      // The second queue needs only the end state of each address, not the shadow: summarizing it here, on one of
+      // several workers, takes the lookups into a large, cache cold shadow (once per entry access, i.e. repeatedly
+      // for an address with several entry LIDs) and the freeing of it off the single consumer thread.
+      current->exit_boundary_summary.set_value(new std::vector<ShadowSummaryEntry>(smem->Summarize()));
+      delete smem;
 
       // the thread's dependencies stay in myMap across chunks, deduplicated, and are merged into
       // allDeps once when the thread ends: merging (and freeing) them per chunk allocated and freed
@@ -200,22 +204,16 @@ void* ProcessSecondAccessQueue(void* arg) {
       }
 
       // update persistent SMem with exit boundary conditions (aka merge the local into the persistent shadow memories)
-      AbstractShadow* promised_last_smem_ptr = current->exit_boundary_smem.get();
+      std::vector<ShadowSummaryEntry>* promised_exit_summary_ptr = current->exit_boundary_summary.get();
 
-      auto sig_read = static_cast<PerfectShadow2*>(promised_last_smem_ptr)->GetSigRead();
-      auto sig_write = static_cast<PerfectShadow2*>(promised_last_smem_ptr)->GetSigWrite();
-
-      // identify required updates to SMem
-      // iterate over addresses to be merged
-      for (auto it = promised_first_accesses_vector_ptr->begin(); it < promised_first_accesses_vector_ptr->end();
-           ++it) {
-        smem->UpdateInRead(it->addr, sig_read->at(it->addr));
-        smem->UpdateInWrite(it->addr, sig_write->at(it->addr));
+      for (const auto& entry : *promised_exit_summary_ptr) {
+        smem->UpdateInRead(entry.addr, entry.last_read);
+        smem->UpdateInWrite(entry.addr, entry.last_write);
       }
 
       // cleanup promises
       delete promised_first_accesses_vector_ptr;
-      delete promised_last_smem_ptr;
+      delete promised_exit_summary_ptr;
 
       delete current;
 
