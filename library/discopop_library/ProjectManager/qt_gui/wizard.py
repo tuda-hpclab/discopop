@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
+from discopop_library.ProjectManager.qt_gui.project_environment_widget import ProjectEnvironmentWidget
 from discopop_library.ProjectManager.services.configurations import (
     WizardData,
     write_seq_settings,
@@ -54,6 +55,7 @@ from discopop_library.ProjectManager.services.wizard import (
 STEP_TITLES = [
     "Welcome",
     "Write Permissions Check",
+    "Instrumentation scope",
     "Compilation Script",
     "Compilation Settings",
     "Test Compilation",
@@ -68,12 +70,13 @@ This wizard will guide you through the steps necessary to create a valid and com
 
 The wizard will help you with:
 
-1. Specifying the compilation script (compile.sh)
-2. Configuring compilation settings (compilers and flags)
-3. Testing the compilation configuration
-4. Reviewing and accepting derived settings files
-5. Specifying the execution script and naming your configuration
-6. Optionally specifying an output validation script (validate.sh), plus a separate
+1. Choosing the instrumentation scope (which directory of the project is instrumented)
+2. Specifying the compilation script (compile.sh)
+3. Configuring compilation settings (compilers and flags)
+4. Testing the compilation configuration
+5. Reviewing and accepting derived settings files
+6. Specifying the execution script and naming your configuration
+7. Optionally specifying an output validation script (validate.sh), plus a separate
    compilation script for it if validation needs a different build
 
 After completing this wizard, your project will be ready to use with DiscoPoP.
@@ -93,6 +96,11 @@ Executions will be limited to "inplace" mode, where the project directory is
 modified directly. Temporary project copies cannot be created.
 
 You can still proceed with the configuration, but keep this limitation in mind."""
+
+SCOPE_TEXT = (
+    "Choose which part of the project is instrumented. The default is the whole project; a narrower directory "
+    "(e.g. src) leaves third-party code out of the profile."
+)
 
 COMPILE_HINT = (
     "Specify the compilation script. It is executed from the project root directory.\n\n"
@@ -215,6 +223,7 @@ class ConfigurationWizard(QWizard):
         self.steps = [
             self._welcome_step(),
             self._write_access_step(),
+            self._instrumentation_scope_step(),
             self._compile_sh_step(),
             self._seq_settings_step(),
             self._test_compilation_step(),
@@ -259,6 +268,23 @@ class ConfigurationWizard(QWizard):
         step.layout().addStretch(1)  # type: ignore[union-attr]
         return step
 
+    def _instrumentation_scope_step(self) -> _Step:
+        self.project_environment_widget = ProjectEnvironmentWidget(
+            self.arguments.project_root, self.arguments.project_config_dir
+        )
+        self.project_environment_widget.load()
+        return self._step(
+            2,
+            _label(SCOPE_TEXT, wrap=True),
+            self.project_environment_widget,
+            on_next=self._leave_instrumentation_scope,
+        )
+
+    def _leave_instrumentation_scope(self) -> bool:
+        if self.project_environment_widget.is_modified():
+            return self.project_environment_widget.save()
+        return True
+
     def _compile_sh_step(self) -> _Step:
         existing = existing_compile_script(self.arguments.project_config_dir)
         self.compile_sh_text: widgets.ScriptEditor
@@ -267,7 +293,7 @@ class ConfigurationWizard(QWizard):
             self.compile_sh_text.set_text(existing)
         else:
             self.compile_sh_text = PlaceholderScriptEditor(COMPILE_PLACEHOLDER)
-        return self._step(2, _label(COMPILE_HINT), self.compile_sh_text, on_next=self._leave_compile_sh)
+        return self._step(3, _label(COMPILE_HINT), self.compile_sh_text, on_next=self._leave_compile_sh)
 
     def _leave_compile_sh(self) -> bool:
         self.step_data.compile_sh = script_text(self.compile_sh_text)
@@ -297,7 +323,7 @@ class ConfigurationWizard(QWizard):
         form_layout.addRow("C Flags (CFLAGS):", self.cflags_entry)
         form_layout.addRow("C++ Flags (CXXFLAGS):", self.cxxflags_entry)
         step = self._step(
-            3,
+            4,
             _label("Configure your compilation settings. These will be used to compile your project."),
             form,
             on_next=self._leave_seq_settings,
@@ -318,7 +344,7 @@ class ConfigurationWizard(QWizard):
         self.test_status_label = QLabel("")
         self.test_output = widgets.OutputConsole()
         step = self._step(
-            4,
+            5,
             _label("Click 'Run Test Compilation' to verify your compilation script works."),
             self.run_test_button,
             self.test_status_label,
@@ -337,7 +363,7 @@ class ConfigurationWizard(QWizard):
         self.test_status_label.setText("Running...")
         widgets.set_label_color(self.test_status_label, widgets.STATUS_BUSY)
         self.run_test_button.setEnabled(False)
-        self.steps[4].set_complete(False)
+        self.steps[5].set_complete(False)
 
         def handle(event: WorkEvent) -> None:
             if not isinstance(event, WorkFinished):
@@ -350,7 +376,7 @@ class ConfigurationWizard(QWizard):
             for line in outcome.output:
                 self.test_output.append_text(line)
             self.run_test_button.setEnabled(True)
-            self.steps[4].set_complete(True)
+            self.steps[5].set_complete(True)
 
         start_work(self, compilation_work(self.arguments), handle)
 
@@ -373,7 +399,7 @@ class ConfigurationWizard(QWizard):
         self.notebook.addTab(self.hd_settings_text, "hd_settings.json")
         self.notebook.addTab(self.par_settings_text, "par_settings.json")
         return self._step(
-            5,
+            6,
             _label("Review and accept the derived settings. You can edit them before continuing."),
             self.notebook,
             on_next=self._leave_derived_settings,
@@ -400,7 +426,7 @@ class ConfigurationWizard(QWizard):
         name_layout.setContentsMargins(0, 0, 0, 0)
         name_layout.addWidget(_label("Configuration Name:"))
         name_layout.addWidget(self.config_name_entry)
-        return self._step(6, name_row, _label(EXECUTE_HINT), self.execute_sh_text, on_next=self._leave_execute_sh)
+        return self._step(7, name_row, _label(EXECUTE_HINT), self.execute_sh_text, on_next=self._leave_execute_sh)
 
     def _leave_execute_sh(self) -> bool:
         config_name = self.config_name_entry.text().strip()
@@ -419,7 +445,7 @@ class ConfigurationWizard(QWizard):
             "compile_validate.sh — only if validation needs a different build",
             widgets.vbox(_label(VALIDATE_COMPILE_HINT), self.validate_compile_sh_text, margins=5),
         )
-        return self._step(7, _label(VALIDATE_HINT), validate_box, validate_compile_box)
+        return self._step(8, _label(VALIDATE_HINT), validate_box, validate_compile_box)
 
     # --- finishing ---
 

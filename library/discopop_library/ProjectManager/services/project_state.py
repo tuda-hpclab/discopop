@@ -47,6 +47,11 @@ class HotspotsChanged:
 
 
 @dataclass(frozen=True)
+class ProjectEnvironmentChanged:
+    """The project environment (the instrumentation scope) was saved."""
+
+
+@dataclass(frozen=True)
 class AutotuningChanged:
     """The autotuner's suggestions, or what it can work on, changed."""
 
