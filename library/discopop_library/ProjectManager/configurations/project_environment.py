@@ -37,6 +37,7 @@ every run overrides them, :func:`ignored_settings_warning` reports a value found
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, Optional
 
@@ -87,7 +88,7 @@ def load_project_environment(project_config_dir: str) -> ProjectEnvironment:
     try:
         with open(path, "r") as f:
             content = json.load(f)
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:  # ValueError: invalid JSON or invalid UTF-8
         raise ProjectEnvironmentError("cannot read " + path + ": " + str(error)) from error
     if not isinstance(content, dict):
         raise ProjectEnvironmentError(path + " has to contain a JSON object")
@@ -236,6 +237,10 @@ def ignored_settings_warning(settings: Mapping[str, str], settings_name: str) ->
     )
 
 
+# The variable as a whole word: $DP_PROJECT_ROOT_DIR and ${DP_PROJECT_ROOT_DIR}, not DP_PROJECT_ROOT_DIR_X.
+_SCOPE_VARIABLE_PATTERN = re.compile(r"\b" + SCOPE_VARIABLE + r"\b")
+
+
 def scripts_using_scope_variable(script_paths: Iterable[str]) -> List[str]:
     """The scripts among ``script_paths`` that mention ``DP_PROJECT_ROOT_DIR``; unreadable ones are skipped.
 
@@ -247,7 +252,7 @@ def scripts_using_scope_variable(script_paths: Iterable[str]) -> List[str]:
     for path in script_paths:
         try:
             with open(path, "r", errors="replace") as f:
-                if SCOPE_VARIABLE in f.read():
+                if _SCOPE_VARIABLE_PATTERN.search(f.read()):
                     found.append(path)
         except OSError:
             continue
