@@ -24,6 +24,14 @@
 
 namespace dp {
 
+// The state one chunk leaves behind for one address: what the second access queue has to write into
+// its persistent shadow once it has analyzed the chunk's entry accesses. 0 means "no access of this kind".
+struct ShadowSummaryEntry {
+  std::int64_t addr;
+  SigElement last_read;
+  SigElement last_write;
+};
+
 class PerfectShadow : public AbstractShadow {
  public:
   PerfectShadow(int /*slot_size*/, int /*size*/, int /*num_hash*/) : PerfectShadow() {}
@@ -198,6 +206,24 @@ class PerfectShadow2 : public AbstractShadow {
     }
 
     return result;
+  }
+
+  // One entry per address of the shadow, in no particular order; 0 for the kind of access an address has no entry for.
+  // In a first queue worker's shadow every address is a key of write_cache_ (the first access to an address asks
+  // TestInWrite, which inserts it), so the second loop finds nothing there.
+  std::vector<ShadowSummaryEntry> Summarize() const {
+    std::vector<ShadowSummaryEntry> summary;
+    summary.reserve(write_cache_.size());
+    for (const auto& write : write_cache_) {
+      const auto read = read_cache_.find(write.first);
+      summary.push_back({write.first, read == read_cache_.end() ? 0 : read->second, write.second});
+    }
+    for (const auto& read : read_cache_) {
+      if (!write_cache_.contains(read.first)) {
+        summary.push_back({read.first, read.second, 0});
+      }
+    }
+    return summary;
   }
 
   const HashMap<int64_t, SigElement>* GetSigRead() const noexcept { return &read_cache_; }
