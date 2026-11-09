@@ -17,9 +17,9 @@ The wrappers build the instrumented version of your sequential program. They cal
 
 1. selects the compiler: the first of `clang-22`, `clang-21`, `clang-20` and `clang-19` found on the `PATH` (with the matching `clang++-<N>` for C++), otherwise a plain `clang` / `clang++`; on macOS also the Homebrew `llvm@<N>` installations. The wrapper stops with an error if no clang 19 to 22 is found;
 2. runs the compiler with your `<arguments>` and the additional flags `-g -O0 -fno-discard-value-names -fPIC`, loads the pass (`-fpass-plugin`), and links `libDiscoPoP_RT.a` and `pthread`. Optimization is therefore always off;
-3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below the project root) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
+3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below `DP_PROJECT_ROOT_DIR`, or below the directory holding `.discopop` if it is not set) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
 
-The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default `.discopop` in the current directory. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
+The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default `.discopop` in the current directory. The pass warns if `DOT_DISCOPOP` is not set or relative: a build that compiles in several directories then spreads its data over several `.discopop` directories that do not fit together. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
 
 {: .note }
 The profiler must be installed without `-e` (`pip install ./profiler`): the wrappers locate the pass and the runtime relative to their own location, and refuse to run from the source tree.
@@ -32,7 +32,7 @@ discopop_cxx example.cpp -o a.out
 ./a.out
 ```
 
-The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. Run the program from the project directory, or set `DOT_DISCOPOP` so that it finds the `.discopop` directory. Afterwards, continue with the [Explorer](Explorer.md).
+The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. Run the program from the project directory, or set `DOT_DISCOPOP` so that it finds the `.discopop` directory; if it cannot create its results there, the program stops at its start with an error and exit code 1. Afterwards, continue with the [Explorer](Explorer.md).
 
 ### Makefile projects
 Pass the wrappers as compilers:

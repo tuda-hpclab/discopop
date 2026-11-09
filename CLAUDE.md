@@ -202,6 +202,11 @@ You can execute a full example by following the steps below. The example should 
 - the extraction lives in `library/discopop_library/ProjectManager/configurations/execution_time.py`; only `execute.sh` call sites pass a pattern, so `compile.sh` / `validate.sh` keep their wall clock times
 - `execution_results.json` entries carry `wall_clock_time` and `time_source` next to `time`; `time` always holds the measurement of interest, so reports, plots, the auto-tuner and the benchmark harnesses need no change
 
+### Project environment (instrumentation scope)
+- every script run of the project manager gets its environment from `build_environment` in `library/discopop_library/ProjectManager/configurations/project_environment.py`: `DP_RUN_ROOT_DIR` (the possibly copied project root, for scripts), `DOT_DISCOPOP` (always `<run root>/.discopop`, absolute) and `DP_PROJECT_ROOT_DIR` (the instrumentation scope, stored relative to the project root in `.discopop/project/configs/project_environment.json`, resolved per run with a trailing `/`; `--dp-project-root-dir` overrides it); the settings files must not set these variables
+- `configurations/instrumentation_checks.py` checks dp/hd runs after the script: a build writing into a `.discopop` other than `$DOT_DISCOPOP` and a profiling run without results fail, a scope without a `FileMapping.txt` entry warns; the scope of instrumented data is recorded in `.discopop/instrumented_scope.json` (stale data warnings in the Qt GUI; for MCP, the mtime of `project_environment.json` counts like a source)
+- see `docs/tools/Project_manager.md`, sections "Instrumentation scope" and "Checks of instrumented builds and runs"
+
 ### Excecute CI Pipeline locally
 To execute the CI pipeline locally, use the following command from the root folder: `scripts/dev/run_ci_locally.sh`.
 - a single matrix entry can be selected with act's `--matrix` filter on its `id`, e.g. `scripts/dev/run_ci_locally.sh --matrix id:ubuntu-24-04-llvm-20`

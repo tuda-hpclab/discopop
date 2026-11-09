@@ -68,16 +68,17 @@ The output of all jobs is shown in one pane below the stages, with one tab per s
 ## Configuration assistant (wizard)
 ![First page of the configuration assistant](../assets/screenshots/gui_wizard.svg)
 
-When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has eight steps:
+When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has nine steps (eight in the Tk version, which has no step for the instrumentation scope):
 
 1. **Welcome**
 2. **Write Permissions Check**: the project is copied to a sibling directory for every run. Without write access to the parent directory, only in-place execution is possible.
-3. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
-4. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
-5. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
-6. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
-7. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
-8. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
+3. **Instrumentation scope**: the directory whose code the profiler and the hotspot detection instrument, by default the whole project; see [Instrumentation scope](Project_manager.md#instrumentation-scope). Narrow it (e.g. to `src`) to leave third-party code bundled with the project out. It is saved when you leave the step, only if you changed it.
+4. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
+5. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
+6. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
+7. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
+8. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
+9. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
 
 After **Finish**, the new configuration is selected and the *Profiling* stage, the first one of the pipeline, opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
 
@@ -111,6 +112,7 @@ The *Configuration Setup* stage edits the scripts of the selected configuration.
 | `compile.sh (override)` | A build script used instead of the shared `compile.sh` for this configuration only. **Add Override** creates it, the button then removes it. |
 | `validate.sh` | Optional correctness check, run separately from `execute.sh`. **Add validate.sh** creates it. |
 | `compile_validate.sh (override)` | Optional build used for `validate.sh` only. |
+| Project environment | Qt version only. The [instrumentation scope](Project_manager.md#instrumentation-scope) of the whole project (not only of the selected configuration), with the resulting `DP_PROJECT_ROOT_DIR` and `DOT_DISCOPOP`. **Browse...** picks a directory below the project root. If the scope is narrowed and scripts still use `$DP_PROJECT_ROOT_DIR` as the project root, they are listed, and **Use DP_RUN_ROOT_DIR in these scripts** rewrites them. Saved with the other sub-tabs; stored in `project_environment.json`. |
 
 The scripts are executed with the project root as working directory and with the environment variables described in [Project manager](Project_manager.md#configuration-directory).
 
@@ -163,6 +165,8 @@ The settings are cards:
 **Run Pattern Detection** (**■ Stop** while it runs) starts the detection. Below the table of suggestions, next to their number, **Browse / Edit Patches…** opens a window in which the patch files of the suggestions can be edited, and **Show Suggestions in VSCode** shows them in VS Code (the `code` command must be on your `PATH`).
 
 The stage shows its results itself. The table lists the suggestions with ID, type, location, function, hotness and pragma; a filter line and a type filter narrow the rows, and the columns can be sorted. For the selected suggestion, the details and the patch are shown below the table, the patch as a colored diff; **Open in VSCode** opens the source file at the loop of the suggestion. The chip shows the number of suggestions, or that none were found. The patch files are in `.discopop/patch_generator/`.
+
+If the profiling data was instrumented with another scope than the project's current [instrumentation scope](Project_manager.md#instrumentation-scope), the chip says *Profiled with another scope* (Qt version); run the *Profiling* stage again to update the data. The chip of the *Hotspots* stage does the same for the `hd` data (*Instrumented with another scope*).
 
 Results are the files described in [Explorer](Explorer.md): `explorer/patterns.json` and the patches in `patch_generator/`.
 
