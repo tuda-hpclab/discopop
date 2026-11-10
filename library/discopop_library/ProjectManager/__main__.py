@@ -53,8 +53,8 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("--init", action="store_true", help="Initialize the .discopop directory in the specified "
     "project path")
     parser.add_argument("--gui", action="store_true", help="Open the graphical configuration manager")
-    parser.add_argument("--gui-toolkit", choices=GUI_TOOLKITS, default="tk", help="The toolkit the window of --gui "
-                        "is drawn with: tk (default) or qt (PySide6).")
+    parser.add_argument("--gui-toolkit", choices=GUI_TOOLKITS, default="qt", help="The toolkit the window of --gui "
+                        "is drawn with: qt (PySide6, default) or tk.")
     parser.add_argument("-x", "--execute", default="tiny", help="Comma separated list of configurations to be "
     "executed. Format: <config_name>[:<mode>][:<thread_count>] . Modes: dp,hd,seq,par. Default: tiny")
     parser.add_argument("-xf", "--execute-full", action="store_true", help="Execute all configurations for validation "

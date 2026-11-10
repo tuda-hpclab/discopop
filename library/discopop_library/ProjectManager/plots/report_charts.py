@@ -30,6 +30,7 @@ always-visible detail panel).
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.plots import interaction, mode_style
@@ -118,6 +119,10 @@ def _format_record_tooltip(record: ExecutionRecord) -> str:
         lines.append(f"Speedup: {record.speedup:.3f}×")
     if record.efficiency is not None:
         lines.append(f"Efficiency: {record.efficiency:.3f}")
+    if record.amdahl_ceiling is not None:
+        lines.append(f"Amdahl ceiling ({record.thread_count} threads): {record.amdahl_ceiling:.3f}×")
+        if record.amdahl_limit is not None and math.isfinite(record.amdahl_limit):
+            lines.append(f"Amdahl limit (unlimited threads): {record.amdahl_limit:.3f}×")
     lines.append(f"Status: {record_status_text(record)}")
     if record.application_failed:
         lines.append(f"Not applied: {record.failed_suggestions if record.failed_suggestions else '(unknown)'}")
@@ -171,7 +176,9 @@ def _setup_record_interaction(figure: Any, on_select: Optional[Callable[[Executi
     interaction.setup_interaction(figure, _format_record_tooltip, on_select)
 
 
-def _config_mode_legends(ax: Any, configs: Sequence[str], modes: Sequence[str], colors: Dict[str, str]) -> None:
+def _config_mode_legends(
+    ax: Any, configs: Sequence[str], modes: Sequence[str], colors: Dict[str, str], extra_handles: Sequence[Any] = ()
+) -> None:
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
@@ -183,6 +190,7 @@ def _config_mode_legends(ax: Any, configs: Sequence[str], modes: Sequence[str], 
         first = ax.legend(handles=config_handles, title="config", loc="upper left", fontsize=mode_style.LEGEND_SIZE)
         mode_style.style_legend(first)
         ax.add_artist(first)
+    mode_handles = list(mode_handles) + list(extra_handles)
     if mode_handles:
         second = ax.legend(handles=mode_handles, title="mode", loc="lower right", fontsize=mode_style.LEGEND_SIZE)
         mode_style.style_legend(second)
@@ -403,4 +411,357 @@ def render_bars(
     mode_style.style_legend(legend)
     _annotate_not_applied(ax, records)
     mode_style.style_axes(ax)
+    _setup_record_interaction(figure, on_select)
+
+
+# ── Amdahl ceilings ───────────────────────────────────────────────────────────
+
+AMDAHL_X_MODES = ("both", "threads", "unlimited")
+
+
+def amdahl_points(
+    records: Sequence[ExecutionRecord],
+    config_filter: Optional[str] = None,
+    valid_only: bool = False,
+) -> Tuple[List[ExecutionRecord], int]:
+    """Records usable in the Amdahl charts, and how many measured records lack a ceiling.
+
+    A record is usable when it was measured, has a speedup and efficiency, and its
+    suggestions' runtime shares are known (``amdahl_ceiling``). The ceiling is an estimate
+    derived from hotspot runtimes, so records without it are counted, not guessed.
+    """
+    rows = [r for r in records if r.config == config_filter or config_filter in (None, "all")]
+    # seq/dp/hd runs apply no suggestions: their "ceiling" is trivially 1 and dp/hd are instrumented runs
+    rows = [r for r in rows if r.mode not in ("seq", "dp", "hd")]
+    rows = [r for r in rows if r.has_measurement and not r.timeout and r.speedup is not None]
+    if valid_only:
+        rows = [r for r in rows if r.valid]
+    usable = [r for r in rows if r.amdahl_ceiling is not None]
+    return usable, len(rows) - len(usable)
+
+
+def _annotate_missing_ceilings(ax: Any, missing: int) -> None:
+    if not missing:
+        return
+    ax.text(
+        0.01,
+        0.01,
+        f"{missing} run(s) not shown: no Amdahl ceiling (hotspot runtimes unknown for their suggestions)",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=mode_style.ANNOTATION_SIZE,
+        color=mode_style.REFERENCE_COLOR,
+    )
+
+
+def render_amdahl_scatter(
+    figure: Any,
+    records: Sequence[ExecutionRecord],
+    x_mode: str = "both",
+    config_filter: Optional[str] = None,
+    valid_only: bool = False,
+    on_select: Optional[Callable[[ExecutionRecord], None]] = None,
+    size_by_efficiency: bool = False,
+) -> None:
+    """Achieved speedup (y) against the Amdahl ceiling (x), with the speedup = ceiling bound.
+
+    ``size_by_efficiency`` turns it into a bubble chart: the marker area encodes the parallel
+    efficiency (speedup per thread), so the third quantity of the 3D chart is readable in 2D while
+    colour stays free for comparing configurations. The unlimited-thread markers keep their point's size.
+
+    ``x_mode``: ``threads`` plots the ceiling for each record's own thread count,
+    ``unlimited`` the ceiling for unlimited threads, ``both`` the first as the point and the
+    second as a light-tinted marker joined to it by a thin line. A point on the dashed diagonal
+    reaches its ceiling; the distance below it is what the parallelization leaves unused.
+    The unlimited ceiling can lie far beyond everything else, so it is clipped to the axis
+    and drawn at the edge with its real value labelled (same marker shape, tinted; hollow means a failed run).
+    """
+    figure.clear()
+    ax = figure.add_subplot(111)
+    usable, missing = amdahl_points(records, config_filter, valid_only)
+    if not usable:
+        _empty(ax, "No runs with an Amdahl ceiling yet")
+        _annotate_missing_ceilings(ax, missing)
+        return
+
+    colors = mode_style.assign_config_colors([r.config for r in records])
+    show_n = x_mode in ("both", "threads")
+    show_limit = x_mode in ("both", "unlimited")
+    heights = [float(r.speedup) for r in usable if r.speedup is not None]
+    bounded = [float(r.amdahl_ceiling) for r in usable if r.amdahl_ceiling is not None]
+    # sized by the measurements and the N-thread ceilings only: the unlimited ceiling can be orders of
+    # magnitude larger and is clipped to the axis edge instead
+    x_right = max(heights + bounded + [1.0]) * 1.15
+
+    def limit_x(r: ExecutionRecord) -> Optional[float]:
+        return None if r.amdahl_limit is None else float(r.amdahl_limit)
+
+    def area(r: ExecutionRecord) -> float:
+        if not size_by_efficiency or r.efficiency is None:
+            return float(mode_style.SCATTER_SIZE)
+        return bubble_area(r.efficiency)
+
+    groups: Dict[Tuple[str, str, bool], List[ExecutionRecord]] = {}
+    for r in usable:
+        groups.setdefault((r.config, r.mode, r.valid), []).append(r)
+    for (config, mode, valid), recs in groups.items():
+        color = colors.get(config, mode_style.CONFIG_PALETTE[0])
+        ys = [float(r.speedup) for r in recs if r.speedup is not None]
+        if show_n:
+            xs = [float(r.amdahl_ceiling) for r in recs if r.amdahl_ceiling is not None]
+            kwargs: Dict[str, Any] = (
+                {"color": color, "edgecolors": "white", "linewidths": 0.6}
+                if valid
+                else {"facecolors": "none", "edgecolors": color, "linewidths": 1.8}
+            )
+            coll = ax.scatter(
+                xs, ys, marker=mode_style.mode_marker(mode), s=[area(r) for r in recs], zorder=3, **kwargs
+            )
+            interaction.attach(coll, recs)
+        if show_limit:
+            lx: List[float] = []
+            ly: List[float] = []
+            lrecs: List[ExecutionRecord] = []
+            clipped: List[bool] = []
+            for r in recs:
+                lim = limit_x(r)
+                if lim is None or r.speedup is None:
+                    continue
+                if show_n and r.amdahl_ceiling is not None:
+                    ax.plot(
+                        [r.amdahl_ceiling, min(lim, x_right)],
+                        [r.speedup, r.speedup],
+                        color=color,
+                        alpha=0.35,
+                        linewidth=1.0,
+                        zorder=1,
+                    )
+                lx.append(min(lim, x_right))
+                ly.append(float(r.speedup))
+                lrecs.append(r)
+                clipped.append(lim > x_right)
+            if lx:
+                # Same marker shape as the point, but a light tint: hollow already means "failed run" here.
+                coll = ax.scatter(
+                    lx,
+                    ly,
+                    marker=mode_style.mode_marker(mode),
+                    facecolors=color,
+                    edgecolors=color,
+                    alpha=0.35,
+                    linewidths=1.0,
+                    s=[area(r) * 0.7 for r in lrecs],
+                    zorder=2,
+                    clip_on=False,
+                )
+                interaction.attach(coll, lrecs)
+            for x, y, rec, is_clipped in zip(lx, ly, lrecs, clipped):
+                if is_clipped and rec.amdahl_limit is not None:
+                    # the marker sits at the axis edge; say where the limit really is
+                    ax.annotate(
+                        f"→ {rec.amdahl_limit:.0f}×",
+                        (x, y),
+                        xytext=(-6, 6),
+                        textcoords="offset points",
+                        ha="right",
+                        fontsize=mode_style.ANNOTATION_SIZE,
+                        color=color,
+                    )
+
+    diagonal = [0.0, x_right]
+    ax.plot(diagonal, diagonal, color=mode_style.REFERENCE_COLOR, linestyle="--", linewidth=1.2, zorder=0)
+    ax.annotate(
+        "speedup = ceiling",
+        xy=(x_right, x_right),
+        xytext=(-4, -12),
+        textcoords="offset points",
+        ha="right",
+        fontsize=mode_style.ANNOTATION_SIZE,
+        color=mode_style.REFERENCE_COLOR,
+    )
+    x_label = {
+        "both": "Amdahl ceiling × (filled: record's threads, light: unlimited threads)",
+        "threads": "Amdahl ceiling × (record's thread count)",
+        "unlimited": "Amdahl ceiling × (unlimited threads)",
+    }.get(x_mode, "Amdahl ceiling ×")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Achieved speedup ×")
+    ax.set_xlim(0, x_right)
+    ax.set_ylim(0, x_right)
+    from matplotlib.lines import Line2D
+
+    extra: List[Any] = []
+    if show_limit:
+        extra.append(
+            Line2D([], [], marker="o", color="0.35", alpha=0.35, linestyle="None", label="ceiling, unlimited threads")
+        )
+    if size_by_efficiency:
+        extra += [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                color="0.35",
+                linestyle="None",
+                markersize=bubble_area(e) ** 0.5,
+                label=f"efficiency {e:g}",
+            )
+            for e in (0.25, 0.5, 1.0)
+        ]
+    _config_mode_legends(ax, sorted({r.config for r in usable}), sorted({r.mode for r in usable}), colors, extra)
+    _annotate_missing_ceilings(ax, missing)
+    mode_style.style_axes(ax)
+    _setup_record_interaction(figure, on_select)
+
+
+def bubble_area(efficiency: float) -> float:
+    """Marker area (points^2) for a parallel efficiency: grows with it, never vanishes, capped for outliers."""
+    return 40.0 + 360.0 * max(0.0, min(efficiency, 1.2))
+
+
+# camera presets of the 3D chart: name -> (elevation, azimuth). "free" keeps whatever the user rotated to.
+AMDAHL_3D_VIEWS: Dict[str, Tuple[float, float]] = {
+    "free": (22.0, -60.0),
+    "front": (0.0, -90.0),  # ceiling horizontal, speedup vertical: reads like the 2D chart
+    "side": (0.0, 0.0),  # efficiency horizontal, speedup vertical
+    "top": (90.0, -90.0),  # ceiling horizontal, efficiency vertical
+}
+
+# Efficiency axis default: 0 to 1 plus headroom. A run above 1 (superlinear) extends it and is ringed:
+# an outlier is exceptional behaviour, so it must stay visible rather than be clipped away.
+EFFICIENCY_HEADROOM_TOP = 1.1
+
+
+def render_amdahl_3d(
+    figure: Any,
+    records: Sequence[ExecutionRecord],
+    config_filter: Optional[str] = None,
+    valid_only: bool = False,
+    view: str = "free",
+    on_select: Optional[Callable[[ExecutionRecord], None]] = None,
+    keep_camera: bool = True,
+) -> None:
+    """Amdahl ceiling (x, record's thread count), efficiency (y) and speedup (z) in one 3D scatter.
+
+    Only the ceiling for the record's own thread count is used: efficiency is speedup per
+    thread, so the matching ceiling is the one for the same thread count.
+
+    Reading aids: a thin stem drops from each point to the floor (z = 0), a translucent plane marks
+    speedup = ceiling (points below it leave headroom), and ``view`` selects a camera preset
+    (``AMDAHL_3D_VIEWS``; ``free`` keeps the user's rotation across refreshes). Hover and click work as in
+    the 2D charts: matplotlib cannot pick 3D artists, so ``interaction`` projects the points itself.
+    Failed runs are hollow, as everywhere. All axes start at 0; efficiency spans 0 to 1.1 unless a run
+    exceeds 1, in which case the axis grows to include it and the run is ringed. Every render recomputes
+    the axis limits from the *visible* points (``valid_only`` hides failed runs), so a re-render fits the
+    view; ``keep_camera=False`` additionally discards a ``free`` rotation (the GUI's "Fit view").
+    """
+    from mpl_toolkits.mplot3d import Axes3D  # type: ignore[import-untyped]  # noqa: F401  registers the 3d projection
+
+    previous = figure.axes[0] if figure.axes else None
+    previous_camera = (
+        (previous.elev, previous.azim)
+        if keep_camera
+        and previous is not None
+        and previous.name == "3d"
+        and getattr(figure, "_amdahl3d_view", None) == "free"
+        else None
+    )
+    figure.clear()
+    usable, missing = amdahl_points(records, config_filter, valid_only)
+    usable = [r for r in usable if r.efficiency is not None]
+    if not usable:
+        ax2 = figure.add_subplot(111)
+        _empty(ax2, "No runs with an Amdahl ceiling yet")
+        _annotate_missing_ceilings(ax2, missing)
+        return
+
+    ax = figure.add_subplot(111, projection="3d")
+    figure._amdahl3d_view = view
+    elev, azim = AMDAHL_3D_VIEWS.get(view, AMDAHL_3D_VIEWS["free"])
+    if view == "free" and previous_camera is not None:
+        elev, azim = previous_camera
+    ax.view_init(elev=elev, azim=azim)
+
+    x_top = max(float(r.amdahl_ceiling) for r in usable if r.amdahl_ceiling is not None) * 1.1
+    z_top = max([float(r.speedup) for r in usable if r.speedup is not None] + [1.0]) * 1.1
+    y_top = max(EFFICIENCY_HEADROOM_TOP, max(float(r.efficiency) for r in usable if r.efficiency is not None) * 1.05)
+    ax.set_xlim(0, x_top)
+    ax.set_ylim(0, y_top)
+    ax.set_zlim(0, z_top)
+
+    # speedup = ceiling plane (only where it lies inside the box)
+    plane_x = min(x_top, z_top)
+    import numpy as np
+
+    gx = np.array([[0.0, plane_x], [0.0, plane_x]])
+    gy = np.array([[0.0, 0.0], [y_top, y_top]])
+    ax.plot_surface(gx, gy, gx, color=mode_style.REFERENCE_COLOR, alpha=0.12, shade=False, linewidth=0)
+
+    colors = mode_style.assign_config_colors([r.config for r in records])
+    groups: Dict[Tuple[str, str, bool], List[ExecutionRecord]] = {}
+    for r in usable:
+        groups.setdefault((r.config, r.mode, r.valid), []).append(r)
+    superlinear: List[ExecutionRecord] = []
+    for (config, mode, valid), recs in groups.items():
+        color = colors.get(config, mode_style.CONFIG_PALETTE[0])
+        xs = [float(r.amdahl_ceiling) for r in recs if r.amdahl_ceiling is not None]
+        ys = [float(r.efficiency) for r in recs if r.efficiency is not None]
+        zs = [float(r.speedup) for r in recs if r.speedup is not None]
+        # stems to the floor, one NaN-separated line per group
+        stem_x, stem_y, stem_z = [], [], []
+        for x, y, z in zip(xs, ys, zs):
+            stem_x += [x, x, float("nan")]
+            stem_y += [y, y, float("nan")]
+            stem_z += [0.0, z, float("nan")]
+        ax.plot(stem_x, stem_y, stem_z, color=color, alpha=0.35, linewidth=0.8)
+        kwargs: Dict[str, Any] = (
+            {"color": color, "edgecolors": "white", "linewidths": 0.6}
+            if valid
+            else {"facecolors": "none", "edgecolors": color, "linewidths": 1.5}
+        )
+        coll = ax.scatter(
+            xs, ys, zs, marker=mode_style.mode_marker(mode), s=mode_style.SCATTER_SIZE, depthshade=False, **kwargs
+        )
+        interaction.attach(coll, recs)
+        interaction.attach_points3d(coll, xs, ys, zs)
+        superlinear += [r for r in recs if r.efficiency is not None and r.efficiency > 1.0]
+    if superlinear:
+        ax.scatter(
+            [float(r.amdahl_ceiling) for r in superlinear if r.amdahl_ceiling is not None],
+            [float(r.efficiency) for r in superlinear if r.efficiency is not None],
+            [float(r.speedup) for r in superlinear if r.speedup is not None],
+            s=mode_style.SCATTER_SIZE * 3,
+            facecolors="none",
+            edgecolors="black",
+            linewidths=1.2,
+            depthshade=False,
+        )
+    ax.set_xlabel("Amdahl ceiling ×")
+    ax.set_ylabel("Efficiency")
+    ax.set_zlabel("Speedup ×")
+    # legend: configs (colour), modes (marker shape) and the reference plane
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    handles: List[Any] = [Patch(facecolor=colors[c], label=c) for c in sorted({r.config for r in usable})]
+    handles += [
+        Line2D([], [], marker=mode_style.mode_marker(m), color="0.35", linestyle="None", label=m)
+        for m in sorted({r.mode for r in usable})
+    ]
+    handles.append(Patch(facecolor=mode_style.REFERENCE_COLOR, alpha=0.3, label="speedup = ceiling"))
+    mode_style.style_legend(ax.legend(handles=handles, loc="upper left", fontsize=mode_style.LEGEND_SIZE))
+    notes = []
+    if missing:
+        notes.append(f"{missing} run(s) not shown: no Amdahl ceiling")
+    if superlinear:
+        notes.append(f"{len(superlinear)} run(s) ringed: efficiency > 1 (axis extended)")
+    if notes:
+        figure.text(
+            0.01,
+            0.01,
+            "; ".join(notes),
+            fontsize=mode_style.ANNOTATION_SIZE,
+            color=mode_style.REFERENCE_COLOR,
+        )
     _setup_record_interaction(figure, on_select)

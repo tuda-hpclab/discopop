@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from unittest import mock
 
 import pytest
+from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import widgets
@@ -56,8 +57,10 @@ def write_results(panel: ReportPanel) -> None:
 def test_without_results_the_table_is_empty_and_no_report_can_be_generated(panel: ReportPanel) -> None:
     assert panel.table.rowCount() == 0
     assert not panel.generate_report_button.isEnabled() and not panel.view_report_button.isEnabled()
-    # the default scatter tab is open next to the table
-    assert [panel.notebook.tabText(i) for i in range(panel.notebook.count())] == ["Table", "Scatter 1"]
+    # one chart of every type is open next to the table, the first of them shown
+    titles = [panel.notebook.tabText(i) for i in range(panel.notebook.count())]
+    assert titles[:3] == ["Table", "Scatter 1", "Scaling 2"] and len(titles) == 1 + len(report_panel.PLOT_TYPES)
+    assert panel.notebook.currentIndex() == 1
 
 
 def test_results_changed_refreshes_the_table(panel: ReportPanel) -> None:
@@ -73,13 +76,12 @@ def test_results_changed_refreshes_the_table(panel: ReportPanel) -> None:
 
 def test_chart_tabs_are_added_from_the_menu_and_closed(panel: ReportPanel) -> None:
     write_results(panel)
+    opened = len(panel.plot_tabs)
     tab = panel.add_plot("scaling")
-    assert panel.notebook.tabText(2) == "Scaling 2" and panel.notebook.currentWidget() is tab.widget
+    assert panel.notebook.currentWidget() is tab.widget and len(panel.plot_tabs) == opened + 1
     tab.combos["metric"].setCurrentText("runtime")  # re-renders without an error
-    for plot_type in ("spbars", "rtbars"):
-        panel.add_plot(plot_type)
     panel.notebook.tabCloseRequested.emit(2)
-    assert len(panel.plot_tabs) == 3 and panel.notebook.count() == 4
+    assert len(panel.plot_tabs) == opened and panel.notebook.count() == opened + 1
     # the table cannot be closed
     panel.notebook.tabCloseRequested.emit(0)
     assert panel.notebook.tabText(0) == "Table"
@@ -138,3 +140,16 @@ def test_reset_asks_first_and_publishes_results_changed(panel: ReportPanel, dial
     panel.reset_results_button.click()
     assert panel.table.rowCount() == 0
     assert panel.status.text() == "Execution results reset successfully"
+
+
+def test_3d_tab_has_hide_failed_and_fit_view(panel: ReportPanel) -> None:
+    write_results(panel)
+    tab = panel.add_plot("amdahl3d")
+    assert "valid_only" in tab.checks and tab.checks["valid_only"].text() == "Hide failed"
+    # failed runs are hidden by default on every Amdahl chart
+    for plot_type in ("amdahl", "amdahl_bubble", "amdahl3d"):
+        assert panel.add_plot(plot_type).checks["valid_only"].isChecked()
+    tab.checks["valid_only"].setChecked(False)  # re-renders without an error
+    buttons = {b.text() for b in tab.widget.findChildren(QPushButton)}
+    assert "Fit view" in buttons
+    next(b for b in tab.widget.findChildren(QPushButton) if b.text() == "Fit view").click()

@@ -257,3 +257,16 @@ def test_ordinary_entries_default_to_applied() -> None:
     records = parse_execution_results(_sample_results())
     assert all(not r.application_failed for r in records)
     assert all(r.has_measurement for r in records)
+
+
+def test_records_get_amdahl_bounds_from_regions() -> None:
+    from discopop_library.Amdahl.model import SuggestionRegion
+
+    data = _sample_results()
+    regions = {3: SuggestionRegion(3, 1, 1, 9, 0.5), 7: SuggestionRegion(7, 1, 20, 30, 0.25)}
+    par = [r for r in parse_execution_results(data, regions) if r.mode == "par" and r.applied_suggestions == [3, 7]]
+    assert par and par[0].parallel_fraction == 0.75
+    assert par[0].amdahl_limit == 4.0
+    assert par[0].amdahl_ceiling == 1 / (0.25 + 0.75 / par[0].thread_count)
+    # without regions nothing is claimed
+    assert all(r.amdahl_ceiling is None for r in parse_execution_results(data))

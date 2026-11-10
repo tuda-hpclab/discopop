@@ -56,9 +56,9 @@ def test_the_toolkit_is_chosen_on_the_command_line(monkeypatch: pytest.MonkeyPat
     from discopop_library.ProjectManager.__main__ import parse_args
 
     monkeypatch.setattr(sys, "argv", ["discopop_project_manager", "--gui", "-p", str(tmp_path)])
-    assert parse_args().gui_toolkit == "tk"
-    monkeypatch.setattr(sys, "argv", ["discopop_project_manager", "--gui", "--gui-toolkit", "qt", "-p", str(tmp_path)])
     assert parse_args().gui_toolkit == "qt"
+    monkeypatch.setattr(sys, "argv", ["discopop_project_manager", "--gui", "--gui-toolkit", "tk", "-p", str(tmp_path)])
+    assert parse_args().gui_toolkit == "tk"
 
 
 def test_tab_host(qtbot: QtBot, tmp_path: Path) -> None:

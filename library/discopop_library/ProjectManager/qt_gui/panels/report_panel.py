@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from discopop_library.Amdahl.model import SuggestionRegion
+from discopop_library.Amdahl.regions import load_regions
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.plots import mode_style, report_charts
 from discopop_library.ProjectManager.plots.data import ExecutionRecord, parse_execution_results
@@ -59,6 +61,9 @@ PLOT_TYPES: Dict[str, Dict[str, str]] = {
     "scaling": {"label": "Thread scaling", "stem": "Scaling"},
     "spbars": {"label": "Speedup / efficiency bars", "stem": "Bars"},
     "rtbars": {"label": "Runtime bars", "stem": "Runtime"},
+    "amdahl": {"label": "Speedup vs. Amdahl ceiling", "stem": "Amdahl"},
+    "amdahl_bubble": {"label": "Amdahl bubble chart (size = efficiency)", "stem": "Amdahl bubbles"},
+    "amdahl3d": {"label": "Amdahl ceiling / efficiency / speedup (3D)", "stem": "Amdahl 3D"},
 }
 
 TABLE_COLUMNS = (
@@ -73,6 +78,8 @@ TABLE_COLUMNS = (
     "Time",
     "Speedup",
     "Efficiency",
+    "Amdahl ceiling",
+    "Amdahl limit",
 )
 
 _NOT_APPLIED_BG = "#f3e6f7"
@@ -99,9 +106,25 @@ def load_execution_records(project_dir: str) -> List[ExecutionRecord]:
         return []
     try:
         with open(path, "r") as f:
-            return parse_execution_results(json.load(f))
+            data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
+    return parse_execution_results(data, _load_regions(project_dir))
+
+
+def _load_regions(project_dir: str) -> Optional[Dict[int, SuggestionRegion]]:
+    """Suggestion runtime shares for the Amdahl ceilings; None if they cannot be derived."""
+    try:
+        # execution_results.json lives in <.discopop>/project
+        return load_regions(os.path.dirname(os.path.normpath(project_dir))) or None
+    except Exception:  # noqa: BLE001 -- the report must work without the ceilings
+        return None
+
+
+def _limit_text(limit: Optional[float]) -> str:
+    if limit is None:
+        return "-"
+    return "unbounded" if limit == float("inf") else str(round(limit, 3))
 
 
 def record_fields(record: ExecutionRecord) -> List[tuple[str, str]]:
@@ -120,6 +143,11 @@ def record_fields(record: ExecutionRecord) -> List[tuple[str, str]]:
         fields.append(("Speedup", f"{record.speedup:.3f}×"))
     if record.efficiency is not None:
         fields.append(("Efficiency", f"{record.efficiency:.3f}"))
+    if record.amdahl_ceiling is not None:
+        fields.append(("Amdahl ceiling", f"{record.amdahl_ceiling:.3f}× ({record.thread_count} threads)"))
+        limit = record.amdahl_limit
+        fields.append(("Amdahl limit", "unbounded" if limit is None or limit == float("inf") else f"{limit:.3f}×"))
+        fields.append(("Parallel fraction", f"{record.parallel_fraction:.3f} (estimate)"))
     fields.append(("Script", record.script))
     fields.append(("Label", record.label or "(unnamed)"))
     return fields
@@ -189,8 +217,10 @@ class ReportPanel(Panel):
         layout.addWidget(self.notebook, 1)
 
         project_state.subscribe(ResultsChanged, lambda _event: self.update_display())
-        # open with a trade-off scatter shown by default
-        self.add_plot("pareto")
+        # open with one chart of every type; more can be added from the "+" menu
+        for plot_type in PLOT_TYPES:
+            self.add_plot(plot_type)
+        self.notebook.setCurrentIndex(1)  # the first chart, not whichever was added last
         self.update_display()
 
     # ── the table ───────────────────────────────────────────────────────────
@@ -255,6 +285,8 @@ class ReportPanel(Panel):
                 str(record.time) if record.has_measurement else "-",
                 "-" if record.speedup is None else str(round(record.speedup, 3)),
                 "-" if record.efficiency is None else str(round(record.efficiency, 3)),
+                "-" if record.amdahl_ceiling is None else str(round(record.amdahl_ceiling, 3)),
+                _limit_text(record.amdahl_limit),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -326,10 +358,25 @@ class ReportPanel(Panel):
             add_combo("Metric", "metric", ["speedup", "runtime", "efficiency"], "speedup")
             add_combo("Config", "config", configs, "all")
             add_check("Ideal", "ideal", True)
+        elif tab.plot_type in ("amdahl", "amdahl_bubble"):
+            add_combo("Ceiling", "x_mode", list(report_charts.AMDAHL_X_MODES), "both")
+            add_combo("Config", "config", configs, "all")
+            add_check("Hide failed", "valid_only", True)
+        elif tab.plot_type == "amdahl3d":
+            add_combo("View", "view", list(report_charts.AMDAHL_3D_VIEWS), "free")
+            add_combo("Config", "config", configs, "all")
+            add_check("Hide failed", "valid_only", True)
+            fit = widgets.create_button(
+                "Fit view",
+                lambda: self._render(tab, reset_camera=True),
+                tooltip="Resize all axes to the visible points and reset the camera to the selected view "
+                "(undoes zooming and rotating)",
+            )
+            items.extend([fit, 8])
         # the bar charts have a fixed metric (spbars: speedup, rtbars: runtime) and no controls
         return widgets.hbox(*items, None)
 
-    def _render(self, tab: PlotTab) -> None:
+    def _render(self, tab: PlotTab, reset_camera: bool = False) -> None:
         records = [record for record in self.records() if record.script == "execute.sh"]
         on_select = functools.partial(self._on_record_selected, tab)
         combos, checks = tab.combos, tab.checks
@@ -352,6 +399,26 @@ class ReportPanel(Panel):
                 config_filter=combos["config"].currentText(),
                 show_ideal=checks["ideal"].isChecked(),
                 on_select=on_select,
+            )
+        elif tab.plot_type in ("amdahl", "amdahl_bubble"):
+            report_charts.render_amdahl_scatter(
+                tab.figure,
+                records,
+                x_mode=combos["x_mode"].currentText(),
+                config_filter=combos["config"].currentText(),
+                valid_only=checks["valid_only"].isChecked(),
+                on_select=on_select,
+                size_by_efficiency=tab.plot_type == "amdahl_bubble",
+            )
+        elif tab.plot_type == "amdahl3d":
+            report_charts.render_amdahl_3d(
+                tab.figure,
+                records,
+                config_filter=combos["config"].currentText(),
+                valid_only=checks["valid_only"].isChecked(),
+                view=combos["view"].currentText(),
+                on_select=on_select,
+                keep_camera=not reset_camera,
             )
         elif tab.plot_type == "spbars":
             report_charts.render_bars(tab.figure, records, metric="speedup", on_select=on_select)

@@ -8,7 +8,7 @@
 
 from typing import Any, Dict, List
 
-from discopop_library.ProjectManager.plots.autotuning_chart import ProgressModel
+from discopop_library.ProjectManager.plots.autotuning_chart import ProgressModel, render
 
 
 def _greedy_events() -> List[Dict[str, Any]]:
@@ -185,3 +185,49 @@ def test_failed_suggestions_alone_marks_a_measurement_as_not_applied() -> None:
     del event["application_failed"]
     model = ProgressModel.from_events([event])
     assert model.measurements[0].status == "not_applied"
+
+
+def Any_ax(figure: Any) -> Any:
+    return figure.axes[0]
+
+
+def _ceiling_event(index: int, speedup: float, ceiling: Any, limit: Any) -> Dict[str, Any]:
+    return {
+        "event": "measurement",
+        "index": index,
+        "suggestions": [index],
+        "runtime": 1.0,
+        "return_code": 0,
+        "valid": True,
+        "tsan": True,
+        "speedup": speedup,
+        "amdahl_ceiling": ceiling,
+        "amdahl_limit": limit,
+    }
+
+
+def test_amdahl_overlay_draws_both_ceilings_and_skips_unknown() -> None:
+    from matplotlib.figure import Figure
+
+    events = [{"event": "baseline", "runtime": 4.0, "valid": True, "thread_count": 4}]
+    events += [_ceiling_event(1, 1.5, 2.0, 100.0), _ceiling_event(2, 2.0, None, None), _ceiling_event(3, 2.5, 3.0, 8.0)]
+    model = ProgressModel.from_events(events)
+    figure = Figure()
+    render(figure, model)
+    ax: Any = figure.axes[0]
+    labels = [line.get_label() for line in ax.get_lines()]
+    assert "Amdahl ceiling (4 threads)" in labels and "Amdahl ceiling (unlimited threads)" in labels
+    ceiling_line = next(line for line in ax.get_lines() if line.get_label() == "Amdahl ceiling (4 threads)")
+    assert list(ceiling_line.get_xdata()) == [1.0, 3.0]
+    # the 100x limit must not set the axis range
+    assert ax.get_ylim()[1] < 10
+    assert dict(model.summary_tiles())["Amdahl ceiling (N / ∞)"] == "3.00× / 8.00×"
+
+
+def test_no_amdahl_data_leaves_plot_as_before() -> None:
+    from matplotlib.figure import Figure
+
+    model = ProgressModel.from_events([{"event": "baseline", "thread_count": 4}, _ceiling_event(1, 1.5, None, None)])
+    figure = Figure()
+    render(figure, model)
+    assert all("Amdahl" not in line.get_label() for line in Any_ax(figure).get_lines())

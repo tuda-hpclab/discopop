@@ -25,6 +25,7 @@ from matplotlib.backends.backend_pdf import PdfPages  # type: ignore
 
 from discopop_library.ProjectManager.reports.execution_time_full import generate_execution_time_report_full
 from discopop_library.ProjectManager.reports.speedup import generate_speedup_report
+from discopop_library.ProjectManager.reports.amdahl import generate_amdahl_report
 
 logger = logging.getLogger("ProjectManager")
 
@@ -48,6 +49,7 @@ def generate_full_report(arguments: ProjectManagerArguments) -> None:
     generate_execution_time_report(arguments, timestamp)
     generate_speedup_report(arguments, timestamp)
     generate_efficiency_report(arguments, timestamp)
+    generate_amdahl_report(arguments, timestamp)
 
     # setup PDF creation
     report_path = os.path.join(arguments.project_dir, "reports", timestamp, "full_report.pdf")
