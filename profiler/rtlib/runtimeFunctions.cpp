@@ -77,6 +77,17 @@ void ReadRuntimeInfo() {
       delete substrings;
     }
   }
+  // the environment takes precedence over dp.conf
+  if (const char* const cache_mb = std::getenv("DP_BB_REPORT_CACHE_MB"); cache_mb != nullptr) {
+    char* end = nullptr;
+    const long value = std::strtol(cache_mb, &end, 10);
+    if (end != cache_mb && *end == '\0' && value >= 0 && value <= INT32_MAX) {
+      bb_report_cache_mb = static_cast<std::int32_t>(value);
+    } else {
+      std::cerr << "DiscoPoP: warning: ignoring DP_BB_REPORT_CACHE_MB=" << cache_mb
+                << ", which is not a number of MiB\n";
+    }
+  }
   if (dp_debug) {
     std::cout << "sig_elem_bit = " << sig_elem_bit << "\n";
     std::cout << "sig_num_elem = " << sig_num_elem << "\n";
