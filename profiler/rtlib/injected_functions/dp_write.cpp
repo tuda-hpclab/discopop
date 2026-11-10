@@ -46,10 +46,12 @@ void __dp_write(LID lid, ADDR addr, const char* var) {
   // For tracking function call or invoke
   function_manager->ResetCall(lid);
 
+#ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
   if (dp_debug) {
     std::cout << "instStore at encoded LID " << std::dec << dputil::DecodeLid(lid) << " and addr " << std::hex << addr
               << std::endl;
   }
+#endif
 
 #if defined DP_NUM_WORKERS && DP_NUM_WORKERS == 0
   AccessInfo current;

@@ -80,10 +80,12 @@ class FunctionManager {
     }
     ++func_stack_level_;
 
+#ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
     if (dp_debug) {
       std::cout << "Entering function LID " << std::dec << dputil::DecodeLid(current_lid) << std::endl;
       std::cout << "Function stack level = " << std::dec << func_stack_level_ << std::endl;
     }
+#endif
 
     begin_funcs_[CallSite{last_call_or_invoke_, last_call_instruction_}].insert(current_lid);
   }

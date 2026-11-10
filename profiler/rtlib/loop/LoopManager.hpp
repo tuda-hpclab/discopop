@@ -38,9 +38,11 @@ class LoopManager {
     if (loops_.find(begin_line) == loops_.end()) {
       loops_.insert(std::pair<LID, LoopRecord*>(begin_line, new LoopRecord(0, 0, 0)));
     }
+#ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
     if (dp_debug) {
       std::cout << "(" << std::dec << function_level << ")Loop " << loop_id << " enters." << std::endl;
     }
+#endif
   }
 
   // The entry of the loop on top of the stack is its next iteration, unless it is made from a deeper function level:
@@ -52,11 +54,13 @@ class LoopManager {
 
   void IterateLoop(const std::int32_t /*function_level*/) {
     loop_stack_.IncrementTopCount();
+#ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
     if (dp_debug) {
       std::cout << "(" << std::dec << loop_stack_.Top().func_level << ")";
       std::cout << "Loop " << loop_stack_.Top().loop_id << " iterates " << loop_stack_.Top().GetCount() << " times."
                 << std::endl;
     }
+#endif
   }
 
   void CleanFunctionExit(const std::int32_t function_level, const LID end_line) {
