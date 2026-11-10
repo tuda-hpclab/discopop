@@ -126,7 +126,8 @@ extern int32_t num_workers;
 extern int32_t first_access_queue_chunks_per_worker;
 extern int32_t second_access_queue_elements_per_worker;
 // allowance of the caches in front of the recorded basic block reports in MiB, adjustable via dp.conf
-// (BB_REPORT_CACHE_MB, 0 turns the caches off), see ReportedBBRecorder
+// (BB_REPORT_CACHE_MB) and the environment variable DP_BB_REPORT_CACHE_MB, which takes precedence (0 turns the
+// caches off), see ReportedBBRecorder
 constexpr int kDefaultBbReportCacheMb = 50;
 extern int32_t bb_report_cache_mb;
 

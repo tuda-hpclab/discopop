@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <sys/stat.h>
@@ -28,6 +29,8 @@ protected:
     previous_sig_num_hash = sig_num_hash;
     previous_num_workers = num_workers;
     previous_use_perfect = use_perfect;
+    previous_bb_report_cache_mb = bb_report_cache_mb;
+    unsetenv("DP_BB_REPORT_CACHE_MB");
 
     configuration_path = dputil::GetExeDir() + "/dp.conf";
 
@@ -49,6 +52,8 @@ protected:
     sig_num_hash = previous_sig_num_hash;
     num_workers = previous_num_workers;
     use_perfect = previous_use_perfect;
+    bb_report_cache_mb = previous_bb_report_cache_mb;
+    unsetenv("DP_BB_REPORT_CACHE_MB");
   }
 
   void write_configuration(const std::string &contents) const {
@@ -64,7 +69,25 @@ private:
   std::int32_t previous_sig_num_hash = 0;
   std::int32_t previous_num_workers = 0;
   bool previous_use_perfect = true;
+  std::int32_t previous_bb_report_cache_mb = 0;
 };
+
+// the allowance of the basic block report caches: dp.conf, overridden by the environment; 0 turns the caches off
+TEST_F(ReadRuntimeInfoTest, testTheReportCacheAllowanceComesFromTheConfigurationOrTheEnvironment) {
+  bb_report_cache_mb = kDefaultBbReportCacheMb;
+  write_configuration("BB_REPORT_CACHE_MB = 0\n");
+  ReadRuntimeInfo();
+  EXPECT_EQ(bb_report_cache_mb, 0);
+
+  write_configuration("BB_REPORT_CACHE_MB = 20\n");
+  setenv("DP_BB_REPORT_CACHE_MB", "300", 1);
+  ReadRuntimeInfo();
+  EXPECT_EQ(bb_report_cache_mb, 300);
+
+  setenv("DP_BB_REPORT_CACHE_MB", "lots", 1);  // ignored, with a warning
+  ReadRuntimeInfo();
+  EXPECT_EQ(bb_report_cache_mb, 20);
+}
 
 TEST_F(ReadRuntimeInfoTest, testWithoutAConfigurationTheDefaultsAreKept) {
   sig_elem_bit = 56;
