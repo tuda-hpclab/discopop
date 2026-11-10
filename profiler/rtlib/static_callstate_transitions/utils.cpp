@@ -68,18 +68,23 @@ CallState* GetTransitionTargetWithFallthrough(CallState* state, int32_t instruct
 }
 }  // namespace
 
+void SetCurrentCallpathState(CallState* state) {
+  current_callpath_state = state;
+  current_callpath_state_id = state == nullptr ? 0 : static_cast<std::uint32_t>(state->GetId());
+}
+
 void UpdateCallstate(int32_t instruction_id) {
   if (!callstate_owner || callstate_hot.frozen) {
     return;
   }
   CallState* transition_target = GetTransitionTargetWithFallthrough(current_callpath_state, instruction_id);
   if (transition_target) {
-    current_callpath_state = transition_target;
+    SetCurrentCallpathState(transition_target);
   }
 }
 
 void ResetCallstateTracking(CallState* initial_state) {
-  current_callpath_state = initial_state;
+  SetCurrentCallpathState(initial_state);
   if (!callstate_hot_constructed) {
     callstate_hot_storage.Construct();
     callstate_hot_constructed = true;
@@ -148,7 +153,7 @@ void EnterFunctionForCallstate(int32_t function_entry_id) {
     target = call_state_graph->GetFunctionEntryState(function_entry_id);
   }
   if (target) {
-    current_callpath_state = target;
+    SetCurrentCallpathState(target);
     callstate_hot.frozen = false;
   } else {
     // the state of the entered function is unknown: keep the caller's state, do not transition
@@ -161,7 +166,7 @@ void LeaveFunctionForCallstate() {
   if (!callstate_owner || callstate_hot.frames.empty()) {
     return;
   }
-  current_callpath_state = callstate_hot.frames.back().caller_state;
+  SetCurrentCallpathState(callstate_hot.frames.back().caller_state);
   callstate_hot.frozen = callstate_hot.frames.back().caller_frozen;
   callstate_hot.frames.pop_back();
 }
