@@ -45,7 +45,7 @@ These options are compiled into the profiler and affect all programs instrumente
 | Option | Default | Description |
 |---|---|---|
 | `DP_NUM_WORKERS` | not set (the runtime uses 4) | Number of worker threads of the runtime library that analyze the memory accesses during profiling. `0` disables the worker threads. Can be changed per program without rebuilding via `NUM_WORKERS` in [`dp.conf`](./environment_variables.md#runtime-settings-dpconf). |
-| `DP_HYBRID_PROFILING` | `1` | Hybrid profiling: the static analysis of the LLVM pass omits instrumentation that is not needed. `0` instruments everything and slows down the profiling. With it, the runtime keeps a cache of 512 bytes per callpath state in which a reporting basic block executes (a few MB, e.g. 4.6 MB for LULESH and 9.2 MB for miniFE). |
+| `DP_HYBRID_PROFILING` | `1` | Hybrid profiling: the static analysis of the LLVM pass omits instrumentation that is not needed. `0` instruments everything and slows down the profiling. With it, the runtime keeps caches of the reported basic block executions, bounded by `BB_REPORT_CACHE_MB` in [dp.conf](./environment_variables.md#runtime-settings-dpconf). |
 | `DP_BRANCH_TRACKING` | `0` | Adds instrumentation that counts the taken branches (used by the optimizer). Slows down the profiling. |
 | `DP_PTHREAD_COMPATIBILITY_MODE` | `0` | `1` serializes the calls to the runtime functions. Set it if the profiled application uses Pthreads. Slows down the profiling. |
 
