@@ -61,7 +61,7 @@ void __dp_init() {
   // hybrid analysis
   all_deps = new DepMap();
   out_put_deps = new StringDepMap();
-  bb_list = new ReportedBBRecorder();
+  bb_list = new ReportedBBRecorder(static_cast<std::size_t>(bb_report_cache_mb) << 20);
   // End HA
 
   // This is the first thing to run in an instrumented program, so it is also where the output

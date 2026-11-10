@@ -160,6 +160,55 @@ TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsExecutionsThatShareACacheEntry
   EXPECT_EQ(recorder.GetExecutions(), expected);
 }
 
+// The caches in front of the recorder's table are bounded by their allowance: without caches, with room for a
+// single table (every new state discards the cache of the previous one) and with room for a few tables, every
+// distinct execution is still recorded exactly once.
+TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsEveryExecutionWithinASmallCacheAllowance) {
+  for (const std::size_t cache_bytes : {std::size_t{0}, std::size_t{2000}, std::size_t{5000}}) {
+    dp::ReportedBBRecorder recorder(cache_bytes);
+    dp::ReportedBBSet expected;
+    for (int round = 0; round < 3; ++round) {
+      for (std::uint32_t sink_state = 0; sink_state < 300; sink_state += 7) {
+        for (std::uint32_t bb_index = 0; bb_index < 130; bb_index += 3) {
+          for (const std::uint32_t source_state : {std::uint32_t{1}, sink_state % 5}) {
+            recorder.Record(bb_index, source_state, sink_state);
+            expected.insert(dp::ReportedBB{bb_index, source_state, sink_state});
+          }
+        }
+      }
+    }
+    EXPECT_EQ(recorder.size(), expected.size()) << cache_bytes;
+    EXPECT_EQ(recorder.GetExecutions(), expected) << cache_bytes;
+    EXPECT_LE(recorder.CacheBytes(), cache_bytes);
+  }
+}
+
+// room for one table: a state whose cache was discarded must not find the entries of the state that took it over
+TEST_F(HybridAnalysisBBDepsTest, testRecorderForgetsTheCacheOfAStateThatWasDiscarded) {
+  dp::ReportedBBRecorder recorder(600);
+  recorder.Record(5, 1, 0);
+  recorder.Record(5, 2, 1);  // takes the only table over from state 0
+  recorder.Record(5, 2, 0);  // new for state 0, although the table holds block 5 with source state 2
+
+  EXPECT_EQ(recorder.GetExecutions(), (dp::ReportedBBSet{{5, 1, 0}, {5, 2, 1}, {5, 2, 0}}));
+}
+
+TEST_F(HybridAnalysisBBDepsTest, testRecorderCachesNeverExceedTheirAllowance) {
+  for (const std::size_t allowance : {std::size_t{600}, std::size_t{1} << 14, std::size_t{1} << 20}) {
+    dp::ReportedBBRecorder recorder(allowance);
+    for (std::uint32_t sink_state = 0; sink_state < 200000; sink_state += 13) {
+      recorder.Record(sink_state % 100, 0, sink_state);
+      ASSERT_LE(recorder.CacheBytes(), allowance) << allowance << " " << sink_state;
+    }
+  }
+  dp::ReportedBBRecorder recorder;
+  for (std::uint32_t sink_state = 0; sink_state < 20000; ++sink_state) {
+    recorder.Record(3, 0, sink_state);
+  }
+  EXPECT_LE(recorder.CacheBytes(), dp::ReportedBBRecorder::kDefaultCacheBytes);
+  EXPECT_GT(recorder.CacheBytes(), 20000u * 512);  // below the default allowance, every state has a table
+}
+
 TEST_F(HybridAnalysisBBDepsTest, testMergeAddsStatesToSinkAndSource) {
   const std::vector<const char *> strings = {"0=36 NOM RAW 38|s(S2),35 NOM RAW 34|t(S4)"};
   const dp::ReportedBBSet reported = {dp::ReportedBB{0, 29, 27}};
