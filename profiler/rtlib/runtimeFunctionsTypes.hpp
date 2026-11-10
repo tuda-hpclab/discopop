@@ -224,12 +224,14 @@ class ReportedBBRecorder {
   static std::string CachesOffWarning(std::size_t cache_bytes, std::size_t state_ids) {
     const std::size_t minimum_mb =
         (state_ids * sizeof(CacheEntry*) + kBytesPerTable + (std::size_t{1} << 20) - 1) >> 20;
-    return "DiscoPoP: warning: the caches of the basic block reports are turned off (BB_REPORT_CACHE_MB=" +
-           std::to_string(cache_bytes >> 20) + " in dp.conf; the program has " + std::to_string(state_ids) +
-           " callpath states, the caches need " + std::to_string(minimum_mb) +
-           " MiB at least), which slows down the profiling. To turn them on, set BB_REPORT_CACHE_MB=" +
-           std::to_string(RecommendedCacheMb(state_ids)) +
-           " (MiB, an estimate) in the file dp.conf next to the executable; the caches may take that much memory.\n";
+    const std::string recommended = std::to_string(RecommendedCacheMb(state_ids));
+    return "DiscoPoP: warning: the caches of the basic block reports are turned off: the program has " +
+           std::to_string(state_ids) + " callpath states, for which they need " + std::to_string(minimum_mb) +
+           " MiB at least, but their allowance is " + std::to_string(cache_bytes >> 20) +
+           " MiB. This slows down the profiling. To turn them on, set the allowance to " + recommended +
+           " MiB (an estimate; the caches may take that much memory): BB_REPORT_CACHE_MB=" + recommended +
+           " in the file dp.conf next to the executable, or the environment variable DP_BB_REPORT_CACHE_MB=" +
+           recommended + ", which takes precedence.\n";
   }
 
   inline void Record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
