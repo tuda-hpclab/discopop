@@ -52,7 +52,7 @@ The runtime library of the profiler reads the file `dp.conf` from the directory 
 | `SIG_NUM_ELEM` | 270000 | Signature memory: number of elements. |
 | `SIG_NUM_HASH` | 2 | Signature memory: number of hash functions. |
 | `USE_PERFECT` | 1 (enabled) | Perfect instead of signature-based shadow memory. |
-| `DP_DEBUG` | off | Any positive value prints the settings at start (followed by a pause of two seconds) and enables debug output of the runtime. |
+| `DP_DEBUG` | off | Any positive value prints the settings at start (followed by a pause of two seconds) and enables debug output of the runtime. The output for every memory access, function entry and exit and loop iteration needs a runtime built with the [build option](./build_options.md#development-and-debugging) `DP_DEBUG`. |
 
 Example `dp.conf` for eight workers:
 
