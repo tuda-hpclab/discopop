@@ -159,15 +159,22 @@ void CallStateGraph::RegisterStateFunction(std::int32_t call_state_id, std::int3
 void CallStateGraph::RegisterFunctionEntryState(std::int32_t function_entry_id, std::int32_t call_state_id) {
   CallState* state = GetOrRegisterNode(call_state_id);
   state->SetFunctionEntryId(function_entry_id);
-  function_entry_states_[function_entry_id] = state;
+  if (function_entry_id < 0) {
+    return;  // no instruction has a negative id
+  }
+  const auto index = static_cast<std::size_t>(function_entry_id);
+  if (index >= function_entry_states_.size()) {
+    function_entry_states_.resize(index + 1, nullptr);
+  }
+  function_entry_states_[index] = state;
 }
 
 CallState* CallStateGraph::GetFunctionEntryState(std::int32_t function_entry_id) {
-  auto pos = function_entry_states_.find(function_entry_id);
-  if (pos == function_entry_states_.end()) {
+  const auto index = static_cast<std::size_t>(function_entry_id);
+  if (function_entry_id < 0 || index >= function_entry_states_.size()) {
     return nullptr;
   }
-  return pos->second;
+  return function_entry_states_[index];
 }
 
 CallStateGraph::~CallStateGraph() {
