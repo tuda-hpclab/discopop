@@ -24,6 +24,8 @@
 
 namespace dp {
 
+constinit thread_local int32_t pending_call_instruction = 0;
+
 namespace {
 // the callpath state of a caller, restored when the entered function is left
 struct CallstateFrame {
@@ -35,8 +37,6 @@ struct CallstateFrame {
 
 // only the thread which initialized the callpath state tracking changes the state
 thread_local bool callstate_owner = false;
-// instruction id of the latest call of this thread which has not entered an instrumented function yet
-thread_local int32_t pending_call_instruction = 0;
 // the following are used by the owner thread only. They are written on every function entry and
 // exit, so they get cache lines of their own: sharing one with a global the worker threads read
 // for every dependency (e.g. DP_DEBUG in addDep, which a different link layout put next to
@@ -129,7 +129,6 @@ void InitializeCurrentCallpathState() {
   ResetCallstateTracking(call_state_graph->GetOrRegisterNode(current_callpath_state_id));
 }
 
-void RegisterCallForCallstate(int32_t instruction_id) { pending_call_instruction = instruction_id; }
 
 void EnterFunctionForCallstate(int32_t function_entry_id) {
   const int32_t call_instruction = pending_call_instruction;
