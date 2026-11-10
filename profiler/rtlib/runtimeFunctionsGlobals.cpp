@@ -86,12 +86,14 @@ int32_t num_workers = 4;  // default number of worker threads (multiple workers
 
 int32_t first_access_queue_chunks_per_worker = kDefaultFirstAccessQueueChunksPerWorker;
 int32_t second_access_queue_elements_per_worker = kDefaultSecondAccessQueueElementsPerWorker;
+int32_t bb_report_cache_mb = kDefaultBbReportCacheMb;
 
 AbstractShadow* single_threaded_execution_smem = nullptr;  // used if NUM_WORKERS==0
 
 thread_local DepMap* my_map = nullptr;
 
 CallState* current_callpath_state = nullptr;
+std::uint32_t current_callpath_state_id = 0;
 CallStateGraph* call_state_graph;
 
 // statistics

@@ -12,6 +12,7 @@
 
 #include "CallStateGraph.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -159,15 +160,22 @@ void CallStateGraph::RegisterStateFunction(std::int32_t call_state_id, std::int3
 void CallStateGraph::RegisterFunctionEntryState(std::int32_t function_entry_id, std::int32_t call_state_id) {
   CallState* state = GetOrRegisterNode(call_state_id);
   state->SetFunctionEntryId(function_entry_id);
-  function_entry_states_[function_entry_id] = state;
+  if (function_entry_id < 0) {
+    return;  // no instruction has a negative id
+  }
+  const auto index = static_cast<std::size_t>(function_entry_id);
+  if (index >= function_entry_states_.size()) {
+    function_entry_states_.resize(index + 1, nullptr);
+  }
+  function_entry_states_[index] = state;
 }
 
 CallState* CallStateGraph::GetFunctionEntryState(std::int32_t function_entry_id) {
-  auto pos = function_entry_states_.find(function_entry_id);
-  if (pos == function_entry_states_.end()) {
+  const auto index = static_cast<std::size_t>(function_entry_id);
+  if (function_entry_id < 0 || index >= function_entry_states_.size()) {
     return nullptr;
   }
-  return pos->second;
+  return function_entry_states_[index];
 }
 
 CallStateGraph::~CallStateGraph() {
@@ -183,6 +191,16 @@ CallStateGraph::~CallStateGraph() {
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[~CallStateGraph()]: " << (static_cast<double>(duration.count()) / 1000.0) << "s" << std::endl;
 #endif
+}
+
+std::size_t CallStateGraph::StateIdBound() const {
+  std::size_t bound = 0;
+  for (const auto& node : node_map_) {
+    if (node.first >= 0) {
+      bound = std::max(bound, static_cast<std::size_t>(node.first) + 1);
+    }
+  }
+  return bound;
 }
 
 CallState* CallStateGraph::GetOrRegisterNode(std::int32_t call_state_id) {

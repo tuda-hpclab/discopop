@@ -24,6 +24,8 @@
 
 namespace dp {
 
+constinit thread_local int32_t pending_call_instruction = 0;
+
 namespace {
 // the callpath state of a caller, restored when the entered function is left
 struct CallstateFrame {
@@ -35,8 +37,6 @@ struct CallstateFrame {
 
 // only the thread which initialized the callpath state tracking changes the state
 thread_local bool callstate_owner = false;
-// instruction id of the latest call of this thread which has not entered an instrumented function yet
-thread_local int32_t pending_call_instruction = 0;
 // the following are used by the owner thread only. They are written on every function entry and
 // exit, so they get cache lines of their own: sharing one with a global the worker threads read
 // for every dependency (e.g. DP_DEBUG in addDep, which a different link layout put next to
@@ -68,18 +68,23 @@ CallState* GetTransitionTargetWithFallthrough(CallState* state, int32_t instruct
 }
 }  // namespace
 
+void SetCurrentCallpathState(CallState* state) {
+  current_callpath_state = state;
+  current_callpath_state_id = state == nullptr ? 0 : static_cast<std::uint32_t>(state->GetId());
+}
+
 void UpdateCallstate(int32_t instruction_id) {
   if (!callstate_owner || callstate_hot.frozen) {
     return;
   }
   CallState* transition_target = GetTransitionTargetWithFallthrough(current_callpath_state, instruction_id);
   if (transition_target) {
-    current_callpath_state = transition_target;
+    SetCurrentCallpathState(transition_target);
   }
 }
 
 void ResetCallstateTracking(CallState* initial_state) {
-  current_callpath_state = initial_state;
+  SetCurrentCallpathState(initial_state);
   if (!callstate_hot_constructed) {
     callstate_hot_storage.Construct();
     callstate_hot_constructed = true;
@@ -124,7 +129,6 @@ void InitializeCurrentCallpathState() {
   ResetCallstateTracking(call_state_graph->GetOrRegisterNode(current_callpath_state_id));
 }
 
-void RegisterCallForCallstate(int32_t instruction_id) { pending_call_instruction = instruction_id; }
 
 void EnterFunctionForCallstate(int32_t function_entry_id) {
   const int32_t call_instruction = pending_call_instruction;
@@ -148,7 +152,7 @@ void EnterFunctionForCallstate(int32_t function_entry_id) {
     target = call_state_graph->GetFunctionEntryState(function_entry_id);
   }
   if (target) {
-    current_callpath_state = target;
+    SetCurrentCallpathState(target);
     callstate_hot.frozen = false;
   } else {
     // the state of the entered function is unknown: keep the caller's state, do not transition
@@ -161,7 +165,7 @@ void LeaveFunctionForCallstate() {
   if (!callstate_owner || callstate_hot.frames.empty()) {
     return;
   }
-  current_callpath_state = callstate_hot.frames.back().caller_state;
+  SetCurrentCallpathState(callstate_hot.frames.back().caller_state);
   callstate_hot.frozen = callstate_hot.frames.back().caller_frozen;
   callstate_hot.frames.pop_back();
 }

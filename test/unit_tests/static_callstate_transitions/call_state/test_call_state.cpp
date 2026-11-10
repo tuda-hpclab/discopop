@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include "static_callstate_transitions/CallState.hpp"
 
 class CallStateTest : public ::testing::Test {};
@@ -153,4 +155,26 @@ TEST_F(CallStateTest, testLookingUpAnUnknownTriggerDoesNotAddIt) {
 
   EXPECT_EQ(source.GetTransitionTarget(10), &target);
   EXPECT_EQ(source.GetTransitionTarget(11), nullptr);
+}
+
+TEST_F(CallStateTest, testTransitionsRegisteredInAnyOrderAreFound) {
+  CallState source(1);
+  std::vector<CallState> targets;
+  targets.reserve(50);
+  for (int i = 0; i < 50; ++i) {
+    targets.emplace_back(100 + i);
+  }
+  for (int i = 49; i >= 0; i -= 2) {
+    source.RegisterTransition(3 * i, &targets[i]);
+  }
+  for (int i = 0; i < 50; i += 2) {
+    source.RegisterTransition(3 * i, &targets[i]);
+  }
+  source.RegisterTransition(3 * 7, &targets[8]);  // registered again: the latest target wins
+
+  for (int i = 0; i < 50; ++i) {
+    EXPECT_EQ(source.GetTransitionTarget(3 * i), i == 7 ? &targets[8] : &targets[i]) << i;
+    EXPECT_EQ(source.GetTransitionTarget(3 * i + 1), nullptr) << i;
+  }
+  EXPECT_EQ(source.GetTransitionTarget(-1), nullptr);
 }

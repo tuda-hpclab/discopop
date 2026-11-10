@@ -61,7 +61,6 @@ void __dp_init() {
   // hybrid analysis
   all_deps = new DepMap();
   out_put_deps = new StringDepMap();
-  bb_list = new ReportedBBRecorder();
   // End HA
 
   // This is the first thing to run in an instrumented program, so it is also where the output
@@ -79,6 +78,9 @@ void __dp_init() {
   // Static callPath tracing
   call_state_graph = new CallStateGraph();
   InitializeCurrentCallpathState();
+  // hybrid analysis: after the callpath states are known, for which the caches of the reports are sized
+  bb_list = new ReportedBBRecorder(static_cast<std::size_t>(bb_report_cache_mb) << 20,
+                                   call_state_graph->StateIdBound());
 
   if (dp_debug) {
     std::cout << "DP initialized." << std::endl;
