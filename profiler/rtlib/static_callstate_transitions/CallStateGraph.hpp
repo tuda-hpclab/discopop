@@ -42,4 +42,6 @@ class CallStateGraph {
   void RegisterFunctionEntryState(std::int32_t function_entry_id, std::int32_t call_state_id);
   // the root entry state of the function, or nullptr if it has none
   CallState* GetFunctionEntryState(std::int32_t function_entry_id);
+  // one more than the highest id of a registered state (0 without states)
+  std::size_t StateIdBound() const;
 };

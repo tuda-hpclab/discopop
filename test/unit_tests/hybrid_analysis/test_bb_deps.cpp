@@ -160,15 +160,22 @@ TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsExecutionsThatShareACacheEntry
   EXPECT_EQ(recorder.GetExecutions(), expected);
 }
 
+namespace {
+constexpr std::size_t kPointerBytes = sizeof(void *);
+constexpr std::size_t kTableBytes = 64 * 8 + 4;  // a table of 64 entries and its owner
+}  // namespace
+
 // The caches in front of the recorder's table are bounded by their allowance: without caches, with room for a
-// single table (every new state discards the cache of the previous one) and with room for a few tables, every
-// distinct execution is still recorded exactly once.
+// single table and with room for a few tables (at the limit, states go without a table, and the tables are
+// discarded when their reports pile up), every distinct execution is still recorded exactly once.
 TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsEveryExecutionWithinASmallCacheAllowance) {
-  for (const std::size_t cache_bytes : {std::size_t{0}, std::size_t{2000}, std::size_t{5000}}) {
-    dp::ReportedBBRecorder recorder(cache_bytes);
+  constexpr std::size_t kStates = 300;
+  for (const std::size_t tables : {std::size_t{0}, std::size_t{1}, std::size_t{4}}) {
+    const std::size_t cache_bytes = tables == 0 ? 0 : kStates * kPointerBytes + tables * kTableBytes;
+    dp::ReportedBBRecorder recorder(cache_bytes, kStates);
     dp::ReportedBBSet expected;
     for (int round = 0; round < 3; ++round) {
-      for (std::uint32_t sink_state = 0; sink_state < 300; sink_state += 7) {
+      for (std::uint32_t sink_state = 0; sink_state < kStates; sink_state += 7) {
         for (std::uint32_t bb_index = 0; bb_index < 130; bb_index += 3) {
           for (const std::uint32_t source_state : {std::uint32_t{1}, sink_state % 5}) {
             recorder.Record(bb_index, source_state, sink_state);
@@ -177,36 +184,57 @@ TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsEveryExecutionWithinASmallCach
         }
       }
     }
-    EXPECT_EQ(recorder.size(), expected.size()) << cache_bytes;
-    EXPECT_EQ(recorder.GetExecutions(), expected) << cache_bytes;
-    EXPECT_LE(recorder.CacheBytes(), cache_bytes);
+    EXPECT_EQ(recorder.size(), expected.size()) << tables;
+    EXPECT_EQ(recorder.GetExecutions(), expected) << tables;
+    EXPECT_LE(recorder.CacheBytes(), cache_bytes) << tables;
+    if (tables == 0) {
+      EXPECT_EQ(recorder.CacheResets(), 0u);
+    } else {
+      EXPECT_GT(recorder.CacheResets(), 0u) << tables;  // the tables were discarded and taken again
+    }
   }
 }
 
-// room for one table: a state whose cache was discarded must not find the entries of the state that took it over
+// room for one table: a state whose table was discarded must not find the entries of the state that takes it next
 TEST_F(HybridAnalysisBBDepsTest, testRecorderForgetsTheCacheOfAStateThatWasDiscarded) {
-  dp::ReportedBBRecorder recorder(600);
-  recorder.Record(5, 1, 0);
-  recorder.Record(5, 2, 1);  // takes the only table over from state 0
+  dp::ReportedBBRecorder recorder(2 * kPointerBytes + kTableBytes, 2);
+  recorder.Record(5, 1, 0);  // state 0 takes the only table
+  // state 1 goes without a table until its reports pile up (4 refills of the table), then the table is discarded
+  for (std::uint32_t reports = 0; recorder.CacheResets() == 0; ++reports) {
+    ASSERT_LT(reports, 10000u) << "the table was never discarded";
+    recorder.Record(reports % 64, 3, 1);
+  }
+  recorder.Record(5, 2, 1);  // state 1 takes the table
   recorder.Record(5, 2, 0);  // new for state 0, although the table holds block 5 with source state 2
 
-  EXPECT_EQ(recorder.GetExecutions(), (dp::ReportedBBSet{{5, 1, 0}, {5, 2, 1}, {5, 2, 0}}));
+  EXPECT_EQ(recorder.GetExecutions().count(dp::ReportedBB{5, 2, 0}), 1u);
+  EXPECT_EQ(recorder.GetExecutions().count(dp::ReportedBB{5, 1, 0}), 1u);
+  EXPECT_EQ(recorder.GetExecutions().count(dp::ReportedBB{5, 2, 1}), 1u);
 }
 
 TEST_F(HybridAnalysisBBDepsTest, testRecorderCachesNeverExceedTheirAllowance) {
-  for (const std::size_t allowance : {std::size_t{600}, std::size_t{1} << 14, std::size_t{1} << 20}) {
-    dp::ReportedBBRecorder recorder(allowance);
-    for (std::uint32_t sink_state = 0; sink_state < 200000; sink_state += 13) {
+  // too small for the table pointers of the states and one table: no caches
+  EXPECT_EQ(dp::ReportedBBRecorder(1000 * kPointerBytes + kTableBytes - 1, 1000).CacheBytes(), 0u);
+  for (const std::size_t allowance : {std::size_t{1} << 14, std::size_t{1} << 20, std::size_t{50} << 20}) {
+    dp::ReportedBBRecorder recorder(allowance, 1000);
+    EXPECT_LE(recorder.CacheBytes(), allowance) << allowance;
+    for (std::uint32_t sink_state = 0; sink_state < 5000; sink_state += 3) {  // ids above 999 get no cache
       recorder.Record(sink_state % 100, 0, sink_state);
       ASSERT_LE(recorder.CacheBytes(), allowance) << allowance << " " << sink_state;
     }
   }
-  dp::ReportedBBRecorder recorder;
-  for (std::uint32_t sink_state = 0; sink_state < 20000; ++sink_state) {
-    recorder.Record(3, 0, sink_state);
+  EXPECT_LE(dp::ReportedBBRecorder().CacheBytes(), dp::ReportedBBRecorder::kDefaultCacheBytes);
+}
+
+// A state without a table at the limit does not take one from a state that has one, as long as the reports of the
+// states without a table do not pile up.
+TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsTheTablesWhileFewReportsGoWithoutOne) {
+  dp::ReportedBBRecorder recorder(3 * kPointerBytes + kTableBytes, 3);
+  recorder.Record(1, 0, 0);
+  for (std::uint32_t i = 0; i < 64; ++i) {
+    recorder.Record(i, 0, 2);  // state 2 goes without a table
   }
-  EXPECT_LE(recorder.CacheBytes(), dp::ReportedBBRecorder::kDefaultCacheBytes);
-  EXPECT_GT(recorder.CacheBytes(), 20000u * 512);  // below the default allowance, every state has a table
+  EXPECT_EQ(recorder.CacheResets(), 0u);
 }
 
 TEST_F(HybridAnalysisBBDepsTest, testMergeAddsStatesToSinkAndSource) {
