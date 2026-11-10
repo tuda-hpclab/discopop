@@ -50,6 +50,9 @@ void ReadRuntimeInfo() {
         value.erase(std::remove_if(value.begin(), value.end(), func), value.end());
 
         std::int32_t int_value = std::atoi(value.c_str());
+        if (variable.compare("BB_REPORT_CACHE_MB") == 0 && int_value >= 0) {
+          bb_report_cache_mb = int_value;  // 0 turns the caches off
+        }
         if (int_value > 0) {
           if (variable.compare("DP_DEBUG") == 0) {
             dp_debug = true;
@@ -81,6 +84,7 @@ void ReadRuntimeInfo() {
     std::cout << "num_workers  = " << num_workers << "\n";
     std::cout << "faq_chunks_per_worker   = " << first_access_queue_chunks_per_worker << "\n";
     std::cout << "saq_elements_per_worker = " << second_access_queue_elements_per_worker << "\n";
+    std::cout << "bb_report_cache_mb      = " << bb_report_cache_mb << "\n";
     sleep(2);
   }
 
