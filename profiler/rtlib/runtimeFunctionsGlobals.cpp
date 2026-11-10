@@ -92,6 +92,7 @@ AbstractShadow* single_threaded_execution_smem = nullptr;  // used if NUM_WORKER
 thread_local DepMap* my_map = nullptr;
 
 CallState* current_callpath_state = nullptr;
+std::uint32_t current_callpath_state_id = 0;
 CallStateGraph* call_state_graph;
 
 // statistics

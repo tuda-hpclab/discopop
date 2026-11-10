@@ -130,6 +130,9 @@ extern thread_local DepMap* my_map;
 
 // see static_callstate_transitions/utils.hpp
 extern CallState* current_callpath_state;
+// the id of current_callpath_state (0 without one), read by every access and basic block report; both are set
+// together by SetCurrentCallpathState
+extern std::uint32_t current_callpath_state_id;
 extern CallStateGraph* call_state_graph;
 
 // statistics

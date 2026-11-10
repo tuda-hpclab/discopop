@@ -65,7 +65,7 @@ void __dp_decl(LID lid, ADDR addr, const char* var) {
 #endif
   current.is_read = false;
   // add current call path state identifier to lid for later retrieval
-  current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state->GetId()) << 32);
+  current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state_id) << 32);
   current.var = var;
   current.aa_var = reinterpret_cast<std::int64_t>(var);
   current.addr = addr;

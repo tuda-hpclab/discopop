@@ -27,6 +27,8 @@ namespace dp {
 // If the function has no root state either, the state is kept and frozen until the function is
 // left. Leaving a function restores the state and freeze flag of its caller.
 void UpdateCallstate(int32_t instruction_id);
+// sets current_callpath_state and current_callpath_state_id
+void SetCurrentCallpathState(CallState* state);
 void InitializeCurrentCallpathState();
 // makes the calling thread the one tracking callpath states, starting from the given state
 void ResetCallstateTracking(CallState* initial_state);
