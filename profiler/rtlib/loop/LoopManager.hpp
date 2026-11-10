@@ -53,11 +53,9 @@ std::cout << "(" << std::dec << function_level << ")Loop " << loop_id << " enter
   void IterateLoop(const std::int32_t /*function_level*/) {
     loop_stack_.IncrementTopCount();
 #ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
-    if (dp_debug) {
-      std::cout << "(" << std::dec << loop_stack_.Top().func_level << ")";
-      std::cout << "Loop " << loop_stack_.Top().loop_id << " iterates " << loop_stack_.Top().GetCount() << " times."
-                << std::endl;
-    }
+std::cout << "(" << std::dec << loop_stack_.Top().func_level << ")";
+std::cout << "Loop " << loop_stack_.Top().loop_id << " iterates " << loop_stack_.Top().GetCount() << " times."
+<< std::endl;
 #endif
   }
 
