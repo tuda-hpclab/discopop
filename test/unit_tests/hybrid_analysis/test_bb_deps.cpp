@@ -226,6 +226,23 @@ TEST_F(HybridAnalysisBBDepsTest, testRecorderCachesNeverExceedTheirAllowance) {
   EXPECT_LE(dp::ReportedBBRecorder().CacheBytes(), dp::ReportedBBRecorder::kDefaultCacheBytes);
 }
 
+// When the caches are off, the warning tells how to turn them on, with an estimate of the allowance they need.
+TEST_F(HybridAnalysisBBDepsTest, testTheWarningAboutTurnedOffCachesEstimatesTheirAllowance) {
+  // 10M states: 80 MB of table pointers, tables for 625001 states (322.5 MB): 384 MiB
+  EXPECT_EQ(dp::ReportedBBRecorder::RecommendedCacheMb(10000000), 384u);
+  EXPECT_EQ(dp::ReportedBBRecorder::RecommendedCacheMb(1000), 50u);  // never less than the default
+  testing::internal::CaptureStderr();
+  dp::ReportedBBRecorder recorder(std::size_t{50} << 20, 10000000);
+  const std::string warning = testing::internal::GetCapturedStderr();
+  EXPECT_EQ(recorder.CacheBytes(), 0u);
+  EXPECT_NE(warning.find("turned off (BB_REPORT_CACHE_MB=50 in dp.conf; the program has 10000000 callpath states, "
+                         "the caches need 77 MiB at least)"),
+            std::string::npos)
+      << warning;
+  EXPECT_NE(warning.find("set BB_REPORT_CACHE_MB=384 (MiB, an estimate) in the file dp.conf"), std::string::npos)
+      << warning;
+}
+
 // A state without a table at the limit does not take one from a state that has one, as long as the reports of the
 // states without a table do not pile up.
 TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsTheTablesWhileFewReportsGoWithoutOne) {
