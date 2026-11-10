@@ -235,12 +235,13 @@ TEST_F(HybridAnalysisBBDepsTest, testTheWarningAboutTurnedOffCachesEstimatesThei
   dp::ReportedBBRecorder recorder(std::size_t{50} << 20, 10000000);
   const std::string warning = testing::internal::GetCapturedStderr();
   EXPECT_EQ(recorder.CacheBytes(), 0u);
-  EXPECT_NE(warning.find("turned off (BB_REPORT_CACHE_MB=50 in dp.conf; the program has 10000000 callpath states, "
-                         "the caches need 77 MiB at least)"),
+  EXPECT_NE(warning.find("the program has 10000000 callpath states, for which they need 77 MiB at least, but their "
+                         "allowance is 50 MiB"),
             std::string::npos)
       << warning;
-  EXPECT_NE(warning.find("set BB_REPORT_CACHE_MB=384 (MiB, an estimate) in the file dp.conf"), std::string::npos)
-      << warning;
+  EXPECT_NE(warning.find("set the allowance to 384 MiB"), std::string::npos) << warning;
+  EXPECT_NE(warning.find("BB_REPORT_CACHE_MB=384 in the file dp.conf"), std::string::npos) << warning;
+  EXPECT_NE(warning.find("environment variable DP_BB_REPORT_CACHE_MB=384"), std::string::npos) << warning;
 }
 
 // A state without a table at the limit does not take one from a state that has one, as long as the reports of the
