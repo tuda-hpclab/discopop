@@ -16,9 +16,11 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "DPTypes.hpp"
 #include "lid_utils.hpp"
@@ -67,7 +69,15 @@ class FunctionManager {
 
   void DecreaseStackLevel() { --func_stack_level_; }
 
-  void RegisterFunctionEnd(const LID current_lid) { end_funcs_.insert(current_lid); }
+  void RegisterFunctionEnd(const LID current_lid) {
+    // a function returns very often, but from few locations: most returns are recorded already
+    LID& seen = seen_function_ends_[SeenSlot(current_lid)];
+    if (seen == current_lid) {
+      return;
+    }
+    seen = current_lid;
+    end_funcs_.insert(current_lid);
+  }
 
   std::int32_t GetCurrentStackLevel() const { return func_stack_level_; }
 
@@ -87,6 +97,14 @@ class FunctionManager {
     }
 #endif
 
+    // a function is entered very often, but from few call sites: most entries are recorded already
+    SeenFunctionBegin& seen =
+        seen_function_begins_[SeenSlot(current_lid ^ (last_call_or_invoke_ * 31) ^ last_call_instruction_)];
+    if (seen.entry == current_lid && seen.call_site == last_call_or_invoke_ &&
+        seen.call_instruction == last_call_instruction_) {
+      return;
+    }
+    seen = SeenFunctionBegin{last_call_or_invoke_, current_lid, last_call_instruction_};
     begin_funcs_[CallSite{last_call_or_invoke_, last_call_instruction_}].insert(current_lid);
   }
 
@@ -110,8 +128,26 @@ class FunctionManager {
   }
 
  private:
+  // Caches of recently recorded function entries and returns, which spare most of them the lookups in begin_funcs_
+  // and end_funcs_: direct mapped, a slot holds the latest entry resp. return whose hash maps to it.
+  static constexpr std::size_t kSeenSlots = 4096;
+  static constexpr LID kNoLid = std::numeric_limits<LID>::min();  // no location is encoded like this
+  struct SeenFunctionBegin {
+    LID call_site = kNoLid;
+    LID entry = kNoLid;
+    std::int32_t call_instruction = 0;
+  };
+
+  static std::size_t SeenSlot(const LID key) {
+    std::uint64_t h = static_cast<std::uint64_t>(key) * 0x9E3779B97F4A7C15ULL;
+    h ^= h >> 32;
+    return static_cast<std::size_t>(h) & (kSeenSlots - 1);
+  }
+
   BGNFuncList begin_funcs_;  // function entries
   ENDFuncList end_funcs_;    // function returns
+  std::vector<SeenFunctionBegin> seen_function_begins_ = std::vector<SeenFunctionBegin>(kSeenSlots);
+  std::vector<LID> seen_function_ends_ = std::vector<LID>(kSeenSlots, kNoLid);
 
   LID last_call_or_invoke_ = 0;
   std::int32_t last_call_instruction_ = 0;
