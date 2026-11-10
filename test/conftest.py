@@ -24,6 +24,14 @@ _PROFILER_INDEPENDENT = [os.path.join(_HERE, "end_to_end", "mcp_server") + os.se
 _REQUIRED_TOOLS = ["discopop_cc", "discopop_cxx", "discopop_explorer", "make"]
 
 
+def _uses_module_fixture(item: pytest.Item) -> bool:
+    """Whether the test uses a module scoped fixture (directly or through another fixture)."""
+    fixture_info = getattr(item, "_fixtureinfo", None)
+    if fixture_info is None:
+        return False
+    return any(defs and defs[-1].scope == "module" for defs in fixture_info.name2fixturedefs.values())
+
+
 # before pytest-xdist's own hook, which turns the xdist_group markers into the groups of --dist loadgroup
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):  # type: ignore
@@ -38,5 +46,9 @@ def pytest_collection_modifyitems(config, items):  # type: ignore
         if item.cls is not None:
             # with pytest-xdist (--dist loadgroup) the tests of a class share one worker, so its program is built once
             item.add_marker(pytest.mark.xdist_group(item.cls.__module__ + "." + item.cls.__qualname__))
+        elif _uses_module_fixture(item):
+            # likewise the tests of a module sharing a module scoped fixture, which every worker would compute again:
+            # task_omp_strassen ran its explorer (up to 4 GiB) on 9 workers at once, which ran CI hosts out of memory
+            item.add_marker(pytest.mark.xdist_group(item.nodeid.split("::")[0]))
         if missing and not any(path.startswith(p) for p in _PROFILER_INDEPENDENT):
             item.add_marker(skip)
