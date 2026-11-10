@@ -135,6 +135,31 @@ TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsEveryDistinctExecution) {
   EXPECT_EQ(recorder.GetExecutions(), expected);
 }
 
+// The recorder answers repeated reports from a small cache per sink state, indexed by the low bits of the block
+// index: blocks sharing a cache entry (indices 64 apart), several source states of one block, many sink states and
+// a sink state with a high id must still be recorded exactly once each.
+TEST_F(HybridAnalysisBBDepsTest, testRecorderKeepsExecutionsThatShareACacheEntry) {
+  dp::ReportedBBRecorder recorder;
+  dp::ReportedBBSet expected;
+  for (int round = 0; round < 3; ++round) {
+    for (std::uint32_t sink = 0; sink < 40; ++sink) {
+      const std::uint32_t sink_state = sink == 39 ? 1000000 : sink;
+      for (std::uint32_t bb = 0; bb < 4; ++bb) {
+        for (std::uint32_t source = 0; source < 3; ++source) {
+          const std::uint32_t bb_index = 5 + 64 * bb;
+          recorder.Record(bb_index, source + sink_state, sink_state);
+          expected.insert(dp::ReportedBB{bb_index, source + sink_state, sink_state});
+        }
+      }
+    }
+  }
+  recorder.Record(0, 0, 0);
+  expected.insert(dp::ReportedBB{0, 0, 0});
+
+  EXPECT_EQ(recorder.size(), expected.size());
+  EXPECT_EQ(recorder.GetExecutions(), expected);
+}
+
 TEST_F(HybridAnalysisBBDepsTest, testMergeAddsStatesToSinkAndSource) {
   const std::vector<const char *> strings = {"0=36 NOM RAW 38|s(S2),35 NOM RAW 34|t(S4)"};
   const dp::ReportedBBSet reported = {dp::ReportedBB{0, 29, 27}};
