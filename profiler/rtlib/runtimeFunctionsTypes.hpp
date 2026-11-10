@@ -201,13 +201,7 @@ class ReportedBBRecorder {
       : slots_(kInitialCapacity) {
     const std::size_t pointer_bytes = state_ids * sizeof(CacheEntry*);
     if (cache_bytes < pointer_bytes + kBytesPerTable) {
-      std::cerr << "DiscoPoP: warning: the caches of the basic block reports are turned off (BB_REPORT_CACHE_MB="
-                << (cache_bytes >> 20) << " in dp.conf";
-      if (cache_bytes != 0) {
-        std::cerr << ", " << ((pointer_bytes + kBytesPerTable + (std::size_t{1} << 20) - 1) >> 20)
-                  << " MiB at least for the " << state_ids << " callpath states";
-      }
-      std::cerr << "), which slows down the profiling\n";
+      std::cerr << CachesOffWarning(cache_bytes, state_ids);
       return;
     }
     table_of_state_.assign(state_ids, nullptr);
@@ -215,6 +209,27 @@ class ReportedBBRecorder {
     // reserved only: the pages become resident when the tables are taken, and the tables never move
     tables_.reserve(tables * kStateCacheSize);
     owners_.reserve(tables);
+  }
+
+  // The allowance in MiB the caches of a program with the given number of callpath states should get: the table
+  // pointers of all states and tables for one in kStatesPerTableEstimate of them (LULESH and miniFE report in 4-5%
+  // of their states), at least the default.
+  static std::size_t RecommendedCacheMb(std::size_t state_ids) {
+    const std::size_t bytes =
+        state_ids * sizeof(CacheEntry*) + (state_ids / kStatesPerTableEstimate + 1) * kBytesPerTable;
+    return std::max((bytes + (std::size_t{1} << 20) - 1) >> 20, kDefaultCacheBytes >> 20);
+  }
+
+  // what the runtime prints when the allowance cannot hold the table pointers and one table
+  static std::string CachesOffWarning(std::size_t cache_bytes, std::size_t state_ids) {
+    const std::size_t minimum_mb =
+        (state_ids * sizeof(CacheEntry*) + kBytesPerTable + (std::size_t{1} << 20) - 1) >> 20;
+    return "DiscoPoP: warning: the caches of the basic block reports are turned off (BB_REPORT_CACHE_MB=" +
+           std::to_string(cache_bytes >> 20) + " in dp.conf; the program has " + std::to_string(state_ids) +
+           " callpath states, the caches need " + std::to_string(minimum_mb) +
+           " MiB at least), which slows down the profiling. To turn them on, set BB_REPORT_CACHE_MB=" +
+           std::to_string(RecommendedCacheMb(state_ids)) +
+           " (MiB, an estimate) in the file dp.conf next to the executable; the caches may take that much memory.\n";
   }
 
   inline void Record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
@@ -257,6 +272,7 @@ class ReportedBBRecorder {
   static constexpr std::size_t kInitialCapacity = 1024;
   static constexpr std::size_t kStateCacheSize = 64;  // entries per state, a power of two (see the class comment)
   static constexpr std::size_t kResetFactor = 4;      // see CacheInState
+  static constexpr std::size_t kStatesPerTableEstimate = 16;  // see RecommendedCacheMb
   struct CacheEntry {
     std::uint32_t bb_index = ~std::uint32_t{0};  // no block has this index
     std::uint32_t source_state = 0;
