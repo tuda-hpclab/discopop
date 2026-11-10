@@ -167,7 +167,7 @@ using ReportedBBSet = std::unordered_set<ReportedBB, ReportedBBHasher>;
 // A state's cache is a table of kStateCacheSize = 64 entries of 8 bytes,
 // taken at its first report from a pool, in which the tables of the states lie
 // next to each other in the order of their first reports. The memory of the
-// caches (the tables, their owners and the table number per state id) never
+// caches (the tables, their owners and the table pointer per state id) never
 // exceeds the allowance BB_REPORT_CACHE_MB of dp.conf (default 50 MiB, 0
 // turns the caches off). At the limit, a state taking a table discards the
 // cache of another state, round robin, which only costs lookups in the hash
@@ -201,10 +201,9 @@ class ReportedBBRecorder {
 
   inline void Record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
     if (sink_state < table_of_state_.size()) {
-      const std::uint32_t table = table_of_state_[sink_state];
-      if (table != kNoTable) {
-        const CacheEntry& entry = tables_[(static_cast<std::size_t>(table) * kStateCacheSize) |
-                                          (bb_index & (kStateCacheSize - 1))];
+      const CacheEntry* table = table_of_state_[sink_state];
+      if (table != nullptr) {
+        const CacheEntry& entry = table[bb_index & (kStateCacheSize - 1)];
         if (entry.bb_index == bb_index && entry.source_state == source_state) {
           return;
         }
@@ -215,7 +214,7 @@ class ReportedBBRecorder {
 
   // the memory the caches occupy, never more than their allowance
   std::size_t CacheBytes() const {
-    return table_of_state_.capacity() * sizeof(std::uint32_t) + owners_.size() * sizeof(std::uint32_t) +
+    return table_of_state_.capacity() * sizeof(CacheEntry*) + owners_.size() * sizeof(std::uint32_t) +
            tables_.size() * sizeof(CacheEntry);
   }
 
@@ -236,7 +235,6 @@ class ReportedBBRecorder {
  private:
   static constexpr std::size_t kInitialCapacity = 1024;
   static constexpr std::size_t kStateCacheSize = 64;  // entries per state, a power of two (see the class comment)
-  static constexpr std::uint32_t kNoTable = ~std::uint32_t{0};
   struct CacheEntry {
     std::uint32_t bb_index = ~std::uint32_t{0};  // no block has this index
     std::uint32_t source_state = 0;
@@ -278,28 +276,28 @@ class ReportedBBRecorder {
       return;
     }
     if (sink_state >= table_of_state_.size()) {
-      // the table numbers of the states grow with the highest state id that reported; within the allowance
+      // the table pointers of the states grow with the highest state id that reported; within the allowance
       const std::size_t needed = static_cast<std::size_t>(sink_state) + 1;
       std::size_t capacity = std::max(needed, 2 * table_of_state_.capacity());
       const std::size_t others = owners_.size() * sizeof(std::uint32_t) + tables_.size() * sizeof(CacheEntry);
-      if (others + capacity * sizeof(std::uint32_t) > cache_allowance_) {
+      if (others + capacity * sizeof(CacheEntry*) > cache_allowance_) {
         capacity = needed;
-        if (others + capacity * sizeof(std::uint32_t) > cache_allowance_) {
+        if (others + capacity * sizeof(CacheEntry*) > cache_allowance_) {
           return;  // the state stays without a cache
         }
       }
-      std::vector<std::uint32_t> grown;
+      std::vector<CacheEntry*> grown;
       grown.reserve(capacity);
       grown.assign(table_of_state_.begin(), table_of_state_.end());
-      grown.resize(needed, kNoTable);
+      grown.resize(needed, nullptr);
       table_of_state_.swap(grown);
     }
-    std::uint32_t& table = table_of_state_[sink_state];
-    if (table == kNoTable) {
+    CacheEntry*& table = table_of_state_[sink_state];
+    if (table == nullptr) {
       if (CacheBytes() + kBytesPerTable <= cache_allowance_ && tables_.size() < tables_.capacity()) {
-        table = static_cast<std::uint32_t>(owners_.size());
         owners_.push_back(sink_state);
-        tables_.resize(tables_.size() + kStateCacheSize);
+        tables_.resize(tables_.size() + kStateCacheSize);  // within the reserved capacity: no table moves
+        table = tables_.data() + tables_.size() - kStateCacheSize;
       } else if (!owners_.empty()) {
         // at the limit: discard the cache of another state, round robin
         if (!limit_reached_) {
@@ -307,18 +305,17 @@ class ReportedBBRecorder {
           std::cerr << "DiscoPoP: the caches of the basic block reports reached their allowance (BB_REPORT_CACHE_MB in "
                        "dp.conf), states now discard each other's caches, which slows down the profiling\n";
         }
-        table = next_victim_;
+        const std::uint32_t victim = next_victim_;
         next_victim_ = (next_victim_ + 1) % static_cast<std::uint32_t>(owners_.size());
-        table_of_state_[owners_[table]] = kNoTable;
-        owners_[table] = sink_state;
-        std::fill_n(tables_.begin() + static_cast<std::ptrdiff_t>(table * kStateCacheSize), kStateCacheSize,
-                    CacheEntry{});
+        table_of_state_[owners_[victim]] = nullptr;
+        owners_[victim] = sink_state;
+        table = tables_.data() + static_cast<std::size_t>(victim) * kStateCacheSize;
+        std::fill_n(table, kStateCacheSize, CacheEntry{});
       } else {
         return;
       }
     }
-    tables_[(static_cast<std::size_t>(table) * kStateCacheSize) | (bb_index & (kStateCacheSize - 1))] =
-        CacheEntry{bb_index, source_state};
+    table[bb_index & (kStateCacheSize - 1)] = CacheEntry{bb_index, source_state};
   }
 
   static inline std::size_t SlotOf(std::uint32_t bb_index, std::uint64_t states) {
@@ -349,7 +346,7 @@ class ReportedBBRecorder {
   std::size_t count_ = 0;
   // the caches, see the class comment
   std::size_t cache_allowance_;
-  std::vector<std::uint32_t> table_of_state_;  // per state id: the number of its table, or kNoTable
+  std::vector<CacheEntry*> table_of_state_;    // per state id: its table in tables_, or nullptr
   std::vector<std::uint32_t> owners_;          // per table: the state using it
   std::vector<CacheEntry> tables_;             // kStateCacheSize entries per table, capacity reserved at once
   std::uint32_t next_victim_ = 0;
