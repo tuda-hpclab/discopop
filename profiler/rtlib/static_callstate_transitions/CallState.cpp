@@ -14,14 +14,6 @@
 
 #include <algorithm>
 
-namespace {
-
-bool TriggerBefore(const std::pair<std::int32_t, CallState*>& transition, std::int32_t trigger_instruction) {
-  return transition.first < trigger_instruction;
-}
-
-}  // namespace
-
 void CallState::RegisterTransition(std::int32_t trigger_instruction, CallState* target_state) {
   const auto pos = std::lower_bound(transitions_.begin(), transitions_.end(), trigger_instruction, TriggerBefore);
   if (pos != transitions_.end() && pos->first == trigger_instruction) {
@@ -45,19 +37,3 @@ void CallState::RegisterImplicitReturnTransition(CallState* target_state) {
     return_transition_target_ = target_state;
   }
 }
-
-int32_t CallState::GetId() const { return id_; }
-
-CallState* CallState::GetTransitionTarget(int32_t trigger_instruction) const {
-  const auto pos = std::lower_bound(transitions_.begin(), transitions_.end(), trigger_instruction, TriggerBefore);
-  if (pos == transitions_.end() || pos->first != trigger_instruction) {
-    return nullptr;
-  }
-  return pos->second;
-}
-
-CallState* CallState::GetImplicitReturnTransitionTarget() const { return implicit_return_transition_target_; }
-
-CallState* CallState::GetFallthroughTransitionTarget() const { return fallthrough_transition_target_; }
-
-CallState* CallState::GetReturnTransitionTarget() const { return return_transition_target_; }
