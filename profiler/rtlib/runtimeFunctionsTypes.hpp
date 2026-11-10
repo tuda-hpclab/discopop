@@ -157,10 +157,21 @@ using ReportedBBSet = std::unordered_set<ReportedBB, ReportedBBHasher>;
 // In front of the table, every sink state has a small direct mapped cache of
 // the executions recorded in it, indexed by the low bits of the block index:
 // a state sees only the reporting blocks of its function, which have
-// consecutive indices, so the cache answers nearly every report (88% on
-// LULESH, 99% on miniFE) with one comparison. Keying the cache by the state
-// rather than by the block matters: a block in a loop executes in a cycle of
-// iteration states, which a cache per block never matched.
+// consecutive indices, so the cache answers nearly every report with one
+// comparison. Keying the cache by the state rather than by the block matters:
+// a block in a loop executes in a cycle of iteration states (the iteration
+// counters wrap around), which a cache per block never matched.
+//
+// The cache holds kStateCacheSize = 64 entries of 8 bytes and is created at
+// the first report in a state, so only states that execute reporting blocks
+// get one: 4.6 MB for LULESH (-s 10, 8974 states), 9.2 MB for miniFE (32^3,
+// 17980 states), measured with 640M resp. 2.2G reports of which 52k resp. 49k
+// were distinct. 64 entries answered 88% (LULESH) resp. 99% (miniFE) of the
+// reports. A cache growing up to 1024 entries for states with many reporting
+// blocks (LULESH has up to 217 in one state) would answer 95% on LULESH with
+// hardly more memory, and nothing more on miniFE; it was left out, as the
+// extra misses cost LULESH below 0.5% of its run time, while the size every
+// report would have to load costs all of them.
 class ReportedBBRecorder {
  public:
   ReportedBBRecorder() : slots_(kInitialCapacity) {}
@@ -194,7 +205,7 @@ class ReportedBBRecorder {
 
  private:
   static constexpr std::size_t kInitialCapacity = 1024;
-  static constexpr std::size_t kStateCacheSize = 64;  // entries per state, a power of two
+  static constexpr std::size_t kStateCacheSize = 64;  // entries per state, a power of two (see the class comment)
   struct CacheEntry {
     std::uint32_t bb_index = ~std::uint32_t{0};  // no block has this index
     std::uint32_t source_state = 0;
