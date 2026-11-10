@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cerrno>
 #include <fstream>
 #include <fcntl.h>
 #include <ios>
@@ -40,8 +41,13 @@ class FileLock {
       : lock_path_((is_full_path ? name : Path(name)) + ".lock") {
     lock_fd_ = open(lock_path_.c_str(), O_CREAT | O_RDWR, 0666);
     if (lock_fd_ == -1) {
+      if (errno == ENOENT) {
+        return;
+      }
+
       throw std::runtime_error("Could not open output lock file: " + lock_path_);
     }
+    
     if (flock(lock_fd_, LOCK_EX) == -1) {
       close(lock_fd_);
       throw std::runtime_error("Could not acquire output lock: " + lock_path_);
