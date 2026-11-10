@@ -12,6 +12,7 @@
 #include "hybrid_analysis/bb_deps.hpp"
 #include "runtimeFunctions.hpp"
 #include "runtimeFunctionsGlobals.hpp"
+#include "static_callstate_transitions/utils.hpp"
 
 // The hybrid analysis hands the dependencies of stack locals over as strings
 // "<bb index>=<dep>,<dep>/<bb index>=..." (one per module) and reports the
@@ -43,10 +44,10 @@ protected:
     delete dp::bb_list;
     dp::bb_list = saved_bb_list;
     dp::runtime_state = saved_runtime_state;
-    dp::current_callpath_state = saved_state;
+    dp::SetCurrentCallpathState(saved_state);
   }
 
-  void enter_state(std::int32_t id) { dp::current_callpath_state = graph->GetOrRegisterNode(id); }
+  void enter_state(std::int32_t id) { dp::SetCurrentCallpathState(graph->GetOrRegisterNode(id)); }
 
   static std::unordered_set<std::string> records_of(const dp::StringDepMap &deps, const std::string &sink) {
     const auto it = deps.find(sink);
@@ -68,7 +69,7 @@ TEST_F(HybridAnalysisBBDepsTest, testBBStateIsCurrentStatePlusOne) {
 }
 
 TEST_F(HybridAnalysisBBDepsTest, testBBStateIsZeroWithoutKnownState) {
-  dp::current_callpath_state = nullptr;
+  dp::SetCurrentCallpathState(nullptr);
   EXPECT_EQ(dp::__dp_bb_state(), 0u);
   enter_state(7);
   dp::runtime_state = dp::RuntimeState::kNotInitialized;

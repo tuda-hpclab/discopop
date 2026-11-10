@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "runtimeFunctionsGlobals.hpp"
 #include "runtimeFunctionsTypes.hpp"
 
 namespace dp {
@@ -39,7 +40,7 @@ void ReleaseRegisteredBbDeps();
 
 // the id of the current callpath state, or 0 if none is known yet. Used to
 // attribute the executions reported by __dp_report_bb / __dp_report_bb_pair.
-std::uint32_t CurrentCallpathStateIdForBbReports();
+inline std::uint32_t CurrentCallpathStateIdForBbReports() { return current_callpath_state_id; }
 
 // merges the dependencies of the given handed over dependency strings into
 // out, once per reported execution in reported whose basic block index they are
