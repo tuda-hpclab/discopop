@@ -168,6 +168,13 @@ if(DEFINED DP_RTLIB_VERBOSE)
         endif()
 endif()
 
+if(DEFINED DP_DEBUG)
+        if(NOT ${DP_DEBUG} EQUAL 0)
+                target_compile_definitions(DiscoPoP_RT PUBLIC DP_DEBUG=${DP_DEBUG})
+                message(STATUS "WARNING: DiscoPoP configuration: DP_DEBUG enabled. Debug setting. Reduces profiling speed.")
+        endif()
+endif()
+
 if(DEFINED DP_NUM_WORKERS)
         target_compile_definitions(DiscoPoP_RT PUBLIC DP_NUM_WORKERS=${DP_NUM_WORKERS})
 endif()

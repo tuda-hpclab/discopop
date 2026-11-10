@@ -49,10 +49,12 @@ void __dp_func_exit(LID lid, std::int32_t is_exit) {
     function_manager->RegisterFunctionEnd(lid);
   }
 
+#ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
   if (dp_debug) {
     std::cout << "Exiting fucntion LID " << std::dec << dputil::DecodeLid(lid) << std::endl;
     std::cout << "Function stack level = " << std::dec << function_manager->GetCurrentStackLevel() << std::endl;
   }
+#endif
   // restore the callpath state of the caller, still under the lock (released with dp_scope)
   LeaveFunctionForCallstate();
 }
