@@ -13,12 +13,15 @@
 #pragma once
 #include <cstdint>
 #include <iostream>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 
 class CallState {
  private:
   std::int32_t id_;
-  std::unordered_map<int32_t, CallState*> transitions_;
+  // (trigger instruction, target), sorted by the trigger instruction: a state has few transitions, which a binary
+  // search of a contiguous array finds faster than a hash map
+  std::vector<std::pair<int32_t, CallState*>> transitions_;
   CallState* implicit_return_transition_target_ = nullptr;
   // instruction id of the __dp_func_entry call of the function this state lies in, if the state
   // is the entry state of a function instance (see callpath_function_entries.txt), else 0

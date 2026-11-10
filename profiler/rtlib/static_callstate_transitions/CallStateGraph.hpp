@@ -10,10 +10,12 @@
  *
  */
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "CallState.hpp"
 
@@ -23,7 +25,8 @@ class CallStateGraph {
   // function entry instruction id -> state of the function's own root call path (the function
   // without callers in its translation unit), used when a function is entered without a
   // matching call transition (call from another translation unit, indirect call, callback)
-  std::unordered_map<std::int32_t, CallState*> function_entry_states_;
+  // indexed by the function entry id (instruction ids are counted densely over the program), nullptr if none
+  std::vector<CallState*> function_entry_states_;
   void ReadFunctionEntries(const std::string& path);
 
  public:
