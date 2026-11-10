@@ -32,7 +32,10 @@ void SetCurrentCallpathState(CallState* state);
 void InitializeCurrentCallpathState();
 // makes the calling thread the one tracking callpath states, starting from the given state
 void ResetCallstateTracking(CallState* initial_state);
-void RegisterCallForCallstate(int32_t instruction_id);
+// instruction id of the latest call of this thread which has not entered an instrumented function yet
+extern constinit thread_local int32_t pending_call_instruction;
+// inline: runs on every call of the program
+inline void RegisterCallForCallstate(int32_t instruction_id) { pending_call_instruction = instruction_id; }
 void EnterFunctionForCallstate(int32_t function_entry_id);
 void LeaveFunctionForCallstate();
 // at a landing pad of the function with the given entry id: the functions entered after its latest
