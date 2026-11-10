@@ -12,6 +12,7 @@
 
 #include "CallStateGraph.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -190,6 +191,16 @@ CallStateGraph::~CallStateGraph() {
   const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
   std::cout << "[~CallStateGraph()]: " << (static_cast<double>(duration.count()) / 1000.0) << "s" << std::endl;
 #endif
+}
+
+std::size_t CallStateGraph::StateIdBound() const {
+  std::size_t bound = 0;
+  for (const auto& node : node_map_) {
+    if (node.first >= 0) {
+      bound = std::max(bound, static_cast<std::size_t>(node.first) + 1);
+    }
+  }
+  return bound;
 }
 
 CallState* CallStateGraph::GetOrRegisterNode(std::int32_t call_state_id) {
