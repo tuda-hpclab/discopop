@@ -39,9 +39,7 @@ class LoopManager {
       loops_.insert(std::pair<LID, LoopRecord*>(begin_line, new LoopRecord(0, 0, 0)));
     }
 #ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
-    if (dp_debug) {
-      std::cout << "(" << std::dec << function_level << ")Loop " << loop_id << " enters." << std::endl;
-    }
+std::cout << "(" << std::dec << function_level << ")Loop " << loop_id << " enters." << std::endl;
 #endif
   }
 
