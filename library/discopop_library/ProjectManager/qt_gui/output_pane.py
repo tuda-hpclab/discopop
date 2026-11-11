@@ -44,7 +44,8 @@ class OutputPane(QWidget):
         self.clear_button = widgets.create_button("Clear", self.clear_current, tooltip="Clear the shown console")
         self.clear_button.setObjectName(widgets.FLAT_NAME)
         self.header = QWidget()
-        header_layout = widgets.hbox(self.toggle, self.last_line, 1, self.clear_button, margins=0)
+        header_layout = widgets.hbox(self.toggle, self.last_line, None, self.clear_button, margins=0)
+        # the last line takes the width while collapsed; expanded (it is hidden) the stretch keeps Clear at the right
         header_layout.setStretch(1, 1)
         self.header.setLayout(header_layout)
         self.tabs = QTabWidget()
@@ -70,6 +71,17 @@ class OutputPane(QWidget):
         console.show()
         console.text_appended.connect(lambda text, c=console: self._on_text(c, text))
         console.cleared.connect(lambda c=console: self._on_cleared(c))
+
+    def remove_console(self, console: widgets.OutputConsole) -> None:
+        """Take the tab of ``console`` out of the pane (its panel was replaced)."""
+        index = self.tabs.indexOf(console)
+        if index >= 0:
+            self.tabs.removeTab(index)
+        self._titles.pop(console, None)
+        self._tails.pop(console, None)
+        if self._last_line_of is console:
+            self._last_line_of = None
+            self.last_line.setText("")
 
     def consoles(self) -> List[widgets.OutputConsole]:
         return list(self._titles)
@@ -135,6 +147,8 @@ class OutputPane(QWidget):
             self.last_line.setToolTip("")
 
     def _on_text(self, console: widgets.OutputConsole, text: str) -> None:
+        if console not in self._titles:
+            return  # removed from the pane
         tail = (self._tails.get(console, "") + text)[-4 * _LAST_LINE_MAX_CHARS :]
         self._tails[console] = tail
         lines = [line for line in tail.splitlines() if line.strip()]

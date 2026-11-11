@@ -16,7 +16,7 @@ A locked stage cannot be selected; its reason is its detail line and tooltip.
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QListWidget,
@@ -36,13 +36,15 @@ _DETAIL_ROLE = Qt.ItemDataRole.UserRole + 1
 _STATE_ROLE = Qt.ItemDataRole.UserRole + 2
 _SECTION_ROLE = Qt.ItemDataRole.UserRole + 3
 
+# glyph and color of the badge; a stage that was not run gets an outlined circle, the others a filled one
 BADGES: Dict[Optional[StageState], Tuple[str, str]] = {
     StageState.DONE: ("✓", widgets.STATUS_OK),
     StageState.STALE: ("!", widgets.STATUS_STOP),
-    StageState.NOT_RUN: ("○", widgets.STATUS_IDLE),
-    StageState.LOCKED: ("🔒", widgets.STATUS_IDLE),
-    None: ("", widgets.STATUS_IDLE),
+    StageState.NOT_RUN: ("", "#9a9a9a"),
+    StageState.LOCKED: ("🔒", "#9a9a9a"),
+    None: ("", "#9a9a9a"),
 }
+_BADGE_DIAMETER = 18
 
 # the detail line of a stage whose status has no detail of its own
 _STATE_TEXTS: Dict[Optional[StageState], str] = {
@@ -105,11 +107,30 @@ class _StageDelegate(QStyledItemDelegate):
             state_value = index.data(_STATE_ROLE)
             badge, badge_color = BADGES.get(state_value, BADGES[None])
             badge_rect = QRect(rect.left() + 10, rect.top(), _BADGE_WIDTH, rect.height())
-            badge_font = QFont(font)
-            badge_font.setBold(True)
-            painter.setFont(badge_font)
-            painter.setPen(text_color if selected else QColor(badge_color))
-            painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), badge)
+            circle = QRect(0, 0, _BADGE_DIAMETER, _BADGE_DIAMETER)
+            circle.moveCenter(badge_rect.center())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            color = QColor(badge_color)
+            if state_value == StageState.LOCKED:
+                # the lock glyph is its own symbol: no circle
+                painter.setPen(text_color if selected else color)
+                painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), badge)
+            elif badge:
+                painter.setPen(QColor("white") if selected else Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawEllipse(circle)
+                badge_font = QFont(font)
+                badge_font.setBold(True)
+                badge_font.setPointSize(max(font.pointSize() - 1, 7))
+                painter.setFont(badge_font)
+                painter.setPen(QColor("white"))
+                painter.drawText(circle, int(Qt.AlignmentFlag.AlignCenter), badge)
+            else:
+                pen = QPen(text_color if selected else color)
+                pen.setWidthF(1.6)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(circle.adjusted(2, 2, -2, -2))
 
             text_left = badge_rect.right() + 6
             title_rect = QRect(text_left, rect.top() + 5, rect.right() - text_left - 8, rect.height() // 2 - 3)

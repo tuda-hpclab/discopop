@@ -14,7 +14,7 @@ Ported from ``gui/mixins/config_list.py``, ``gui/mixins/config_crud.py`` and ``g
 
 from typing import Callable, List, Optional
 
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QWheelEvent
 from PySide6.QtWidgets import QComboBox, QLabel, QMenu, QSizePolicy, QToolButton, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
@@ -36,6 +36,13 @@ from discopop_library.ProjectManager.services.configurations import (
 from discopop_library.ProjectManager.services.project_state import ConfigChanged, ConfigurationsChanged, ProjectState
 
 _STATUS_RESET_MS = 2000
+
+
+class _NoWheelComboBox(QComboBox):
+    """A combo box the mouse wheel does not change: scrolling over the header must not switch the configuration."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 (Qt's name)
+        event.ignore()
 
 
 class ConfigListPanel(Panel):
@@ -71,7 +78,7 @@ class ConfigListPanel(Panel):
         self._shown_config: Optional[str] = None
         self._wizard: Optional[ConfigurationWizard] = None
 
-        self.combo = QComboBox()
+        self.combo = _NoWheelComboBox()
         self.combo.setMinimumWidth(180)
         self.combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.combo.setToolTip("The configuration the tabs work on")

@@ -223,7 +223,7 @@ class AutotuningPanel(Panel):
         self.log_level = widgets.log_level_selector("WARNING")
         section = widgets.FormSection()
         section.add_row("Log level:", self.log_level)
-        return widgets.CollapsibleSection("Advanced", section)
+        return widgets.CollapsibleSection("Advanced", section, summary="log level")
 
     def _build_selection(self) -> QWidget:
         # pick between searching for the best combination (algorithm + restricted search space) and evaluating one
@@ -636,6 +636,9 @@ class AutotuningPanel(Panel):
                 self.status.set("Autotuning completed successfully", widgets.STATUS_OK, reset_ms=6000)
         else:
             self.status.set("Autotuning failed", widgets.STATUS_FAIL, reset_ms=3000)
+            self.header.chip.set_status(
+                widgets.CHIP_ERROR, "Autotuning failed", "See the Autotuning tab of the output pane for the details."
+            )
 
     def stop(self) -> None:
         if self._job is not None:

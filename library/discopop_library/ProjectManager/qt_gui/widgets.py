@@ -13,6 +13,7 @@ editors and the thread selector, so components of the same kind look the same in
 """
 
 import logging
+import time
 from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 
 from PySide6.QtCore import QObject, QRect, QRegularExpression, Qt, Signal, Slot
@@ -140,7 +141,7 @@ def _component_rules() -> str:
         f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 8px;"
         " background-color: palette(base); }",
         # a status chip: a rounded, colored pill (StatusChip)
-        f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; color: white; font-weight: bold; }}",
+        f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; font-weight: bold; }}",
     ]
     return "\n".join(rules)
 
@@ -536,6 +537,9 @@ def log_level_selector(initial: str = "WARNING") -> QComboBox:
 
 # --- run / stop ---
 
+# clicks this soon after a RunStopButton switched between run and stop are ignored (the second click of a double click)
+SWITCH_GUARD_S = 0.5
+
 
 class RunStopButton(QPushButton):
     """One button that starts a job and, while it runs, stops it (instead of a Run and a mostly disabled Stop).
@@ -566,12 +570,17 @@ class RunStopButton(QPushButton):
         self._on_stop = on_stop
         self._running = False
         self._can_run = True
+        self._switched_at = -SWITCH_GUARD_S
         self.setObjectName(VARIANT_PRIMARY)
         if tooltip:
             self.setToolTip(tooltip)
         self.clicked.connect(lambda _checked=False: self._clicked())
 
     def _clicked(self) -> None:
+        # the second click of a double click lands on the button that has just switched: it must neither stop the
+        # job it started nor start one right after a stop
+        if time.monotonic() - self._switched_at < SWITCH_GUARD_S:
+            return
         if self._running:
             self._on_stop()
         else:
@@ -593,6 +602,8 @@ class RunStopButton(QPushButton):
 
         ``enabled_after``: whether Run is offered once it ended; by default what ``setEnabled`` said last.
         """
+        if running != self._running:
+            self._switched_at = time.monotonic()
         self._running = running
         if enabled_after is not None:
             self._can_run = enabled_after
@@ -717,9 +728,19 @@ class CollapsibleSection(QWidget):
 
     expanded_changed = Signal(bool)
 
-    def __init__(self, title: str, content: QWidget, *, expanded: bool = False, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        title: str,
+        content: QWidget,
+        *,
+        expanded: bool = False,
+        summary: str = "",
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self._title = title
+        # what is inside, shown while collapsed ("timeouts, log level"), so the settings can be found
+        self._summary = summary
         self.content = content
         self.toggle = QToolButton()
         self.toggle.setObjectName(FLAT_NAME)
@@ -740,7 +761,10 @@ class CollapsibleSection(QWidget):
             return
         changed = expanded != self._expanded
         self._expanded = expanded
-        self.toggle.setText(("▾ " if expanded else "▸ ") + self._title)
+        text = ("▾ " if expanded else "▸ ") + self._title
+        if self._summary and not expanded:
+            text += f" — {self._summary}"
+        self.toggle.setText(text)
         self.content.setVisible(expanded)
         if changed:
             self.expanded_changed.emit(expanded)
@@ -795,7 +819,13 @@ class StatusChip(QWidget):
         self.level = level
         self.chip.setText(text)
         self.chip.setVisible(bool(text))
-        self.chip.setStyleSheet(f"background-color: {CHIP_COLORS.get(level, CHIP_COLORS[CHIP_IDLE])};")
+        color = QColor(CHIP_COLORS.get(level, CHIP_COLORS[CHIP_IDLE]))
+        # a tint of the color behind text in the color: reads on light and dark windows, and is quieter than a
+        # solid fill, which made a warning louder than the primary action
+        self.chip.setStyleSheet(
+            f"color: {color.name()}; background-color: rgba({color.red()}, {color.green()}, {color.blue()}, 38);"
+            f" border: 1px solid rgba({color.red()}, {color.green()}, {color.blue()}, 90);"
+        )
         self.chip.setToolTip(detail)
         self.detail_label.setText(detail)
         self.details_button.setVisible(bool(detail))
@@ -829,6 +859,11 @@ def overflow_button(actions: Iterable[Tuple[str, Callable[[], None]]], *, toolti
 
 # --- panel header ---
 
+# the width of the slot of the "⋯" button at the right end of a panel header
+OVERFLOW_SLOT_WIDTH = 32
+# the margins of every panel's page (the main window applies them), so that the stages line up
+PAGE_MARGINS = (16, 12, 16, 8)
+
 
 class PanelHeader(QWidget):
     """The top row of a panel: title and one-line description on the left, a status chip below them, and the
@@ -849,17 +884,30 @@ class PanelHeader(QWidget):
         self.description_label = caption_label(description)
         self.description_label.setVisible(bool(description))
         self.chip = StatusChip()
-        self.actions_layout = hbox(*actions)
+        self.actions_layout = hbox()
+        # the "⋯" menu has a slot of its own at the right end, empty in panels without one, so that the primary
+        # action is in the same place in every panel
+        self.overflow_slot = QWidget()
+        self.overflow_slot.setFixedWidth(OVERFLOW_SLOT_WIDTH)
+        self._overflow_layout = hbox(margins=0)
+        self.overflow_slot.setLayout(self._overflow_layout)
+        self.actions_layout.addWidget(self.overflow_slot, 0, Qt.AlignmentFlag.AlignTop)
+        for action in actions:
+            self.add_action(action)
         text_column = vbox(self.title_label, self.description_label, self.chip, spacing=4)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 8)
+        layout.setContentsMargins(0, 0, 0, 8)
         layout.setSpacing(12)
         layout.addLayout(text_column, 1)
         layout.addLayout(self.actions_layout, 0)
         self.actions_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
     def add_action(self, widget: QWidget) -> None:
-        self.actions_layout.addWidget(widget)
+        """Add an action left of the "⋯" slot; an :func:`overflow_button` goes into the slot."""
+        if isinstance(widget, QToolButton) and widget.objectName() == FLAT_NAME and widget.menu() is not None:
+            self._overflow_layout.addWidget(widget)
+        else:
+            self.actions_layout.insertWidget(self.actions_layout.count() - 1, widget)
 
 
 def align_top(widget: QWidget) -> QWidget:

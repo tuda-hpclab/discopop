@@ -255,7 +255,9 @@ class PatchRepairPanel(Panel):
             )
         )
         section.add_row("Log level:", self.log_level_combo)
-        self._advanced = widgets.CollapsibleSection("Advanced", section)
+        self._advanced = widgets.CollapsibleSection(
+            "Advanced", section, summary="agent timeout, prompts, retries, log level"
+        )
 
     def _build_results(self) -> QTabWidget:
         notebook = QTabWidget()

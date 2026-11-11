@@ -11,6 +11,7 @@
 from pathlib import Path
 from typing import List, Optional
 
+import pytest
 from pytestqt.qtbot import QtBot
 
 from PySide6.QtCore import Qt
@@ -109,7 +110,14 @@ def test_panel_header_holds_title_chip_and_actions(qtbot: QtBot) -> None:
     header.show()
     header.add_action(widgets.overflow_button([("Reset", lambda: None)]))
     assert header.title_label.text() == "Pattern Detection" and header.description_label.isVisible()
-    assert header.actions_layout.count() == 2 and run.parent() is header
+    # actions in the given order, the "⋯" in its slot at the right end
+    assert header.actions_layout.indexOf(run) == 0 and run.parent() is header
+    last = header.actions_layout.itemAt(header.actions_layout.count() - 1)
+    assert last is not None and last.widget() is header.overflow_slot
+    assert header._overflow_layout.count() == 1
+    second = widgets.create_button("Second")
+    header.add_action(second)
+    assert header.actions_layout.indexOf(second) == 1
     header.chip.set_status(widgets.CHIP_OK, "12 suggestions")
     assert header.chip.chip.isVisible()
     plain = widgets.PanelHeader("No description")
@@ -173,7 +181,9 @@ def test_main_window_puts_panel_consoles_into_the_output_pane(qtbot: QtBot, tmp_
     assert window.content_splitter.sizes()[1] <= window.output_pane.maximumHeight()
     # an unrelated widget (not a panel) is not asked for output
     window.add_tab(TAB_ORDER[2], QWidget())
-    assert len(window.output_pane.consoles()) == consoles_before + 1
+    # the panel replaced the Execute panel: its console replaced the Execute console
+    assert len(window.output_pane.consoles()) == consoles_before
+    assert window.execute_panel.console not in window.output_pane.consoles()
 
 
 def test_run_stop_button_remembers_whether_it_can_run(qtbot: QtBot) -> None:
@@ -237,3 +247,31 @@ def test_a_panel_console_is_hidden_until_the_pane_takes_it(qtbot: QtBot, tmp_pat
     console = panel.make_console()
     panel.show()
     assert console.parent() is panel and not console.isVisible()
+
+
+def test_a_double_click_on_run_does_not_stop_the_job(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(widgets, "SWITCH_GUARD_S", 0.5)
+    calls: List[str] = []
+    button = widgets.RunStopButton("Run", lambda: calls.append("run"), lambda: calls.append("stop"))
+    qtbot.addWidget(button)
+    button.clicked.connect(lambda: button.set_running(True) if calls == ["run"] else None)
+    button.click()
+    button.click()  # the second click of a double click
+    assert calls == ["run"] and button.is_running()
+    monkeypatch.setattr(widgets, "SWITCH_GUARD_S", 0.0)
+    button.click()
+    assert calls == ["run", "stop"]
+
+
+def test_replacing_a_stage_removes_the_old_console(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    first = _PanelWithOutput(window.arguments, window.project_state, window.status)
+    window.add_tab(TAB_ORDER[2], first)
+    second = _PanelWithOutput(window.arguments, window.project_state, window.status)
+    window.add_tab(TAB_ORDER[2], second)
+    assert second.console in window.output_pane.consoles() and first.console not in window.output_pane.consoles()
+    assert first not in window.panels and second in window.panels
+    first.console.append_text("late output\n")
+    assert "late output" not in window.output_pane.last_line_text()
+    qtbot.addWidget(first)

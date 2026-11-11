@@ -70,7 +70,7 @@ STATUS_ON_ACTIVATE_MIN_S = 2.0
 
 
 class ElidedPathLabel(QLabel):
-    """Shows a path, cut from the left with an ellipsis when it does not fit; the full path is the tooltip."""
+    """Shows a path, cut in the middle with an ellipsis when it does not fit; the full path is the tooltip."""
 
     def __init__(self, path: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -85,7 +85,8 @@ class ElidedPathLabel(QLabel):
 
     def _elide(self) -> None:
         width = self.width() if self.width() > 1 else 10_000
-        self.setText(self.fontMetrics().elidedText(self._path, Qt.TextElideMode.ElideLeft, width))
+        # in the middle: the start (where the project lives) and the end (its name) are the informative parts
+        self.setText(self.fontMetrics().elidedText(self._path, Qt.TextElideMode.ElideMiddle, width))
 
 
 class MainWindow(QMainWindow):
@@ -125,6 +126,8 @@ class MainWindow(QMainWindow):
         self._status_timer.setInterval(STATUS_DEBOUNCE_MS)
         self._status_timer.timeout.connect(self.refresh_stage_statuses)
         self._statuses_computed_at = 0.0
+        # set on close: a job ending afterwards publishes events, the sidebar must not be refreshed any more
+        self._closing = False
 
         self._build_panels()
         self._build_frame()
@@ -235,6 +238,11 @@ class MainWindow(QMainWindow):
         """
         if name in self._tab_widgets:
             old = self._tab_widgets[name]
+            if isinstance(old, Panel):
+                self.panels.remove(old)
+                old_console = old.output_console()
+                if old_console is not None:
+                    self.output_pane.remove_console(old_console)
             index = self.stack.indexOf(old)
             was_current = self.stack.currentWidget() is old
             self.stack.removeWidget(old)
@@ -247,6 +255,10 @@ class MainWindow(QMainWindow):
         if isinstance(widget, Panel):
             self.panels.append(widget)
             self._add_output_of(name, widget)
+            # every stage gets the same page margins, whatever its own layout set
+            layout = widget.layout()
+            if layout is not None:
+                layout.setContentsMargins(*widgets.PAGE_MARGINS)
         if name in self._pending_tab_state:
             self.set_tab_enabled(name, *self._pending_tab_state.pop(name))
         if name in self._pending_tab_titles:
@@ -304,6 +316,8 @@ class MainWindow(QMainWindow):
 
     def refresh_stage_statuses(self) -> None:
         """Ask the services what each stage has done and show it in the sidebar."""
+        if self._closing:
+            return
         self._statuses_computed_at = time.monotonic()
         statuses = stage_statuses(self.arguments, self.project_state.current_config)
         for name, status in statuses.items():
@@ -355,6 +369,7 @@ class MainWindow(QMainWindow):
             panel.cancel_jobs()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt's name)
+        self._closing = True
         self._status_timer.stop()
         self.cancel_running_jobs()
         super().closeEvent(event)

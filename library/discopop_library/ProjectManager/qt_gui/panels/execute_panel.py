@@ -200,7 +200,9 @@ class ExecutePanel(Panel):
         advanced.add_row("Log level:", self.log_level_combo)
         advanced.add_widget(self.inplace_check)
         advanced.add_widget(self.skip_cleanup_check)
-        self.advanced_section = widgets.CollapsibleSection("Advanced", advanced)
+        self.advanced_section = widgets.CollapsibleSection(
+            "Advanced", advanced, summary="timeouts, log level, in-place, cleanup"
+        )
 
         # ── apply suggestions ────────────────────────────────────────────────
         self.none_radio = QRadioButton("None (apply no suggestions)")
@@ -384,6 +386,8 @@ class ExecutePanel(Panel):
                 self.label_prefix_edit.setText("")
             self._autotuner_prefix_auto_value = ""
         self.execute_suggestion_selector.set_enabled(mode == SUGGESTIONS_MANUAL)
+        # only manually selected suggestions use it: hidden otherwise rather than a large disabled table
+        self.execute_suggestion_selector.setVisible(mode == SUGGESTIONS_MANUAL)
 
     def _update_suggestion_count(self) -> None:
         """The "N of M selected" label from the selector."""
@@ -409,6 +413,7 @@ class ExecutePanel(Panel):
         if total == 0 and self.suggestions_mode() == SUGGESTIONS_MANUAL:
             self.set_suggestions_mode(SUGGESTIONS_NONE)
         self.execute_suggestion_selector.set_enabled(total > 0 and self.suggestions_mode() == SUGGESTIONS_MANUAL)
+        self.execute_suggestion_selector.setVisible(self.suggestions_mode() == SUGGESTIONS_MANUAL)
 
         config = self.project_state.current_config or ""
         executed = autotuner_results_exist(self.arguments.dot_dp)

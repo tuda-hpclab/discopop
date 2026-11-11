@@ -128,11 +128,18 @@ class PatternDetectionPanel(Panel):
 
         self.run_button = widgets.RunStopButton(_RUN_TEXT, self.run_pattern_detection, self.stop_pattern_detection)
         self.run_button.setEnabled(False)
-        self.overflow = widgets.overflow_button([("Show suggestions in VSCode", self.open_in_vscode)])
+        self.overflow = widgets.overflow_button(
+            [
+                ("Show suggestions in VSCode", self.open_in_vscode),
+                ("Browse / edit patches…", self.open_suggestion_browser),
+            ]
+        )
         overflow_menu = self.overflow.menu()
         assert overflow_menu is not None
         self.vscode_action = overflow_menu.actions()[0]
         self.vscode_action.setEnabled(False)
+        self.browse_action = overflow_menu.actions()[1]
+        self.browse_action.setEnabled(False)
         self.header = widgets.PanelHeader(
             "Pattern Detection",
             "Finds parallelization suggestions in the profiling data.",
@@ -219,7 +226,7 @@ class PatternDetectionPanel(Panel):
             "suggestions.",
         )
         advanced.add_widget(self.visualize_check, "The graphs open in a window of their own.")
-        self.advanced = widgets.CollapsibleSection("Advanced", advanced)
+        self.advanced = widgets.CollapsibleSection("Advanced", advanced, summary="dependency data, graph visualization")
 
         column = QWidget()
         column_layout = QVBoxLayout(column)
@@ -314,6 +321,7 @@ class PatternDetectionPanel(Panel):
         none_found = explorer_state.pattern_detection_executed(dot_dp) and not explorer_state.patterns_found(dot_dp)
         self.table.set_empty_text(_NONE_FOUND_TEXT if none_found else NO_SUGGESTIONS_TEXT)
         self.vscode_action.setEnabled(bool(infos))
+        self.browse_action.setEnabled(bool(infos))
         self.detail_area.setVisible(bool(infos))
         self._update_chip(ready, len(infos), none_found)
 
