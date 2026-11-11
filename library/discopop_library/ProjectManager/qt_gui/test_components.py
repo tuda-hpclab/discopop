@@ -102,6 +102,21 @@ def test_overflow_button_runs_the_chosen_action(qtbot: QtBot) -> None:
     assert calls == ["reset"]
 
 
+def test_panel_header_holds_title_chip_and_actions(qtbot: QtBot) -> None:
+    run = widgets.RunStopButton("Run", lambda: None, lambda: None)
+    header = widgets.PanelHeader("Pattern Detection", "Finds parallel patterns.", [run])
+    qtbot.addWidget(header)
+    header.show()
+    header.add_action(widgets.overflow_button([("Reset", lambda: None)]))
+    assert header.title_label.text() == "Pattern Detection" and header.description_label.isVisible()
+    assert header.actions_layout.count() == 2 and run.parent() is header
+    header.chip.set_status(widgets.CHIP_OK, "12 suggestions")
+    assert header.chip.chip.isVisible()
+    plain = widgets.PanelHeader("No description")
+    qtbot.addWidget(plain)
+    assert not plain.description_label.isVisibleTo(plain)
+
+
 def test_console_reports_appended_text(qtbot: QtBot) -> None:
     console = widgets.OutputConsole()
     qtbot.addWidget(console)
@@ -136,7 +151,7 @@ class _PanelWithOutput(Panel):
 
     def __init__(self, *args: object) -> None:
         super().__init__(*args)  # type: ignore[arg-type]
-        self.console = widgets.OutputConsole(self)
+        self.console = self.make_console()
 
     def output_console(self) -> Optional[widgets.OutputConsole]:
         return self.console
@@ -158,3 +173,66 @@ def test_main_window_puts_panel_consoles_into_the_output_pane(qtbot: QtBot, tmp_
     # an unrelated widget (not a panel) is not asked for output
     window.add_tab(TAB_ORDER[2], QWidget())
     assert len(window.output_pane.consoles()) == 1
+
+
+def test_run_stop_button_remembers_whether_it_can_run(qtbot: QtBot) -> None:
+    calls: List[str] = []
+    button = widgets.RunStopButton("Run", lambda: calls.append("run"), lambda: calls.append("stop"))
+    qtbot.addWidget(button)
+    button.setEnabled(False)  # e.g. no configuration
+    button.set_running(True)
+    button.setEnabled(False)  # a panel disabling all its controls during the job
+    assert button.isEnabled() and not button.can_run()
+    button.set_stopping()
+    assert button.text() == "Stopping…" and not button.isEnabled()
+    button.set_running(False)
+    assert button.text() == "Run" and not button.isEnabled()
+    button.setEnabled(True)
+    assert button.isEnabled()
+
+
+def test_collapsible_section_reports_changes(qtbot: QtBot) -> None:
+    section = widgets.CollapsibleSection("Advanced", QLabel("x"), expanded=True)
+    qtbot.addWidget(section)
+    seen: List[bool] = []
+    section.expanded_changed.connect(seen.append)
+    section.set_expanded(True)
+    section.toggle.click()
+    section.set_expanded(False)
+    assert seen == [False] and not section.is_expanded()
+
+
+def test_form_section_hides_a_row(qtbot: QtBot) -> None:
+    section = widgets.FormSection()
+    qtbot.addWidget(section)
+    spin, check = QSpinBox(), QLabel("full width")
+    section.add_row("Value:", spin, "a hint")
+    section.add_widget(check)
+    section.show()
+    section.set_row_visible(spin, False)
+    section.set_row_visible(check, False)
+    assert not spin.isVisible() and not check.isVisible()
+    section.set_row_visible(spin, True)
+    assert spin.isVisible()
+
+
+def test_output_pane_forgets_the_last_line_of_a_cleared_console(qtbot: QtBot) -> None:
+    pane = OutputPane()
+    qtbot.addWidget(pane)
+    console = widgets.OutputConsole()
+    pane.add_console("A", console)
+    console.append_text("hello\nworld")
+    console.clear()
+    assert pane.last_line_text() == ""
+    console.append_text("partial")
+    assert pane.last_line_text() == "A: partial"
+
+
+def test_a_panel_console_is_hidden_until_the_pane_takes_it(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    panel = Panel(window.arguments, window.project_state, window.status)
+    qtbot.addWidget(panel)
+    console = panel.make_console()
+    panel.show()
+    assert console.parent() is panel and not console.isVisible()

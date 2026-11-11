@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLayout,
+    QLayoutItem,
     QMenu,
     QPlainTextEdit,
     QProxyStyle,
@@ -316,6 +317,7 @@ class OutputConsole(QPlainTextEdit):
     """
 
     text_appended = Signal(str)
+    cleared = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None, *, wrap: bool = True, editable: bool = False) -> None:
         super().__init__(parent)
@@ -344,6 +346,10 @@ class OutputConsole(QPlainTextEdit):
         if follow:
             scrollbar.setValue(scrollbar.maximum())
         self.text_appended.emit(text)
+
+    def clear(self) -> None:
+        super().clear()
+        self.cleared.emit()
 
     def set_text(self, text: str) -> None:
         """Replace the whole content."""
@@ -537,9 +543,12 @@ class RunStopButton(QPushButton):
     """One button that starts a job and, while it runs, stops it (instead of a Run and a mostly disabled Stop).
 
     Idle it shows ``run_text`` in the primary color and calls ``on_run``; after :meth:`set_running` (True) it shows
-    ``stop_text`` in the danger color, stays enabled and calls ``on_stop``. ``setEnabled(False)`` while idle means
-    "cannot run now"; :meth:`set_stop_enabled` (False) while running means "cannot be stopped now" (e.g. a phase
-    that must not be interrupted).
+    ``stop_text`` in the danger color, stays enabled and calls ``on_stop``.
+
+    ``setEnabled`` always means "can a run be started": while running it is only remembered (so code disabling all
+    controls during a job does not disable Stop) and applied when the run ends. :meth:`set_stop_enabled` (False)
+    while running means "cannot be stopped now" (a phase that must not be interrupted); :meth:`set_stopping` shows
+    that a stop was requested and blocks a second click.
     """
 
     def __init__(
@@ -558,6 +567,7 @@ class RunStopButton(QPushButton):
         self._on_run = on_run
         self._on_stop = on_stop
         self._running = False
+        self._can_run = True
         self.setObjectName(VARIANT_PRIMARY)
         if tooltip:
             self.setToolTip(tooltip)
@@ -572,12 +582,31 @@ class RunStopButton(QPushButton):
     def is_running(self) -> bool:
         return self._running
 
-    def set_running(self, running: bool, *, enabled_after: bool = True) -> None:
-        """Switch between the run and the stop look; ``enabled_after``: whether Run is offered once it ended."""
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802 (Qt's name)
+        self._can_run = enabled
+        if not self._running:
+            super().setEnabled(enabled)
+
+    def can_run(self) -> bool:
+        return self._can_run
+
+    def set_running(self, running: bool, *, enabled_after: Optional[bool] = None) -> None:
+        """Switch between the run and the stop look.
+
+        ``enabled_after``: whether Run is offered once it ended; by default what ``setEnabled`` said last.
+        """
         self._running = running
+        if enabled_after is not None:
+            self._can_run = enabled_after
         self.setText(self._stop_text if running else self._run_text)
         set_button_variant(self, VARIANT_DANGER if running else VARIANT_PRIMARY)
-        self.setEnabled(True if running else enabled_after)
+        super().setEnabled(True if running else self._can_run)
+
+    def set_stopping(self, text: str = "Stopping…") -> None:
+        """A stop was requested: say so and ignore further clicks until :meth:`set_running` (False)."""
+        if self._running:
+            self.setText(text)
+            super().setEnabled(False)
 
     def set_run_text(self, text: str) -> None:
         """Change the idle text (e.g. "Run Analysis" -> "Re-run Analysis")."""
@@ -587,7 +616,7 @@ class RunStopButton(QPushButton):
 
     def set_stop_enabled(self, enabled: bool) -> None:
         if self._running:
-            self.setEnabled(enabled)
+            super().setEnabled(enabled)
 
 
 # --- forms ---
@@ -649,6 +678,15 @@ class FormSection(QFrame):
             self.form.addRow(label, field)
         return hint_label
 
+    def set_row_visible(self, field: Union[QWidget, QLayout], visible: bool) -> None:
+        """Show or hide the row holding ``field`` (as passed to :meth:`add_row` / :meth:`add_widget`)."""
+        for row in range(self.form.rowCount()):
+            for role in (QFormLayout.ItemRole.FieldRole, QFormLayout.ItemRole.SpanningRole):
+                item = self.form.itemAt(row, role)
+                if item is not None and _layout_item_holds(item, field):
+                    self.form.setRowVisible(row, visible)
+                    return
+
     def add_widget(self, widget: Union[QWidget, QLayout], hint: str = "") -> Optional[QLabel]:
         """A full-width row; ``hint`` goes into a caption below it."""
         if isinstance(widget, QLayout):
@@ -662,8 +700,24 @@ class FormSection(QFrame):
         return None
 
 
+def _layout_item_holds(item: QLayoutItem, field: Union[QWidget, QLayout]) -> bool:
+    """Whether ``item`` is ``field`` or a layout containing it (add_row wraps fields into layouts)."""
+    if item.widget() is field or item.layout() is field:
+        return True
+    layout = item.layout()
+    if layout is None:
+        return False
+    for index in range(layout.count()):
+        child = layout.itemAt(index)
+        if child is not None and _layout_item_holds(child, field):
+            return True
+    return False
+
+
 class CollapsibleSection(QWidget):
     """A "▸ title" toggle that shows / hides its content; for advanced settings that are rarely changed."""
+
+    expanded_changed = Signal(bool)
 
     def __init__(self, title: str, content: QWidget, *, expanded: bool = False, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -679,14 +733,19 @@ class CollapsibleSection(QWidget):
         layout.setSpacing(4)
         layout.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(content)
+        self._expanded = not expanded  # so the first set_expanded applies the state
         self.set_expanded(expanded)
 
     def set_expanded(self, expanded: bool) -> None:
         if self.toggle.isChecked() != expanded:
             self.toggle.setChecked(expanded)  # re-enters through toggled
             return
+        changed = expanded != self._expanded
+        self._expanded = expanded
         self.toggle.setText(("▾ " if expanded else "▸ ") + self._title)
         self.content.setVisible(expanded)
+        if changed:
+            self.expanded_changed.emit(expanded)
 
     def is_expanded(self) -> bool:
         return self.toggle.isChecked()
@@ -768,6 +827,41 @@ def overflow_button(actions: Iterable[Tuple[str, Callable[[], None]]], *, toolti
         action.triggered.connect(lambda _checked=False, cb=callback: cb())
     button.setMenu(menu)
     return button
+
+
+# --- panel header ---
+
+
+class PanelHeader(QWidget):
+    """The top row of a panel: title and one-line description on the left, a status chip below them, and the
+    panel's actions on the right (the primary one -- usually a :class:`RunStopButton` -- last, then a "⋯" menu).
+
+    The primary action sits in the same place in every panel and stays visible while the settings below scroll.
+    """
+
+    def __init__(
+        self,
+        title: str,
+        description: str = "",
+        actions: Iterable[QWidget] = (),
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.title_label = heading_label(title, title=True)
+        self.description_label = caption_label(description)
+        self.description_label.setVisible(bool(description))
+        self.chip = StatusChip()
+        self.actions_layout = hbox(*actions)
+        text_column = vbox(self.title_label, self.description_label, self.chip, spacing=4)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 8)
+        layout.setSpacing(12)
+        layout.addLayout(text_column, 1)
+        layout.addLayout(self.actions_layout, 0)
+        self.actions_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+    def add_action(self, widget: QWidget) -> None:
+        self.actions_layout.addWidget(widget)
 
 
 def align_top(widget: QWidget) -> QWidget:

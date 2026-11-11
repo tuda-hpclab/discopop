@@ -95,9 +95,10 @@ def _detection_is_stale(dot_dp: str) -> bool:
     detected = _mtime(os.path.join(dot_dp, "explorer", "patterns.json"))
     if detected is None:
         return False
-    return any(
-        profiled is not None and profiled > detected for profiled in map(_mtime, required_explorer_files(dot_dp))
-    )
+    # FileMapping.txt is left out: every instrumented build rewrites it (the hotspot build too), without changing
+    # the profiling data the detection used
+    profiling_files = [path for path in required_explorer_files(dot_dp) if os.path.basename(path) != "FileMapping.txt"]
+    return any(profiled is not None and profiled > detected for profiled in map(_mtime, profiling_files))
 
 
 def _editor_status(arguments: ProjectManagerArguments, config: Optional[str]) -> StageStatus:

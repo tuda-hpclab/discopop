@@ -16,6 +16,7 @@ job stays visible without taking space.
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import QLabel, QTabWidget, QToolButton, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.qt_gui import widgets
@@ -48,7 +49,7 @@ class OutputPane(QWidget):
         self.header.setLayout(header_layout)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        layout = QVBoxLayout(self)
+        layout = self._layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 4)
         layout.setSpacing(2)
         layout.addWidget(self.header)
@@ -56,6 +57,7 @@ class OutputPane(QWidget):
         self._titles: Dict[widgets.OutputConsole, str] = {}
         # the recent output of each console, to find its last complete line
         self._tails: Dict[widgets.OutputConsole, str] = {}
+        self._last_line_of: Optional[widgets.OutputConsole] = None
         self._expanded = True
         self.set_expanded(False)
 
@@ -67,6 +69,7 @@ class OutputPane(QWidget):
         self.tabs.addTab(console, title)
         console.show()
         console.text_appended.connect(lambda text, c=console: self._on_text(c, text))
+        console.cleared.connect(lambda c=console: self._on_cleared(c))
 
     def consoles(self) -> List[widgets.OutputConsole]:
         return list(self._titles)
@@ -102,9 +105,19 @@ class OutputPane(QWidget):
         self.tabs.setVisible(expanded)
         self.clear_button.setVisible(expanded)
         self.last_line.setVisible(not expanded)
-        self.setMaximumHeight(16_777_215 if expanded else self.header.sizeHint().height() + 8)
+        self.setMaximumHeight(16_777_215 if expanded else self.collapsed_height())
         if changed:
             self.expanded_changed.emit(expanded)
+
+    def collapsed_height(self) -> int:
+        margins = self._layout.contentsMargins()
+        return self.header.sizeHint().height() + margins.top() + margins.bottom()
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt's name)
+        super().showEvent(event)
+        # the header's height is only final once the style polished it
+        if not self._expanded:
+            self.setMaximumHeight(self.collapsed_height())
 
     def _on_toggled(self, checked: bool) -> None:
         self.set_expanded(checked)
@@ -114,6 +127,13 @@ class OutputPane(QWidget):
     def last_line_text(self) -> str:
         return self.last_line.text()
 
+    def _on_cleared(self, console: widgets.OutputConsole) -> None:
+        self._tails.pop(console, None)
+        if self._last_line_of is console:
+            self._last_line_of = None
+            self.last_line.setText("")
+            self.last_line.setToolTip("")
+
     def _on_text(self, console: widgets.OutputConsole, text: str) -> None:
         tail = (self._tails.get(console, "") + text)[-4 * _LAST_LINE_MAX_CHARS :]
         self._tails[console] = tail
@@ -121,5 +141,6 @@ class OutputPane(QWidget):
         if not lines:
             return
         line = lines[-1].strip()[:_LAST_LINE_MAX_CHARS]
+        self._last_line_of = console
         self.last_line.setText(f"{self._titles.get(console, '')}: {line}")
         self.last_line.setToolTip(line)
