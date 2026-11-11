@@ -33,7 +33,9 @@ from discopop_library.ProjectManager.services.patch_repair_view import load_resu
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
 
 # The keys of the stages; they equal the names of the tabs of the main window (qt_gui/tabs.py re-exports them).
+STAGE_SETUP = "Setup"
 STAGE_EDITOR = "Editor"
+STAGE_PROFILING = "Profiling"
 STAGE_EXECUTE = "Execute"
 STAGE_REPORT = "Report"
 STAGE_HOTSPOT = "Hotspot Detection"
@@ -102,6 +104,16 @@ def detection_is_stale(dot_dp: str) -> bool:
     return any(profiled is not None and profiled > detected for profiled in map(_mtime, profiling_files))
 
 
+def _setup_status(arguments: ProjectManagerArguments) -> StageStatus:
+    """The shared build: compile.sh, the settings of the sequential build and the ones derived from them."""
+    for name in ("compile.sh", "seq_settings.json"):
+        if not os.path.isfile(os.path.join(arguments.project_config_dir, name)):
+            return StageStatus(StageState.NOT_RUN, f"no {name}")
+    if not os.path.isfile(os.path.join(arguments.project_config_dir, "dp_settings.json")):
+        return StageStatus(StageState.NOT_RUN, "settings not derived")
+    return StageStatus(StageState.DONE, "compile.sh, settings")
+
+
 def _editor_status(arguments: ProjectManagerArguments, config: Optional[str]) -> StageStatus:
     if not config:
         return StageStatus(StageState.NOT_RUN, "no configuration selected")
@@ -110,10 +122,16 @@ def _editor_status(arguments: ProjectManagerArguments, config: Optional[str]) ->
     return StageStatus(StageState.NOT_RUN, "no execute.sh")
 
 
-def _execute_status(arguments: ProjectManagerArguments, runs: int) -> StageStatus:
+def _profiling_status(arguments: ProjectManagerArguments) -> StageStatus:
     if not explorer_prerequisites_met(arguments.dot_dp):
         return StageStatus(StageState.NOT_RUN, "no profiling data")
-    return StageStatus(StageState.DONE, _plural(runs, "measured run") if runs else "profiled")
+    return StageStatus(StageState.DONE, "profiled")
+
+
+def _execute_status(runs: int) -> StageStatus:
+    if not runs:
+        return StageStatus(StageState.NOT_RUN, "no measured runs")
+    return StageStatus(StageState.DONE, _plural(runs, "measured run"))
 
 
 # The build state walks the source tree for the newest modification time, the only part of stage_statuses that is
@@ -186,8 +204,10 @@ def stage_statuses(arguments: ProjectManagerArguments, config: Optional[str]) ->
     """The status of every stage of the workflow, by stage key; cheap enough to call after every project event."""
     runs = count_execution_results(arguments.project_dir)
     return {
+        STAGE_SETUP: _setup_status(arguments),
         STAGE_EDITOR: _editor_status(arguments, config),
-        STAGE_EXECUTE: _execute_status(arguments, runs),
+        STAGE_PROFILING: _profiling_status(arguments),
+        STAGE_EXECUTE: _execute_status(runs),
         STAGE_HOTSPOT: _hotspot_status(arguments, config),
         STAGE_PATTERN_DETECTION: _pattern_detection_status(arguments),
         STAGE_PATCH_REPAIR: _patch_repair_status(arguments),

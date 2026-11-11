@@ -46,19 +46,19 @@ Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the co
 
 The window has a header bar, a workflow sidebar, the stage that is selected and an output pane. The colors follow the light or dark color scheme of the desktop; the charts stay light.
 
-- **Header bar** (top): the title, the path of the `.discopop` directory and the **Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…*, *Project compilation…* (opens the [Compilation Editor](#compilation-editor)) and *Delete…*.
+- **Header bar** (top): the title, the path of the `.discopop` directory and the **Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…* and *Delete…*.
 - **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:
-  - **Setup**: *Configure*, the scripts of the selected configuration.
-  - **Pipeline**: *Execute*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*. Most of them work on the selected configuration.
+  - **Project**: *Setup*, the build shared by all configurations, and *Configure*, the scripts of the selected configuration.
+  - **Pipeline**: *Profiling*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*. Most of them work on the selected configuration.
   - **Results**: *Report*.
 
-  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). A locked stage cannot be opened, except *Pattern Detection*, which opens and explains what is missing, with a **Go to Execute** button.
+  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). A locked stage cannot be opened, except *Pattern Detection*, which opens and explains what is missing, with a **Go to Profiling** button.
 - **Stage** (right): the stage that is selected.
 - **Output pane** (bottom): the output of all jobs, see [Output pane](#output-pane).
 
 Every stage has the same header: its title, a one-line description, a status chip (a colored label; some chips have a **Details** toggle for the longer explanation) and its actions at the top right. The primary action, for example **Run**, is one button that turns into **■ Stop** while the job runs. Rare or destructive actions are in a **⋯** menu of the stage. Settings are grouped in cards; settings that are rarely changed are in a collapsed **Advanced** section.
 
-The Tk version (`--gui-toolkit tk`) keeps the old layout: the configuration list on the left with **+ New** and **Edit Compilation**, and the tabs *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair* and *Autotuning* on the right. The functions of the tabs are the same as those of the stages described below.
+The Tk version (`--gui-toolkit tk`) keeps the old layout: the configuration list on the left with **+ New** and **Edit Compilation**, and the tabs *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair* and *Autotuning* on the right. The functions of the tabs are the same as those of the stages described below; the *Setup* stage is the window opened by **Edit Compilation**, the *Profiling* stage is the button **Prepare Pattern Detection** of the *Execute* tab.
 
 The stages for later steps explain which prerequisite is missing: the detail line in the sidebar, and on mouse over. For example, *Pattern Detection* needs profiling data and *Autotuning* needs pattern detection results.
 
@@ -79,7 +79,22 @@ When the project has no usable configuration, the GUI opens the *Configuration A
 7. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
 8. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
 
-After **Finish**, the new configuration is selected and the *Execute* stage opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
+After **Finish**, the new configuration is selected and the *Profiling* stage, the first one of the pipeline, opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
+
+## Setup
+![Setup stage with the shared compile.sh](../assets/screenshots/gui_setup.svg)
+
+The *Setup* stage edits the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`. Unsaved changes mark the stage "Setup *" in the sidebar.
+
+- **Save (Ctrl+S)** writes the files.
+- **Test Compilation** (on the `compile.sh` tab) builds the project with the current script and settings, without recording a result. The output appears in the output pane, the outcome in the status chip.
+- **Derive** (on the `seq_settings.json` tab) creates `dp_settings.json`, `hd_settings.json` and `par_settings.json` from `seq_settings.json`: `discopop_cc`/`discopop_cxx` for `dp`, `discopop_hotspot_cc`/`discopop_hotspot_cxx` and `-fopenmp` for `hd`, `-fopenmp` for `par`.
+- The shared `compile_validate.sh` is optional (**Add** / **Remove**).
+
+Files without unsaved changes are read again when the stage is shown, so the files written by the configuration assistant or by another program appear.
+
+{: .note }
+The GUI does not derive the settings files again when it executes a configuration, so your edits of them are kept. The command line project manager overwrites them from `seq_settings.json` on every run.
 
 ## Configure
 ![Configure stage, execute.sh with the execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
@@ -98,44 +113,14 @@ The scripts are executed with the project root as working directory and with the
 ### Execution time
 By default, the runtime of `execute.sh` is its wall clock time. Check *Read the execution time from the program's console output* to measure the time the program prints itself instead. *Pattern* is a regular expression whose first capture group holds the value; the default searches for `<DP_EXEC_TIME>1.234</DP_EXEC_TIME>`. **Test** applies the pattern to the output of the last recorded run without executing anything. The setting is stored in `execution_time.json` next to `execute.sh`. See [Measured runtime](Project_manager.md#measured-runtime).
 
-### Compilation Editor
-**Project compilation…** in the **⋯** menu of the header bar opens a separate window, the *Compilation Editor*, for the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`. (In the Tk version, the same window is opened by **Edit Compilation** in the left column.)
+## Profiling
+![Profiling stage with the time of the last profiling run and the timeouts](../assets/screenshots/gui_profiling.svg)
 
-- **Save (Ctrl+S)** writes the files.
-- **Test Compilation** builds the project with the current script and settings and shows the result.
-- **Derive** creates `dp_settings.json`, `hd_settings.json` and `par_settings.json` from `seq_settings.json`: `discopop_cc`/`discopop_cxx` for `dp`, `discopop_hotspot_cc`/`discopop_hotspot_cxx` and `-fopenmp` for `hd`, `-fopenmp` for `par`.
-- The shared `compile_validate.sh` is optional (**Add** / **Remove**).
+The *Profiling* stage compiles the selected configuration with the DiscoPoP compiler wrappers (`dp_settings.json`) and runs its `execute.sh` once, in place, i.e. in the project directory itself. The profiler records the data dependences that occur in this run; they are kept in `.discopop/profiler`, and the *Pattern Detection* stage works on them. A new profiling run replaces the data of the previous one.
 
-{: .note }
-The GUI does not derive the settings files again when it executes a configuration, so your edits of them are kept. The command line project manager overwrites them from `seq_settings.json` on every run.
+Its header holds **Profile for Pattern Detection** (**■ Stop** while it runs). The cards show the selected configuration and the time of the last profiling run (or which profiling files are missing), and explain the run. The instrumented program runs much slower than the original, so give the configuration a small, but representative input. *Advanced* (collapsed) holds the timeouts for compilation, execution and validation in seconds (0 = disabled).
 
-## Execute
-![Execute stage](../assets/screenshots/gui_execute.svg)
-
-The *Execute* stage compiles and runs the selected configuration, as `discopop_project_manager -x` does, and records the measurements. Its header holds **Run** (**■ Stop** while it runs) and **Profile for Pattern Detection**.
-
-| Card | Setting |
-|---|---|
-| Modes | `seq` (sequential), `dp` (DiscoPoP instrumented), `hd` (hotspot detection), `par` (parallel). A mode is available when its settings file, the compile script and `execute.sh` exist. |
-| Run | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, and a summary of the execution time setting of the *Configure* stage |
-| Apply suggestions | None, manually selected suggestions (**Browse / Edit →**), or the suggestions selected by the autotuner |
-| Advanced (collapsed) | Timeouts for execution, compilation and validation in seconds (0 = disabled), log level, *Execute in-place (skip project copy)*, *Skip cleanup (keep project copies)* |
-
-**Profile for Pattern Detection** runs the configuration in `dp` mode in place, which creates the profiling data in `.discopop/profiler`. The output appears in the output pane.
-
-{: .warning }
-In-place execution together with applied suggestions modifies your project directory. The GUI asks for confirmation.
-
-Results are stored in `.discopop/project/execution_results.json`.
-
-## Report
-![Report stage](../assets/screenshots/gui_report.svg)
-
-The *Report* stage shows all recorded measurements. The *Table* tab lists configuration, script, setting, label, applied and not applied suggestions, threads, status, time, speedup and efficiency; speedup is relative to the `seq` run of the same script. Times have their units, missing values are shown as "—", and applied suggestions are listed by their IDs. With the **+** button you add plots: *Trade-off scatter*, *Thread scaling*, *Speedup / efficiency bars* and *Runtime bars*. Click a point or bar to see its details.
-
-- **Generate PDF Report** and **View Report PDF** create and open `.discopop/project/reports/<timestamp>/full_report.pdf` (the folder also holds `report.csv` and single PDFs). Viewing uses `xdg-open`.
-- The **⋯** menu offers **Reset Execution Results…**, which deletes the measurements and reports, and **Reset Project…**, which deletes everything below `.discopop` except the configurations. Both ask for confirmation.
-- **Reload** re-reads the results.
+Without `compile.sh`, `execute.sh` or `dp_settings.json`, the stage says what is missing; **Go to Setup** opens the *Setup* stage. The *Profiling* and *Execute* stages do not run at the same time.
 
 ## Hotspots
 ![Hotspots stage after two measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
@@ -159,7 +144,7 @@ Results are stored in `.discopop/hotspot_detection/` (`Hotspots.json` and the ru
 ## Pattern Detection
 ![Pattern Detection stage after a detection run, with the table of suggestions and the details and patch of the selected suggestion](../assets/screenshots/gui_pattern_detection.svg)
 
-The stage runs `discopop_explorer` in the `.discopop` directory. It needs the profiling data of a `dp` run (use **Profile for Pattern Detection** in the *Execute* stage first). Without profiling data, the stage says what is missing and offers **Go to Execute**.
+The stage runs `discopop_explorer` in the `.discopop` directory. It needs the profiling data of a `dp` run (run the *Profiling* stage first). Without profiling data, the stage says what is missing and offers **Go to Profiling**.
 
 The settings are cards:
 
@@ -195,11 +180,39 @@ The stage runs [`discopop_auto_tuner`](Autotuner.md) for the selected configurat
 
 The *Live Plot* shows every measured configuration while the tuner runs; its output is in the output pane. The stage does not apply the result: in the *Execute* stage, choose *Apply autotuner-selected suggestions* and run the `par` mode, or apply the suggestions to your sources with the [patch applicator](Patch_applicator.md).
 
+## Execute
+![Execute stage](../assets/screenshots/gui_execute.svg)
+
+The *Execute* stage compiles and runs the selected configuration, as `discopop_project_manager -x` does, and records the measurements. Its header holds **Run** (**■ Stop** while it runs). It is the last stage of the pipeline: it measures the configurations with or without the suggestions of the stages before it.
+
+| Card | Setting |
+|---|---|
+| Modes | `seq` (sequential), `dp` (DiscoPoP instrumented), `hd` (hotspot detection), `par` (parallel). A mode is available when its settings file, the compile script and `execute.sh` exist. |
+| Run | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, and a summary of the execution time setting of the *Configure* stage |
+| Apply suggestions | None, manually selected suggestions (**Browse / Edit →**), or the suggestions selected by the autotuner |
+| Advanced (collapsed) | Timeouts for execution, compilation and validation in seconds (0 = disabled), log level, *Execute in-place (skip project copy)*, *Skip cleanup (keep project copies)* |
+
+The profiling data for the pattern detection is created by the [Profiling](#profiling) stage. Runs of the `dp` mode in a project copy delete their profiling data with the copy.
+
+{: .warning }
+In-place execution together with applied suggestions modifies your project directory. The GUI asks for confirmation.
+
+Results are stored in `.discopop/project/execution_results.json`.
+
+## Report
+![Report stage](../assets/screenshots/gui_report.svg)
+
+The *Report* stage shows all recorded measurements. The *Table* tab lists configuration, script, setting, label, applied and not applied suggestions, threads, status, time, speedup and efficiency; speedup is relative to the `seq` run of the same script. Times have their units, missing values are shown as "—", and applied suggestions are listed by their IDs. With the **+** button you add plots: *Trade-off scatter*, *Thread scaling*, *Speedup / efficiency bars* and *Runtime bars*. Click a point or bar to see its details.
+
+- **Generate PDF Report** and **View Report PDF** create and open `.discopop/project/reports/<timestamp>/full_report.pdf` (the folder also holds `report.csv` and single PDFs). Viewing uses `xdg-open`.
+- The **⋯** menu offers **Reset Execution Results…**, which deletes the measurements and reports, and **Reset Project…**, which deletes everything below `.discopop` except the configurations. Both ask for confirmation.
+- **Reload** re-reads the results.
+
 ## What the stages run
 
 | Stage | Runs |
 |---|---|
-| Configure, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
+| Setup, Configure, Profiling, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
 | Hotspots | The `hd` mode of the project manager, then `discopop_hotspot_analyzer` |
 | Pattern Detection | `discopop_explorer` (subprocess; in the Tk version in process with graph visualization) |
 | Patch Repair | `python -m discopop_library.PatchRepair` (`discopop_patch_repair`) as a subprocess |

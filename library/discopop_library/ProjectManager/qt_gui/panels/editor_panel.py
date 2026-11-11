@@ -41,7 +41,6 @@ from discopop_library.ProjectManager.configurations.execution_time import (
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.ProjectManager.qt_gui.compilation_editor import CompilationEditor
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
@@ -119,7 +118,6 @@ class EditorPanel(Panel):
         self._loaded_config: Optional[str] = None
         # the files of the loaded configuration as they were on disk when loaded or saved
         self._loaded_state: Tuple[Tuple[str, Optional[str]], ...] = ()
-        self._compilation_editor: Optional[CompilationEditor] = None
 
         self.editors: Dict[str, widgets.ScriptEditor] = {name: widgets.ScriptEditor() for name in FILES}
         for editor in self.editors.values():
@@ -551,21 +549,3 @@ class EditorPanel(Panel):
         if dialogs.ask_yes_no(self, "Unsaved Changes", "You have unsaved changes. Save before switching?"):
             return self.save()
         return True
-
-    def save_shortcut(self) -> None:
-        """Ctrl+S: saves what the window in front shows (the compilation editor, or the Editor tab)."""
-        editor = self._compilation_editor
-        if editor is not None and editor.isVisible() and editor.isActiveWindow():
-            editor.save()
-        elif self.tabs.current_tab() == TAB_EDITOR:
-            self.save()
-
-    def open_compilation_editor(self) -> None:
-        """Open the compilation editor window (shared compile.sh and settings), or bring it to the front."""
-        if self._compilation_editor is None:
-            self._compilation_editor = CompilationEditor(self.arguments, self.project_state, self.status, self)
-        self._compilation_editor.open()
-
-    def cancel_jobs(self) -> None:
-        if self._compilation_editor is not None:
-            self._compilation_editor.cancel_jobs()

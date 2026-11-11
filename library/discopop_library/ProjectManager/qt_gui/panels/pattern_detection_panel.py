@@ -14,6 +14,7 @@ responsive and Stop works.
 """
 
 import importlib.util
+import os
 import queue
 from typing import Dict, List, Optional
 
@@ -39,7 +40,7 @@ from discopop_library.ProjectManager.qt_gui import dialogs, suggestion_browser, 
 from discopop_library.ProjectManager.qt_gui.widgets import CodeView
 from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
 from discopop_library.ProjectManager.qt_gui.suggestion_table import NO_SUGGESTIONS_TEXT, SuggestionTable
-from discopop_library.ProjectManager.qt_gui.tabs import TAB_EXECUTE, TAB_HOTSPOT, TAB_PATTERN_DETECTION
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_HOTSPOT, TAB_PATTERN_DETECTION, TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services import explorer_state
@@ -293,13 +294,15 @@ class PatternDetectionPanel(Panel):
         self.locked_reason.setWordWrap(True)
         self.locked_reason.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.locked_reason.setStyleSheet(f"color: {widgets.STATUS_IDLE};")
-        self.goto_execute_button = widgets.primary_button("Go to Execute", lambda: self.tabs.show_tab(TAB_EXECUTE))
+        self.goto_profiling_button = widgets.primary_button(
+            "Go to Profiling", lambda: self.tabs.show_tab(TAB_PROFILING)
+        )
         view = QWidget()
         layout = QVBoxLayout(view)
         layout.addStretch(1)
         layout.addWidget(self.locked_title, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.locked_reason)
-        layout.addWidget(self.goto_execute_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.goto_profiling_button, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addStretch(2)
         return view
 
@@ -326,7 +329,12 @@ class PatternDetectionPanel(Panel):
         if ready:
             self.results_stack.setCurrentIndex(0)
         else:
-            lines = explorer_state.pattern_detection_tooltip_text(dot_dp).splitlines()[1:]
+            lines = ["Profiling data not found."]
+            missing = explorer_state.missing_explorer_files(dot_dp)
+            if missing:
+                lines.append("Missing in " + dot_dp + ":")
+                lines.extend("  " + os.path.relpath(path, dot_dp) for path in missing)
+            lines.append("Run the Profiling stage first.")
             self.locked_reason.setText("\n".join(lines))
             self.results_stack.setCurrentIndex(1)
         # the tab stays reachable: without profiling data it explains what to do instead of being grayed out
@@ -338,7 +346,7 @@ class PatternDetectionPanel(Panel):
         if self.explorer_running:
             chip.set_status(widgets.CHIP_BUSY, "Running...")
         elif not ready:
-            chip.set_status(widgets.CHIP_IDLE, "Not run yet", "Needs profiling data from the Execute tab.")
+            chip.set_status(widgets.CHIP_IDLE, "Not run yet", "Needs profiling data from the Profiling stage.")
         elif detection_is_stale(dot_dp):
             chip.set_status(
                 widgets.CHIP_WARN,
@@ -369,7 +377,7 @@ class PatternDetectionPanel(Panel):
             dialogs.show_error(
                 self,
                 "Prerequisites Not Met",
-                "Profiling data not found.\nPlease execute a configuration in 'dp' mode with 'inplace' enabled first.",
+                "Profiling data not found.\nPlease run the Profiling stage first.",
             )
             return
         if self.explorer_running:

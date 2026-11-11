@@ -325,17 +325,6 @@ def test_confirm_leave_keeps_the_configuration_when_saving_fails(
     assert not panel.confirm_leave()
 
 
-def test_the_save_shortcut_depends_on_the_tab_in_front(panel: EditorPanel) -> None:
-    select(panel)
-    type_into(panel, "execute.sh", "ctrl s")
-    tabs(panel).current = "Report"
-    panel.save_shortcut()
-    assert (config_dir(panel) / "execute.sh").read_text() == "#!/bin/bash\n./prog\n"
-    tabs(panel).current = "Editor"
-    panel.save_shortcut()
-    assert (config_dir(panel) / "execute.sh").read_text() == "ctrl s"
-
-
 def test_the_help_buttons_open_the_help_of_their_file(qtbot: QtBot, panel: EditorPanel) -> None:
     panel.show()
     for index, title in enumerate(
@@ -350,37 +339,6 @@ def test_the_help_buttons_open_the_help_of_their_file(qtbot: QtBot, panel: Edito
         assert len(dialogs_open) == 1 and dialogs_open[0].isVisible()
         assert dialogs_open[0].text.toPlainText()
         dialogs_open[0].ok_button.click()
-
-
-def test_the_compilation_editor_opens_once_and_is_reused(panel: EditorPanel) -> None:
-    panel.open_compilation_editor()
-    window = panel._compilation_editor
-    assert window is not None and window.isVisible()
-    panel.open_compilation_editor()
-    assert panel._compilation_editor is window
-    window.close()
-    panel.open_compilation_editor()
-    assert window.isVisible()
-    panel.cancel_jobs()
-
-
-def test_the_save_shortcut_saves_the_compilation_editor_when_it_is_in_front(
-    panel: EditorPanel, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    select(panel)
-    panel.open_compilation_editor()
-    window = panel._compilation_editor
-    assert window is not None
-    saved: List[str] = []
-
-    def fake_save() -> bool:
-        saved.append("compilation")
-        return True
-
-    monkeypatch.setattr(window, "save", fake_save)
-    monkeypatch.setattr(window, "isActiveWindow", lambda: True)
-    panel.save_shortcut()
-    assert saved == ["compilation"]
 
 
 def test_a_refresh_of_the_selection_keeps_the_cursor_and_reloads_what_changed_on_disk(panel: EditorPanel) -> None:

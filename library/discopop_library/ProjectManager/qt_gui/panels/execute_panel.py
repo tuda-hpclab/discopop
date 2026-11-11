@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QRadioButton,
     QScrollArea,
     QSpinBox,
@@ -56,10 +55,8 @@ from discopop_library.ProjectManager.services.execution_run import (
     SUGGESTIONS_MANUAL,
     SUGGESTIONS_NONE,
     ExecutionRequest,
-    PreparationRequest,
     execution_time_summary,
     run_execution,
-    run_preparation,
     suggestion_ids_to_apply,
 )
 from discopop_library.ProjectManager.services.jobs import (
@@ -98,7 +95,6 @@ _STATUS_COLORS = {
 }
 
 RUN_TEXT = "Run"
-PREPARE_TEXT = "Profile for Pattern Detection"
 _MAX_THREADS = 4096
 _MAX_SECONDS = 10_000_000
 _MAX_REPETITIONS = 1000
@@ -111,7 +107,8 @@ class ExecutePanel(Panel):
 
     ``tabs`` is offered for tab switches (the Execute tab does not need one at the moment). ``console`` shows the
     output of a run (shown in the output pane of the main window); the Report panel writes the progress of its PDF
-    report into it. ``timeouts()`` returns the timeout settings for the Hotspot panel.
+    report into it. ``timeouts()`` returns the timeout settings for the Hotspot panel. :meth:`set_blocked` keeps a run
+    from starting while the Profiling stage runs the configuration.
     """
 
     output_title = "Execute"
@@ -128,8 +125,9 @@ class ExecutePanel(Panel):
     ) -> None:
         super().__init__(arguments, project_state, status, parent)
         self.tabs = tabs
-        # told True when a run or preparation starts and False when it ended (the Report tab holds its report back)
+        # told True when a run starts and False when it ended (the Report tab holds its report back)
         self._run_state_changed = run_state_changed
+        self._blocked = False
         self._job: Optional[WorkRunner] = None
         self._browser: Optional[QWidget] = None
         self._autotuner_prefix_auto_value = ""
@@ -241,16 +239,10 @@ class ExecutePanel(Panel):
         # ── actions in the header ────────────────────────────────────────────
         self.run_button = widgets.RunStopButton(RUN_TEXT, self._run_execution, self._stop_execution)
         self.run_button.setEnabled(False)
-        self.prepare_pattern_detection_button = widgets.create_button(
-            PREPARE_TEXT,
-            self._prepare_pattern_detection,
-            tooltip="Runs the selected configuration in 'dp' mode with 'inplace' enabled.",
-        )
-        self.prepare_pattern_detection_button.setEnabled(False)
         self.header = widgets.PanelHeader(
             "Execute",
-            "Build and run the selected configuration in the chosen modes.",
-            [self.prepare_pattern_detection_button, self.run_button],
+            "Build and run the selected configuration in the chosen modes and record the measurements.",
+            [self.run_button],
         )
 
         # ── layout: the header, below it the settings column (scrollable, left-aligned) ─────────────
@@ -359,7 +351,6 @@ class ExecutePanel(Panel):
                 check.setChecked(mode == "seq")
             if not self.is_running():
                 self.run_button.setEnabled(False)
-                self.prepare_pattern_detection_button.setEnabled(False)
             self.console.clear()
             return
         config_path = os.path.join(self.arguments.project_config_dir, config)
@@ -369,10 +360,15 @@ class ExecutePanel(Panel):
             self.mode_checks[mode].setEnabled(exists)
             if not exists:
                 self.mode_checks[mode].setChecked(False)
-        # a run in progress keeps both buttons off until it is finished
+        # a run in progress keeps the button off until it is finished; _end_run updates it
         if not self.is_running():
-            self.run_button.setEnabled(True)
-            self.prepare_pattern_detection_button.setEnabled(True)
+            self.run_button.setEnabled(not self._blocked)
+            self.run_button.setToolTip("The Profiling stage runs the configuration" if self._blocked else "")
+
+    def set_blocked(self, blocked: bool) -> None:
+        """The Profiling stage runs the configuration in place: no run meanwhile."""
+        self._blocked = blocked
+        self._update_modes()
 
     # ── the suggestions ──────────────────────────────────────────────────────
 
@@ -506,7 +502,7 @@ class ExecutePanel(Panel):
                 configuration,
             ),
         )
-        self._begin_run(self.run_button, "Running", "⏳ Execution in progress...")
+        self._begin_run("Running", "⏳ Execution in progress...")
         restore_logging = widgets.redirect_logging_to_console(self.console, log_level)
         logging.getLogger("Execute").info(f"Starting execution of configuration: {configuration}")
         arguments = self.arguments
@@ -516,12 +512,11 @@ class ExecutePanel(Panel):
             lambda event: self._on_execution_event(event, restore_logging),
         )
 
-    def _begin_run(self, _button: QPushButton, chip_text: str, status_text: str) -> None:
-        """Turn Run into Stop, disable the other button, clear the output and open the output pane."""
+    def _begin_run(self, chip_text: str, status_text: str) -> None:
+        """Turn Run into Stop, clear the output and open the output pane."""
         self._run_failed = False
         self.run_button.setEnabled(False)  # remembered: "can a run be started" once this one ended
         self.run_button.set_running(True)
-        self.prepare_pattern_detection_button.setEnabled(False)
         self.header.chip.set_status(widgets.CHIP_BUSY, chip_text)
         self.status.set(status_text, widgets.STATUS_BUSY)
         self.console.clear()
@@ -593,58 +588,6 @@ class ExecutePanel(Panel):
             self.status.set("Ready", widgets.STATUS_IDLE)
         self.project_state.publish(ConfigurationsChanged())
         self.project_state.publish(ResultsChanged())
-
-    def _prepare_pattern_detection(self) -> None:
-        self._prepare_inplace_run(
-            mode="dp",
-            settings_filename="dp_settings.json",
-            status_noun="pattern detection",
-        )
-
-    def _prepare_inplace_run(self, mode: str, settings_filename: str, status_noun: str) -> None:
-        """Compile and execute the selected configuration in ``mode`` with inplace execution."""
-        configuration = self.project_state.current_config
-        if not configuration:
-            dialogs.show_warning(self, "No Configuration Selected", "Please select a configuration first.")
-            return
-        request = PreparationRequest(
-            configuration=configuration,
-            mode=mode,
-            settings_filename=settings_filename,
-            status_noun=status_noun,
-            timeout_execution=self.timeout_execution_spin.value(),
-            timeout_compilation=self.timeout_compilation_spin.value(),
-            timeout_validation=self.timeout_validation_spin.value(),
-        )
-        self._begin_run(self.prepare_pattern_detection_button, "Preparing", f"⏳ Preparing {status_noun}...")
-        restore_logging = widgets.redirect_logging_to_console(self.console, "INFO")
-        arguments = self.arguments
-        failure_status = f"{status_noun.capitalize()} preparation failed"
-        logger = logging.getLogger(f"Prepare {status_noun.title()}")
-
-        def handle(event: WorkEvent) -> None:
-            if isinstance(event, WorkOutput):
-                self._append_output(event.text)
-            elif isinstance(event, WorkStatus):
-                self._run_failed = self._run_failed or event.kind == StatusKind.FAIL
-                self.status.set(event.text, _STATUS_COLORS[event.kind])
-            elif isinstance(event, WorkFinished):
-                job = self._job
-                restore_logging()
-                if event.error is not None:  # a crash of the work must not leave the buttons disabled
-                    logger.error("preparation failed: %s", event.error)
-                    self._append_output(f"\nError: {event.error}\n")
-                success = event.error is None and bool(event.result)
-                stopped = job is not None and job.cancel_requested
-                self._run_failed = self._run_failed or not (success or stopped)
-                self._end_run(stopped=stopped)
-                if success or stopped:
-                    self.status.set("Ready", widgets.STATUS_IDLE)
-                else:
-                    self.status.set(failure_status, widgets.STATUS_FAIL, reset_ms=_STATUS_RESET_MS)
-                self.project_state.publish(ResultsChanged())
-
-        self._job = start_work(self, lambda ctx: run_preparation(arguments, request, ctx), handle)
 
     def _stop_requested(self) -> bool:
         """Whether Stop was pressed; a progress status the work sends afterwards would hide "Stopping ..."."""

@@ -91,7 +91,7 @@ TABLE_COLUMNS = (
 # the columns holding numbers (right-aligned): Threads, Time, Speedup, Efficiency, Amdahl ceiling, Amdahl limit
 _NUMERIC_COLUMNS = frozenset({6, 8, 9, 10, 11, 12})
 _LABEL_COLUMN = 3  # takes the width the other columns leave
-_EMPTY_TEXT = "No execution results yet — run a configuration on the Execute tab."
+_EMPTY_TEXT = "No execution results yet — run a configuration in the Execute stage."
 _NOT_APPLIED_BG = "#f3e6f7"
 _BEST_BG = "#d6ebd5"
 _DETAIL_BAR_WIDTH = 280

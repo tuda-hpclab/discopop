@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QComboBox, QLabel, QMenu, QSizePolicy, QToolButton
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR, TAB_EXECUTE, TAB_REPORT
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR, TAB_EXECUTE, TAB_PROFILING, TAB_REPORT
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.wizard import ConfigurationWizard
@@ -46,14 +46,14 @@ class _NoWheelComboBox(QComboBox):
 
 
 class ConfigListPanel(Panel):
-    """The configuration selector: a combo box, "+ New" and a "⋯" menu (copy, rename, delete, project compilation).
+    """The configuration selector: a combo box, "+ New" and a "⋯" menu (copy, rename, wizard, delete).
 
     It used to be a list taking the left side of the window; one configuration is worked on at a time, so a selector
     in the header bar says the same in one line.
 
     ``confirm_leave_config`` is asked before the user's selection changes; False keeps the old selection (the Editor
-    panel uses it for unsaved changes). ``open_compilation_editor`` is the "Project compilation…" action. ``tabs``
-    switches the tabs of the main window.
+    panel uses it for unsaved changes). ``tabs`` switches the tabs of the main window. The files shared by all
+    configurations (compile.sh, settings) are edited in the Setup stage.
 
     Publishes ``ConfigChanged`` when the selection changes or is refreshed, and ``ConfigurationsChanged`` after
     a configuration was created, copied, renamed, deleted or written by the wizard; refreshes on the latter.
@@ -65,13 +65,11 @@ class ConfigListPanel(Panel):
         project_state: ProjectState,
         status: StatusLine,
         confirm_leave_config: Callable[[], bool],
-        open_compilation_editor: Callable[[], None],
         tabs: TabHost,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(arguments, project_state, status, parent)
         self._confirm_leave_config = confirm_leave_config
-        self._open_compilation_editor = open_compilation_editor
         self._tabs = tabs
         self.config_dir = arguments.project_config_dir
         self._updating = False
@@ -170,9 +168,6 @@ class ConfigListPanel(Panel):
         rename_action.triggered.connect(lambda _checked=False: self.rename_config())
         wizard_action: QAction = menu.addAction("New with wizard…")
         wizard_action.triggered.connect(lambda _checked=False: self.open_configuration_wizard())
-        menu.addSeparator()
-        compilation_action: QAction = menu.addAction("Project compilation…")
-        compilation_action.triggered.connect(lambda _checked=False: self._open_compilation_editor())
         menu.addSeparator()
         delete_action: QAction = menu.addAction("Delete…")
         delete_action.triggered.connect(lambda _checked=False: self.delete_config())
@@ -304,8 +299,9 @@ class ConfigListPanel(Panel):
         if result:
             self.project_state.current_config = result
         self.project_state.publish(ConfigurationsChanged())
+        # the first stage of the pipeline
         if result and result in self.names():
-            self._tabs.show_tab(TAB_EXECUTE)
+            self._tabs.show_tab(TAB_PROFILING)
         wizard.deleteLater()
 
     def cancel_jobs(self) -> None:

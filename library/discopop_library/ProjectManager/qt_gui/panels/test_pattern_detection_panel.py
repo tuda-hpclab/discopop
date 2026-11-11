@@ -100,8 +100,8 @@ def test_without_profiling_data_the_panel_says_why_and_leads_to_execute(panel: P
     assert panel.locked_title.text() == "Needs profiling data"
     assert "Data.xml" in panel.locked_reason.text() and "FileMapping.txt" in panel.locked_reason.text()
     assert panel.header.chip.text() == "Not run yet"
-    panel.goto_execute_button.click()
-    assert isinstance(panel.tabs, FakeTabs) and panel.tabs.shown == [main_window.TAB_EXECUTE]
+    panel.goto_profiling_button.click()
+    assert isinstance(panel.tabs, FakeTabs) and panel.tabs.shown == [main_window.TAB_PROFILING]
 
 
 def test_profiling_data_enables_run_and_tab(panel: PatternDetectionPanel) -> None:

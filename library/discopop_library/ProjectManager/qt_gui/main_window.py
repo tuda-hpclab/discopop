@@ -33,7 +33,9 @@ from discopop_library.ProjectManager.qt_gui.panels.execute_panel import ExecuteP
 from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotPanel
 from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
 from discopop_library.ProjectManager.qt_gui.panels.pattern_detection_panel import PatternDetectionPanel
+from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
+from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
@@ -46,7 +48,9 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_ORDER as TAB_ORDER,
     TAB_PATCH_REPAIR as TAB_PATCH_REPAIR,
     TAB_PATTERN_DETECTION as TAB_PATTERN_DETECTION,
+    TAB_PROFILING as TAB_PROFILING,
     TAB_REPORT as TAB_REPORT,
+    TAB_SETUP as TAB_SETUP,
 )
 from discopop_library.ProjectManager.qt_gui.workflow_nav import WorkflowNav
 from discopop_library.ProjectManager.services.project_state import (
@@ -139,13 +143,23 @@ class MainWindow(QMainWindow):
     def _build_panels(self) -> None:
         """Create the panels and wire them: the events each one reacts to beyond its own, and the callbacks."""
         args, state, status = self.arguments, self.project_state, self.status
+        # Execute and Profiling run the configuration (Profiling in place): one at a time; the Report holds its PDF
+        # report back while either runs
         self.execute_panel = ExecutePanel(
             args,
             state,
             status,
             self,
-            run_state_changed=lambda running: self.report_panel.set_execution_running(running),
+            run_state_changed=lambda running: self._run_state_changed(self.profiling_panel, running),
         )
+        self.profiling_panel = ProfilingPanel(
+            args,
+            state,
+            status,
+            self,
+            run_state_changed=lambda running: self._run_state_changed(self.execute_panel, running),
+        )
+        self.setup_panel = SetupPanel(args, state, status, self)
         self.editor_panel = EditorPanel(args, state, status, self)
         self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
         self.hotspot_panel = HotspotPanel(args, state, status, self.execute_panel.timeouts)
@@ -157,20 +171,23 @@ class MainWindow(QMainWindow):
             state,
             status,
             confirm_leave_config=self.editor_panel.confirm_leave,
-            open_compilation_editor=self.editor_panel.open_compilation_editor,
             tabs=self,
         )
         self.panels.append(self.config_list)
-        for name, panel in (
-            (TAB_EDITOR, self.editor_panel),
-            (TAB_EXECUTE, self.execute_panel),
-            (TAB_REPORT, self.report_panel),
-            (TAB_HOTSPOT, self.hotspot_panel),
-            (TAB_PATTERN_DETECTION, self.pattern_detection_panel),
-            (TAB_PATCH_REPAIR, self.patch_repair_panel),
-            (TAB_AUTOTUNING, self.autotuning_panel),
-        ):
-            self.add_tab(name, panel)
+        panels: Dict[str, Panel] = {
+            TAB_SETUP: self.setup_panel,
+            TAB_EDITOR: self.editor_panel,
+            TAB_PROFILING: self.profiling_panel,
+            TAB_HOTSPOT: self.hotspot_panel,
+            TAB_PATTERN_DETECTION: self.pattern_detection_panel,
+            TAB_PATCH_REPAIR: self.patch_repair_panel,
+            TAB_AUTOTUNING: self.autotuning_panel,
+            TAB_EXECUTE: self.execute_panel,
+            TAB_REPORT: self.report_panel,
+        }
+        # in the order of the sidebar
+        for name in TAB_ORDER:
+            self.add_tab(name, panels[name])
 
         # the autotuner records its measurements as execution results
         state.subscribe(AutotuningFinished, lambda _event: self.report_panel.update_display())
@@ -193,7 +210,19 @@ class MainWindow(QMainWindow):
         # a measurement or a run can rebuild what the hotspot stage compares with the sources
         state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
-        QShortcut(QKeySequence.StandardKey.Save, self, self.editor_panel.save_shortcut)
+        QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
+
+    def _run_state_changed(self, other: "ExecutePanel | ProfilingPanel", running: bool) -> None:
+        other.set_blocked(running)
+        self.report_panel.set_execution_running(running)
+
+    def save_shortcut(self) -> None:
+        """Ctrl+S: saves the files of the stage in front (Setup or Configure)."""
+        current = self.current_tab()
+        if current == TAB_SETUP:
+            self.setup_panel.save()
+        elif current == TAB_EDITOR:
+            self.editor_panel.save()
 
     def _build_frame(self) -> None:
         """Header bar on top; sidebar | (panel over output pane) below."""

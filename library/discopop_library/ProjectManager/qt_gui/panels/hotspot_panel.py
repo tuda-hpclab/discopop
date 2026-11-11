@@ -228,7 +228,7 @@ class HotspotPanel(Panel):
             self.repetitions,
             "Hotness weighs the average runtime and how much it varies between runs. Repeating one configuration "
             "only reduces noise; measure several configurations (inputs) to make the variation meaningful. "
-            "Timeouts come from the Execute tab.",
+            "Timeouts come from the Execute stage.",
         )
         self.facts_label = widgets.caption_label("")
         column = QWidget()

@@ -20,6 +20,8 @@ from discopop_library.ProjectManager.services.workflow_status import (
     STAGE_AUTOTUNING,
     STAGE_EDITOR,
     STAGE_EXECUTE,
+    STAGE_PROFILING,
+    STAGE_SETUP,
     STAGE_HOTSPOT,
     STAGE_PATCH_REPAIR,
     STAGE_PATTERN_DETECTION,
@@ -90,12 +92,24 @@ def statuses(arguments: ProjectManagerArguments, config: str = "") -> Dict[str, 
 def test_empty_project(tmp_path: Path) -> None:
     result = statuses(make_arguments(tmp_path))
     assert result[STAGE_EDITOR].state == StageState.NOT_RUN
-    assert result[STAGE_EXECUTE].state == StageState.NOT_RUN
+    assert result[STAGE_SETUP] == StageStatus(StageState.NOT_RUN, "no compile.sh")
+    assert result[STAGE_PROFILING] == StageStatus(StageState.NOT_RUN, "no profiling data")
+    assert result[STAGE_EXECUTE] == StageStatus(StageState.NOT_RUN, "no measured runs")
     assert result[STAGE_HOTSPOT].state == StageState.NOT_RUN
     assert result[STAGE_PATTERN_DETECTION] == StageStatus(StageState.LOCKED, "needs profiling data")
     assert result[STAGE_PATCH_REPAIR] == StageStatus(StageState.LOCKED, "needs suggestions")
     assert result[STAGE_AUTOTUNING] == StageStatus(StageState.LOCKED, "needs profiling data")
     assert result[STAGE_REPORT] == StageStatus(StageState.NOT_RUN, "0 execution results")
+
+
+def test_setup(tmp_path: Path) -> None:
+    arguments = make_arguments(tmp_path)
+    touch(os.path.join(arguments.project_config_dir, "compile.sh"))
+    assert statuses(arguments)[STAGE_SETUP] == StageStatus(StageState.NOT_RUN, "no seq_settings.json")
+    touch(os.path.join(arguments.project_config_dir, "seq_settings.json"), "{}")
+    assert statuses(arguments)[STAGE_SETUP] == StageStatus(StageState.NOT_RUN, "settings not derived")
+    touch(os.path.join(arguments.project_config_dir, "dp_settings.json"), "{}")
+    assert statuses(arguments)[STAGE_SETUP] == StageStatus(StageState.DONE, "compile.sh, settings")
 
 
 def test_editor(tmp_path: Path) -> None:
@@ -122,8 +136,9 @@ def test_unreadable_execution_results(tmp_path: Path) -> None:
     arguments = make_arguments(tmp_path)
     touch(os.path.join(arguments.project_dir, "execution_results.json"), "{not json")
     assert count_execution_results(arguments.project_dir) == 0
+    assert statuses(arguments)[STAGE_EXECUTE] == StageStatus(StageState.NOT_RUN, "no measured runs")
     profile(arguments.dot_dp)
-    assert statuses(arguments)[STAGE_EXECUTE] == StageStatus(StageState.DONE, "profiled")
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.DONE, "profiled")
 
 
 def test_hotspot_done_and_stale(tmp_path: Path) -> None:

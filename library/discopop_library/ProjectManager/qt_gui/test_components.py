@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QSpinBox, QWidget
 
 from discopop_library.ProjectManager.qt_gui import widgets
-from discopop_library.ProjectManager.qt_gui.main_window import TAB_ORDER, MainWindow
+from discopop_library.ProjectManager.qt_gui.main_window import TAB_EXECUTE, TAB_ORDER, TAB_REPORT, MainWindow
 from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
@@ -171,7 +171,7 @@ def test_main_window_puts_panel_consoles_into_the_output_pane(qtbot: QtBot, tmp_
     window.show()
     consoles_before = len(window.output_pane.consoles())
     panel = _PanelWithOutput(window.arguments, window.project_state, window.status)
-    window.add_tab(TAB_ORDER[1], panel)
+    window.add_tab(TAB_EXECUTE, panel)
     assert panel.console in window.output_pane.consoles()
     assert window.output_pane.tabs.tabText(window.output_pane.tabs.indexOf(panel.console)) == "Busy"
     panel.output_requested.emit()
@@ -180,7 +180,7 @@ def test_main_window_puts_panel_consoles_into_the_output_pane(qtbot: QtBot, tmp_
     window.output_pane.set_expanded(False)
     assert window.content_splitter.sizes()[1] <= window.output_pane.maximumHeight()
     # an unrelated widget (not a panel) is not asked for output
-    window.add_tab(TAB_ORDER[2], QWidget())
+    window.add_tab(TAB_REPORT, QWidget())
     # the panel replaced the Execute panel: its console replaced the Execute console
     assert len(window.output_pane.consoles()) == consoles_before
     assert window.execute_panel.console not in window.output_pane.consoles()

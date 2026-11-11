@@ -14,7 +14,7 @@ from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
-from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_REPORT
+from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_PROFILING, TAB_REPORT
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
@@ -46,7 +46,6 @@ class Env:
         self.tabs = tabs
         self.events = events
         self.allow_leave = True
-        self.editor_opened = 0
 
 
 @pytest.fixture
@@ -66,12 +65,7 @@ def env(qtbot: QtBot, tmp_path: Path) -> Env:
     def leave() -> bool:
         return holder[0].allow_leave
 
-    def open_editor() -> None:
-        holder[0].editor_opened += 1
-
-    panel = ConfigListPanel(
-        arguments, state, status, confirm_leave_config=leave, open_compilation_editor=open_editor, tabs=tabs
-    )
+    panel = ConfigListPanel(arguments, state, status, confirm_leave_config=leave, tabs=tabs)
     qtbot.addWidget(panel)
     holder.append(Env(panel, tabs, events))
     events.clear()
@@ -91,7 +85,7 @@ def test_the_list_shows_the_sorted_configurations_and_selects_the_first(qtbot: Q
     state.subscribe(ConfigChanged, lambda e: seen.append(e.configuration))
     status = StatusLine()
     qtbot.addWidget(status)
-    panel = ConfigListPanel(arguments, state, status, lambda: True, lambda: None, FakeTabs())
+    panel = ConfigListPanel(arguments, state, status, lambda: True, FakeTabs())
     qtbot.addWidget(panel)
     assert panel.names() == ["a", "b"] and state.current_config == "a" and seen == ["a"]
     assert panel.new_button.text() == "+ New" and panel.combo.currentText() == "a" and panel.combo.isEnabled()
@@ -118,13 +112,6 @@ def test_the_selection_stays_when_leaving_is_refused(env: Env) -> None:
     click_row(env, 1)
     assert env.panel.project_state.current_config == "a" and env.events == []
     assert env.panel.combo.currentIndex() == 0 and env.panel.combo.currentText() == "a"
-
-
-def test_the_menu_opens_the_project_compilation(env: Env) -> None:
-    menu = env.panel.menu_button.menu()
-    assert menu is not None
-    next(a for a in menu.actions() if a.text() == "Project compilation…").trigger()
-    assert env.editor_opened == 1
 
 
 def test_select_asks_like_the_user(env: Env) -> None:
@@ -234,10 +221,10 @@ def test_configurations_changed_refreshes(env: Env) -> None:
     assert env.panel.names() == ["a", "b", "c"] and env.panel.project_state.current_config == "a"
 
 
-def test_the_menu_offers_copy_rename_wizard_compilation_delete(env: Env, dialog_answers: DialogRecorder) -> None:
+def test_the_menu_offers_copy_rename_wizard_delete(env: Env, dialog_answers: DialogRecorder) -> None:
     menu = env.panel.context_menu()
     texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-    assert texts == ["Copy…", "Rename…", "New with wizard…", "Project compilation…", "Delete…"]
+    assert texts == ["Copy…", "Rename…", "New with wizard…", "Delete…"]
     dialog_answers.answer("ask_yes_no", True)
     menu.actions()[-1].trigger()
     assert env.panel.names() == ["b"]
@@ -268,5 +255,5 @@ def test_a_finished_wizard_selects_its_configuration_and_shows_execute(env: Env)
     wizard.next()
     wizard.accept()
     assert env.panel.names() == ["a", "b", "wiz"] and env.panel.project_state.current_config == "wiz"
-    assert env.tabs.shown == [TAB_EXECUTE] and ConfigChanged("wiz") in env.events
+    assert env.tabs.shown == [TAB_PROFILING] and ConfigChanged("wiz") in env.events
     assert env.panel._wizard is None
