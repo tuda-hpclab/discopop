@@ -105,6 +105,8 @@ class DetailBar(QWidget):
             item = self._body_layout.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
+                # deleteLater alone leaves the old widget visible until the event loop delivers the deletion
+                widget.hide()
                 widget.deleteLater()
 
     def _update_actions(self) -> None:

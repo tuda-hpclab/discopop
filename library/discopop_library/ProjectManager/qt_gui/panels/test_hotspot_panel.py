@@ -13,11 +13,12 @@ from typing import Any, List, Optional, Tuple
 from unittest import mock
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.plots import hotspot_data
-from discopop_library.ProjectManager.plots.hotspot_data import KIND_LOOP
+from discopop_library.ProjectManager.plots.hotspot_data import KIND_LOOP, MeasurementRun
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.panels import hotspot_panel
@@ -127,31 +128,27 @@ def wait_idle(qtbot: QtBot, panel: HotspotPanel) -> None:
 def test_the_tab_starts_without_results_and_a_configuration(env: Env) -> None:
     panel = env.panel
     tabs = [panel.notebook.tabText(i) for i in range(panel.notebook.count())]
-    assert tabs == ["Measurement", "Runs", "Regions", "Quadrant 1"]
-    assert panel.config_label.text() == "(none selected)"
+    assert tabs == ["Regions", "Runs", "Quadrant 1"]
+    assert panel.header.chip.text() == "No configuration selected"
     assert not any(
-        button.isEnabled()
-        for button in (
-            panel.run_button,
-            panel.stop_button,
-            panel.reinstrument_button,
-            panel.analyze_button,
-            panel.clear_button,
-        )
+        item.isEnabled()
+        for item in (panel.run_button, panel.reinstrument_action, panel.analyze_action, panel.clear_action)
     )
-    assert panel.build_label.text() == "Instrumented build: none (will be compiled)"
-    assert panel.runs_label.text() == "Accumulated runs: 0"
-    assert panel.hotness_label.text() == "Code regions: no analysis results yet"
-    assert panel.warning_label.isHidden()
+    assert panel.facts_label.text() == "Accumulated runs: 0 · Code regions: no analysis results yet"
+    assert panel.regions_stack.currentIndex() == 0
+    assert panel.regions_empty_label.text() == "No measurement yet — press Run Measurement."
+    assert panel.runs_stack.currentIndex() == 0
+    assert panel.output.parent() is panel and panel.output_console() is panel.output
+    assert panel.output_title == "Hotspots"
     assert panel.regions_table.rowCount() == 0 and panel.runs_table.rowCount() == 0
 
 
 def test_selecting_a_configuration_enables_running(env: Env) -> None:
     env.add_configuration()
     env.select("tiny")
-    assert env.panel.config_label.text() == "tiny"
-    assert env.panel.run_button.isEnabled() and env.panel.reinstrument_button.isEnabled()
-    assert not env.panel.analyze_button.isEnabled() and not env.panel.stop_button.isEnabled()
+    assert env.panel.header.chip.text() == "No measurement yet"
+    assert env.panel.run_button.isEnabled() and env.panel.reinstrument_action.isEnabled()
+    assert not env.panel.analyze_action.isEnabled() and not env.panel.clear_action.isEnabled()
     env.select(None)
     assert not env.panel.run_button.isEnabled()
 
@@ -160,11 +157,21 @@ def test_results_fill_the_tables_and_the_summary(env: Env) -> None:
     env.write_results()
     env.panel.refresh_results()
     panel = env.panel
-    assert panel.hotness_label.text() == "Code regions: 3   YES 1 / MAYBE 1 / NO 1"
-    assert panel.regions_table.rowCount() == 3
+    assert panel.facts_label.text() == "Accumulated runs: 0 · Code regions: 3 (YES 1 / MAYBE 1 / NO 1)"
+    assert panel.regions_table.rowCount() == 3 and panel.regions_stack.currentIndex() == 1
     first = [panel.regions_table.item(0, column).text() for column in range(10)]  # type: ignore[union-attr]
-    assert first[:4] == ["● YES", KIND_LOOP, "main.cpp:10", "-"] and first[4] == "3.000000" and first[9] == "2"
-    assert panel.clear_button.isEnabled()
+    assert first[:4] == ["● YES", KIND_LOOP, "main.cpp:10", "—"] and first[4] == "3.00 s" and first[9] == "2"
+    assert first[8] == "0.900" and first[6] == "1.00 s"
+    avg = panel.regions_table.item(0, 4)
+    assert avg is not None and avg.textAlignment() & Qt.AlignmentFlag.AlignRight
+    assert panel.clear_action.isEnabled()
+    assert panel.regions_empty_label.text() == "No measurement yet — press Run Measurement."
+
+
+def test_results_without_an_analysis_say_so(env: Env) -> None:
+    env.panel.runs = [MeasurementRun(0, "c")]
+    env.panel._populate_regions_table()
+    assert env.panel.regions_stack.currentIndex() == 0 and "Re-run Analysis" in env.panel.regions_empty_label.text()
 
 
 def test_filters_and_sorting_of_the_regions_table(env: Env) -> None:
@@ -182,11 +189,11 @@ def test_filters_and_sorting_of_the_regions_table(env: Env) -> None:
     panel.kind_combo.setCurrentText("all")
     panel.hotness_checks["NO"].setChecked(True)
     panel._sort_regions_by_section(4)  # Avg (s): descending first
-    assert column(4) == ["3.000000", "1.000000", "0.100000"]
+    assert column(4) == ["3.00 s", "1.00 s", "100 ms"]
     panel._sort_regions_by_section(4)
-    assert column(4) == ["0.100000", "1.000000", "3.000000"]
+    assert column(4) == ["100 ms", "1.00 s", "3.00 s"]
     panel._sort_regions_by_section(3)  # Name
-    assert column(3) == ["compute", "-", "-"]
+    assert column(3) == ["compute", "—", "—"]
 
 
 def test_a_clicked_row_shows_in_the_detail_bar_and_opens_in_vscode(env: Env) -> None:
@@ -230,7 +237,7 @@ def test_chart_tabs_are_added_rendered_and_closed(env: Env) -> None:
     env.panel.refresh_results()
     panel = env.panel
     bars = panel.add_plot("bars")
-    assert panel.notebook.tabText(4) == "Bars 2" and panel.notebook.currentWidget() is bars.widget
+    assert panel.notebook.tabText(3) == "Bars 2" and panel.notebook.currentWidget() is bars.widget
     assert bars.top_n is not None
     bars.top_n.setCurrentText("10")  # re-renders without an error
     profile = panel.add_plot("profile")
@@ -240,11 +247,11 @@ def test_chart_tabs_are_added_rendered_and_closed(env: Env) -> None:
     assert profile.region_combo.currentIndex() == 1
     panel.refresh_results()  # keeps the picked region
     assert profile.region_combo.currentIndex() == 1
-    panel.notebook.tabCloseRequested.emit(4)
+    panel.notebook.tabCloseRequested.emit(3)
     assert len(panel.plot_tabs) == 2
-    for fixed in (0, 1, 2):
+    for fixed in (0, 1):
         panel.notebook.tabCloseRequested.emit(fixed)
-    assert panel.notebook.count() == 5 and panel.notebook.tabText(0) == "Measurement"
+    assert panel.notebook.count() == 4 and panel.notebook.tabText(0) == "Regions"
     panel._close_tab_widget(profile.widget)
     assert len(panel.plot_tabs) == 1 and panel.notebook.currentIndex() == 0
 
@@ -274,8 +281,9 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
 
     panel._on_work_complete = complete  # type: ignore[method-assign]
     panel.run_button.click()
-    assert panel.running and panel.run_button.text() == "⟳ Running..." and panel.stop_button.isEnabled()
-    assert not panel.run_button.isEnabled() and not panel.reinstrument_button.isEnabled()
+    assert panel.running and panel.run_button.is_running() and panel.run_button.isEnabled()
+    assert panel.run_button.text() == "■ Stop" and not panel.reinstrument_action.isEnabled()
+    assert panel.header.chip.text() == "Measurement running" and not panel.run_button.can_run()
     assert panel.status.text() == "⏳ Hotspot measurement in progress..."
     wait_idle(qtbot, panel)
     assert completed_on == [True]  # the handler ran on the main thread
@@ -290,7 +298,8 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
         "✓ ok",
         "2",
     ]
-    assert panel.runs_label.text() == "Accumulated runs: 2"
+    assert panel.facts_label.text().startswith("Accumulated runs: 2 ·")
+    assert panel.header.chip.text() == "Up to date"
     assert panel.regions_table.rowCount() == 3
     out = panel.output.text()
     assert "Compiling 'tiny' in 'hd' mode (inplace)..." in out and "Executing 'tiny' (2/2)..." in out
@@ -298,7 +307,7 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
     assert len(env.published) == 1
     assert panel.status.text() == "Hotspot measurement completed" and panel.status.color == widgets.STATUS_OK
     assert panel.run_button.text() == "Run Measurement" and panel.run_button.isEnabled()
-    assert not panel.stop_button.isEnabled() and panel.analyze_button.isEnabled()
+    assert not panel.run_button.is_running() and panel.analyze_action.isEnabled()
     assert all(env.threads[:1]) is False  # the work ran off the main thread
     log = hotspot_data.deserialize_log(json.loads(Path(hotspot_data.sidecar_path(panel.arguments.dot_dp)).read_text()))
     assert len(log.runs) == 2 and log.compile_script is not None
@@ -309,13 +318,13 @@ def test_a_current_build_is_not_compiled_again_and_reinstrument_does_not_run(qtb
     env.select("tiny")
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert env.panel.build_label.text() == "Instrumented build: current"
+    assert env.panel.header.chip.text() == "Only one run"
     env.executed.clear()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
     assert [name for name, _ in env.executed] == ["execute.sh"]
     env.executed.clear()
-    env.panel.reinstrument_button.click()
+    env.panel.reinstrument_action.trigger()
     wait_idle(qtbot, env.panel)
     assert [name for name, _ in env.executed] == ["compile.sh"]
     assert "Keeping the 2 accumulated run(s)" in env.panel.output.text()
@@ -366,8 +375,8 @@ def test_stop_cancels_the_measurement(qtbot: QtBot, env: Env) -> None:
     env.panel.repetitions.setValue(3)
     env.panel.run_button.click()
     qtbot.waitUntil(lambda: ("execute.sh", 11.0) in env.executed, timeout=10000)
-    env.panel.stop_button.click()
-    assert not env.panel.stop_button.isEnabled()
+    env.panel.run_button.click()
+    assert not env.panel.run_button.isEnabled() and env.panel.run_button.text() == "Stopping…"
     assert (
         env.panel.status.text() == "Stopping hotspot measurement..." and env.panel.status.color == widgets.STATUS_STOP
     )
@@ -400,8 +409,8 @@ def test_rerun_analysis_needs_runs_and_does_not_execute(qtbot: QtBot, env: Env) 
     env.executed.clear()
     env.published.clear()
     env.panel.output.set_text("old output")
-    env.panel.analyze_button.click()
-    assert env.panel.running and env.panel.stop_button.isEnabled() and env.panel.output.text() == ""
+    env.panel.analyze_action.trigger()
+    assert env.panel.running and env.panel.run_button.is_running() and env.panel.output.text() == ""
     assert env.panel.status.text() == "⏳ Hotspot analysis in progress..."
     wait_idle(qtbot, env.panel)
     assert env.executed == [] and "analyzed" in env.panel.output.text() and len(env.published) == 1
@@ -433,15 +442,16 @@ def test_clearing_asks_first_removes_the_data_and_publishes(
     wait_idle(qtbot, env.panel)
     env.published.clear()
     dialog_answers.answer("ask_yes_no", False, True)
-    env.panel.clear_button.click()
+    env.panel.clear_action.trigger()
     assert env.panel.regions_table.rowCount() == 3 and env.published == []
     assert "(1 run(s))" in dialog_answers.messages("ask_yes_no")[0]
-    env.panel.clear_button.click()
+    env.panel.clear_action.trigger()
     assert env.panel.regions_table.rowCount() == 0 and env.panel.runs_table.rowCount() == 0
     assert not (env.dot_dp / "hotspot_detection").exists() and (env.dot_dp / "FileMapping.txt").exists()
     assert len(env.published) == 1 and env.panel.output.text() == ""
     assert env.panel.status.text() == "Hotspot measurements cleared"
-    assert not env.panel.clear_button.isEnabled() and not env.panel.analyze_button.isEnabled()
+    assert not env.panel.clear_action.isEnabled() and not env.panel.analyze_action.isEnabled()
+    assert env.panel.regions_stack.currentIndex() == 0
 
 
 def test_one_accumulated_run_warns_about_the_ratio(qtbot: QtBot, env: Env) -> None:
@@ -449,7 +459,36 @@ def test_one_accumulated_run_warns_about_the_ratio(qtbot: QtBot, env: Env) -> No
     env.select("tiny")
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert not env.panel.warning_label.isHidden() and "Only one run accumulated" in env.panel.warning_label.text()
+    chip = env.panel.header.chip
+    assert chip.level == widgets.CHIP_WARN and chip.text() == "Only one run"
+    assert "every ratio is 0.5" in chip.detail()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert env.panel.warning_label.isHidden()
+    assert chip.level == widgets.CHIP_OK and chip.text() == "Up to date" and chip.detail() == ""
+
+
+def test_starting_a_job_opens_the_output_pane(qtbot: QtBot, env: Env) -> None:
+    env.add_configuration()
+    env.select("tiny")
+    with qtbot.waitSignal(env.panel.output_requested):
+        env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    with qtbot.waitSignal(env.panel.output_requested):
+        env.panel.reinstrument_action.trigger()
+    wait_idle(qtbot, env.panel)
+    with qtbot.waitSignal(env.panel.output_requested):
+        env.panel.analyze_action.trigger()
+    wait_idle(qtbot, env.panel)
+
+
+def test_the_detail_bar_shows_no_stale_placeholder_before_the_event_loop_runs(env: Env) -> None:
+    env.write_results()
+    env.panel.refresh_results()
+    env.panel.show()
+    bar = env.panel.regions_detail
+    item = bar._body_layout.itemAt(0)
+    assert item is not None
+    placeholder = item.widget()
+    assert placeholder is not None
+    bar.show_fields([("Kind", "LOOP")])
+    assert placeholder.isHidden()  # deleteLater has not run yet
