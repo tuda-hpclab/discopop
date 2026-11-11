@@ -13,7 +13,7 @@ editors and the thread selector, so components of the same kind look the same in
 """
 
 import logging
-from typing import Callable, Dict, Iterable, Optional, Union
+from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 
 from PySide6.QtCore import QObject, QRect, QRegularExpression, Qt, Signal, Slot
 from PySide6.QtGui import (
@@ -28,15 +28,19 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLayout,
+    QMenu,
     QPlainTextEdit,
     QProxyStyle,
     QPushButton,
     QStyle,
     QStyleOption,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -97,14 +101,24 @@ CONSOLE_TAG_COLORS: Dict[str, str] = {
 }
 
 
+# The style sheet names palette roles (``palette(button)``, ``palette(mid)``, ...) instead of fixed colors, so the
+# application follows the light or dark color scheme of the desktop; only the accent colors of the button variants
+# and the status chips are fixed (they carry white text and read on both).
+
+
 def _button_rules() -> str:
     rules = [
-        # the default look: a light, framed button (a border radius without a border would draw a bare label)
-        "QPushButton { padding: 5px 14px; border-radius: 6px; border: 1px solid #b8b8b8;"
-        " background-color: #f4f4f4; }",
-        "QPushButton:hover { background-color: #e6e6e6; }",
-        "QPushButton:pressed { background-color: #d8d8d8; }",
-        "QPushButton:disabled { color: #9a9a9a; background-color: #ececec; border-color: #d0d0d0; }",
+        # the default look: a framed button in the palette's button color (a border radius without a border would
+        # draw a bare label)
+        "QPushButton { padding: 5px 14px; border-radius: 6px; border: 1px solid palette(mid);"
+        " background-color: palette(button); color: palette(button-text); }",
+        "QPushButton:hover { background-color: palette(midlight); }",
+        "QPushButton:pressed { background-color: palette(mid); }",
+        "QPushButton:disabled { color: palette(mid); border-color: palette(midlight); }",
+        # a flat button: the "⋯" overflow menus, the toggles of collapsible sections
+        "QPushButton#flat, QToolButton#flat { border: none; background: transparent; padding: 3px 6px; }",
+        "QPushButton#flat:hover, QToolButton#flat:hover { background-color: palette(midlight); }",
+        "QToolButton#flat::menu-indicator { image: none; }",
     ]
     for variant, (color, hover) in _VARIANT_COLORS.items():
         rules.append(
@@ -113,12 +127,31 @@ def _button_rules() -> str:
         )
         rules.append(f"QPushButton#{variant}:hover {{ background-color: {hover}; }}")
         rules.append(
-            f"QPushButton#{variant}:disabled {{ background-color: #d0d0d0; color: #7a7a7a; border-color: #d0d0d0; }}"
+            f"QPushButton#{variant}:disabled {{ background-color: palette(midlight); color: palette(mid);"
+            " border-color: palette(midlight); }"
         )
     return "\n".join(rules)
 
 
-APP_STYLE_SHEET = _button_rules()
+def _component_rules() -> str:
+    rules = [
+        # a card: the framed section of a form (FormSection) or a header
+        f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 8px;"
+        " background-color: palette(base); }",
+        f"QFrame#{CARD_NAME} QLabel, QFrame#{CARD_NAME} QCheckBox, QFrame#{CARD_NAME} QRadioButton"
+        " { background: transparent; }",
+        # a status chip: a rounded, colored pill (StatusChip)
+        f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; color: white; font-weight: bold; }}",
+    ]
+    return "\n".join(rules)
+
+
+# objectNames the style sheet selects on
+CARD_NAME = "card"
+CHIP_NAME = "chip"
+FLAT_NAME = "flat"
+
+APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 
 # how much taller than the font a tab title may draw (see TabTextRoomStyle)
 TAB_TEXT_EXTRA_PX = 2
@@ -278,11 +311,15 @@ class OutputConsole(QPlainTextEdit):
     """The dark, read-only log / output console of the panels.
 
     ``append_text`` adds text as it comes (no newline is added), optionally colored by a tag of
-    :data:`CONSOLE_TAG_COLORS`. The view follows the end unless the user scrolled up to read.
+    :data:`CONSOLE_TAG_COLORS`. The view follows the end unless the user scrolled up to read. ``text_appended``
+    carries every appended piece (the output dock shows the last line of a collapsed console).
     """
+
+    text_appended = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None, *, wrap: bool = True, editable: bool = False) -> None:
         super().__init__(parent)
+        self.setPlaceholderText("No output yet.")
         self.setReadOnly(not editable)
         self.setFont(monospace_font())
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth if wrap else QPlainTextEdit.LineWrapMode.NoWrap)
@@ -306,6 +343,7 @@ class OutputConsole(QPlainTextEdit):
         cursor.insertText(text, self._formats.get(tag or "", self._plain_format))
         if follow:
             scrollbar.setValue(scrollbar.maximum())
+        self.text_appended.emit(text)
 
     def set_text(self, text: str) -> None:
         """Replace the whole content."""
@@ -490,6 +528,246 @@ def log_level_selector(initial: str = "WARNING") -> QComboBox:
     combo.addItems(LOG_LEVEL_VALUES)
     combo.setCurrentText(initial)
     return combo
+
+
+# --- run / stop ---
+
+
+class RunStopButton(QPushButton):
+    """One button that starts a job and, while it runs, stops it (instead of a Run and a mostly disabled Stop).
+
+    Idle it shows ``run_text`` in the primary color and calls ``on_run``; after :meth:`set_running` (True) it shows
+    ``stop_text`` in the danger color, stays enabled and calls ``on_stop``. ``setEnabled(False)`` while idle means
+    "cannot run now"; :meth:`set_stop_enabled` (False) while running means "cannot be stopped now" (e.g. a phase
+    that must not be interrupted).
+    """
+
+    def __init__(
+        self,
+        run_text: str,
+        on_run: Callable[[], None],
+        on_stop: Callable[[], None],
+        *,
+        stop_text: str = "■ Stop",
+        tooltip: Optional[str] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(run_text, parent)
+        self._run_text = run_text
+        self._stop_text = stop_text
+        self._on_run = on_run
+        self._on_stop = on_stop
+        self._running = False
+        self.setObjectName(VARIANT_PRIMARY)
+        if tooltip:
+            self.setToolTip(tooltip)
+        self.clicked.connect(lambda _checked=False: self._clicked())
+
+    def _clicked(self) -> None:
+        if self._running:
+            self._on_stop()
+        else:
+            self._on_run()
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def set_running(self, running: bool, *, enabled_after: bool = True) -> None:
+        """Switch between the run and the stop look; ``enabled_after``: whether Run is offered once it ended."""
+        self._running = running
+        self.setText(self._stop_text if running else self._run_text)
+        set_button_variant(self, VARIANT_DANGER if running else VARIANT_PRIMARY)
+        self.setEnabled(True if running else enabled_after)
+
+    def set_run_text(self, text: str) -> None:
+        """Change the idle text (e.g. "Run Analysis" -> "Re-run Analysis")."""
+        self._run_text = text
+        if not self._running:
+            self.setText(text)
+
+    def set_stop_enabled(self, enabled: bool) -> None:
+        if self._running:
+            self.setEnabled(enabled)
+
+
+# --- forms ---
+
+
+class FormSection(QFrame):
+    """A titled card holding a form: label | field rows, a hint below its field instead of beside it.
+
+    ``add_row`` puts a plain, right-aligned label and the field side by side and an optional gray hint in the next
+    line below the field; ``add_widget`` adds a full-width row (a check box, a list). The same look in every panel.
+    """
+
+    def __init__(self, title: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName(CARD_NAME)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 10, 14, 12)
+        outer.setSpacing(8)
+        self.title_label: Optional[QLabel] = None
+        if title:
+            self.title_label = heading_label(title)
+            outer.addWidget(self.title_label)
+        self.form = QFormLayout()
+        self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.form.setHorizontalSpacing(12)
+        self.form.setVerticalSpacing(8)
+        outer.addLayout(self.form)
+
+    def add_row(
+        self,
+        label: str,
+        field: Union[QWidget, QLayout],
+        hint: str = "",
+        *,
+        stretch_field: bool = False,
+    ) -> Optional[QLabel]:
+        """A ``label: field`` row; ``hint`` goes into a caption under the field. Returns the hint label (or None).
+
+        A narrow field (spin box, combo box) keeps its natural width unless ``stretch_field``.
+        """
+        if isinstance(field, QWidget) and not stretch_field:
+            field = hbox(field, None)
+        hint_label: Optional[QLabel] = None
+        if hint:
+            hint_label = caption_label(hint)
+            column = QVBoxLayout()
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(2)
+            if isinstance(field, QLayout):
+                column.addLayout(field)
+            else:
+                column.addWidget(field)
+            column.addWidget(hint_label)
+            self.form.addRow(label, column)
+        elif isinstance(field, QLayout):
+            self.form.addRow(label, field)
+        else:
+            self.form.addRow(label, field)
+        return hint_label
+
+    def add_widget(self, widget: Union[QWidget, QLayout], hint: str = "") -> Optional[QLabel]:
+        """A full-width row; ``hint`` goes into a caption below it."""
+        if isinstance(widget, QLayout):
+            self.form.addRow(widget)
+        else:
+            self.form.addRow(widget)
+        if hint:
+            hint_label = caption_label(hint)
+            self.form.addRow(hint_label)
+            return hint_label
+        return None
+
+
+class CollapsibleSection(QWidget):
+    """A "▸ title" toggle that shows / hides its content; for advanced settings that are rarely changed."""
+
+    def __init__(self, title: str, content: QWidget, *, expanded: bool = False, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._title = title
+        self.content = content
+        self.toggle = QToolButton()
+        self.toggle.setObjectName(FLAT_NAME)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.toggle.setCheckable(True)
+        self.toggle.toggled.connect(self.set_expanded)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(content)
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        if self.toggle.isChecked() != expanded:
+            self.toggle.setChecked(expanded)  # re-enters through toggled
+            return
+        self.toggle.setText(("▾ " if expanded else "▸ ") + self._title)
+        self.content.setVisible(expanded)
+
+    def is_expanded(self) -> bool:
+        return self.toggle.isChecked()
+
+
+# --- status chips ---
+
+CHIP_OK = "ok"
+CHIP_WARN = "warn"
+CHIP_ERROR = "error"
+CHIP_BUSY = "busy"
+CHIP_IDLE = "idle"
+
+CHIP_COLORS: Dict[str, str] = {
+    CHIP_OK: STATUS_OK,
+    CHIP_WARN: STATUS_STOP,
+    CHIP_ERROR: STATUS_FAIL,
+    CHIP_BUSY: STATUS_BUSY,
+    CHIP_IDLE: "#7a7a7a",
+}
+
+
+class StatusChip(QWidget):
+    """A one-line colored status pill; the long explanation is behind a "Details" toggle, not on the page.
+
+    ``set_status(CHIP_WARN, "Build stale", "Sources changed since ...")``; without a detail the toggle is hidden.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.chip = QLabel()
+        self.chip.setObjectName(CHIP_NAME)
+        self.details_button = QToolButton()
+        self.details_button.setObjectName(FLAT_NAME)
+        self.details_button.setText("Details")
+        self.details_button.setCheckable(True)
+        self.detail_label = caption_label("")
+        self.detail_label.setVisible(False)
+        self.details_button.toggled.connect(self.detail_label.setVisible)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addLayout(hbox(self.chip, self.details_button, None))
+        layout.addWidget(self.detail_label)
+        self.level = CHIP_IDLE
+        self.set_status(CHIP_IDLE, "")
+
+    def set_status(self, level: str, text: str, detail: str = "") -> None:
+        self.level = level
+        self.chip.setText(text)
+        self.chip.setVisible(bool(text))
+        self.chip.setStyleSheet(f"background-color: {CHIP_COLORS.get(level, CHIP_COLORS[CHIP_IDLE])};")
+        self.chip.setToolTip(detail)
+        self.detail_label.setText(detail)
+        self.details_button.setVisible(bool(detail))
+        if not detail:
+            self.details_button.setChecked(False)
+
+    def text(self) -> str:
+        return self.chip.text()
+
+    def detail(self) -> str:
+        return self.detail_label.text()
+
+
+# --- overflow menu ---
+
+
+def overflow_button(actions: Iterable[Tuple[str, Callable[[], None]]], *, tooltip: str = "More actions") -> QToolButton:
+    """A flat "⋯" button opening a menu of ``(text, callback)``; for rare or destructive actions."""
+    button = QToolButton()
+    button.setObjectName(FLAT_NAME)
+    button.setText("⋯")
+    button.setToolTip(tooltip)
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    menu = QMenu(button)
+    for text, callback in actions:
+        action = menu.addAction(text)
+        action.triggered.connect(lambda _checked=False, cb=callback: cb())
+    button.setMenu(menu)
+    return button
 
 
 def align_top(widget: QWidget) -> QWidget:

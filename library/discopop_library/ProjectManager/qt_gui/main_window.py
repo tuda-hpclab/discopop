@@ -30,6 +30,7 @@ from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotP
 from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
 from discopop_library.ProjectManager.qt_gui.panels.pattern_detection_panel import PatternDetectionPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
+from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
@@ -94,6 +95,12 @@ class MainWindow(QMainWindow):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.setCentralWidget(self.splitter)
         self.tabs = QTabWidget()
+        self.output_pane = OutputPane()
+        # the panels above, their output below; the pane collapses to its header
+        self.content_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.content_splitter.setChildrenCollapsible(False)
+        self._expanded_output_height = 260
+        self.output_pane.expanded_changed.connect(self._on_output_expanded)
         self._tab_widgets: Dict[str, QWidget] = {}
         self._pending_tab_state: Dict[str, Tuple[bool, str]] = {}
         self._pending_tab_titles: Dict[str, str] = {}
@@ -132,7 +139,11 @@ class MainWindow(QMainWindow):
         self.panels.append(self.config_list)
 
         self.splitter.addWidget(self.config_list)
-        self.splitter.addWidget(self.tabs)
+        self.content_splitter.addWidget(self.tabs)
+        self.content_splitter.addWidget(self.output_pane)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 0)
+        self.splitter.addWidget(self.content_splitter)
         for name, panel in (
             (TAB_EDITOR, self.editor_panel),
             (TAB_EXECUTE, self.execute_panel),
@@ -171,10 +182,32 @@ class MainWindow(QMainWindow):
         self._tab_widgets[name] = widget
         if isinstance(widget, Panel):
             self.panels.append(widget)
+            self._add_output_of(name, widget)
         if name in self._pending_tab_state:
             self.set_tab_enabled(name, *self._pending_tab_state.pop(name))
         if name in self._pending_tab_titles:
             self.set_tab_title(name, self._pending_tab_titles.pop(name))
+
+    def _add_output_of(self, name: str, panel: Panel) -> None:
+        """Put the console of ``panel`` into the output pane; its jobs bring it to the front."""
+        console = panel.output_console()
+        if console is None or console in self.output_pane.consoles():
+            return
+        self.output_pane.add_console(panel.output_title or name, console)
+        panel.output_requested.connect(lambda c=console: self.output_pane.show_console(c))
+
+    def _on_output_expanded(self, expanded: bool) -> None:
+        sizes = self.content_splitter.sizes()
+        total = sum(sizes)
+        if total <= 0:
+            return
+        if expanded:
+            output = min(self._expanded_output_height, total // 2)
+        else:
+            if len(sizes) == 2 and sizes[1] > self.output_pane.maximumHeight():
+                self._expanded_output_height = sizes[1]
+            output = self.output_pane.maximumHeight()
+        self.content_splitter.setSizes([total - output, output])
 
     def tab(self, name: str) -> QWidget:
         return self._tab_widgets[name]

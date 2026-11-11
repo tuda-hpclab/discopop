@@ -52,7 +52,6 @@ from discopop_library.ProjectManager.services.autotuner_results import (
     read_autotuner_applied_suggestions,
 )
 from discopop_library.ProjectManager.services.commands import autotuner_command
-from discopop_library.ProjectManager.services.explorer_state import explorer_prerequisites_met
 from discopop_library.ProjectManager.services.jobs import (
     CancelPolicy,
     JobEvent,
@@ -62,7 +61,7 @@ from discopop_library.ProjectManager.services.jobs import (
     JobRunner,
     JobSpec,
 )
-from discopop_library.ProjectManager.services.patches import has_patches, sort_suggestion_ids
+from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
     AutotuningFinished,
@@ -74,6 +73,7 @@ from discopop_library.ProjectManager.services.project_state import (
 )
 from discopop_library.ProjectManager.services.requests import AutotunerRequest
 from discopop_library.ProjectManager.services.text import clean_ansi_output
+from discopop_library.ProjectManager.services.workflow_status import autotuning_ready
 
 TAB_DISABLED_TOOLTIP = "Prerequisites not met:\nPattern Detection needs to be executed first."
 
@@ -377,7 +377,7 @@ class AutotuningPanel(Panel):
     def update_tab_state(self) -> None:
         """Enable the Autotuning tab when profiling data and parallelization suggestions exist."""
         dot_dp = self.arguments.dot_dp
-        ready = explorer_prerequisites_met(dot_dp) and has_patches(dot_dp)
+        ready = autotuning_ready(dot_dp)
         self._tabs.set_tab_enabled(TAB_AUTOTUNING, ready, "" if ready else TAB_DISABLED_TOOLTIP)
 
     def _refresh_suggestions_display(self) -> None:
