@@ -42,7 +42,8 @@ class OutputPane(QWidget):
         widgets.set_label_color(self.last_line, widgets.STATUS_IDLE)
         self.last_line.setMinimumWidth(50)
         self.clear_button = widgets.create_button("Clear", self.clear_current, tooltip="Clear the shown console")
-        self.clear_button.setObjectName(widgets.FLAT_NAME)
+        # framed: a flat "Clear" read as a label
+        self.clear_button.setObjectName(widgets.COMPACT_NAME)
         self.header = QWidget()
         header_layout = widgets.hbox(self.toggle, self.last_line, None, self.clear_button, margins=0)
         # the last line takes the width while collapsed; expanded (it is hidden) the stretch keeps Clear at the right

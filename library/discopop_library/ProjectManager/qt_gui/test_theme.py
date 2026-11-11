@@ -65,3 +65,13 @@ def test_default_buttons_stand_out_from_the_window() -> None:
         assert abs(border.lightness() - window.lightness()) >= 50
         assert background.lightness() > window.lightness()
         assert f"border: 1px solid {border.name()}" in widgets.app_style_sheet(palette)
+
+
+def test_the_clear_button_of_the_output_pane_is_framed(qtbot: QtBot) -> None:
+    from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
+
+    pane = OutputPane()
+    qtbot.addWidget(pane)
+    # a flat button has no frame and read as a label
+    assert pane.clear_button.objectName() == widgets.COMPACT_NAME != widgets.FLAT_NAME
+    assert f"QPushButton#{widgets.COMPACT_NAME} {{ padding:" in widgets.app_style_sheet(QPalette(QColor("#efefef")))

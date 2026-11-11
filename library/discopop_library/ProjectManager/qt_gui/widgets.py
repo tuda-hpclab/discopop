@@ -135,6 +135,8 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
         f"QPushButton:pressed {{ background-color: {pressed}; }}",
         "QPushButton:disabled { color: palette(mid); border-color: palette(midlight);"
         " background-color: palette(window); }",
+        # a compact button: framed like the default one, with less padding, for slim bars (the output pane's Clear)
+        f"QPushButton#{COMPACT_NAME} {{ padding: 2px 10px; }}",
         # a flat button: the "⋯" overflow menus, the toggles of collapsible sections
         "QPushButton#flat, QToolButton#flat { border: none; background: transparent; padding: 3px 6px; }",
         "QPushButton#flat:hover, QToolButton#flat:hover { background-color: palette(midlight); }",
@@ -190,6 +192,7 @@ def _component_rules(dark: bool = False) -> str:
 CARD_NAME = "card"
 CHIP_NAME = "chip"
 FLAT_NAME = "flat"
+COMPACT_NAME = "compact"
 # the frame of the main window (see _chrome_rules)
 HEADER_NAME = "appHeader"
 SIDEBAR_NAME = "appSidebar"
