@@ -18,7 +18,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui import dialogs, theme, widgets
 from discopop_library.ProjectManager.qt_gui.main_window import MainWindow
 from discopop_library.ProjectManager.services.jobs import let_children_receive_sigint
 from discopop_library.ProjectManager.utilities.initializeFiles import initialize_configuration_files
@@ -47,6 +47,8 @@ def run_qt_gui(arguments: ProjectManagerArguments) -> None:
     # Stop sends SIGINT to the autotuner and patch repair jobs
     let_children_receive_sigint()
     app = create_application()
+    # the color theme chosen in the "⋯" menu of the header bar (System, i.e. the desktop's, by default)
+    theme.apply_saved_theme(app)
     was_initialized = False
     if not os.path.exists(arguments.project_config_dir):
         try:

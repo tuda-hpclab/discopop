@@ -19,11 +19,20 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QResizeEvent, QShortcut
-from PySide6.QtWidgets import QFrame, QLabel, QMainWindow, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QIcon, QKeySequence, QResizeEvent, QShortcut
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QLabel,
+    QMainWindow,
+    QSplitter,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.qt_gui import widgets
+from discopop_library.ProjectManager.qt_gui import theme, widgets
 from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
@@ -174,6 +183,7 @@ class MainWindow(QMainWindow):
             tabs=self,
         )
         self.panels.append(self.config_list)
+        self._add_theme_menu()
         panels: Dict[str, Panel] = {
             TAB_SETUP: self.setup_panel,
             TAB_EDITOR: self.editor_panel,
@@ -211,6 +221,28 @@ class MainWindow(QMainWindow):
         state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
+
+    def _add_theme_menu(self) -> None:
+        """The submenu "Theme" (System / Light / Dark) of the "⋯" menu in the header bar."""
+        menu = self.config_list.menu()
+        menu.addSeparator()
+        self.theme_menu = menu.addMenu("Theme")
+        self.theme_actions: Dict[str, QAction] = {}
+        group = QActionGroup(self.theme_menu)
+        group.setExclusive(True)
+        for key in theme.THEMES:
+            action = self.theme_menu.addAction(theme.THEME_TITLES[key])
+            action.setCheckable(True)
+            action.setChecked(key == theme.current_theme())
+            action.triggered.connect(lambda _checked=False, key=key: self.set_theme(key))
+            group.addAction(action)
+            self.theme_actions[key] = action
+
+    def set_theme(self, key: str) -> None:
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            theme.set_theme(app, key)
+        self.theme_actions[theme.current_theme()].setChecked(True)
 
     def _run_state_changed(self, other: "ExecutePanel | ProfilingPanel", running: bool) -> None:
         other.set_blocked(running)

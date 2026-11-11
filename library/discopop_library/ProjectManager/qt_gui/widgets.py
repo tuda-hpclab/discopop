@@ -109,15 +109,32 @@ CONSOLE_TAG_COLORS: Dict[str, str] = {
 # and the status chips are fixed (they carry white text and read on both).
 
 
-def _button_rules() -> str:
+def button_colors(palette: QPalette) -> Tuple[QColor, QColor, QColor, QColor]:
+    """Background, border, hover and pressed color of a default button, derived from the window color.
+
+    The palette's own button color often equals the window color and its "mid" border is faint, which left a plain
+    button ("Help") barely visible; these stand out from the window, a card and the page of a tab in both themes.
+    """
+    window = palette.color(QPalette.ColorRole.Window)
+    if is_dark(palette):
+        return window.lighter(150), window.lighter(230), window.lighter(185), window.lighter(120)
+    return window.lighter(112), window.darker(145), window.darker(106), window.darker(115)
+
+
+def _button_rules(palette: Optional[QPalette] = None) -> str:
+    if palette is not None:
+        background, border, hover, pressed = (color.name() for color in button_colors(palette))
+    else:
+        background, border, hover, pressed = "palette(button)", "palette(mid)", "palette(midlight)", "palette(mid)"
     rules = [
-        # the default look: a framed button in the palette's button color (a border radius without a border would
+        # the default look: a framed button that stands out from the window (a border radius without a border would
         # draw a bare label)
-        "QPushButton { padding: 5px 14px; border-radius: 6px; border: 1px solid palette(mid);"
-        " background-color: palette(button); color: palette(button-text); }",
-        "QPushButton:hover { background-color: palette(midlight); }",
-        "QPushButton:pressed { background-color: palette(mid); }",
-        "QPushButton:disabled { color: palette(mid); border-color: palette(midlight); }",
+        f"QPushButton {{ padding: 5px 14px; border-radius: 6px; border: 1px solid {border};"
+        f" background-color: {background}; color: palette(button-text); }}",
+        f"QPushButton:hover {{ background-color: {hover}; }}",
+        f"QPushButton:pressed {{ background-color: {pressed}; }}",
+        "QPushButton:disabled { color: palette(mid); border-color: palette(midlight);"
+        " background-color: palette(window); }",
         # a flat button: the "⋯" overflow menus, the toggles of collapsible sections
         "QPushButton#flat, QToolButton#flat { border: none; background: transparent; padding: 3px 6px; }",
         "QPushButton#flat:hover, QToolButton#flat:hover { background-color: palette(midlight); }",
@@ -183,7 +200,7 @@ APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 
 def app_style_sheet(palette: QPalette) -> str:
     """The style sheet of the application for ``palette`` (light or dark, see :func:`is_dark`)."""
-    return _button_rules() + "\n" + _component_rules(dark=is_dark(palette)) + "\n" + _chrome_rules(palette)
+    return _button_rules(palette) + "\n" + _component_rules(dark=is_dark(palette)) + "\n" + _chrome_rules(palette)
 
 
 def is_dark(palette: QPalette) -> bool:

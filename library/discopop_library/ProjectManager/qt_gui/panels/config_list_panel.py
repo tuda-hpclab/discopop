@@ -85,7 +85,7 @@ class ConfigListPanel(Panel):
         self.menu_button = QToolButton()
         self.menu_button.setObjectName(widgets.FLAT_NAME)
         self.menu_button.setText("⋯")
-        self.menu_button.setToolTip("Copy, rename or delete the configuration; the compilation of the project")
+        self.menu_button.setToolTip("Copy, rename or delete the configuration; the color theme")
         self.menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._menu = self.context_menu()
         self.menu_button.setMenu(self._menu)
@@ -159,6 +159,10 @@ class ConfigListPanel(Panel):
         return True
 
     # --- the menu ---
+
+    def menu(self) -> QMenu:
+        """The menu of the "⋯" button; the main window adds the entries that are not about configurations."""
+        return self._menu
 
     def context_menu(self) -> QMenu:
         menu = QMenu(self)
