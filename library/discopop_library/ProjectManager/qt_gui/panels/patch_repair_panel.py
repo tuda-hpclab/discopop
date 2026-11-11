@@ -277,8 +277,7 @@ class PatchRepairPanel(Panel):
         header.setStretchLastSection(True)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
         # an empty table says what to do instead of showing bare column headers
-        self.empty_label = widgets.caption_label(NO_RESULTS_TEXT)
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label = widgets.empty_state_label(NO_RESULTS_TEXT)
         self.results_stack = QStackedWidget()
         self.results_stack.addWidget(self.empty_label)
         self.results_stack.addWidget(self.table)

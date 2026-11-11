@@ -170,8 +170,11 @@ class HotspotPanel(Panel):
         self._plot_counter = 0
         self._job: Optional[WorkRunner] = None
         self.session = HotspotSession(arguments)
-        # the configurations to measure (checked in the list); a configuration seen for the first time is checked
+        # the configurations to measure (checked in the list). Until the user changes a check box, the list follows
+        # the configuration selected in the header bar (only it is checked); afterwards the user's choice stays, and
+        # a configuration created later starts unchecked.
         self._checked: Dict[str, bool] = {}
+        self._user_chose = False
         self._filling_configs = False
         # the running batch, or the last one (its states stay visible until the next batch)
         self.queue: Optional[MeasurementQueue] = None
@@ -311,8 +314,7 @@ class HotspotPanel(Panel):
     @staticmethod
     def _with_empty_state(content: QWidget, text: str) -> Tuple[QStackedWidget, QLabel]:
         """A stack showing ``text`` (page 0) or ``content`` (page 1)."""
-        label = widgets.caption_label(text)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label = widgets.empty_state_label(text)
         stack = QStackedWidget()
         stack.addWidget(label)
         stack.addWidget(content)
@@ -589,7 +591,12 @@ class HotspotPanel(Panel):
     # ── the execution configurations ───────────────────────────────────────────
 
     def refresh_configurations(self) -> None:
-        """The configurations on disk into the list (a new one is checked), then the button states."""
+        """The configurations on disk into the list, then the button states.
+
+        Not while a batch runs: its list stays as it started (it is rebuilt when the batch ends).
+        """
+        if self.running:
+            return
         self._fill_config_list()
         self.update_ui()
 
@@ -601,7 +608,8 @@ class HotspotPanel(Panel):
         if item is None or (item.state == measurement_queue.QUEUED and not self.running):
             return runs_text, None
         if item.state == measurement_queue.MEASURED:
-            return "✓ " + runs_text, _STATE_COLORS[item.state]
+            # its runs may have been cleared since
+            return ("✓ " + runs_text, _STATE_COLORS[item.state]) if runs else (runs_text, None)
         return measurement_queue.state_text(item), _STATE_COLORS.get(item.state)
 
     def _fill_config_list(self) -> None:
@@ -609,8 +617,11 @@ class HotspotPanel(Panel):
         self._filling_configs = True
         try:
             self.config_list.clear()
+            current = self.project_state.current_config
             for name in names:
-                checked = self._checked.setdefault(name, True)
+                if not self._user_chose:
+                    self._checked[name] = name == current
+                checked = self._checked.setdefault(name, False)
                 status, color = self._config_status(name)
                 item = QTreeWidgetItem([name, status])
                 flags = Qt.ItemFlag.ItemIsEnabled | (
@@ -628,15 +639,32 @@ class HotspotPanel(Panel):
         row_height = self.config_list.sizeHintForRow(0) if names else 22
         self.config_list.setFixedHeight(self.config_list.header().sizeHint().height() + rows * row_height + 6)
 
+    def _update_config_statuses(self) -> None:
+        """The status column in place (on every state change of a running batch: keeps the scroll position)."""
+        for row in range(self.config_list.topLevelItemCount()):
+            item = self.config_list.topLevelItem(row)
+            if item is None:
+                continue
+            status, color = self._config_status(item.text(0))
+            self._filling_configs = True
+            try:
+                item.setText(1, status)
+                item.setToolTip(1, status)
+                item.setForeground(1, QBrush(QColor(color)) if color is not None else QBrush())
+            finally:
+                self._filling_configs = False
+
     def _on_config_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         if self._filling_configs or column != 0:
             return
         self._checked[item.text(0)] = item.checkState(0) == Qt.CheckState.Checked
+        self._user_chose = True
         self.update_ui()
 
     def _check_all(self, checked: bool) -> None:
         for name in list_configurations(self.arguments.project_config_dir):
             self._checked[name] = checked
+        self._user_chose = True
         self.refresh_configurations()
 
     def selected_configs(self) -> List[str]:
@@ -646,6 +674,7 @@ class HotspotPanel(Panel):
     def set_selected_configs(self, names: List[str]) -> None:
         for name in list_configurations(self.arguments.project_config_dir):
             self._checked[name] = name in names
+        self._user_chose = True
         self.refresh_configurations()
 
     # ── prerequisites and button states ────────────────────────────────────────
@@ -713,7 +742,7 @@ class HotspotPanel(Panel):
         elif isinstance(event, WorkProgress):
             if self.queue is not None:
                 self.queue.apply(event.key, event.state, event.detail)
-                self._fill_config_list()
+                self._update_config_statuses()
                 self.update_ui()
         elif isinstance(event, WorkFinished):
             if event.error is not None:  # a crash of the work must not leave the UI stuck
@@ -837,6 +866,7 @@ class HotspotPanel(Panel):
         ):
             return
         self.session.delete_hotspot_dir()
+        self.queue = None
         self.output.clear()
         self.refresh_results()
         self.project_state.publish(HotspotsChanged())

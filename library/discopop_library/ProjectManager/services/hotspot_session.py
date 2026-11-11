@@ -68,6 +68,8 @@ Timeouts = Tuple[Optional[float], Optional[float], Optional[float]]
 
 # what HotspotSession.measure returns when the user stopped it
 STOPPED_REASON = "stopped"
+# the start of the reason HotspotSession.measure returns when the instrumented build failed
+INSTRUMENTATION_FAILED = "instrumentation failed"
 
 
 @dataclass(frozen=True)
@@ -257,7 +259,7 @@ class HotspotSession:
             if result is None or result[0] != 0:
                 code = result[0] if result else "None"
                 ctx.output(f"Instrumentation failed (return code: {code})\n")
-                return f"instrumentation failed (return code {code})"
+                return f"{INSTRUMENTATION_FAILED} (return code {code})"
             _code, elapsed, stdout, stderr = result
             ctx.output(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
             if stdout:
@@ -356,6 +358,9 @@ class HotspotSession:
         """
         measured_any = False
         all_measured = True
+        # a configuration that failed (or was stopped) during its instrumentation may have left a half-written build;
+        # the build state compares only the recorded script and the sources, so the next one is instrumented again
+        build_dirty = False
         total = len(configs)
         for position, name in enumerate(configs, start=1):
             if ctx.cancel_event.is_set():
@@ -363,10 +368,11 @@ class HotspotSession:
             ctx.progress(name, measurement_queue.RUNNING, f"{position}/{total}")
             ctx.output(f"\n=== {name} ({position}/{total}) ===\n")
             state, _detail = self.build_state(name)
-            request = self.make_request(
-                name, needs_compile=state != BUILD_CURRENT, repetitions=repetitions, timeouts=timeouts
-            )
+            needs_compile = build_dirty or state != BUILD_CURRENT
+            request = self.make_request(name, needs_compile=needs_compile, repetitions=repetitions, timeouts=timeouts)
             reason = self.measure(ctx, request)
+            if needs_compile:
+                build_dirty = reason is not None and reason.startswith(INSTRUMENTATION_FAILED)
             if reason == STOPPED_REASON or ctx.cancel_event.is_set():
                 ctx.progress(name, measurement_queue.STOPPED)
                 all_measured = False
@@ -378,7 +384,13 @@ class HotspotSession:
                 all_measured = False
                 ctx.progress(name, measurement_queue.FAILED, reason)
         if ctx.cancel_event.is_set():
-            # the configurations after the stopped one never ran
+            # the configurations after the stopped one never ran; Stop means stop, so the runs recorded before are not
+            # analyzed now -- Re-run Analysis does that
+            if measured_any:
+                ctx.output(
+                    "\nStopped: the analysis is skipped. The runs recorded so far are kept; "
+                    "use Re-run Analysis in the ⋯ menu to analyze them.\n"
+                )
             return False
         if not measured_any:
             ctx.output("\nNo configuration was measured; the analysis is skipped.\n")

@@ -314,8 +314,7 @@ class AutotuningPanel(Panel):
 
         canvas_widget, self.figure, self.canvas, _toolbar = chart_embedding.create_canvas()
         # before the first event there is nothing to plot: a caption says what to do
-        self.plot_empty_label = widgets.caption_label(NO_PLOT_TEXT)
-        self.plot_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.plot_empty_label = widgets.empty_state_label(NO_PLOT_TEXT)
         self.plot_stack = QStackedWidget()
         self.plot_stack.addWidget(self.plot_empty_label)
         self.plot_stack.addWidget(canvas_widget)

@@ -254,6 +254,16 @@ def heading_label(text: str, *, title: bool = False) -> QLabel:
     return label
 
 
+def empty_state_label(text: str) -> QLabel:
+    """The text of an empty view (a table, a chart, a detail area) saying what to do: centered, gray, in the normal
+    font size, the same on every page."""
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setStyleSheet(f"color: {STATUS_IDLE};")
+    return label
+
+
 def caption_label(text: str) -> QLabel:
     """A small, gray hint label that wraps."""
     label = QLabel(text)
@@ -912,10 +922,21 @@ class StatusChip(QWidget):
         self.detail_label = caption_label("")
         self.detail_label.setVisible(False)
         self.details_button.toggled.connect(self.detail_label.setVisible)
+        # The row keeps its height when the chip is empty or has no "Details": every page header is equally tall, so
+        # the content of all stages starts at the same height and does not jump when a stage's status appears.
+        self.row = QWidget()
+        self.row.setLayout(hbox(self.chip, self.details_button, None, margins=0))
+        # the style sheet (padding of the pill) decides the heights: polish before asking
+        self.chip.ensurePolished()
+        self.details_button.ensurePolished()
+        row_height = max(self.chip.sizeHint().height(), self.details_button.sizeHint().height())
+        self.row.setFixedHeight(row_height)
+        self.chip.setFixedHeight(row_height)
+        self.details_button.setFixedHeight(row_height)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addLayout(hbox(self.chip, self.details_button, None))
+        layout.addWidget(self.row)
         layout.addWidget(self.detail_label)
         self.level = CHIP_IDLE
         self.set_status(CHIP_IDLE, "")

@@ -211,8 +211,7 @@ class ReportPanel(Panel):
         self.notebook.tabCloseRequested.connect(self._close_tab)
         self.table = self._build_table()
         # without results a caption says what to do instead of an empty table
-        self.empty_label = widgets.caption_label(_EMPTY_TEXT)
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label = widgets.empty_state_label(_EMPTY_TEXT)
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.empty_label)
         self.table_stack.addWidget(self.table)

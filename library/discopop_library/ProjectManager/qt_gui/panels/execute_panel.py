@@ -217,7 +217,8 @@ class ExecutePanel(Panel):
         self.none_radio.setChecked(True)
         self.apply_suggestions_rb.setEnabled(False)
         self.apply_autotuner_suggestions_rb.setEnabled(False)
-        self.suggestions_count_label = widgets.caption_label("No suggestions available")
+        # the normal font size, as the same count on the Autotuning page
+        self.suggestions_count_label = QLabel("No suggestions available")
         self.suggestions_count_label.setWordWrap(False)
         self.browse_edit_suggestions_button = widgets.create_button("Browse / Edit →", self._open_suggestion_browser)
         self.browse_edit_suggestions_button.setEnabled(False)

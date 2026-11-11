@@ -27,7 +27,6 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QLabel,
     QLineEdit,
     QStackedWidget,
     QTableView,
@@ -275,10 +274,7 @@ class SuggestionTable(QWidget):
         else:
             self.view.sortByColumn(0, Qt.SortOrder.AscendingOrder)
 
-        self.empty_label = QLabel(empty_text)
-        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setWordWrap(True)
-        self.empty_label.setStyleSheet(f"color: {widgets.STATUS_IDLE};")
+        self.empty_label = widgets.empty_state_label(empty_text)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.view)
         self.stack.addWidget(self.empty_label)

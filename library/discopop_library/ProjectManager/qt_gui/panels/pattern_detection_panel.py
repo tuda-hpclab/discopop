@@ -268,9 +268,7 @@ class PatternDetectionPanel(Panel):
         self.detail_body.addWidget(self.patch_view)
         self.detail_body.setStretchFactor(1, 1)
         self.detail_body.setSizes([300, 700])
-        self.detail_placeholder = QLabel(_SELECT_HINT)
-        self.detail_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.detail_placeholder.setStyleSheet(f"color: {widgets.STATUS_IDLE};")
+        self.detail_placeholder = widgets.empty_state_label(_SELECT_HINT)
         self.detail_stack = QStackedWidget()
         self.detail_stack.addWidget(self.detail_placeholder)
         self.detail_stack.addWidget(self.detail_body)
@@ -290,10 +288,7 @@ class PatternDetectionPanel(Panel):
 
     def _build_locked_view(self) -> QWidget:
         self.locked_title = widgets.heading_label("Needs profiling data", title=True)
-        self.locked_reason = QLabel()
-        self.locked_reason.setWordWrap(True)
-        self.locked_reason.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.locked_reason.setStyleSheet(f"color: {widgets.STATUS_IDLE};")
+        self.locked_reason = widgets.empty_state_label("")
         self.goto_profiling_button = widgets.primary_button(
             "Go to Profiling", lambda: self.tabs.show_tab(TAB_PROFILING)
         )
