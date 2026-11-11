@@ -59,7 +59,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ProjectState,
     ResultsChanged,
 )
-from discopop_library.ProjectManager.services.workflow_status import stage_statuses
+from discopop_library.ProjectManager.services.workflow_status import forget_build_states, stage_statuses
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
 
@@ -187,6 +187,9 @@ class MainWindow(QMainWindow):
             AutotuningFinished,
         ):
             state.subscribe(event_type, lambda _event: self._status_timer.start())
+        # a measurement or a run can rebuild what the hotspot stage compares with the sources
+        state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
+        state.subscribe(ResultsChanged, lambda _event: forget_build_states())
         QShortcut(QKeySequence.StandardKey.Save, self, self.editor_panel.save_shortcut)
 
     def _build_frame(self) -> None:
@@ -312,6 +315,8 @@ class MainWindow(QMainWindow):
             event.type() == QEvent.Type.WindowActivate
             and time.monotonic() - self._statuses_computed_at > STATUS_ON_ACTIVATE_MIN_S
         ):
+            # the sources may have been edited in another program
+            forget_build_states()
             self._status_timer.start()
         return super().event(event)
 

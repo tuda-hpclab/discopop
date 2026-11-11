@@ -14,9 +14,10 @@ event on the GUI thread, so no profiler output is parsed and nothing is run.
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.plots import hotspot_data
@@ -115,11 +116,34 @@ def _execute_status(arguments: ProjectManagerArguments, runs: int) -> StageStatu
     return StageStatus(StageState.DONE, _plural(runs, "measured run") if runs else "profiled")
 
 
+# The build state walks the source tree for the newest modification time, the only part of stage_statuses that is
+# not a few stat calls. The GUI asks after every burst of events; within this many seconds the last answer is reused
+# (forget_build_states() drops it when the GUI knows the build changed).
+BUILD_STATE_MAX_AGE_S = 5.0
+_build_states: Dict[Tuple[str, Optional[str]], Tuple[float, str]] = {}
+
+
+def forget_build_states() -> None:
+    """Drop the cached build states (call after a hotspot build or measurement)."""
+    _build_states.clear()
+
+
+def _build_state(arguments: ProjectManagerArguments, config: Optional[str]) -> str:
+    key = (arguments.dot_dp, config)
+    now = time.monotonic()
+    cached = _build_states.get(key)
+    if cached is not None and now - cached[0] < BUILD_STATE_MAX_AGE_S:
+        return cached[1]
+    state, _detail = HotspotSession(arguments).build_state(config)
+    _build_states[key] = (now, state)
+    return state
+
+
 def _hotspot_status(arguments: ProjectManagerArguments, config: Optional[str]) -> StageStatus:
     if not os.path.exists(hotspot_data.hotspots_json_path(arguments.dot_dp)):
         return StageStatus(StageState.NOT_RUN, "no hotspot results")
     # the same rule as the "Instrumented build" line of the Hotspot panel
-    state, _detail = HotspotSession(arguments).build_state(config)
+    state = _build_state(arguments, config)
     if state == BUILD_MISMATCH:
         return StageStatus(StageState.STALE, "sources changed")
     return StageStatus(StageState.DONE, "")

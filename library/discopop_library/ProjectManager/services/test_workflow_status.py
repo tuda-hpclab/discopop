@@ -9,11 +9,14 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
+
+import pytest
 
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services.workflow_status import (
+    forget_build_states,
     STAGE_AUTOTUNING,
     STAGE_EDITOR,
     STAGE_EXECUTE,
@@ -27,6 +30,12 @@ from discopop_library.ProjectManager.services.workflow_status import (
     count_execution_results,
     stage_statuses,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_build_states() -> None:
+    """The build state cache is module level: a test must not see the answer of another one."""
+    forget_build_states()
 
 
 def make_arguments(root: Path) -> ProjectManagerArguments:
@@ -126,6 +135,9 @@ def test_hotspot_done_and_stale(tmp_path: Path) -> None:
     touch(source, mtime=1000.0)
     assert statuses(arguments)[STAGE_HOTSPOT].state == StageState.DONE
     os.utime(source, (3000.0, 3000.0))
+    # the build state is reused for a few seconds; the GUI drops it after events and when it is activated
+    assert statuses(arguments)[STAGE_HOTSPOT].state == StageState.DONE
+    forget_build_states()
     assert statuses(arguments)[STAGE_HOTSPOT] == StageStatus(StageState.STALE, "sources changed")
 
 
@@ -169,3 +181,25 @@ def test_autotuning(tmp_path: Path) -> None:
     assert statuses(arguments)[STAGE_AUTOTUNING].state == StageState.NOT_RUN
     touch(os.path.join(dot_dp, "auto_tuner", "results.json"), "{}")
     assert statuses(arguments)[STAGE_AUTOTUNING].state == StageState.DONE
+
+
+def test_the_build_state_is_reused_for_a_while(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from discopop_library.ProjectManager.services import workflow_status
+
+    calls: List[Optional[str]] = []
+
+    def build_state(_session: object, config: Optional[str]) -> Tuple[str, str]:
+        calls.append(config)
+        return ("ok", "")
+
+    from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
+
+    monkeypatch.setattr(HotspotSession, "build_state", build_state)
+    arguments = make_arguments(tmp_path)
+    workflow_status.forget_build_states()
+    assert workflow_status._build_state(arguments, "a") == "ok"
+    workflow_status._build_state(arguments, "a")
+    assert calls == ["a"]
+    workflow_status.forget_build_states()
+    workflow_status._build_state(arguments, "a")
+    assert calls == ["a", "a"]
