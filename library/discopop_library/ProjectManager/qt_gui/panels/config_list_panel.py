@@ -89,7 +89,7 @@ class ConfigListPanel(Panel):
         self.menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._menu = self.context_menu()
         self.menu_button.setMenu(self._menu)
-        label = QLabel("Configuration:")
+        label = QLabel("Execution Configuration:")
         self.setLayout(widgets.hbox(label, self.combo, self.new_button, self.menu_button, margins=0))
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 

@@ -257,3 +257,9 @@ def test_a_finished_wizard_selects_its_configuration_and_shows_execute(env: Env)
     assert env.panel.names() == ["a", "b", "wiz"] and env.panel.project_state.current_config == "wiz"
     assert env.tabs.shown == [TAB_PROFILING] and ConfigChanged("wiz") in env.events
     assert env.panel._wizard is None
+
+
+def test_the_selector_is_labeled_as_the_execution_configuration(env: Env) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    assert "Execution Configuration:" in [label.text() for label in env.panel.findChildren(QLabel)]

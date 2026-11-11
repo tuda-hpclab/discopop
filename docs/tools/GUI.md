@@ -46,7 +46,7 @@ Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the co
 
 The window has a header bar, a workflow sidebar, the stage that is selected and an output pane. The header bar, the sidebar and the status line form the frame of the window, in a darker shade than the page of the stage. The colors follow the light or dark color scheme of the desktop; the charts stay light.
 
-- **Header bar** (top): the title, the path of the `.discopop` directory and the **Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…* and *Delete…*.
+- **Header bar** (top): the title, the path of the `.discopop` directory and the **Execution Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…* and *Delete…*.
 - **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:
   - **Setup**: *Project Setup*, the build shared by all configurations, and *Configuration Setup*, the scripts of the selected configuration.
   - **Pipeline**: *Profiling*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*. Most of them work on the selected configuration.
