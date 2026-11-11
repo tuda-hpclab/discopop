@@ -57,9 +57,23 @@ class StageStatus:
     detail: str  # one short line, e.g. "2 suggestions", "sources changed", "needs profiling data"
 
 
+# what the autotuner is missing (autotuning_missing)
+MISSING_PROFILING_DATA = "profiling data"
+MISSING_SUGGESTIONS = "suggestions"
+
+
+def autotuning_missing(dot_dp: str) -> Optional[str]:
+    """The first prerequisite of the autotuner that is missing (``MISSING_*``), or None if it can start."""
+    if not explorer_prerequisites_met(dot_dp):
+        return MISSING_PROFILING_DATA
+    if not has_patches(dot_dp):
+        return MISSING_SUGGESTIONS
+    return None
+
+
 def autotuning_ready(dot_dp: str) -> bool:
     """Whether the autotuner can start: profiling data and parallelization suggestions exist."""
-    return explorer_prerequisites_met(dot_dp) and has_patches(dot_dp)
+    return autotuning_missing(dot_dp) is None
 
 
 def count_execution_results(project_dir: str) -> int:

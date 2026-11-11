@@ -42,7 +42,7 @@ from discopop_library.ProjectManager.plots.data import parse_progress_jsonl, spl
 from discopop_library.ProjectManager.plots.hotspot_data import hotspots_available_for_explorer
 from discopop_library.ProjectManager.qt_gui import chart_embedding, dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
-from discopop_library.ProjectManager.qt_gui.tabs import TAB_AUTOTUNING
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_AUTOTUNING, TAB_PATTERN_DETECTION, TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.suggestion_browser import open_suggestion_browser
@@ -73,9 +73,25 @@ from discopop_library.ProjectManager.services.project_state import (
 )
 from discopop_library.ProjectManager.services.requests import AutotunerRequest
 from discopop_library.ProjectManager.services.text import clean_ansi_output
-from discopop_library.ProjectManager.services.workflow_status import autotuning_ready
+from discopop_library.ProjectManager.services.workflow_status import (
+    MISSING_PROFILING_DATA,
+    MISSING_SUGGESTIONS,
+    autotuning_missing,
+)
 
-TAB_DISABLED_TOOLTIP = "Prerequisites not met:\nPattern Detection needs to be executed first."
+# what the page says while a prerequisite of the autotuner is missing: title, explanation
+PREREQUISITE_TEXTS: Dict[str, Tuple[str, str]] = {
+    MISSING_PROFILING_DATA: (
+        "Prerequisites not met: no profiling data",
+        "The autotuner measures combinations of the parallelization suggestions, which the pattern detection finds "
+        "in the profiling data. Profile the configuration in the Profiling stage, then run the pattern detection.",
+    ),
+    MISSING_SUGGESTIONS: (
+        "Prerequisites not met: no parallelization suggestions",
+        "The autotuner measures combinations of the parallelization suggestions. Run the pattern detection first; "
+        "if it found no suggestions, there is nothing to tune.",
+    ),
+}
 
 SEARCH_MODE = "search"
 EVALUATE_MODE = "evaluate"
@@ -112,9 +128,9 @@ def _set_state_text(label: QLabel, text: str, active: bool) -> None:
 class AutotuningPanel(Panel):
     """The Autotuning tab.
 
-    ``tabs`` is the main window: the panel enables and disables its own tab (``TAB_AUTOTUNING``) there, depending
-    on whether parallelization suggestions and profiling data exist (``update_tab_state``; the window calls it once
-    after it put the panel into its tab, the panel itself whenever the prerequisites may have changed).
+    ``tabs`` is the main window. The stage is always reachable; while profiling data or parallelization suggestions
+    are missing, a warning on the page says which and where to get it, and Run is unavailable (``update_tab_state``;
+    the window calls it after events that can change the prerequisites, the panel itself as well).
     """
 
     output_title = "Autotuning"
@@ -137,6 +153,16 @@ class AutotuningPanel(Panel):
         self.console = self.make_console()
         self.run_button = widgets.RunStopButton("Run Autotuning", self.run, self.stop)
         self.header = widgets.PanelHeader("Autotuning", DESCRIPTION, [self.run_button])
+        self.prerequisites_banner = widgets.WarningBanner()
+        self.goto_profiling_button = widgets.primary_button(
+            "Go to Profiling", lambda: self._tabs.show_tab(TAB_PROFILING)
+        )
+        self.goto_pattern_detection_button = widgets.primary_button(
+            "Go to Pattern Detection", lambda: self._tabs.show_tab(TAB_PATTERN_DETECTION)
+        )
+        self.prerequisites_banner.add_action(self.goto_profiling_button)
+        self.prerequisites_banner.add_action(self.goto_pattern_detection_button)
+        self.prerequisites_banner.setVisible(False)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_left_side())
@@ -147,6 +173,7 @@ class AutotuningPanel(Panel):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.header)
+        layout.addWidget(self.prerequisites_banner)
         layout.addWidget(splitter, 1)
 
         self._update_mode_widgets()
@@ -319,9 +346,7 @@ class AutotuningPanel(Panel):
             self.algorithm_hint.setText("Ranks hot code regions by their measured runtime. Reproducible across runs.")
             widgets.set_label_color(self.algorithm_hint, widgets.STATUS_IDLE)
         else:
-            self.algorithm_hint.setText(
-                "No hotspot detection results found - run Hotspot Detection first, or pick another algorithm."
-            )
+            self.algorithm_hint.setText("No hotspot results: run Hotspot Detection first, or pick another algorithm.")
             widgets.set_label_color(self.algorithm_hint, widgets.STATUS_FAIL)
         self.algorithm_hint.setVisible(bool(self.algorithm_hint.text()))
 
@@ -359,16 +384,24 @@ class AutotuningPanel(Panel):
         open_suggestion_browser(self, self.arguments.dot_dp)
 
     def _update_ui(self) -> None:
-        # a running tuning keeps showing Stop, and Run stays unavailable afterwards if it was before
-        self.run_button.setEnabled(not self.running)
         self._refresh_suggestions_display()
         self.update_tab_state()
 
     def update_tab_state(self) -> None:
-        """Enable the Autotuning tab when profiling data and parallelization suggestions exist."""
-        dot_dp = self.arguments.dot_dp
-        ready = autotuning_ready(dot_dp)
-        self._tabs.set_tab_enabled(TAB_AUTOTUNING, ready, "" if ready else TAB_DISABLED_TOOLTIP)
+        """Show what the autotuner is missing on the page; Run is available when nothing is.
+
+        The stage stays reachable: the sidebar shows it locked with the reason, the page says what to do.
+        """
+        missing = autotuning_missing(self.arguments.dot_dp)
+        self.prerequisites_banner.setVisible(missing is not None)
+        if missing is not None:
+            self.prerequisites_banner.set_message(*PREREQUISITE_TEXTS[missing])
+        self.goto_profiling_button.setVisible(missing == MISSING_PROFILING_DATA)
+        self.goto_pattern_detection_button.setVisible(missing == MISSING_SUGGESTIONS)
+        # a running tuning keeps showing Stop and Run unavailable; _on_complete decides again at its end
+        self.run_button.setEnabled(missing is None and not self.running)
+        self.run_button.setToolTip("" if missing is None else PREREQUISITE_TEXTS[missing][0])
+        self._tabs.set_tab_enabled(TAB_AUTOTUNING, True, "")
 
     def _refresh_suggestions_display(self) -> None:
         """Re-read the suggestions and the autotuner's results into the selectors and the overview."""
@@ -480,6 +513,10 @@ class AutotuningPanel(Panel):
             return
         if not self.project_state.current_config:
             dialogs.show_error(self, "No Configuration Selected", "Please select a configuration first.")
+            return
+        missing = autotuning_missing(self.arguments.dot_dp)
+        if missing is not None:
+            dialogs.show_error(self, "Prerequisites Not Met", "\n\n".join(PREREQUISITE_TEXTS[missing]))
             return
 
         self.running = True
@@ -617,7 +654,7 @@ class AutotuningPanel(Panel):
         self._load_progress_from_file()
         self._show_plot_or_caption(NO_PLOT_TEXT)
 
-        self.run_button.set_running(False, enabled_after=True)
+        self.run_button.set_running(False, enabled_after=autotuning_missing(self.arguments.dot_dp) is None)
         self._refresh_suggestions_display()
 
         if stopped:

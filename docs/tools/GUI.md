@@ -52,7 +52,7 @@ The window has a header bar, a workflow sidebar, the stage that is selected and 
   - **Pipeline**: *Profiling*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*. Most of them work on the selected configuration.
   - **Results**: *Report*.
 
-  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). A locked stage cannot be opened, except *Pattern Detection*, which opens and explains what is missing, with a **Go to Profiling** button.
+  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). Locked stages can still be opened: *Pattern Detection* explains what is missing and offers **Go to Profiling**; *Autotuning* shows a warning with the missing prerequisite (profiling data or parallelization suggestions) and a button to the stage that creates it, and **Run Autotuning** is unavailable until then.
 - **Stage** (right): the stage that is selected.
 - **Output pane** (bottom): the output of all jobs, see [Output pane](#output-pane).
 
@@ -170,7 +170,7 @@ The right side shows *Results* (one row per suggestion) and *Patch*, the patch o
 ## Autotuning
 ![Autotuning stage with the live plot](../assets/screenshots/gui_autotuning.svg)
 
-The stage runs [`discopop_auto_tuner`](Autotuner.md) for the selected configuration. It needs the output of pattern detection and the `dp` and `hd` settings.
+The stage runs [`discopop_auto_tuner`](Autotuner.md) for the selected configuration. It needs the output of pattern detection and the `dp` and `hd` settings. Without profiling data or parallelization suggestions, the stage shows a warning that names the missing prerequisite, with **Go to Profiling** resp. **Go to Pattern Detection**.
 
 | Card | Setting |
 |---|---|

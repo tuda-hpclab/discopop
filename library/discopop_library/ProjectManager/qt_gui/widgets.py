@@ -193,6 +193,7 @@ CARD_NAME = "card"
 CHIP_NAME = "chip"
 FLAT_NAME = "flat"
 COMPACT_NAME = "compact"
+BANNER_NAME = "warningBanner"
 # the frame of the main window (see _chrome_rules)
 HEADER_NAME = "appHeader"
 SIDEBAR_NAME = "appSidebar"
@@ -848,6 +849,50 @@ CHIP_COLORS: Dict[str, str] = {
     CHIP_BUSY: STATUS_BUSY,
     CHIP_IDLE: "#7a7a7a",
 }
+
+
+class WarningBanner(QFrame):
+    """A tinted warning box across the page: a bold title, the explanation and the actions that resolve it.
+
+    For a stage whose prerequisites are not met: it opens, and says on the page what is missing and where to get it
+    (instead of a disabled entry whose reason is only a tooltip).
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName(BANNER_NAME)
+        color = QColor(CHIP_COLORS[CHIP_WARN])
+        rgb = f"{color.red()}, {color.green()}, {color.blue()}"
+        self.setStyleSheet(
+            f"QFrame#{BANNER_NAME} {{ background-color: rgba({rgb}, 30); border: 1px solid rgba({rgb}, 140);"
+            " border-radius: 8px; }"
+        )
+        self.title_label = heading_label("")
+        set_label_color(self.title_label, color.name())
+        self.text_label = QLabel("")
+        self.text_label.setWordWrap(True)
+        self.actions_layout = hbox(margins=0)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(6)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.text_label)
+        layout.addLayout(self.actions_layout)
+        self.actions_layout.addStretch(1)
+
+    def set_message(self, title: str, text: str) -> None:
+        self.title_label.setText("⚠ " + title)
+        self.text_label.setText(text)
+
+    def add_action(self, button: QWidget) -> None:
+        """A button below the text, left-aligned (before the stretch)."""
+        self.actions_layout.insertWidget(self.actions_layout.count() - 1, button)
+
+    def title(self) -> str:
+        return self.title_label.text()
+
+    def text(self) -> str:
+        return self.text_label.text()
 
 
 class StatusChip(QWidget):

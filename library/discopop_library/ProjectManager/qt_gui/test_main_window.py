@@ -127,10 +127,11 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
-    # nothing was profiled: the Autotuning stage is disabled, with a reason; the Pattern Detection stage stays
-    # reachable and explains what is missing, the sidebar marks it locked
-    assert not window.is_tab_enabled(TAB_AUTOTUNING) and window.tab_tooltip(TAB_AUTOTUNING)
+    # nothing was profiled: the Autotuning and Pattern Detection stages stay reachable and explain on their page what
+    # is missing; the sidebar marks them locked, with the reason as detail and tooltip
+    assert window.is_tab_enabled(TAB_AUTOTUNING) and window.tab_tooltip(TAB_AUTOTUNING) == "needs profiling data"
     assert window.nav.stage_state(TAB_AUTOTUNING) == StageState.LOCKED
+    assert window.autotuning_panel.prerequisites_banner.isVisibleTo(window.autotuning_panel)
     assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
     assert window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.LOCKED
     # the hotspot panel reads the timeouts of the Execute tab, the report writes into its console
