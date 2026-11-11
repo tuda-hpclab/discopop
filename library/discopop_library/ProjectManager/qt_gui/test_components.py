@@ -287,3 +287,23 @@ def test_cards_keep_the_window_color_in_a_dark_palette() -> None:
     assert not widgets.is_dark(light) and widgets.is_dark(dark)
     assert "background-color: palette(base)" in widgets.app_style_sheet(light)
     assert "background-color: palette(window)" in widgets.app_style_sheet(dark)
+
+
+def test_the_window_frame_has_a_color_of_its_own(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtGui import QColor, QPalette
+
+    for window_color, text_color in (("#efefef", "#000000"), ("#2b2b2b", "#e6e6e6")):
+        palette = QPalette(QColor(window_color))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text_color))
+        chrome = widgets.chrome_color(palette)
+        # darker than the pages, in a light and in a dark palette
+        assert chrome.lightness() < palette.color(QPalette.ColorRole.Window).lightness()
+        sheet = widgets.app_style_sheet(palette)
+        for name in (widgets.HEADER_NAME, widgets.SIDEBAR_NAME, widgets.STATUS_BAR_NAME):
+            assert f"#{name} {{ background-color: {chrome.name()};" in sheet
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    assert window.header.objectName() == widgets.HEADER_NAME
+    assert window.sidebar.objectName() == widgets.SIDEBAR_NAME and window.nav.parentWidget() is window.sidebar
+    assert window.statusBar().objectName() == widgets.STATUS_BAR_NAME
+    assert window.splitter.widget(0) is window.sidebar

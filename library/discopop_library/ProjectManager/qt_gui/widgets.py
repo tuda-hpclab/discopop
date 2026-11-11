@@ -136,6 +136,25 @@ def _button_rules() -> str:
     return "\n".join(rules)
 
 
+def chrome_color(palette: QPalette) -> QColor:
+    """The background of the window's frame (header bar, sidebar, status line): a shade darker than the pages, so
+    that the navigation and the page content read as separate areas, in a light and in a dark palette."""
+    window = palette.color(QPalette.ColorRole.Window)
+    return window.darker(140) if is_dark(palette) else window.darker(112)
+
+
+def _chrome_rules(palette: Optional[QPalette]) -> str:
+    """The frame of the main window: header bar and sidebar in the chrome color, with a line towards the page."""
+    background = chrome_color(palette).name() if palette is not None else "palette(window)"
+    return "\n".join(
+        [
+            f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
+            f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
+            f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
+        ]
+    )
+
+
 def _component_rules(dark: bool = False) -> str:
     # a card: the framed section of a form (FormSection). Light, it is lifted in the color of the input fields; dark,
     # input fields and the indicators of check boxes are drawn in that color too and would vanish in it, so the card
@@ -154,13 +173,17 @@ def _component_rules(dark: bool = False) -> str:
 CARD_NAME = "card"
 CHIP_NAME = "chip"
 FLAT_NAME = "flat"
+# the frame of the main window (see _chrome_rules)
+HEADER_NAME = "appHeader"
+SIDEBAR_NAME = "appSidebar"
+STATUS_BAR_NAME = "appStatusBar"
 
 APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 
 
 def app_style_sheet(palette: QPalette) -> str:
     """The style sheet of the application for ``palette`` (light or dark, see :func:`is_dark`)."""
-    return _button_rules() + "\n" + _component_rules(dark=is_dark(palette))
+    return _button_rules() + "\n" + _component_rules(dark=is_dark(palette)) + "\n" + _chrome_rules(palette)
 
 
 def is_dark(palette: QPalette) -> bool:
