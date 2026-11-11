@@ -152,7 +152,7 @@ class EditorPanel(Panel):
 
         self.save_button = widgets.primary_button("Save (Ctrl+S)", self._save_clicked)
         self.header = widgets.PanelHeader(
-            "Configure",
+            "Configuration Setup",
             "The scripts of the selected configuration: how it is built, run and validated.",
             [self.save_button],
         )

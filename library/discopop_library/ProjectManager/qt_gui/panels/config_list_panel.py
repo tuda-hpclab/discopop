@@ -53,7 +53,7 @@ class ConfigListPanel(Panel):
 
     ``confirm_leave_config`` is asked before the user's selection changes; False keeps the old selection (the Editor
     panel uses it for unsaved changes). ``tabs`` switches the tabs of the main window. The files shared by all
-    configurations (compile.sh, settings) are edited in the Setup stage.
+    configurations (compile.sh, settings) are edited in the Project Setup stage.
 
     Publishes ``ConfigChanged`` when the selection changes or is refreshed, and ``ConfigurationsChanged`` after
     a configuration was created, copied, renamed, deleted or written by the wizard; refreshes on the latter.

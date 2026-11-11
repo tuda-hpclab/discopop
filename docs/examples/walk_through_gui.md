@@ -29,7 +29,7 @@ discopop_gui
 
 ![Main window of the GUI](../assets/screenshots/gui_main_window.svg)
 
-The header bar has the **Configuration:** selector, the buttons "+ New" and the "⋯" menu, and shows the path of the `.discopop` folder. The left column is the workflow sidebar with the stages, grouped into "Project" (Setup, Configure), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
+The header bar has the **Configuration:** selector, the buttons "+ New" and the "⋯" menu, and shows the path of the `.discopop` folder. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
 
 ## Step 2: Create a configuration with the wizard
 If the project has no real configuration yet, the "Configuration Assistant" opens on its own. Its steps are:
@@ -47,12 +47,12 @@ If the project has no real configuration yet, the "Configuration Assistant" open
 
 ![Configuration Assistant, first step (Welcome)](../assets/screenshots/gui_wizard.svg)
 
-You can edit the wizard's results later: the stage **Setup** at the top of the sidebar shows `compile.sh` and the settings files, with the buttons "Save (Ctrl+S)", "Test Compilation" (its output appears in the output pane) and "Derive" (derives the settings of the other modes from `seq_settings.json`). "+ New" next to the **Configuration:** selector adds a further configuration; its **⋯** menu offers "Copy…", "Rename…", "New with wizard…" and "Delete…" for the selected one.
+You can edit the wizard's results later: the stage **Project Setup** at the top of the sidebar shows `compile.sh` and the settings files, with the buttons "Save (Ctrl+S)", "Test Compilation" (its output appears in the output pane) and "Derive" (derives the settings of the other modes from `seq_settings.json`). "+ New" next to the **Configuration:** selector adds a further configuration; its **⋯** menu offers "Copy…", "Rename…", "New with wizard…" and "Delete…" for the selected one.
 
 ## Step 3: Edit the scripts
-The stage **Configure** shows the files of the selected configuration in the sub-tabs `execute.sh`, `compile.sh (override)`, `validate.sh` and `compile_validate.sh (override)`. "Help" explains each script; "Add Override" and "Add validate.sh" create the optional ones. Save with "Save (Ctrl+S)".
+The stage **Configuration Setup** shows the files of the selected configuration in the sub-tabs `execute.sh`, `compile.sh (override)`, `validate.sh` and `compile_validate.sh (override)`. "Help" explains each script; "Add Override" and "Add validate.sh" create the optional ones. Save with "Save (Ctrl+S)".
 
-![Configure stage with execute.sh and the Execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
+![Configuration Setup stage with execute.sh and the Execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
 
 The box **Execution time** below `execute.sh` sets what is measured. Off (default), the wall clock time of `execute.sh` is used. If your program prints its own time, tick "Read the execution time from the program's console output" and enter a regular expression whose first capture group holds the value, e.g. `Total time:\s*([0-9.]+)`. "Test" matches the pattern against the output of the last recorded run and shows "Matched in the last recorded run: ... s" or a failure. The setting is stored per configuration; see [Project manager](../tools/Project_manager.md).
 

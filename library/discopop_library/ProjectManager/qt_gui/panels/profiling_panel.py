@@ -118,7 +118,7 @@ class ProfilingPanel(Panel):
         self.data_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.configuration_label = QLabel("")
         self.configuration_label.setWordWrap(True)
-        self.goto_setup_button = widgets.create_button("Go to Setup", lambda: self.tabs.show_tab(TAB_SETUP))
+        self.goto_setup_button = widgets.create_button("Go to Project Setup", lambda: self.tabs.show_tab(TAB_SETUP))
         self.goto_setup_button.setVisible(False)
         data = widgets.FormSection("Profiling data")
         data.add_row("Configuration:", self.configuration_label, stretch_field=True)
@@ -200,18 +200,18 @@ class ProfilingPanel(Panel):
     # ── what the stage shows ─────────────────────────────────────────────────
 
     def _missing_requirement(self) -> Tuple[str, bool]:
-        """Why the selected configuration cannot be profiled ("" if it can), and whether the Setup stage fixes it."""
+        """Why the selected configuration cannot be profiled ("" if it can); whether Project Setup fixes it."""
         config = self.project_state.current_config
         if not config:
             return "No configuration selected.", False
         compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, config)
         execute_sh = os.path.join(self.arguments.project_config_dir, config, "execute.sh")
         if not os.path.exists(compile_sh):
-            return "No compile.sh: write it in Setup.", True
+            return "No compile.sh: write it in Project Setup.", True
         if not os.path.exists(execute_sh):
-            return "The configuration has no execute.sh: write it in Configure.", False
+            return "The configuration has no execute.sh: write it in Configuration Setup.", False
         if not available_modes(self.arguments.project_config_dir, compile_sh, execute_sh)["dp"]:
-            return "No dp_settings.json: derive the settings from seq_settings.json in Setup.", True
+            return "No dp_settings.json: derive the settings from seq_settings.json in Project Setup.", True
         return "", False
 
     def _data_text(self) -> str:

@@ -50,7 +50,7 @@ On the first start, the Configuration Assistant asks for two scripts and checks 
   ./prog input_small.txt
   ```
 
-Optionally, a validation script `validate.sh` checks that the output is still correct after a parallelization. The assistant derives the settings for the instrumented and the parallel builds itself; you can review them later in the *Configure* stage.
+Optionally, a validation script `validate.sh` checks that the output is still correct after a parallelization. The assistant derives the settings for the instrumented and the parallel builds itself; you can review them later in the *Project Setup* stage.
 
 ## Find and measure parallelism
 Select the configuration in the header bar and work through the stages of the sidebar from top to bottom:

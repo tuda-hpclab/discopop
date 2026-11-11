@@ -46,9 +46,9 @@ TAB_ORDER = (
     TAB_REPORT,
 )
 
-# the workflow sidebar: sections of (tab, title) in display order; the project first, the results last
+# the workflow sidebar: sections of (tab, title) in display order; the setup first, the results last
 NAV_SECTIONS = (
-    ("Project", ((TAB_SETUP, "Setup"), (TAB_EDITOR, "Configure"))),
+    ("Setup", ((TAB_SETUP, "Project Setup"), (TAB_EDITOR, "Configuration Setup"))),
     (
         "Pipeline",
         (

@@ -217,7 +217,7 @@ class MainWindow(QMainWindow):
         self.report_panel.set_execution_running(running)
 
     def save_shortcut(self) -> None:
-        """Ctrl+S: saves the files of the stage in front (Setup or Configure)."""
+        """Ctrl+S: saves the files of the stage in front (Project Setup or Configuration Setup)."""
         current = self.current_tab()
         if current == TAB_SETUP:
             self.setup_panel.save()

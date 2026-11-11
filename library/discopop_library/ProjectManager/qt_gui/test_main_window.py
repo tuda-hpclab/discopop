@@ -41,7 +41,7 @@ def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
-    # the sidebar: the project, the pipeline, the results
+    # the sidebar: the setup, the pipeline, the results
     assert window.tab_names() == [
         TAB_SETUP,
         TAB_EDITOR,
@@ -55,8 +55,8 @@ def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
     ]
     assert window.tab_names() == list(TAB_ORDER)
     assert [window.stack.indexOf(window.tab(name)) for name in TAB_ORDER] == list(range(len(TAB_ORDER)))
-    assert window.tab_title(TAB_SETUP) == "Setup" and window.tab_title(TAB_PROFILING) == "Profiling"
-    assert window.tab_title(TAB_EDITOR) == "Configure" and window.current_tab() == TAB_EDITOR
+    assert window.tab_title(TAB_SETUP) == "Project Setup" and window.tab_title(TAB_PROFILING) == "Profiling"
+    assert window.tab_title(TAB_EDITOR) == "Configuration Setup" and window.current_tab() == TAB_EDITOR
     assert window.dot_dp_label.toolTip() == str(tmp_path / ".discopop")
 
 
@@ -92,13 +92,13 @@ def test_tab_host(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.current_tab() == TAB_ORDER[2]
     assert window.nav.current_stage() == TAB_ORDER[2]
     window.set_tab_title(TAB_EDITOR, "Editor *")
-    assert window.tab_title(TAB_EDITOR) == "Configure *" and window.current_tab() == TAB_ORDER[2]
+    assert window.tab_title(TAB_EDITOR) == "Configuration Setup *" and window.current_tab() == TAB_ORDER[2]
     window.set_tab_title(TAB_EDITOR, "Editor")
-    assert window.tab_title(TAB_EDITOR) == "Configure"
+    assert window.tab_title(TAB_EDITOR) == "Configuration Setup"
     window.set_tab_enabled(TAB_ORDER[4], False, "no profiling data")
     assert not window.is_tab_enabled(TAB_ORDER[4]) and window.tab_tooltip(TAB_ORDER[4]) == "no profiling data"
     assert window.nav.detail(TAB_ORDER[4]) == "no profiling data"
-    # a stage that becomes disabled while it is shown gives way to the Configure stage
+    # a stage that becomes disabled while it is shown gives way to the Configuration Setup stage
     window.show_tab(TAB_ORDER[4])
     window.set_tab_enabled(TAB_ORDER[4], False, "gone")
     assert window.current_tab() == TAB_EDITOR

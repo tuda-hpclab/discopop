@@ -103,7 +103,7 @@ class SetupPanel(Panel):
         self.test_compilation_button = widgets.create_button(TEST_BUTTON_TEXT, self.test_compilation)
         self.derive_button = widgets.create_button("Derive", self.derive_settings)
         self.header = widgets.PanelHeader(
-            "Setup",
+            "Project Setup",
             "How the project is built: compile.sh and the compiler settings, shared by all configurations.",
             [self.derive_button, self.test_compilation_button, self.save_button],
         )

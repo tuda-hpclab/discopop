@@ -48,7 +48,7 @@ The window has a header bar, a workflow sidebar, the stage that is selected and 
 
 - **Header bar** (top): the title, the path of the `.discopop` directory and the **Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…* and *Delete…*.
 - **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:
-  - **Project**: *Setup*, the build shared by all configurations, and *Configure*, the scripts of the selected configuration.
+  - **Setup**: *Project Setup*, the build shared by all configurations, and *Configuration Setup*, the scripts of the selected configuration.
   - **Pipeline**: *Profiling*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*. Most of them work on the selected configuration.
   - **Results**: *Report*.
 
@@ -58,7 +58,7 @@ The window has a header bar, a workflow sidebar, the stage that is selected and 
 
 Every stage has the same header: its title, a one-line description, a status chip (a colored label; some chips have a **Details** toggle for the longer explanation) and its actions at the top right. The primary action, for example **Run**, is one button that turns into **■ Stop** while the job runs. Rare or destructive actions are in a **⋯** menu of the stage. Settings are grouped in cards; settings that are rarely changed are in a collapsed **Advanced** section.
 
-The Tk version (`--gui-toolkit tk`) keeps the old layout: the configuration list on the left with **+ New** and **Edit Compilation**, and the tabs *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair* and *Autotuning* on the right. The functions of the tabs are the same as those of the stages described below; the *Setup* stage is the window opened by **Edit Compilation**, the *Profiling* stage is the button **Prepare Pattern Detection** of the *Execute* tab.
+The Tk version (`--gui-toolkit tk`) keeps the old layout: the configuration list on the left with **+ New** and **Edit Compilation**, and the tabs *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair* and *Autotuning* on the right. The functions of the tabs are the same as those of the stages described below; the *Project Setup* stage is the window opened by **Edit Compilation**, the *Configuration Setup* stage is the *Editor* tab, the *Profiling* stage is the button **Prepare Pattern Detection** of the *Execute* tab.
 
 The stages for later steps explain which prerequisite is missing: the detail line in the sidebar, and on mouse over. For example, *Pattern Detection* needs profiling data and *Autotuning* needs pattern detection results.
 
@@ -81,10 +81,10 @@ When the project has no usable configuration, the GUI opens the *Configuration A
 
 After **Finish**, the new configuration is selected and the *Profiling* stage, the first one of the pipeline, opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
 
-## Setup
-![Setup stage with the shared compile.sh](../assets/screenshots/gui_setup.svg)
+## Project Setup
+![Project Setup stage with the shared compile.sh](../assets/screenshots/gui_setup.svg)
 
-The *Setup* stage edits the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`. Unsaved changes mark the stage "Setup *" in the sidebar.
+The *Project Setup* stage edits the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`. Unsaved changes mark the stage "Project Setup *" in the sidebar.
 
 - **Save (Ctrl+S)** writes the files.
 - **Test Compilation** (on the `compile.sh` tab) builds the project with the current script and settings, without recording a result. The output appears in the output pane, the outcome in the status chip.
@@ -96,10 +96,10 @@ Files without unsaved changes are read again when the stage is shown, so the fil
 {: .note }
 The GUI does not derive the settings files again when it executes a configuration, so your edits of them are kept. The command line project manager overwrites them from `seq_settings.json` on every run.
 
-## Configure
-![Configure stage, execute.sh with the execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
+## Configuration Setup
+![Configuration Setup stage, execute.sh with the execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
 
-The *Configure* stage edits the scripts of the selected configuration. Save with **Save (Ctrl+S)**. Every sub-tab has a **Help** button. The sub-tabs are:
+The *Configuration Setup* stage edits the scripts of the selected configuration. Save with **Save (Ctrl+S)**. Every sub-tab has a **Help** button. The sub-tabs are:
 
 | Sub-tab | Content |
 |---|---|
@@ -120,7 +120,7 @@ The *Profiling* stage compiles the selected configuration with the DiscoPoP comp
 
 Its header holds **Profile for Pattern Detection** (**■ Stop** while it runs). The cards show the selected configuration and the time of the last profiling run (or which profiling files are missing), and explain the run. The instrumented program runs much slower than the original, so give the configuration a small, but representative input. *Advanced* (collapsed) holds the timeouts for compilation, execution and validation in seconds (0 = disabled).
 
-Without `compile.sh`, `execute.sh` or `dp_settings.json`, the stage says what is missing; **Go to Setup** opens the *Setup* stage. The *Profiling* and *Execute* stages do not run at the same time.
+Without `compile.sh`, `execute.sh` or `dp_settings.json`, the stage says what is missing; **Go to Project Setup** opens the *Project Setup* stage. The *Profiling* and *Execute* stages do not run at the same time.
 
 ## Hotspots
 ![Hotspots stage after two measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
@@ -188,7 +188,7 @@ The *Execute* stage compiles and runs the selected configuration, as `discopop_p
 | Card | Setting |
 |---|---|
 | Modes | `seq` (sequential), `dp` (DiscoPoP instrumented), `hd` (hotspot detection), `par` (parallel). A mode is available when its settings file, the compile script and `execute.sh` exist. |
-| Run | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, and a summary of the execution time setting of the *Configure* stage |
+| Run | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, and a summary of the execution time setting of the *Configuration Setup* stage |
 | Apply suggestions | None, manually selected suggestions (**Browse / Edit →**), or the suggestions selected by the autotuner |
 | Advanced (collapsed) | Timeouts for execution, compilation and validation in seconds (0 = disabled), log level, *Execute in-place (skip project copy)*, *Skip cleanup (keep project copies)* |
 
@@ -212,7 +212,7 @@ The *Report* stage shows all recorded measurements. The *Table* tab lists config
 
 | Stage | Runs |
 |---|---|
-| Setup, Configure, Profiling, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
+| Project Setup, Configuration Setup, Profiling, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
 | Hotspots | The `hd` mode of the project manager, then `discopop_hotspot_analyzer` |
 | Pattern Detection | `discopop_explorer` (subprocess; in the Tk version in process with graph visualization) |
 | Patch Repair | `python -m discopop_library.PatchRepair` (`discopop_patch_repair`) as a subprocess |
