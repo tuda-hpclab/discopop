@@ -36,7 +36,7 @@ def create_application() -> QApplication:
     app.setApplicationName("DiscoPoP Project Manager")
     if not isinstance(app.style(), widgets.TabTextRoomStyle):
         app.setStyle(widgets.TabTextRoomStyle(app.style().name()))
-    app.setStyleSheet(widgets.APP_STYLE_SHEET)
+    app.setStyleSheet(widgets.app_style_sheet(app.palette()))
     return app
 
 

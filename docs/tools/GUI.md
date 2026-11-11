@@ -44,7 +44,7 @@ Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the co
 ## Window layout
 ![Main window with the configuration selector in the header bar, the workflow sidebar on the left and the output pane below the stage](../assets/screenshots/gui_main_window.svg)
 
-The window has a header bar, a workflow sidebar, the stage that is selected and an output pane. The colors follow the light or dark color scheme of the desktop.
+The window has a header bar, a workflow sidebar, the stage that is selected and an output pane. The colors follow the light or dark color scheme of the desktop; the charts stay light.
 
 - **Header bar** (top): the title, the path of the `.discopop` directory and the **Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…*, *Project compilation…* (opens the [Compilation Editor](#compilation-editor)) and *Delete…*.
 - **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:

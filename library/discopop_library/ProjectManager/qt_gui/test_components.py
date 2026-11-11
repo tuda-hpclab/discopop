@@ -275,3 +275,15 @@ def test_replacing_a_stage_removes_the_old_console(qtbot: QtBot, tmp_path: Path)
     first.console.append_text("late output\n")
     assert "late output" not in window.output_pane.last_line_text()
     qtbot.addWidget(first)
+
+
+def test_cards_keep_the_window_color_in_a_dark_palette() -> None:
+    from PySide6.QtGui import QColor, QPalette
+
+    light = QPalette(QColor("#efefef"))
+    dark = QPalette(QColor("#2b2b2b"))
+    dark.setColor(QPalette.ColorRole.WindowText, QColor("#e6e6e6"))
+    light.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+    assert not widgets.is_dark(light) and widgets.is_dark(dark)
+    assert "background-color: palette(base)" in widgets.app_style_sheet(light)
+    assert "background-color: palette(window)" in widgets.app_style_sheet(dark)

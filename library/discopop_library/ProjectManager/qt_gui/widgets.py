@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
+    QPalette,
     QRegularExpressionValidator,
     QSyntaxHighlighter,
     QTextCharFormat,
@@ -135,11 +136,14 @@ def _button_rules() -> str:
     return "\n".join(rules)
 
 
-def _component_rules() -> str:
+def _component_rules(dark: bool = False) -> str:
+    # a card: the framed section of a form (FormSection). Light, it is lifted in the color of the input fields; dark,
+    # input fields and the indicators of check boxes are drawn in that color too and would vanish in it, so the card
+    # keeps the window color and only its frame sets it apart (as in a dialog)
+    card_background = "palette(window)" if dark else "palette(base)"
     rules = [
-        # a card: the framed section of a form (FormSection) or a header
         f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 8px;"
-        " background-color: palette(base); }",
+        f" background-color: {card_background}; }}",
         # a status chip: a rounded, colored pill (StatusChip)
         f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; font-weight: bold; }}",
     ]
@@ -152,6 +156,19 @@ CHIP_NAME = "chip"
 FLAT_NAME = "flat"
 
 APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
+
+
+def app_style_sheet(palette: QPalette) -> str:
+    """The style sheet of the application for ``palette`` (light or dark, see :func:`is_dark`)."""
+    return _button_rules() + "\n" + _component_rules(dark=is_dark(palette))
+
+
+def is_dark(palette: QPalette) -> bool:
+    """Whether ``palette`` is a dark one: its window color is darker than its text."""
+    return (
+        palette.color(QPalette.ColorRole.Window).lightness() < palette.color(QPalette.ColorRole.WindowText).lightness()
+    )
+
 
 # how much taller than the font a tab title may draw (see TabTextRoomStyle)
 TAB_TEXT_EXTRA_PX = 2
