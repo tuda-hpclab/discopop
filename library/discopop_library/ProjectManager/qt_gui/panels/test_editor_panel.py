@@ -133,10 +133,11 @@ def test_editing_marks_the_tabs_and_saving_clears_them(panel: EditorPanel) -> No
     changed = record(panel, ConfigurationsChanged)
     type_into(panel, "execute.sh", "#!/bin/bash\n./prog 100\n\n")
     assert panel.notebook.tabText(0) == "execute.sh *" and tabs(panel).titles["Editor"] == "Editor *"
-    assert panel.has_unsaved_changes()
+    assert panel.has_unsaved_changes() and panel.header.chip.text() == "Unsaved changes"
     panel.save_button.click()
     assert (config_dir(panel) / "execute.sh").read_text() == "#!/bin/bash\n./prog 100"
     assert panel.notebook.tabText(0) == "execute.sh" and tabs(panel).titles["Editor"] == "Editor"
+    assert panel.header.chip.text() == ""
     assert panel.status.text() == "Saved execute.sh" and panel.status.color == widgets.STATUS_OK
     assert changed == [ConfigurationsChanged()]
 

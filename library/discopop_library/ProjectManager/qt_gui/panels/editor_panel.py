@@ -153,9 +153,14 @@ class EditorPanel(Panel):
             self.notebook.addTab(page, BASE_LABELS[name])
 
         self.save_button = widgets.primary_button("Save (Ctrl+S)", self._save_clicked)
+        self.header = widgets.PanelHeader(
+            "Configure",
+            "The scripts of the selected configuration: how it is built, run and validated.",
+            [self.save_button],
+        )
         layout = QVBoxLayout(self)
+        layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
-        layout.addLayout(widgets.hbox(self.save_button, None, margins=5))
 
         project_state.subscribe(ConfigChanged, lambda _event: self._on_config_changed())
 
@@ -389,7 +394,12 @@ class EditorPanel(Panel):
             label = self.sub_tab_labels[name]
             self.notebook.setTabText(index, f"{label} *" if modified else label)
         # imported here: the main window imports the panels, so a module level import would be circular
-        self.tabs.set_tab_title(TAB_EDITOR, "Editor *" if self.has_unsaved_changes() else "Editor")
+        unsaved = self.has_unsaved_changes()
+        self.tabs.set_tab_title(TAB_EDITOR, "Editor *" if unsaved else "Editor")
+        if unsaved:
+            self.header.chip.set_status(widgets.CHIP_WARN, "Unsaved changes", "Save with Ctrl+S.")
+        else:
+            self.header.chip.set_status(widgets.CHIP_IDLE, "")
 
     # ── add / remove the optional files ─────────────────────────────────────
 

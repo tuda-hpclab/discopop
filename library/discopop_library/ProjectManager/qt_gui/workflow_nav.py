@@ -44,6 +44,14 @@ BADGES: Dict[Optional[StageState], Tuple[str, str]] = {
     None: ("", widgets.STATUS_IDLE),
 }
 
+# the detail line of a stage whose status has no detail of its own
+_STATE_TEXTS: Dict[Optional[StageState], str] = {
+    StageState.DONE: "done",
+    StageState.STALE: "out of date",
+    StageState.NOT_RUN: "not run yet",
+    StageState.LOCKED: "locked",
+}
+
 _ITEM_HEIGHT = 46
 _SECTION_HEIGHT = 26
 _BADGE_WIDTH = 26
@@ -122,7 +130,7 @@ class _StageDelegate(QStyledItemDelegate):
             detail_color = QColor(text_color)
             detail_color.setAlpha(170)
             painter.setPen(detail_color)
-            detail = str(index.data(_DETAIL_ROLE) or "")
+            detail = str(index.data(_DETAIL_ROLE) or "") or _STATE_TEXTS.get(state_value, "")
             painter.drawText(
                 detail_rect,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
