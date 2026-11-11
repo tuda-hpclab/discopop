@@ -183,9 +183,7 @@ class PatternDetectionPanel(Panel):
             "Pattern detection restricts its analysis to the hot parts of the program when hotspot information is "
             "available; measuring hotspots first can speed this step up significantly.",
         )
-        self.goto_hotspot_button = widgets.create_button(
-            "Go to Hotspot Detection", lambda: self.tabs.show_tab(TAB_HOTSPOT)
-        )
+        self.goto_hotspot_button = widgets.create_button("Go to Hotspots", lambda: self.tabs.show_tab(TAB_HOTSPOT))
         card.add_widget(widgets.hbox(self.goto_hotspot_button, None))
         return card
 
