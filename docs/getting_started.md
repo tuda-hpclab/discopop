@@ -56,7 +56,7 @@ Optionally, a validation script `validate.sh` checks that the output is still co
 Select the configuration in the header bar and work through the stages of the sidebar from top to bottom:
 
 1. **Profiling**: click *Profile for Pattern Detection*: it builds and runs the instrumented program and keeps its profiling data in `.discopop`.
-2. **Hotspots**: click *Run Measurement* to find the regions that take the most time. The autotuner uses this result. Measuring two configurations with different input sizes gives the best ranking.
+2. **Hotspots**: check the execution configurations to measure and click *Run Measurements* to find the regions that take the most time; the configurations are measured one after another. The autotuner uses this result. Measuring two configurations with different input sizes gives the best ranking.
 3. **Pattern Detection**: click *Run Pattern Detection*. The table lists each suggestion with its source location; selecting one shows its OpenMP patch.
 4. **Patch Repair** (optional): checks the generated patches and repairs them with an LLM agent you configure in the tab.
 5. **Autotuning**: click *Run Autotuning*. The autotuner measures combinations of the suggestions and keeps those that make the program faster; the plot shows the speedup of each measured combination. The default algorithm, *Hotspot-guided region descent*, needs the result of step 2; without it, choose another algorithm, for example *Greedy combination*.

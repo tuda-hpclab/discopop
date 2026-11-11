@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -52,19 +54,27 @@ from discopop_library.ProjectManager.qt_gui.detail_bar import DetailBar
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
-from discopop_library.ProjectManager.services import hotspot_view
+from discopop_library.ProjectManager.services import hotspot_view, measurement_queue
+from discopop_library.ProjectManager.services.configurations import list_configurations
 from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession, Timeouts
+from discopop_library.ProjectManager.services.measurement_queue import MeasurementQueue
 from discopop_library.ProjectManager.services.jobs import (
     StatusKind,
     WorkContext,
     WorkEvent,
     WorkFinished,
     WorkOutput,
+    WorkProgress,
     WorkRunner,
     WorkStatus,
 )
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, HotspotsChanged, ProjectState
+from discopop_library.ProjectManager.services.project_state import (
+    ConfigChanged,
+    ConfigurationsChanged,
+    HotspotsChanged,
+    ProjectState,
+)
 from discopop_library.ProjectManager.services.vscode import (
     VSCODE_NOT_FOUND_MESSAGE,
     find_code_executable,
@@ -78,6 +88,7 @@ PLOT_TYPES: Dict[str, Dict[str, str]] = {
     "profile": {"label": "Per-region run profile", "stem": "Profile"},
 }
 
+RUN_TEXT = "Run Measurements"
 _DETAIL_BAR_WIDTH = 260
 _SETTINGS_WIDTH = 330
 _FIXED_TABS = 2  # Regions, Runs
@@ -85,6 +96,13 @@ _RESET_MS = 3000
 _KEY_ROLE = Qt.ItemDataRole.UserRole
 _RIGHT = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 _RUN_NUMERIC_COLUMNS = (0, 3, 5)  # Run, Time (s), Regions
+_CONFIG_LIST_MAX_ROWS = 8
+_STATE_COLORS = {
+    measurement_queue.RUNNING: widgets.STATUS_BUSY,
+    measurement_queue.MEASURED: widgets.STATUS_OK,
+    measurement_queue.FAILED: widgets.STATUS_FAIL,
+    measurement_queue.STOPPED: widgets.STATUS_STOP,
+}
 
 _CHIP_LEVELS = {
     hotspot_view.LEVEL_OK: widgets.CHIP_OK,
@@ -120,8 +138,11 @@ class HotspotPanel(Panel):
     """The Hotspot Detection tab.
 
     The header holds the run / stop button, a "\u22ef" menu (re-instrument, re-run analysis, clear) and a chip with the
-    state of the measurements; below it the settings (repetitions) are a narrow column left of the result tabs
-    (Regions, Runs and the charts), so the regions are visible without switching tabs. The console is in the output
+    state of the measurements; below it the settings are a narrow column left of the result tabs (Regions, Runs and
+    the charts), so the regions are visible without switching tabs. The settings list the execution configurations
+    with check boxes: Run Measurements measures the checked ones one after another (``HotspotSession.run_batch``)
+    and analyzes all runs once at the end; the list shows the state of each (queued, measuring, measured, failed,
+    stopped) and, between batches, how many runs it has. The console is in the output
     pane. ``timeouts`` returns the (execution, compilation, validation) timeouts of the Execute tab, which a
     measurement uses; it is called on the main thread when a measurement starts. The panel publishes
     ``HotspotsChanged`` whenever the hotspot results change (after a measurement, an analysis or after clearing) and
@@ -149,6 +170,11 @@ class HotspotPanel(Panel):
         self._plot_counter = 0
         self._job: Optional[WorkRunner] = None
         self.session = HotspotSession(arguments)
+        # the configurations to measure (checked in the list); a configuration seen for the first time is checked
+        self._checked: Dict[str, bool] = {}
+        self._filling_configs = False
+        # the running batch, or the last one (its states stay visible until the next batch)
+        self.queue: Optional[MeasurementQueue] = None
 
         self.output = self.make_console()
 
@@ -188,7 +214,8 @@ class HotspotPanel(Panel):
         layout.addWidget(self.header)
         layout.addWidget(splitter, 1)
 
-        project_state.subscribe(ConfigChanged, lambda _event: self.update_ui())
+        project_state.subscribe(ConfigChanged, lambda _event: self.refresh_configurations())
+        project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh_configurations())
         # open with the quadrant chart shown, mirroring the Report tab opening on a trade-off scatter
         self.add_plot("quadrant")
         self.notebook.setCurrentIndex(0)
@@ -197,7 +224,7 @@ class HotspotPanel(Panel):
     # ── construction ───────────────────────────────────────────────────────────
 
     def _build_header(self) -> widgets.PanelHeader:
-        self.run_button = widgets.RunStopButton("Run Measurement", self.run_measurement, self.stop_measurement)
+        self.run_button = widgets.RunStopButton(RUN_TEXT, self.run_measurement, self.stop_measurement)
         self.run_button.setEnabled(False)
         menu_button = widgets.overflow_button(
             [
@@ -219,6 +246,27 @@ class HotspotPanel(Panel):
         )
 
     def _build_settings(self) -> QWidget:
+        self.config_list = QTreeWidget()
+        self.config_list.setColumnCount(2)
+        self.config_list.setHeaderLabels(["Configuration", "Status"])
+        self.config_list.setRootIsDecorated(False)
+        self.config_list.setUniformRowHeights(True)
+        self.config_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.config_list.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.config_list.header().setStretchLastSection(True)
+        self.config_list.itemChanged.connect(self._on_config_item_changed)
+        self.select_all_button = widgets.create_button("All", lambda: self._check_all(True))
+        self.select_none_button = widgets.create_button("None", lambda: self._check_all(False))
+        for button in (self.select_all_button, self.select_none_button):
+            button.setObjectName(widgets.COMPACT_NAME)
+        configs = widgets.FormSection("Execution configurations")
+        configs.add_widget(
+            self.config_list,
+            "Run Measurements measures the checked configurations one after another and analyzes all runs at the "
+            "end. Configurations with different inputs make the hotness meaningful.",
+        )
+        configs.add_widget(widgets.hbox(self.select_all_button, self.select_none_button, None, margins=0))
+
         self.repetitions = QSpinBox()
         self.repetitions.setRange(1, 20)
         self.repetitions.setValue(1)
@@ -226,14 +274,14 @@ class HotspotPanel(Panel):
         section.add_row(
             "Repetitions:",
             self.repetitions,
-            "Hotness weighs the average runtime and how much it varies between runs. Repeating one configuration "
-            "only reduces noise; measure several configurations (inputs) to make the variation meaningful. "
-            "Timeouts come from the Execute stage.",
+            "Runs per configuration. Hotness weighs the average runtime and how much it varies between runs; "
+            "repeating one configuration only reduces noise. Timeouts come from the Execute stage.",
         )
         self.facts_label = widgets.caption_label("")
         column = QWidget()
         layout = QVBoxLayout(column)
         layout.setContentsMargins(0, 0, 8, 0)
+        layout.addWidget(configs)
         layout.addWidget(section)
         layout.addWidget(self.facts_label)
         layout.addStretch(1)
@@ -485,6 +533,7 @@ class HotspotPanel(Panel):
 
         self._populate_regions_table()
         self._populate_runs_table()
+        self._fill_config_list()
         for tab in self.plot_tabs:
             tab.selection = None
             tab.detail.show_placeholder()
@@ -537,11 +586,75 @@ class HotspotPanel(Panel):
                 table.setItem(row, column, item)
         self.runs_stack.setCurrentIndex(1 if self.runs else 0)
 
+    # ── the execution configurations ───────────────────────────────────────────
+
+    def refresh_configurations(self) -> None:
+        """The configurations on disk into the list (a new one is checked), then the button states."""
+        self._fill_config_list()
+        self.update_ui()
+
+    def _config_status(self, name: str) -> Tuple[str, Optional[str]]:
+        """The status column of ``name``: its state in the running / last batch, else its recorded runs."""
+        runs = sum(1 for run in self.runs if run.config == name)
+        runs_text = f"{runs} run" + ("" if runs == 1 else "s") if runs else "not measured"
+        item = self.queue.item(name) if self.queue is not None else None
+        if item is None or (item.state == measurement_queue.QUEUED and not self.running):
+            return runs_text, None
+        if item.state == measurement_queue.MEASURED:
+            return "✓ " + runs_text, _STATE_COLORS[item.state]
+        return measurement_queue.state_text(item), _STATE_COLORS.get(item.state)
+
+    def _fill_config_list(self) -> None:
+        names = list_configurations(self.arguments.project_config_dir)
+        self._filling_configs = True
+        try:
+            self.config_list.clear()
+            for name in names:
+                checked = self._checked.setdefault(name, True)
+                status, color = self._config_status(name)
+                item = QTreeWidgetItem([name, status])
+                flags = Qt.ItemFlag.ItemIsEnabled | (
+                    Qt.ItemFlag.NoItemFlags if self.running else Qt.ItemFlag.ItemIsUserCheckable
+                )
+                item.setFlags(flags)
+                item.setCheckState(0, Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+                item.setToolTip(1, status)
+                if color is not None:
+                    item.setForeground(1, QBrush(QColor(color)))
+                self.config_list.addTopLevelItem(item)
+        finally:
+            self._filling_configs = False
+        rows = max(1, min(len(names), _CONFIG_LIST_MAX_ROWS))
+        row_height = self.config_list.sizeHintForRow(0) if names else 22
+        self.config_list.setFixedHeight(self.config_list.header().sizeHint().height() + rows * row_height + 6)
+
+    def _on_config_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        if self._filling_configs or column != 0:
+            return
+        self._checked[item.text(0)] = item.checkState(0) == Qt.CheckState.Checked
+        self.update_ui()
+
+    def _check_all(self, checked: bool) -> None:
+        for name in list_configurations(self.arguments.project_config_dir):
+            self._checked[name] = checked
+        self.refresh_configurations()
+
+    def selected_configs(self) -> List[str]:
+        """The checked configurations, in the order of the list."""
+        return [name for name in list_configurations(self.arguments.project_config_dir) if self._checked.get(name)]
+
+    def set_selected_configs(self, names: List[str]) -> None:
+        for name in list_configurations(self.arguments.project_config_dir):
+            self._checked[name] = name in names
+        self.refresh_configurations()
+
     # ── prerequisites and button states ────────────────────────────────────────
 
     @property
     def current_config(self) -> Optional[str]:
-        return self.project_state.current_config
+        """The configuration whose build the header describes and Re-instrument builds: the first checked one."""
+        selected = self.selected_configs()
+        return selected[0] if selected else None
 
     def update_ui(self) -> None:
         """Show the state of the measurements in the header and the button states."""
@@ -549,11 +662,19 @@ class HotspotPanel(Panel):
         state, detail = self.session.build_state(current_config)
         status = hotspot_view.measurement_status(state, detail, self.runs, self.regions)
         self.facts_label.setText(status.facts)
-        if self.running:
+        running_item = self.queue.running() if self.queue is not None else None
+        if self.running and running_item is not None and self.queue is not None:
+            position = self.queue.position(running_item.name)
+            self.header.chip.set_status(
+                widgets.CHIP_BUSY, f"Measuring {position} of {len(self.queue.items)}: {running_item.name}"
+            )
+        elif self.running:
             self.header.chip.set_status(widgets.CHIP_BUSY, "Measurement running")
         elif not current_config:
             self.header.chip.set_status(
-                widgets.CHIP_IDLE, "No configuration selected", "Select a configuration to run a measurement."
+                widgets.CHIP_IDLE,
+                "No configuration selected",
+                "Check the execution configurations to measure in the list on the left.",
             )
         else:
             self.header.chip.set_status(_CHIP_LEVELS[status.level], status.text, status.detail)
@@ -561,6 +682,10 @@ class HotspotPanel(Panel):
         idle = not self.running
         has_config = bool(current_config)
         self.run_button.setEnabled(idle and has_config)
+        count = len(self.selected_configs())
+        self.run_button.set_run_text(RUN_TEXT if count != 1 else "Run Measurement")
+        self.select_all_button.setEnabled(idle)
+        self.select_none_button.setEnabled(idle)
         self.reinstrument_action.setEnabled(idle and has_config)
         self.analyze_action.setEnabled(idle and bool(self.runs))
         self.clear_action.setEnabled(idle and self.session.has_data())
@@ -585,6 +710,11 @@ class HotspotPanel(Panel):
             # after Stop, a late progress status would hide "Stopping ..."
             if self._job is None or not self._job.cancel_requested:
                 self.status.set(event.text, _STATUS_COLORS[event.kind])
+        elif isinstance(event, WorkProgress):
+            if self.queue is not None:
+                self.queue.apply(event.key, event.state, event.detail)
+                self._fill_config_list()
+                self.update_ui()
         elif isinstance(event, WorkFinished):
             if event.error is not None:  # a crash of the work must not leave the UI stuck
                 self.output.append_text(f"\nError: {event.error}\n")
@@ -592,19 +722,43 @@ class HotspotPanel(Panel):
             self._on_work_complete(bool(event.result) and event.error is None, job.cancel_requested)
 
     def run_measurement(self) -> None:
-        self._start_work(execute_runs=True)
+        """Measure the checked configurations one after another, then analyze."""
+        if self.running:
+            dialogs.show_error(self, "Already Running", "A hotspot measurement is already running.")
+            return
+        configs = self.selected_configs()
+        if not configs:
+            dialogs.show_warning(
+                self, "No Configuration Selected", "Check the execution configurations to measure first."
+            )
+            return
+        repetitions = max(1, self.repetitions.value())
+        timeouts = self._timeouts()
+        self.queue = MeasurementQueue(configs)
+        self.running = True
+        self.run_button.set_running(True)
+        self._fill_config_list()
+        self.update_ui()
+        self.output.clear()
+        self.output_requested.emit()
+        self.status.set("⏳ Hotspot measurement in progress...", widgets.STATUS_BUSY)
+        self._run_job(lambda ctx: self.session.run_batch(ctx, configs, repetitions=repetitions, timeouts=timeouts))
 
     def reinstrument(self) -> None:
         self._start_work(execute_runs=False, force_compile=True)
 
     def _start_work(self, *, execute_runs: bool, force_compile: bool = False) -> None:
+        """One configuration (the first checked one): Re-instrument, or a single measurement."""
         if self.running:
             dialogs.show_error(self, "Already Running", "A hotspot measurement is already running.")
             return
         config = self.current_config
         if not config:
-            dialogs.show_warning(self, "No Configuration Selected", "Please select a configuration first.")
+            dialogs.show_warning(
+                self, "No Configuration Selected", "Check the execution configurations to measure first."
+            )
             return
+        self.queue = None
 
         state, _detail = self.session.build_state(config)
         needs_compile = force_compile or state != BUILD_CURRENT
@@ -636,17 +790,24 @@ class HotspotPanel(Panel):
     def _on_work_complete(self, success: bool, cancelled: bool) -> None:
         self.running = False
         self.run_button.set_running(False)
+        tally = ""
+        if self.queue is not None:
+            if cancelled or not self.queue.finished():
+                # stopped, or the work ended early: what did not finish is stopped
+                self.queue.stop_remaining()
+            if len(self.queue.items) > 1:
+                tally = " (" + self.queue.tally() + ")"
 
         self.refresh_results()
         # the analyzer's output gates the hotspot types of the Autotuning tab and the hint of Pattern Detection
         self.project_state.publish(HotspotsChanged())
 
         if cancelled:
-            self.status.set("Hotspot measurement stopped", widgets.STATUS_STOP, reset_ms=_RESET_MS)
+            self.status.set("Hotspot measurement stopped" + tally, widgets.STATUS_STOP, reset_ms=_RESET_MS)
         elif success:
-            self.status.set("Hotspot measurement completed", widgets.STATUS_OK, reset_ms=_RESET_MS)
+            self.status.set("Hotspot measurement completed" + tally, widgets.STATUS_OK, reset_ms=_RESET_MS)
         else:
-            self.status.set("Hotspot measurement failed", widgets.STATUS_FAIL, reset_ms=_RESET_MS)
+            self.status.set("Hotspot measurement failed" + tally, widgets.STATUS_FAIL, reset_ms=_RESET_MS)
 
     def stop_measurement(self) -> None:
         if self._job is not None:

@@ -28,7 +28,12 @@ from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services import hotspot_session
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
 from discopop_library.ProjectManager.services.jobs import WorkContext
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, HotspotsChanged, ProjectState
+from discopop_library.ProjectManager.services.project_state import (
+    ConfigChanged,
+    ConfigurationsChanged,
+    HotspotsChanged,
+    ProjectState,
+)
 
 CS_ID = "1 loop 10 1\n2 func 20 1 compute\n3 loop 30 1\n"
 
@@ -50,6 +55,8 @@ class Env:
         self.compile_exit_code = 0
         self.gate: Optional[threading.Event] = None
         self.threads: List[bool] = []
+        self.executed_configs: List[str] = []  # the configuration of every execute.sh run
+        self.failing_configs: List[str] = []  # their execute.sh fails
 
     def add_configuration(self, name: str = "tiny") -> None:
         (self.root / ".discopop" / "project" / "configs" / name).mkdir(parents=True, exist_ok=True)
@@ -89,8 +96,12 @@ class Env:
             (self.dot_dp / "FileMapping.txt").write_text(f"1\t{self.source}\n")
             return (0, 0.1, "", "")
         else:
+            config = Path(config_path).name
+            self.executed_configs.append(config)
             if self.gate is not None:
                 self.gate.wait(5)
+            if config in self.failing_configs:
+                return (3, 0.25, "", "broken input")
             if self.exit_code == 0:
                 (private / f"hotspot_result_{self.next_result}.txt").write_text("1 2.0\n2 0.5\n3 0\n")
                 self.next_result += 1
@@ -143,14 +154,93 @@ def test_the_tab_starts_without_results_and_a_configuration(env: Env) -> None:
     assert panel.regions_table.rowCount() == 0 and panel.runs_table.rowCount() == 0
 
 
-def test_selecting_a_configuration_enables_running(env: Env) -> None:
+def configs_in_list(panel: HotspotPanel) -> List[Tuple[str, bool, str]]:
+    items = [panel.config_list.topLevelItem(row) for row in range(panel.config_list.topLevelItemCount())]
+    return [(i.text(0), i.checkState(0) == Qt.CheckState.Checked, i.text(1)) for i in items if i is not None]
+
+
+def test_checking_a_configuration_enables_running(env: Env) -> None:
     env.add_configuration()
-    env.select("tiny")
+    env.panel.project_state.publish(ConfigurationsChanged())
+    # a configuration seen for the first time is checked
+    assert configs_in_list(env.panel) == [("tiny", True, "not measured")]
     assert env.panel.header.chip.text() == "No measurement yet"
     assert env.panel.run_button.isEnabled() and env.panel.reinstrument_action.isEnabled()
+    assert env.panel.run_button.text() == "Run Measurement"
     assert not env.panel.analyze_action.isEnabled() and not env.panel.clear_action.isEnabled()
+    item = env.panel.config_list.topLevelItem(0)
+    assert item is not None
+    item.setCheckState(0, Qt.CheckState.Unchecked)
+    assert not env.panel.run_button.isEnabled() and env.panel.header.chip.text() == "No configuration selected"
+    env.panel.select_all_button.click()
+    assert env.panel.run_button.isEnabled()
+    env.panel.select_none_button.click()
+    assert env.panel.selected_configs() == [] and not env.panel.reinstrument_action.isEnabled()
+
+
+def test_the_selection_of_the_header_bar_does_not_matter(env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.select("small")
+    assert env.panel.selected_configs() == ["big", "small"] and env.panel.run_button.text() == "Run Measurements"
     env.select(None)
-    assert not env.panel.run_button.isEnabled()
+    assert env.panel.run_button.isEnabled()
+
+
+def test_several_configurations_are_measured_one_after_another(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small", "unused"):
+        env.add_configuration(name)
+    env.panel.set_selected_configs(["big", "small"])
+    env.panel.run_button.click()
+    assert [state for _name, _checked, state in configs_in_list(env.panel)][:2] == ["queued", "queued"]
+    wait_idle(qtbot, env.panel)
+    # one build serves both (the same compile.sh), each is executed, the runs are analyzed once
+    assert [name for name, _timeout in env.executed] == ["compile.sh", "execute.sh", "execute.sh"]
+    assert env.executed_configs == ["big", "small"]
+    out = env.panel.output.text()
+    assert "=== big (1/2) ===" in out and "=== small (2/2) ===" in out and out.count("analyzed") == 1
+    assert configs_in_list(env.panel) == [
+        ("big", True, "✓ 1 run"),
+        ("small", True, "✓ 1 run"),
+        ("unused", False, "not measured"),
+    ]
+    assert [cell(env.panel.runs_table, row, 1) for row in range(2)] == ["big", "small"]
+    assert env.panel.status.text() == "Hotspot measurement completed (2 measured)"
+    assert len(env.published) == 1
+
+
+def test_a_failing_configuration_does_not_stop_the_batch(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.failing_configs = ["big"]
+    env.panel.project_state.publish(ConfigurationsChanged())
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert env.executed_configs == ["big", "small"] and "analyzed" in env.panel.output.text()
+    assert configs_in_list(env.panel) == [
+        ("big", True, "✗ failed: execution failed (return code 3)"),
+        ("small", True, "✓ 1 run"),
+    ]
+    assert env.panel.status.text() == "Hotspot measurement failed (1 measured, 1 failed ✗)"
+    assert env.panel.status.color == widgets.STATUS_FAIL
+
+
+def test_stop_ends_the_batch(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.panel.project_state.publish(ConfigurationsChanged())
+    env.gate = threading.Event()
+    env.panel.run_button.click()
+    qtbot.waitUntil(lambda: env.executed_configs == ["big"], timeout=10000)
+    qtbot.waitUntil(lambda: env.panel.header.chip.text() == "Measuring 1 of 2: big", timeout=10000)
+    assert configs_in_list(env.panel)[0][2] == "⏳ measuring…: 1/2"
+    assert not env.panel.select_all_button.isEnabled()
+    env.panel.run_button.click()
+    env.gate.set()
+    wait_idle(qtbot, env.panel)
+    assert env.executed_configs == ["big"] and "analyzed" not in env.panel.output.text()
+    assert [state for _name, _checked, state in configs_in_list(env.panel)] == ["stopped", "stopped"]
+    assert env.panel.status.text() == "Hotspot measurement stopped (2 stopped)"
 
 
 def test_results_fill_the_tables_and_the_summary(env: Env) -> None:
@@ -352,7 +442,7 @@ def test_a_failing_run_is_reported(qtbot: QtBot, env: Env) -> None:
 def test_a_crashing_worker_does_not_leave_the_tab_stuck(qtbot: QtBot, env: Env) -> None:
     env.add_configuration()
     env.select("tiny")
-    with mock.patch.object(HotspotSession, "run", side_effect=RuntimeError("kaboom")):
+    with mock.patch.object(HotspotSession, "run_batch", side_effect=RuntimeError("kaboom")):
         env.panel.run_button.click()
         wait_idle(qtbot, env.panel)
     assert "Error: kaboom" in env.panel.output.text()

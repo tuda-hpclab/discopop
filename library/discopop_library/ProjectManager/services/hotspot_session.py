@@ -55,7 +55,8 @@ from discopop_library.ProjectManager.services.commands import (
     environment_with_interpreter_on_path,
     hotspot_analyzer_command,
 )
-from discopop_library.ProjectManager.services.hotspot_build import hotspot_build_state
+from discopop_library.ProjectManager.services import measurement_queue
+from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT, hotspot_build_state
 from discopop_library.ProjectManager.services.jobs import JobSpec, StatusKind, WorkContext
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 
@@ -64,6 +65,9 @@ logger = logging.getLogger("HotspotPanel")
 HOTSPOT_ANALYZER = "discopop_hotspot_analyzer"
 
 Timeouts = Tuple[Optional[float], Optional[float], Optional[float]]
+
+# what HotspotSession.measure returns when the user stopped it
+STOPPED_REASON = "stopped"
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,15 @@ class HotspotSession:
 
         Runs on a worker thread; it reports through ``ctx`` and touches no widget.
         """
+        if self.measure(ctx, request) is not None:
+            return False
+        return self.invoke_analyzer(ctx)
+
+    def measure(self, ctx: WorkContext, request: HotspotRunRequest) -> Optional[str]:
+        """Compile if needed and execute ``request.repetitions`` runs, without the analysis.
+
+        None if it succeeded, else a short reason (the output has the details); a stop returns ``STOPPED_REASON``.
+        """
         dot_dp = self.arguments.dot_dp
         args_copy = request.arguments
         config_name = request.config_name
@@ -215,7 +228,7 @@ class HotspotSession:
 
         if not os.path.exists(settings_path):
             ctx.output(f"hd_settings.json not found at {settings_path}\n")
-            return False
+            return "hd_settings.json not found"
 
         log = self.load_log()
 
@@ -244,7 +257,7 @@ class HotspotSession:
             if result is None or result[0] != 0:
                 code = result[0] if result else "None"
                 ctx.output(f"Instrumentation failed (return code: {code})\n")
-                return False
+                return f"instrumentation failed (return code {code})"
             _code, elapsed, stdout, stderr = result
             ctx.output(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
             if stdout:
@@ -265,7 +278,7 @@ class HotspotSession:
 
         if ctx.cancel_event.is_set():
             ctx.output("Stopped by user.\n")
-            return False
+            return STOPPED_REASON
 
         keys = self.load_region_keys()
         private = hotspot_data.private_dir(dot_dp)
@@ -274,7 +287,7 @@ class HotspotSession:
         for repetition in range(repetitions):
             if ctx.cancel_event.is_set():
                 ctx.output("Stopped by user.\n")
-                return False
+                return STOPPED_REASON
 
             label = f" ({repetition + 1}/{repetitions})" if repetitions > 1 else ""
             ctx.status("⏳ Measuring...", StatusKind.BUSY)
@@ -294,13 +307,13 @@ class HotspotSession:
             ctx.clear_process()
             if result is None:
                 ctx.output("Execution failed (no result)\n")
-                return False
+                return "execution failed (no result)"
             code, elapsed, stdout, stderr = result
             if code != 0:
                 ctx.output(f"Execution failed (return code: {code})\n")
                 if stderr:
                     ctx.output(f"stderr: {stderr}\n")
-                return False
+                return f"execution failed (return code {code})"
             ctx.output(f"Execution succeeded ({elapsed:.2f}s)\n")
             if stdout:
                 ctx.output(f"stdout: {stdout}\n")
@@ -312,7 +325,7 @@ class HotspotSession:
                     "Warning: the binary ran but produced no hotspot_result_*.txt file.\n"
                     "It is probably not instrumented -- use Re-instrument.\n"
                 )
-                return False
+                return "no hotspot result written (not instrumented?)"
 
             for index in new_indices:
                 log.runs.append(
@@ -330,9 +343,48 @@ class HotspotSession:
 
         if ctx.cancel_event.is_set():
             ctx.output("Stopped by user.\n")
-            return False
+            return STOPPED_REASON
+        return None
 
-        return self.invoke_analyzer(ctx)
+    def run_batch(self, ctx: WorkContext, configs: List[str], *, repetitions: int, timeouts: Timeouts) -> bool:
+        """Measure every configuration of ``configs`` in turn, then analyze all runs once.
+
+        Each configuration is instrumented when the current build does not serve it (another compile script, changed
+        sources). A failing configuration does not stop the batch; Stop ends it. The states of the configurations
+        are reported as ``ctx.progress(name, state, detail)`` (``services/measurement_queue.py``). True if every
+        configuration was measured and the analysis succeeded.
+        """
+        measured_any = False
+        all_measured = True
+        total = len(configs)
+        for position, name in enumerate(configs, start=1):
+            if ctx.cancel_event.is_set():
+                break
+            ctx.progress(name, measurement_queue.RUNNING, f"{position}/{total}")
+            ctx.output(f"\n=== {name} ({position}/{total}) ===\n")
+            state, _detail = self.build_state(name)
+            request = self.make_request(
+                name, needs_compile=state != BUILD_CURRENT, repetitions=repetitions, timeouts=timeouts
+            )
+            reason = self.measure(ctx, request)
+            if reason == STOPPED_REASON or ctx.cancel_event.is_set():
+                ctx.progress(name, measurement_queue.STOPPED)
+                all_measured = False
+                break
+            if reason is None:
+                measured_any = True
+                ctx.progress(name, measurement_queue.MEASURED)
+            else:
+                all_measured = False
+                ctx.progress(name, measurement_queue.FAILED, reason)
+        if ctx.cancel_event.is_set():
+            # the configurations after the stopped one never ran
+            return False
+        if not measured_any:
+            ctx.output("\nNo configuration was measured; the analysis is skipped.\n")
+            return False
+        ctx.output("\n=== Analysis ===\n")
+        return self.invoke_analyzer(ctx) and all_measured
 
     def resolve_run_regions(
         self, private: str, index: int, keys: Dict[int, hotspot_data.RegionKey]
