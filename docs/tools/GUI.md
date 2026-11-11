@@ -6,7 +6,7 @@ nav_order: 1
 ---
 
 # Graphical user interface
-`discopop_gui` opens a desktop window around the [project manager](Project_manager.md). It guides you from a first compile and execute script to measurements, hotspots, pattern detection, repair of generated patches and empirical autotuning. Each tab runs the matching DiscoPoP tool for you and shows its result. Everything the GUI does is also available on the command line and through the [MCP server](MCP_server.md).
+`discopop_gui` opens a desktop window around the [project manager](Project_manager.md). It guides you from a first compile and execute script to measurements, hotspots, pattern detection, repair of generated patches and empirical autotuning. Each stage of the workflow sidebar runs the matching DiscoPoP tool for you and shows its result. Everything the GUI does is also available on the command line and through the [MCP server](MCP_server.md).
 
 For a guided example, see the [GUI walk-through](../examples/walk_through_gui.md).
 
@@ -27,7 +27,7 @@ discopop_gui
 
 `discopop_gui` accepts the arguments of `discopop_project_manager`, but only `-p/--project` and the logging options matter for the GUI. A `.discopop` directory is created in the project if it does not exist yet; you do not need `--init`.
 
-The GUI is being moved from Tk to Qt (PySide6). Both versions have the same tabs and do the same; the Qt version is the default, `--gui-toolkit tk` selects the Tk version until it is removed. The Tk version needs `tkinter` (Debian/Ubuntu: `python3-tk`), the Qt version comes with its Python package (`PySide6-Essentials`, a dependency of DiscoPoP); both need a display. Without a display (`$DISPLAY` and `$WAYLAND_DISPLAY` unset), the command prints
+The GUI is being moved from Tk to Qt (PySide6). Both versions offer the same functions; the Qt version is the default, `--gui-toolkit tk` selects the Tk version until it is removed. The Tk version needs `tkinter` (Debian/Ubuntu: `python3-tk`), the Qt version comes with its Python package (`PySide6-Essentials`, a dependency of DiscoPoP); both need a display. Without a display (`$DISPLAY` and `$WAYLAND_DISPLAY` unset), the command prints
 
 ```text
 ERROR: this command opens a graphical window, but no display is available (neither $DISPLAY nor $WAYLAND_DISPLAY is set).
@@ -42,13 +42,28 @@ On a remote machine, e.g. an HPC login node, the GUI works over X forwarding (`s
 Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the command line project manager.
 
 ## Window layout
-![Main window with the configuration list on the left and the tabs on the right](../assets/screenshots/gui_main_window.svg)
+![Main window with the configuration selector in the header bar, the workflow sidebar on the left and the output pane below the stage](../assets/screenshots/gui_main_window.svg)
 
-- **Run Configs** (left): the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`. Select one to work on it. A right click offers *Copy*, *Rename* and *Delete*. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). **Edit Compilation** opens the [Compilation Editor](#compilation-editor).
-- **Tabs** (right), in workflow order: *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair*, *Autotuning*. Most tabs work on the selected configuration.
-- **Status bar** (bottom): the current activity and the path of the `.discopop` directory.
+The window has a header bar, a workflow sidebar, the stage that is selected and an output pane. The colors follow the light or dark color scheme of the desktop.
 
-The tabs for later steps explain on mouse over which prerequisite is missing. For example, *Pattern Detection* needs profiling data and *Autotuning* needs pattern detection results.
+- **Header bar** (top): the title, the path of the `.discopop` directory and the **Configuration:** selector. The selector lists the execution configurations of the project, i.e. the directories below `.discopop/project/configs/`; the stages work on the selected one. **+ New** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu next to the selector offers *Copy…*, *Rename…*, *New with wizard…*, *Project compilation…* (opens the [Compilation Editor](#compilation-editor)) and *Delete…*.
+- **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:
+  - **Setup**: *Configure*, the scripts of the selected configuration.
+  - **Pipeline**: *Execute*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*. Most of them work on the selected configuration.
+  - **Results**: *Report*.
+
+  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). A locked stage cannot be opened, except *Pattern Detection*, which opens and explains what is missing, with a **Go to Execute** button.
+- **Stage** (right): the stage that is selected.
+- **Output pane** (bottom): the output of all jobs, see [Output pane](#output-pane).
+
+Every stage has the same header: its title, a one-line description, a status chip (a colored label; some chips have a **Details** toggle for the longer explanation) and its actions at the top right. The primary action, for example **Run**, is one button that turns into **■ Stop** while the job runs. Rare or destructive actions are in a **⋯** menu of the stage. Settings are grouped in cards; settings that are rarely changed are in a collapsed **Advanced** section.
+
+The Tk version (`--gui-toolkit tk`) keeps the old layout: the configuration list on the left with **+ New** and **Edit Compilation**, and the tabs *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair* and *Autotuning* on the right. The functions of the tabs are the same as those of the stages described below.
+
+The stages for later steps explain which prerequisite is missing: the detail line in the sidebar, and on mouse over. For example, *Pattern Detection* needs profiling data and *Autotuning* needs pattern detection results.
+
+### Output pane
+The output of all jobs is shown in one pane below the stages, with one tab per stage. Collapsed, the pane is one line that shows the last line any job wrote. It opens when a job starts; the toggle expands and collapses it, and **Clear** empties the shown output. The stages themselves have no consoles.
 
 ## Configuration assistant (wizard)
 ![First page of the configuration assistant](../assets/screenshots/gui_wizard.svg)
@@ -64,12 +79,12 @@ When the project has no usable configuration, the GUI opens the *Configuration A
 7. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
 8. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
 
-After **Finish**, the new configuration is selected and the *Execute* tab opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
+After **Finish**, the new configuration is selected and the *Execute* stage opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
 
-## Editor
-![Editor tab, execute.sh with the execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
+## Configure
+![Configure stage, execute.sh with the execution time setting](../assets/screenshots/gui_editor_execute_sh.svg)
 
-The *Editor* tab edits the scripts of the selected configuration. Save with **Save (Ctrl+S)**. Every sub-tab has a **Help** button. The sub-tabs are:
+The *Configure* stage edits the scripts of the selected configuration. Save with **Save (Ctrl+S)**. Every sub-tab has a **Help** button. The sub-tabs are:
 
 | Sub-tab | Content |
 |---|---|
@@ -84,7 +99,7 @@ The scripts are executed with the project root as working directory and with the
 By default, the runtime of `execute.sh` is its wall clock time. Check *Read the execution time from the program's console output* to measure the time the program prints itself instead. *Pattern* is a regular expression whose first capture group holds the value; the default searches for `<DP_EXEC_TIME>1.234</DP_EXEC_TIME>`. **Test** applies the pattern to the output of the last recorded run without executing anything. The setting is stored in `execution_time.json` next to `execute.sh`. See [Measured runtime](Project_manager.md#measured-runtime).
 
 ### Compilation Editor
-**Edit Compilation** (left) opens a separate window for the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`.
+**Project compilation…** in the **⋯** menu of the header bar opens a separate window, the *Compilation Editor*, for the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`. (In the Tk version, the same window is opened by **Edit Compilation** in the left column.)
 
 - **Save (Ctrl+S)** writes the files.
 - **Test Compilation** builds the project with the current script and settings and shows the result.
@@ -95,19 +110,18 @@ By default, the runtime of `execute.sh` is its wall clock time. Check *Read the 
 The GUI does not derive the settings files again when it executes a configuration, so your edits of them are kept. The command line project manager overwrites them from `seq_settings.json` on every run.
 
 ## Execute
-![Execute tab](../assets/screenshots/gui_execute.svg)
+![Execute stage](../assets/screenshots/gui_execute.svg)
 
-The *Execute* tab compiles and runs the selected configuration, as `discopop_project_manager -x` does, and records the measurements.
+The *Execute* stage compiles and runs the selected configuration, as `discopop_project_manager -x` does, and records the measurements. Its header holds **Run** (**■ Stop** while it runs) and **Profile for Pattern Detection**.
 
-| Group | Setting |
+| Card | Setting |
 |---|---|
-| Execution Modes | `seq` (sequential), `dp` (DiscoPoP instrumented), `hd` (hotspot detection), `par` (parallel). A mode is available when its settings file, the compile script and `execute.sh` exist. |
-| Execution Settings | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, the execution time setting of the Editor |
-| Timeout Settings | Execution, compilation and validation timeouts in seconds (0 = disabled) |
-| Logging & Behavior | Log level, *Execute in-place (skip project copy)*, *Skip cleanup (keep project copies)* |
-| Apply Suggestions | None, manually selected suggestions (**Browse / Edit**), or the suggestions selected by the autotuner |
+| Modes | `seq` (sequential), `dp` (DiscoPoP instrumented), `hd` (hotspot detection), `par` (parallel). A mode is available when its settings file, the compile script and `execute.sh` exist. |
+| Run | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, and a summary of the execution time setting of the *Configure* stage |
+| Apply suggestions | None, manually selected suggestions (**Browse / Edit →**), or the suggestions selected by the autotuner |
+| Advanced (collapsed) | Timeouts for execution, compilation and validation in seconds (0 = disabled), log level, *Execute in-place (skip project copy)*, *Skip cleanup (keep project copies)* |
 
-Buttons: **Run**, **Stop**, and **Prepare Pattern Detection**. The latter runs the configuration in `dp` mode in place, which creates the profiling data in `.discopop/profiler`. Output appears in the pane on the right.
+**Profile for Pattern Detection** runs the configuration in `dp` mode in place, which creates the profiling data in `.discopop/profiler`. The output appears in the output pane.
 
 {: .warning }
 In-place execution together with applied suggestions modifies your project directory. The GUI asks for confirmation.
@@ -115,76 +129,78 @@ In-place execution together with applied suggestions modifies your project direc
 Results are stored in `.discopop/project/execution_results.json`.
 
 ## Report
-![Report tab](../assets/screenshots/gui_report.svg)
+![Report stage](../assets/screenshots/gui_report.svg)
 
-The *Report* tab shows all recorded measurements. The *Table* tab lists configuration, script, setting, label, applied and not applied suggestions, threads, status, time, speedup and efficiency; speedup is relative to the `seq` run of the same script. With the **+** tab you add plots: *Trade-off scatter*, *Thread scaling*, *Speedup / efficiency bars* and *Runtime bars*. Click a point or bar to see its details.
+The *Report* stage shows all recorded measurements. The *Table* tab lists configuration, script, setting, label, applied and not applied suggestions, threads, status, time, speedup and efficiency; speedup is relative to the `seq` run of the same script. Times have their units, missing values are shown as "—", and applied suggestions are listed by their IDs. With the **+** button you add plots: *Trade-off scatter*, *Thread scaling*, *Speedup / efficiency bars* and *Runtime bars*. Click a point or bar to see its details.
 
 - **Generate PDF Report** and **View Report PDF** create and open `.discopop/project/reports/<timestamp>/full_report.pdf` (the folder also holds `report.csv` and single PDFs). Viewing uses `xdg-open`.
-- **Reset Execution Results** deletes the measurements and reports. **Reset Project** deletes everything below `.discopop` except the configurations. Both ask for confirmation.
+- The **⋯** menu offers **Reset Execution Results…**, which deletes the measurements and reports, and **Reset Project…**, which deletes everything below `.discopop` except the configurations. Both ask for confirmation.
 - **Reload** re-reads the results.
 
-## Hotspot Detection
-![Hotspot Detection tab after two measured runs, with the status and the output of the analysis](../assets/screenshots/gui_hotspot_detection.svg)
+## Hotspots
+![Hotspots stage after two measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
 
-The tab measures which loops and functions dominate the runtime. See [Hotspot detection](Hotspot_detection.md) for the method. It has the sub-tabs *Measurement*, *Runs*, *Regions* and plot tabs added with **+** (*Hotness quadrant*, *Top-N runtime bars*, *Per-region run profile*).
+The stage measures which loops and functions dominate the runtime. See [Hotspot detection](Hotspot_detection.md) for the method. Its tabs are *Runs*, *Regions* and the plot tabs added with **+** (*Hotness quadrant*, *Top-N runtime bars*, *Per-region run profile*). The measurement settings, *Repetitions*, are a column next to these tabs; the column also shows the accumulated runs and the number of code regions per hotness.
 
-*Measurement* runs the selected configuration in `hd` mode in place: it builds the program with `discopop_hotspot_cc`/`discopop_hotspot_cxx` (if the build is missing or outdated), executes it *Repetitions* times and calls `discopop_hotspot_analyzer` on all accumulated runs. Repeating one configuration only reduces noise. To make the hotness classification meaningful, measure several configurations with different input sizes; the runs of all configurations are combined.
+**Run Measurement** (**■ Stop** while it runs) runs the selected configuration in `hd` mode in place: it builds the program with `discopop_hotspot_cc`/`discopop_hotspot_cxx` (if the build is missing or outdated), executes it *Repetitions* times and calls `discopop_hotspot_analyzer` on all accumulated runs. Repeating one configuration only reduces noise. To make the hotness classification meaningful, measure several configurations with different input sizes; the runs of all configurations are combined. The status chip shows the state of the build.
 
-| Button | Effect |
+The **⋯** menu offers the following actions:
+
+| Action | Effect |
 |---|---|
-| Run Measurement / Stop | Instrument if necessary, execute, analyze |
 | Re-instrument | Build the hotspot-instrumented program again |
 | Re-run Analysis | Run the analyzer again on the accumulated runs |
-| Clear Measurements | Delete the accumulated runs |
+| Clear Measurements… | Delete the accumulated runs |
 
-*Runs* lists every recorded run (runs recorded elsewhere, for example in the Execute tab, by the command line or by the MCP server, are marked `(external)`). *Regions* lists the code regions with hotness (`YES`, `MAYBE`, `NO`), kind, location, average, share, minimum, maximum, ratio and number of runs, with filters for hotness and kind.
+*Runs* lists every recorded run (runs recorded elsewhere, for example in the Execute stage, by the command line or by the MCP server, are marked `(external)`). *Regions* lists the code regions with hotness (`YES`, `MAYBE`, `NO`), kind, location, average, share, minimum, maximum, ratio and number of runs, with filters for hotness and kind. **Show in VSCode** in the detail bar of a region opens it in VS Code.
 
 Results are stored in `.discopop/hotspot_detection/` (`Hotspots.json` and the run log `measurement_runs.json`).
 
 ## Pattern Detection
-![Pattern Detection tab after a detection run, with the settings and the output of the explorer](../assets/screenshots/gui_pattern_detection.svg)
+![Pattern Detection stage after a detection run, with the table of suggestions and the details and patch of the selected suggestion](../assets/screenshots/gui_pattern_detection.svg)
 
-The tab runs `discopop_explorer` in the `.discopop` directory. It needs the profiling data of a `dp` run (use **Prepare Pattern Detection** in the *Execute* tab first).
+The stage runs `discopop_explorer` in the `.discopop` directory. It needs the profiling data of a `dp` run (use **Profile for Pattern Detection** in the *Execute* stage first). Without profiling data, the stage says what is missing and offers **Go to Execute**.
 
-| Setting | Meaning |
+The settings are cards:
+
+| Card | Setting |
 |---|---|
-| Pattern Types | `reduction` and `doall` (default); `task` is experimental |
-| Dependency Data | `default (full states)` or `no_states (states ignored)`, i.e. `--ignore-dependency-states` |
-| Threads | Worker processes of the Explorer (`-j`); `auto` = unlimited |
-| Show graph visualization | Tk version: runs the Explorer inside the GUI process and shows its graphs in the *Graph Visualization* tab; the window is unresponsive while it runs. Qt version: runs `discopop_explorer --visualize`, which shows the graphs in a window of its own (needs the package `discopop-gui`); the GUI stays responsive and *Stop* works. |
+| Hotspots | Shown while there are no hotspot results: a hint and **Go to Hotspots**. The Explorer restricts its analysis to the hot parts of the program when `Hotspots.json` exists. |
+| Detection | Pattern Types: `reduction` and `doall` (default); `task` is experimental. Threads: worker processes of the Explorer (`-j`); `auto` = unlimited. |
+| Advanced (collapsed) | Dependency Data: `default (full states)` or `no_states (states ignored)`, i.e. `--ignore-dependency-states`. *Show graph visualization*: Tk version: runs the Explorer inside the GUI process and shows its graphs in the *Graph Visualization* tab; the window is unresponsive while it runs. Qt version: runs `discopop_explorer --visualize`, which shows the graphs in a window of its own (needs the package `discopop-gui`); the GUI stays responsive and *Stop* works. |
 
-If no hotspot results exist, a hint offers to go to the *Hotspot Detection* tab: the Explorer restricts its analysis to the hot parts of the program when `Hotspots.json` exists.
+**Run Pattern Detection** (**■ Stop** while it runs) starts the detection. Its **⋯** menu offers **Show suggestions in VSCode** (the `code` command must be on your `PATH`) and **Browse / edit patches…**, a window in which the patch files of the suggestions can be edited.
 
-Buttons: **Run Pattern Detection**, **Stop**, **Browse Suggestions** and **Show Suggestions in VSCode**. *Browse Suggestions* lists the suggestions and shows and edits their patch files in `.discopop/patch_generator/`. *Show Suggestions in VSCode* opens the project in VS Code (the `code` command must be on your `PATH`); see below.
+The stage shows its results itself. The table lists the suggestions with ID, type, location, function, hotness and pragma; a filter line and a type filter narrow the rows, and the columns can be sorted. For the selected suggestion, the details and the patch are shown below the table, the patch as a colored diff; **Open in VSCode** opens the source file at the loop of the suggestion. The chip shows the number of suggestions, or that none were found. The patch files are in `.discopop/patch_generator/`.
 
 Results are the files described in [Explorer](Explorer.md): `explorer/patterns.json` and the patches in `patch_generator/`.
 
 ## Patch Repair
-![Patch Repair tab after a run in which all considered patches compile](../assets/screenshots/gui_patch_repair.svg)
+![Patch Repair stage after a run in which all considered patches compile](../assets/screenshots/gui_patch_repair.svg)
 
-The tab runs [`discopop_patch_repair`](Patch_repair.md): an LLM agent repairs generated patches that do not compile. Settings are the hotspot types (`NO` is off by default), log level, *Dry run*, the LLM backend and model, the agent timeout, the number of prompts and retries, and the suggestions to consider. The right side shows *Results*, the repaired *Patch* as a diff and the *Console*.
+The stage runs [`discopop_patch_repair`](Patch_repair.md): an LLM agent repairs generated patches that do not compile. Its cards are *Settings* (the hotspot types, `NO` is off by default, and *Dry run (do not modify the patches)*), *LLM Agent* (backend and model) and *Suggestion Scope*. The collapsed *Advanced* section holds the agent timeout, the number of prompts and retries and the log level. The chip summarizes the outcome of the last run; *Details* shows the rest.
+
+The right side shows *Results* (one row per suggestion) and *Patch*, the patch of the selected suggestion before and after the repair, as a diff.
 
 ## Autotuning
-![Autotuning tab](../assets/screenshots/gui_autotuning.svg)
+![Autotuning stage with the live plot](../assets/screenshots/gui_autotuning.svg)
 
-The tab runs [`discopop_auto_tuner`](Autotuner.md) for the selected configuration. It needs the output of pattern detection and the `dp` and `hd` settings.
+The stage runs [`discopop_auto_tuner`](Autotuner.md) for the selected configuration. It needs the output of pattern detection and the `dp` and `hd` settings.
 
-| Setting | Meaning |
+| Card | Setting |
 |---|---|
-| Threads | `OMP_NUM_THREADS` of the measurements (`auto` = CPU count / 2) |
-| Repetitions | Runs per candidate (default 1) |
-| Hotspot Types | `YES` (default), `NO`, `MAYBE` |
-| Algorithm | `0` to `6`; the GUI preselects `6`, *Hotspot-guided region descent*, which needs hotspot results (the tab warns if they are missing). The command line default is `0`. |
-| Suggestion Selection | *Search for best combination* (optionally restricted to a subset) or *Evaluate a specific combination* |
+| Settings | `Algorithm`: `0` to `6`; the GUI preselects `6`, *Hotspot-guided region descent*, which needs hotspot results (the stage warns if they are missing). The command line default is `0`. `Threads`: `OMP_NUM_THREADS` of the measurements (`auto` = CPU count / 2). `Repetitions`: runs per candidate (default 1). `Hotspot types`: `YES` (default), `MAYBE`, `NO`. |
+| Suggestion Selection | *Search for best combination* (optionally restricted to a subset) or *Evaluate a specific combination*. **Browse / Edit →** opens the list of suggestions. |
+| Advanced (collapsed) | Log level |
 
-The *Live Plot* tab shows every measured configuration while the tuner runs, the *Console* tab its output. The tab does not apply the result: in the *Execute* tab, choose *Apply autotuner-selected suggestions* and run the `par` mode, or apply the suggestions to your sources with the [patch applicator](Patch_applicator.md).
+The *Live Plot* shows every measured configuration while the tuner runs; its output is in the output pane. The stage does not apply the result: in the *Execute* stage, choose *Apply autotuner-selected suggestions* and run the `par` mode, or apply the suggestions to your sources with the [patch applicator](Patch_applicator.md).
 
-## What the tabs run
+## What the stages run
 
-| Tab | Runs |
+| Stage | Runs |
 |---|---|
-| Editor, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
-| Hotspot Detection | The `hd` mode of the project manager, then `discopop_hotspot_analyzer` |
+| Configure, Execute, Report | The code of [`discopop_project_manager`](Project_manager.md) (in the GUI process) |
+| Hotspots | The `hd` mode of the project manager, then `discopop_hotspot_analyzer` |
 | Pattern Detection | `discopop_explorer` (subprocess; in the Tk version in process with graph visualization) |
 | Patch Repair | `python -m discopop_library.PatchRepair` (`discopop_patch_repair`) as a subprocess |
 | Autotuning | `python -m discopop_library.EmpiricalAutotuning` (`discopop_auto_tuner`) as a subprocess |
