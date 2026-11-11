@@ -161,6 +161,7 @@ def test_main_window_puts_panel_consoles_into_the_output_pane(qtbot: QtBot, tmp_
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
+    consoles_before = len(window.output_pane.consoles())
     panel = _PanelWithOutput(window.arguments, window.project_state, window.status)
     window.add_tab(TAB_ORDER[1], panel)
     assert panel.console in window.output_pane.consoles()
@@ -172,7 +173,7 @@ def test_main_window_puts_panel_consoles_into_the_output_pane(qtbot: QtBot, tmp_
     assert window.content_splitter.sizes()[1] <= window.output_pane.maximumHeight()
     # an unrelated widget (not a panel) is not asked for output
     window.add_tab(TAB_ORDER[2], QWidget())
-    assert len(window.output_pane.consoles()) == 1
+    assert len(window.output_pane.consoles()) == consoles_before + 1
 
 
 def test_run_stop_button_remembers_whether_it_can_run(qtbot: QtBot) -> None:

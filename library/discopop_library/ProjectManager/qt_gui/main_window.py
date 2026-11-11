@@ -6,21 +6,25 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The main window: the configuration list on the left, the panels as tabs on the right, the status line below.
+"""The main window: a header bar with the project and the configuration selector, the workflow sidebar on the left,
+the panel of the selected stage on the right with the output pane below it, the status line at the bottom.
 
 The window assembles the panels and wires them: which panel reacts to which :class:`ProjectState` event, and the
-few callbacks one panel offers another. The panels do not know each other.
+few callbacks one panel offers another. The panels do not know each other. The window is their :class:`TabHost`:
+the "tabs" of the panels are the stages of the sidebar.
 """
 
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QIcon, QKeySequence, QResizeEvent, QShortcut
-from PySide6.QtWidgets import QLabel, QMainWindow, QSplitter, QTabWidget, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QMainWindow, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import widgets
+from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
@@ -30,11 +34,11 @@ from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotP
 from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
 from discopop_library.ProjectManager.qt_gui.panels.pattern_detection_panel import PatternDetectionPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
-from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
 from discopop_library.ProjectManager.qt_gui.tabs import (
+    NAV_SECTIONS,
     TAB_AUTOTUNING as TAB_AUTOTUNING,
     TAB_EDITOR as TAB_EDITOR,
     TAB_EXECUTE as TAB_EXECUTE,
@@ -44,14 +48,25 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_PATTERN_DETECTION as TAB_PATTERN_DETECTION,
     TAB_REPORT as TAB_REPORT,
 )
+from discopop_library.ProjectManager.qt_gui.workflow_nav import WorkflowNav
 from discopop_library.ProjectManager.services.project_state import (
+    AutotuningChanged,
     AutotuningFinished,
+    ConfigChanged,
     ConfigurationsChanged,
+    HotspotsChanged,
+    PatternsChanged,
     ProjectState,
     ResultsChanged,
 )
+from discopop_library.ProjectManager.services.workflow_status import stage_statuses
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
+
+# the statuses of the stages are recomputed this long after the last event (a job publishes several in a row)
+STATUS_DEBOUNCE_MS = 150
+# and at most this often when the window is activated (the sources may have changed outside the GUI)
+STATUS_ON_ACTIVATE_MIN_S = 2.0
 
 
 class ElidedPathLabel(QLabel):
@@ -88,27 +103,33 @@ class MainWindow(QMainWindow):
         self.panels: List[Panel] = []
 
         self.status = StatusLine()
-        self.dot_dp_label = ElidedPathLabel(arguments.dot_dp)
         self.statusBar().addWidget(self.status, 1)
-        self.statusBar().addPermanentWidget(self.dot_dp_label)
+        self.dot_dp_label = ElidedPathLabel(arguments.dot_dp)
 
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.setCentralWidget(self.splitter)
-        self.tabs = QTabWidget()
+        self.nav = WorkflowNav([(heading, list(stages)) for heading, stages in NAV_SECTIONS])
+        self.nav.stage_selected.connect(self._on_stage_selected)
+        self.stack = QStackedWidget()
         self.output_pane = OutputPane()
-        # the panels above, their output below; the pane collapses to its header
+        # the panel above, the output below; the pane collapses to its header
         self.content_splitter = QSplitter(Qt.Orientation.Vertical)
         self.content_splitter.setChildrenCollapsible(False)
         self._expanded_output_height = 260
         self.output_pane.expanded_changed.connect(self._on_output_expanded)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
         self._tab_widgets: Dict[str, QWidget] = {}
         self._pending_tab_state: Dict[str, Tuple[bool, str]] = {}
         self._pending_tab_titles: Dict[str, str] = {}
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.setInterval(STATUS_DEBOUNCE_MS)
+        self._status_timer.timeout.connect(self.refresh_stage_statuses)
+        self._statuses_computed_at = 0.0
 
         self._build_panels()
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([280, 1320])
+        self._build_frame()
+        self.refresh_stage_statuses()
+        self.show_tab(TAB_EDITOR)
 
     # --- assembly ---
 
@@ -137,13 +158,6 @@ class MainWindow(QMainWindow):
             tabs=self,
         )
         self.panels.append(self.config_list)
-
-        self.splitter.addWidget(self.config_list)
-        self.content_splitter.addWidget(self.tabs)
-        self.content_splitter.addWidget(self.output_pane)
-        self.content_splitter.setStretchFactor(0, 1)
-        self.content_splitter.setStretchFactor(1, 0)
-        self.splitter.addWidget(self.content_splitter)
         for name, panel in (
             (TAB_EDITOR, self.editor_panel),
             (TAB_EXECUTE, self.execute_panel),
@@ -162,23 +176,70 @@ class MainWindow(QMainWindow):
         state.subscribe(ConfigurationsChanged, lambda _event: self.autotuning_panel.update_tab_state())
         self.autotuning_panel.update_tab_state()
         self.pattern_detection_panel.refresh()
+        # every change of the project can change what the stages have done
+        for event_type in (
+            ConfigChanged,
+            ConfigurationsChanged,
+            ResultsChanged,
+            PatternsChanged,
+            HotspotsChanged,
+            AutotuningChanged,
+            AutotuningFinished,
+        ):
+            state.subscribe(event_type, lambda _event: self._status_timer.start())
         QShortcut(QKeySequence.StandardKey.Save, self, self.editor_panel.save_shortcut)
+
+    def _build_frame(self) -> None:
+        """Header bar on top; sidebar | (panel over output pane) below."""
+        title = widgets.heading_label("DiscoPoP Project Manager", title=True)
+        self.dot_dp_label.setMinimumWidth(80)
+        header_layout = widgets.hbox(title, 12, self.dot_dp_label, None, self.config_list, margins=0, spacing=8)
+        header_layout.setStretch(2, 1)
+        self.header = QFrame()
+        self.header.setObjectName("appHeader")
+        self.header.setLayout(header_layout)
+        header_layout.setContentsMargins(14, 8, 14, 8)
+        self.header.setStyleSheet("QFrame#appHeader { border-bottom: 1px solid palette(midlight); }")
+
+        self.content_splitter.addWidget(self.stack)
+        self.content_splitter.addWidget(self.output_pane)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 0)
+        self.splitter.addWidget(self.nav)
+        self.splitter.addWidget(self.content_splitter)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([220, 1380])
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.header)
+        layout.addWidget(self.splitter, 1)
+        self.setCentralWidget(central)
 
     def after_show(self) -> None:
         """Called once the window is visible: the wizard of a fresh project opens on top of it."""
         self.config_list.maybe_open_wizard(self.was_initialized)
 
-    def add_tab(self, name: str, widget: QWidget) -> None:
-        """Put ``widget`` at the place of tab ``name`` (replacing what is there) and register it if it is a panel.
+    # --- the stages ---
 
-        A state set before the tab existed (enabled, tooltip, title) is applied to it.
+    def add_tab(self, name: str, widget: QWidget) -> None:
+        """Put ``widget`` at the place of stage ``name`` (replacing what is there) and register it if it is a panel.
+
+        A state set before the stage existed (enabled, tooltip, title) is applied to it.
         """
         if name in self._tab_widgets:
-            index = self.tabs.indexOf(self._tab_widgets[name])
-            self.tabs.removeTab(index)
-            self.tabs.insertTab(index, widget, name)
+            old = self._tab_widgets[name]
+            index = self.stack.indexOf(old)
+            was_current = self.stack.currentWidget() is old
+            self.stack.removeWidget(old)
+            self.stack.insertWidget(index, widget)
+            if was_current:
+                self.stack.setCurrentWidget(widget)
         else:
-            self.tabs.addTab(widget, name)
+            self.stack.addWidget(widget)
         self._tab_widgets[name] = widget
         if isinstance(widget, Panel):
             self.panels.append(widget)
@@ -187,6 +248,74 @@ class MainWindow(QMainWindow):
             self.set_tab_enabled(name, *self._pending_tab_state.pop(name))
         if name in self._pending_tab_titles:
             self.set_tab_title(name, self._pending_tab_titles.pop(name))
+
+    def tab(self, name: str) -> QWidget:
+        return self._tab_widgets[name]
+
+    def tab_names(self) -> List[str]:
+        """The stages in the order of the sidebar."""
+        return self.nav.stages()
+
+    def show_tab(self, name: str) -> None:
+        if name not in self._tab_widgets:
+            return
+        self.stack.setCurrentWidget(self._tab_widgets[name])
+        if self.nav.current_stage() != name:
+            self.nav.select_stage(name)
+
+    def current_tab(self) -> str:
+        current = self.stack.currentWidget()
+        return next((name for name, widget in self._tab_widgets.items() if widget is current), "")
+
+    def set_tab_title(self, name: str, title: str) -> None:
+        """Show ``title`` for stage ``name``; the key in it (e.g. "Editor *") is replaced by the stage's title."""
+        if name not in self._tab_widgets:
+            self._pending_tab_titles[name] = title
+            return
+        default = self.nav.default_title(name)
+        self.nav.set_title(name, default + title[len(name) :] if title.startswith(name) else title)
+
+    def tab_title(self, name: str) -> str:
+        return self.nav.title(name)
+
+    def set_tab_enabled(self, name: str, enabled: bool, tooltip: str = "") -> None:
+        if name not in self._tab_widgets:
+            # a panel decides about its stage in its constructor, before the window added it
+            self._pending_tab_state[name] = (enabled, tooltip)
+            return
+        self.nav.set_stage_enabled(name, enabled, tooltip)
+        if enabled:
+            self._status_timer.start()
+        elif self.current_tab() == name:
+            self.show_tab(TAB_EDITOR)
+
+    def is_tab_enabled(self, name: str) -> bool:
+        return self.nav.is_stage_enabled(name)
+
+    def tab_tooltip(self, name: str) -> str:
+        return self.nav.item_tooltip(name)
+
+    def _on_stage_selected(self, name: str) -> None:
+        if name in self._tab_widgets:
+            self.stack.setCurrentWidget(self._tab_widgets[name])
+
+    def refresh_stage_statuses(self) -> None:
+        """Ask the services what each stage has done and show it in the sidebar."""
+        self._statuses_computed_at = time.monotonic()
+        statuses = stage_statuses(self.arguments, self.project_state.current_config)
+        for name, status in statuses.items():
+            if name in self._tab_widgets:
+                self.nav.set_status(name, status)
+
+    def event(self, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.WindowActivate
+            and time.monotonic() - self._statuses_computed_at > STATUS_ON_ACTIVATE_MIN_S
+        ):
+            self._status_timer.start()
+        return super().event(event)
+
+    # --- the output pane ---
 
     def _add_output_of(self, name: str, panel: Panel) -> None:
         """Put the console of ``panel`` into the output pane; its jobs bring it to the front."""
@@ -209,31 +338,6 @@ class MainWindow(QMainWindow):
             output = self.output_pane.maximumHeight()
         self.content_splitter.setSizes([total - output, output])
 
-    def tab(self, name: str) -> QWidget:
-        return self._tab_widgets[name]
-
-    def show_tab(self, name: str) -> None:
-        self.tabs.setCurrentWidget(self._tab_widgets[name])
-
-    def current_tab(self) -> str:
-        current = self.tabs.currentWidget()
-        return next((name for name, widget in self._tab_widgets.items() if widget is current), "")
-
-    def set_tab_title(self, name: str, title: str) -> None:
-        if name not in self._tab_widgets:
-            self._pending_tab_titles[name] = title
-            return
-        self.tabs.setTabText(self.tabs.indexOf(self._tab_widgets[name]), title)
-
-    def set_tab_enabled(self, name: str, enabled: bool, tooltip: str = "") -> None:
-        if name not in self._tab_widgets:
-            # a panel decides about its tab in its constructor, before the window added it
-            self._pending_tab_state[name] = (enabled, tooltip)
-            return
-        index = self.tabs.indexOf(self._tab_widgets[name])
-        self.tabs.setTabEnabled(index, enabled)
-        self.tabs.setTabToolTip(index, tooltip)
-
     # --- lifecycle ---
 
     def cancel_running_jobs(self) -> None:
@@ -246,10 +350,6 @@ class MainWindow(QMainWindow):
             panel.cancel_jobs()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt's name)
+        self._status_timer.stop()
         self.cancel_running_jobs()
         super().closeEvent(event)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 (Qt's name)
-        super().resizeEvent(event)
-        # the path takes at most half of the status bar; the status text keeps the rest
-        self.dot_dp_label.setMaximumWidth(max(self.width() // 2, 100))

@@ -79,7 +79,7 @@ def env(qtbot: QtBot, tmp_path: Path) -> Env:
 
 
 def click_row(env: Env, row: int) -> None:
-    env.panel.list.setCurrentRow(row)
+    env.panel.combo.setCurrentIndex(row)
 
 
 def test_the_list_shows_the_sorted_configurations_and_selects_the_first(qtbot: QtBot, tmp_path: Path) -> None:
@@ -94,7 +94,7 @@ def test_the_list_shows_the_sorted_configurations_and_selects_the_first(qtbot: Q
     panel = ConfigListPanel(arguments, state, status, lambda: True, lambda: None, FakeTabs())
     qtbot.addWidget(panel)
     assert panel.names() == ["a", "b"] and state.current_config == "a" and seen == ["a"]
-    assert panel.new_button.text() == "+ New" and panel.edit_compilation_button.text() == "Edit Compilation"
+    assert panel.new_button.text() == "+ New" and panel.combo.currentText() == "a" and panel.combo.isEnabled()
 
 
 def test_selecting_publishes_and_leaves_execute_and_report(env: Env) -> None:
@@ -117,19 +117,27 @@ def test_the_selection_stays_when_leaving_is_refused(env: Env) -> None:
     env.allow_leave = False
     click_row(env, 1)
     assert env.panel.project_state.current_config == "a" and env.events == []
-    assert env.panel.list.currentRow() == 0 and [i.text() for i in env.panel.list.selectedItems()] == ["a"]
+    assert env.panel.combo.currentIndex() == 0 and env.panel.combo.currentText() == "a"
 
 
-def test_edit_compilation_button(env: Env) -> None:
-    env.panel.edit_compilation_button.click()
+def test_the_menu_opens_the_project_compilation(env: Env) -> None:
+    menu = env.panel.menu_button.menu()
+    assert menu is not None
+    next(a for a in menu.actions() if a.text() == "Project compilation…").trigger()
     assert env.editor_opened == 1
+
+
+def test_select_asks_like_the_user(env: Env) -> None:
+    assert env.panel.select("b") and env.panel.project_state.current_config == "b"
+    env.allow_leave = False
+    assert not env.panel.select("a") and env.panel.combo.currentText() == "b"
 
 
 def test_new_config_creates_and_selects_it(env: Env, dialog_answers: DialogRecorder) -> None:
     dialog_answers.answer("ask_string", " c ")
     env.panel.new_button.click()
     assert env.panel.names() == ["a", "b", "c"] and env.panel.project_state.current_config == "c"
-    assert env.panel.list.currentRow() == 2
+    assert env.panel.combo.currentIndex() == 2
     assert ConfigurationsChanged() in env.events and ConfigChanged("c") in env.events
     assert env.panel.status.text() == "Created configuration 'c'" and env.panel.status.color == widgets.STATUS_OK
     assert Path(env.panel.config_dir, "c", "execute.sh").exists()
@@ -166,7 +174,7 @@ def test_rename_config(env: Env, dialog_answers: DialogRecorder) -> None:
     dialog_answers.answer("ask_string", "z")
     env.panel.rename_config()
     assert env.panel.names() == ["b", "z"] and env.panel.project_state.current_config == "z"
-    assert env.panel.list.currentRow() == 1 and ConfigChanged("z") in env.events
+    assert env.panel.combo.currentIndex() == 1 and ConfigChanged("z") in env.events
     assert env.panel.status.text() == "Renamed configuration to 'z'"
 
 
@@ -192,6 +200,7 @@ def test_deleting_the_last_configuration_tells_the_panels(env: Env, dialog_answe
     env.panel.delete_config()
     env.panel.delete_config()
     assert env.panel.names() == [] and env.panel.project_state.current_config is None
+    assert not env.panel.combo.isEnabled()
     assert env.events[-1] == ConfigChanged(None)
 
 
@@ -225,24 +234,13 @@ def test_configurations_changed_refreshes(env: Env) -> None:
     assert env.panel.names() == ["a", "b", "c"] and env.panel.project_state.current_config == "a"
 
 
-def test_the_context_menu_offers_copy_rename_delete(env: Env, dialog_answers: DialogRecorder) -> None:
+def test_the_menu_offers_copy_rename_wizard_compilation_delete(env: Env, dialog_answers: DialogRecorder) -> None:
     menu = env.panel.context_menu()
     texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-    assert texts == ["Copy", "Rename", "Delete"]
+    assert texts == ["Copy…", "Rename…", "New with wizard…", "Project compilation…", "Delete…"]
     dialog_answers.answer("ask_yes_no", True)
-    menu.actions()[3].trigger()
+    menu.actions()[-1].trigger()
     assert env.panel.names() == ["b"]
-
-
-def test_right_click_selects_the_item_under_the_cursor(env: Env) -> None:
-    env.panel.show()
-    item = env.panel.list.item(1)
-    assert item is not None
-    position = env.panel.list.visualItemRect(item).center()
-    env.panel._on_right_click(position)
-    assert env.panel.project_state.current_config == "b"
-    assert env.panel._menu is not None
-    env.panel._menu.close()
 
 
 def test_the_wizard_opens_for_a_project_without_a_real_configuration(env: Env, dialog_answers: DialogRecorder) -> None:

@@ -29,3 +29,19 @@ TAB_AUTOTUNING = STAGE_AUTOTUNING
 # the order of the tabs: hotspots are measured before, and feed into, pattern detection and the autotuner; patch
 # repair sits between them, a suggestion that does not build is one the tuner can only record as a failure
 TAB_ORDER = (TAB_EDITOR, TAB_EXECUTE, TAB_REPORT, TAB_HOTSPOT, TAB_PATTERN_DETECTION, TAB_PATCH_REPAIR, TAB_AUTOTUNING)
+
+# the workflow sidebar: sections of (tab, title) in display order; the setup first, the results last
+NAV_SECTIONS = (
+    ("Setup", ((TAB_EDITOR, "Configure"),)),
+    (
+        "Pipeline",
+        (
+            (TAB_EXECUTE, "Execute"),
+            (TAB_HOTSPOT, "Hotspots"),
+            (TAB_PATTERN_DETECTION, "Pattern Detection"),
+            (TAB_PATCH_REPAIR, "Patch Repair"),
+            (TAB_AUTOTUNING, "Autotuning"),
+        ),
+    ),
+    ("Results", ((TAB_REPORT, "Report"),)),
+)

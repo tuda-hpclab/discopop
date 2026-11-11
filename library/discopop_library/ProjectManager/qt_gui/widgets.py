@@ -139,8 +139,6 @@ def _component_rules() -> str:
         # a card: the framed section of a form (FormSection) or a header
         f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 8px;"
         " background-color: palette(base); }",
-        f"QFrame#{CARD_NAME} QLabel, QFrame#{CARD_NAME} QCheckBox, QFrame#{CARD_NAME} QRadioButton"
-        " { background: transparent; }",
         # a status chip: a rounded, colored pill (StatusChip)
         f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; color: white; font-weight: bold; }}",
     ]

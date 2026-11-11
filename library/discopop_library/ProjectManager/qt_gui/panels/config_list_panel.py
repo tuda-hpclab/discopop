@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The configuration list on the left of the main window: select, create, copy, rename, delete, the wizard.
+"""The configuration selector in the header bar of the main window: select, create, copy, rename, delete, the wizard.
 
 Ported from ``gui/mixins/config_list.py``, ``gui/mixins/config_crud.py`` and ``gui/mixins/wizard_launcher.py``
 (without ``_update_execute_modes``: the Execute panel reacts to ``ConfigChanged`` / ``ConfigurationsChanged``).
@@ -14,9 +14,8 @@ Ported from ``gui/mixins/config_list.py``, ``gui/mixins/config_crud.py`` and ``g
 
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem, QMenu, QWidget
+from PySide6.QtWidgets import QComboBox, QLabel, QMenu, QSizePolicy, QToolButton, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
@@ -40,11 +39,14 @@ _STATUS_RESET_MS = 2000
 
 
 class ConfigListPanel(Panel):
-    """The "Run Configs" list with its buttons.
+    """The configuration selector: a combo box, "+ New" and a "⋯" menu (copy, rename, delete, project compilation).
 
-    ``confirm_leave_config`` is asked before the user's selection changes (a click, the right-click menu); False
-    keeps the old selection (the Editor panel uses it for unsaved changes). ``open_compilation_editor`` is the
-    "Edit Compilation" button. ``tabs`` switches the tabs of the main window.
+    It used to be a list taking the left side of the window; one configuration is worked on at a time, so a selector
+    in the header bar says the same in one line.
+
+    ``confirm_leave_config`` is asked before the user's selection changes; False keeps the old selection (the Editor
+    panel uses it for unsaved changes). ``open_compilation_editor`` is the "Project compilation…" action. ``tabs``
+    switches the tabs of the main window.
 
     Publishes ``ConfigChanged`` when the selection changes or is refreshed, and ``ConfigurationsChanged`` after
     a configuration was created, copied, renamed, deleted or written by the wizard; refreshes on the latter.
@@ -68,27 +70,23 @@ class ConfigListPanel(Panel):
         self._updating = False
         self._shown_config: Optional[str] = None
         self._wizard: Optional[ConfigurationWizard] = None
-        self._menu: Optional[QMenu] = None
 
-        self.list = QListWidget()
-        self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list.itemSelectionChanged.connect(self._on_selection_changed)
-        self.list.customContextMenuRequested.connect(self._on_right_click)
-        self.new_button = widgets.primary_button("+ New", self.new_config)
-        self.edit_compilation_button = widgets.create_button("Edit Compilation", self._open_compilation_editor)
-
-        heading = widgets.heading_label("Run Configs", title=True)
-        layout = widgets.vbox(
-            heading,
-            self.list,
-            self.new_button,
-            self.edit_compilation_button,
-            margins=5,
-        )
-        layout.setStretchFactor(self.list, 1)
-        layout.setAlignment(heading, Qt.AlignmentFlag.AlignHCenter)
-        self.setLayout(layout)
+        self.combo = QComboBox()
+        self.combo.setMinimumWidth(180)
+        self.combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo.setToolTip("The configuration the tabs work on")
+        self.combo.currentIndexChanged.connect(lambda _index: self._on_selection_changed())
+        self.new_button = widgets.create_button("+ New", self.new_config, tooltip="Create a new configuration")
+        self.menu_button = QToolButton()
+        self.menu_button.setObjectName(widgets.FLAT_NAME)
+        self.menu_button.setText("⋯")
+        self.menu_button.setToolTip("Copy, rename or delete the configuration; the compilation of the project")
+        self.menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._menu = self.context_menu()
+        self.menu_button.setMenu(self._menu)
+        label = QLabel("Configuration:")
+        self.setLayout(widgets.hbox(label, self.combo, self.new_button, self.menu_button, margins=0))
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         self.refresh()
@@ -96,11 +94,7 @@ class ConfigListPanel(Panel):
     # --- the list ---
 
     def names(self) -> List[str]:
-        return [self._item_name(row) for row in range(self.list.count())]
-
-    def _item_name(self, row: int) -> str:
-        item = self.list.item(row)
-        return item.text() if item is not None else ""
+        return [self.combo.itemText(row) for row in range(self.combo.count())]
 
     def refresh(self) -> None:
         """Show the configurations on disk; the selection stays, else the first one is selected."""
@@ -108,11 +102,11 @@ class ConfigListPanel(Panel):
         configs = list_configurations(self.config_dir)
         self._updating = True
         try:
-            self.list.clear()
-            self.list.addItems(configs)
+            self.combo.clear()
+            self.combo.addItems(configs)
             chosen = previous if previous in configs else (configs[0] if configs else None)
-            if chosen is not None:
-                self.list.setCurrentRow(configs.index(chosen))
+            self.combo.setCurrentIndex(configs.index(chosen) if chosen is not None else -1)
+            self.combo.setEnabled(bool(configs))
         finally:
             self._updating = False
         self.project_state.current_config = chosen
@@ -121,18 +115,22 @@ class ConfigListPanel(Panel):
         self.project_state.publish(ConfigChanged(chosen))
 
     def _selected_name(self) -> Optional[str]:
-        items = self.list.selectedItems()
-        return items[0].text() if items else None
+        return self.combo.currentText() if self.combo.currentIndex() >= 0 else None
 
     def _select(self, name: Optional[str]) -> None:
-        """Select ``name`` in the list without telling anybody (the caller does)."""
+        """Select ``name`` without telling anybody (the caller does)."""
         self._updating = True
         try:
-            self.list.clearSelection()
-            if name is not None:
-                self.list.setCurrentRow(self.names().index(name))
+            self.combo.setCurrentIndex(self.names().index(name) if name is not None else -1)
         finally:
             self._updating = False
+
+    def select(self, name: str) -> bool:
+        """Select ``name`` as the user would (asking whether to leave the current one); False if refused."""
+        if name == self._shown_config:
+            return True
+        self._select(name)
+        return self._change_selection(name)
 
     def _on_selection_changed(self) -> None:
         if self._updating:
@@ -155,32 +153,21 @@ class ConfigListPanel(Panel):
             self._tabs.show_tab(TAB_EDITOR)
         return True
 
-    # --- the context menu ---
-
-    def _on_right_click(self, position: QPoint) -> None:
-        item = self.list.itemAt(position)
-        if item is None:
-            return
-        if not self._select_for_menu(item):
-            return
-        self._menu = self.context_menu()
-        self._menu.popup(self.list.viewport().mapToGlobal(position))
-
-    def _select_for_menu(self, item: QListWidgetItem) -> bool:
-        name = item.text()
-        if name == self._shown_config:
-            return True
-        self._select(name)
-        return self._change_selection(name)
+    # --- the menu ---
 
     def context_menu(self) -> QMenu:
-        menu = QMenu(self.list)
-        copy_action: QAction = menu.addAction("Copy")
+        menu = QMenu(self)
+        copy_action: QAction = menu.addAction("Copy…")
         copy_action.triggered.connect(lambda _checked=False: self.copy_config())
-        rename_action: QAction = menu.addAction("Rename")
+        rename_action: QAction = menu.addAction("Rename…")
         rename_action.triggered.connect(lambda _checked=False: self.rename_config())
+        wizard_action: QAction = menu.addAction("New with wizard…")
+        wizard_action.triggered.connect(lambda _checked=False: self.open_configuration_wizard())
         menu.addSeparator()
-        delete_action: QAction = menu.addAction("Delete")
+        compilation_action: QAction = menu.addAction("Project compilation…")
+        compilation_action.triggered.connect(lambda _checked=False: self._open_compilation_editor())
+        menu.addSeparator()
+        delete_action: QAction = menu.addAction("Delete…")
         delete_action.triggered.connect(lambda _checked=False: self.delete_config())
         return menu
 
