@@ -10,6 +10,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
+from discopop_library.ProjectManager.services import suggestions
 from discopop_library.ProjectManager.services.suggestions import (
     SuggestionInfo,
     load_suggestions,
@@ -178,3 +181,38 @@ def test_detail_fields(tmp_path: Path) -> None:
     assert fields["Shared"] == "a"
     assert "Hotness" not in fields
     assert suggestion_detail_fields(SuggestionInfo(id="4")) == [("Suggestion", "4")]
+
+
+def test_results_are_cached_until_an_input_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dot_dp = _project(tmp_path, {"do_all": [_entry(0, "1:20", "1:22")]}, ["0"])
+    calls: List[str] = []
+    real = suggestions._load_suggestions
+
+    def counting(dot_dp_path: str) -> List[SuggestionInfo]:
+        calls.append(dot_dp_path)
+        return real(dot_dp_path)
+
+    monkeypatch.setattr(suggestions, "_load_suggestions", counting)
+    first = load_suggestions(dot_dp)
+    assert load_suggestions(dot_dp) == first and len(calls) == 1
+
+    # a new suggestion directory, new patterns, new hotspot results and a new file mapping each invalidate
+    (tmp_path / "patch_generator" / "1").mkdir()
+    (tmp_path / "patch_generator" / "1" / "1.patch").write_text("")
+    assert [info.id for info in load_suggestions(dot_dp)] == ["0", "1"] and len(calls) == 2
+    (tmp_path / "explorer" / "patterns.json").write_text(
+        json.dumps({"patterns": {"reduction": [_entry(0, "1:5", "1:6")]}})
+    )
+    assert load_suggestions(dot_dp)[0].pattern_type == "reduction" and len(calls) == 3
+    _hotspots(tmp_path, [_region(1, 5, "YES")])
+    assert load_suggestions(dot_dp)[0].hotness == "YES" and len(calls) == 4
+    (tmp_path / "FileMapping.txt").write_text("1\t/other/dir/renamed.cpp\n")
+    assert load_suggestions(dot_dp)[0].file_name == "renamed.cpp" and len(calls) == 5
+    load_suggestions(dot_dp)
+    assert len(calls) == 5
+
+
+def test_the_cache_does_not_hand_out_its_own_list(tmp_path: Path) -> None:
+    dot_dp = _project(tmp_path, {"do_all": [_entry(0, "1:20", "1:22")]}, ["0"])
+    load_suggestions(dot_dp).clear()
+    assert len(load_suggestions(dot_dp)) == 1

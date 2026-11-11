@@ -120,10 +120,12 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
-    # nothing was profiled: the tabs that need profiling data are disabled, with a reason
-    for name in (TAB_PATTERN_DETECTION, TAB_AUTOTUNING):
-        assert not window.is_tab_enabled(name) and window.tab_tooltip(name)
-        assert window.nav.stage_state(name) == StageState.LOCKED
+    # nothing was profiled: the Autotuning stage is disabled, with a reason; the Pattern Detection stage stays
+    # reachable and explains what is missing, the sidebar marks it locked
+    assert not window.is_tab_enabled(TAB_AUTOTUNING) and window.tab_tooltip(TAB_AUTOTUNING)
+    assert window.nav.stage_state(TAB_AUTOTUNING) == StageState.LOCKED
+    assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
+    assert window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.LOCKED
     # the hotspot panel reads the timeouts of the Execute tab, the report writes into its console
     assert window.hotspot_panel._timeouts == window.execute_panel.timeouts  # type: ignore[attr-defined]
     window.report_panel._report_progress("from the report")
@@ -141,11 +143,16 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
     }
 
 
-def test_profiling_data_enables_the_pattern_detection_tab(qtbot: QtBot, tmp_path: Path) -> None:
+def test_profiling_data_unlocks_the_pattern_detection_stage(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
+    assert window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.LOCKED
     (tmp_path / ".discopop" / "profiler").mkdir()
+    for name in ("Data.xml", "dynamic_dependencies.txt", "loop_counter_output.txt", "reduction.txt"):
+        (tmp_path / ".discopop" / "profiler" / name).write_text("")
+    (tmp_path / ".discopop" / "FileMapping.txt").write_text("")
     window.project_state.publish(ResultsChanged())
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.NOT_RUN, timeout=2000)
     assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
 
 

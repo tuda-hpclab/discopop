@@ -90,7 +90,7 @@ def _mtime(path: str) -> Optional[float]:
         return None
 
 
-def _detection_is_stale(dot_dp: str) -> bool:
+def detection_is_stale(dot_dp: str) -> bool:
     """Whether a profiling file is newer than the last detection result (``explorer/patterns.json``)."""
     detected = _mtime(os.path.join(dot_dp, "explorer", "patterns.json"))
     if detected is None:
@@ -132,7 +132,7 @@ def _pattern_detection_status(arguments: ProjectManagerArguments) -> StageStatus
     if not pattern_detection_executed(dot_dp):
         return StageStatus(StageState.NOT_RUN, "")
     suggestions = _plural(count_patches(dot_dp), "suggestion")
-    if _detection_is_stale(dot_dp):
+    if detection_is_stale(dot_dp):
         return StageStatus(StageState.STALE, "profiling data newer than the results")
     return StageStatus(StageState.DONE, suggestions)
 

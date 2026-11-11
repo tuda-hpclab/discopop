@@ -18,6 +18,7 @@ import ast
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,7 +28,7 @@ from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
 from discopop_library.HostpotLoader.utilities import get_patterns_by_hotspot_type
 from discopop_library.ProjectManager.plots import demangle
-from discopop_library.ProjectManager.services.patches import discover_suggestion_ids
+from discopop_library.ProjectManager.services.patches import PATCH_GENERATOR_DIRECTORY, discover_suggestion_ids
 
 logger = logging.getLogger("Suggestions")
 
@@ -204,8 +205,70 @@ def _clause(entry: Dict[str, Any], key: str) -> str:
     return ", ".join(str(item) for item in _as_list(entry.get(key)))
 
 
+def _stat_key(path: str) -> Tuple[int, int]:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return (-1, -1)
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _patch_directory_key(dot_dp: str) -> Tuple[Any, ...]:
+    """The listing of ``patch_generator`` with the modification time of every suggestion directory."""
+    root = os.path.join(dot_dp, PATCH_GENERATOR_DIRECTORY)
+    entries: List[Tuple[str, int]] = []
+    try:
+        with os.scandir(root) as scanner:
+            for entry in scanner:
+                try:
+                    entries.append((entry.name, entry.stat().st_mtime_ns))
+                except OSError:
+                    continue
+    except OSError:
+        return ()
+    return tuple(sorted(entries))
+
+
+def _cache_key(dot_dp: str) -> Tuple[Any, ...]:
+    return (
+        _stat_key(os.path.join(dot_dp, "explorer", "patterns.json")),
+        _stat_key(os.path.join(dot_dp, "hotspot_detection", "Hotspots.json")),
+        _stat_key(os.path.join(dot_dp, "FileMapping.txt")),
+        _patch_directory_key(dot_dp),
+    )
+
+
+_CACHE_LIMIT = 8
+_cache: Dict[str, Tuple[Tuple[Any, ...], Tuple[SuggestionInfo, ...]]] = {}
+_cache_lock = threading.Lock()
+
+
+def clear_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
+
+
 def load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
-    """One :class:`SuggestionInfo` per suggestion with patches, ordered like ``discover_suggestion_ids``."""
+    """One :class:`SuggestionInfo` per suggestion with patches, ordered like ``discover_suggestion_ids``.
+
+    The result is cached per ``dot_dp`` and reused as long as ``explorer/patterns.json``, the hotspot results,
+    ``FileMapping.txt`` and the listing of ``patch_generator`` keep their modification times and sizes: several
+    selectors ask on every ``PatternsChanged`` and classifying the hotspots is not cheap.
+    """
+    key = _cache_key(dot_dp)
+    with _cache_lock:
+        cached = _cache.get(dot_dp)
+    if cached is not None and cached[0] == key:
+        return list(cached[1])
+    infos = _load_suggestions(dot_dp)
+    with _cache_lock:
+        if len(_cache) >= _CACHE_LIMIT and dot_dp not in _cache:
+            _cache.pop(next(iter(_cache)))
+        _cache[dot_dp] = (key, tuple(infos))
+    return infos
+
+
+def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
     ids = discover_suggestion_ids(dot_dp)
     if not ids:
         return []
