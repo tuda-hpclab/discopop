@@ -10,7 +10,10 @@
 
 import json
 import os
-from typing import List
+from typing import List, Optional
+
+from discopop_library.ProjectManager.configurations.project_environment import stale_scope_message
+from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 
 # Selectable interpretations of the profiled dependency data, as (value, label) pairs.
 # "no_states" runs the explorer with --ignore-dependency-states, i.e. it discards the
@@ -74,3 +77,8 @@ def patterns_found(dot_dp: str) -> bool:
         return False
     patterns = data.get("patterns", {})
     return any(patterns.get(key, []) for key in SUGGESTION_KEYS)
+
+
+def stale_profiling_data_message(arguments: ProjectManagerArguments) -> Optional[str]:
+    """A warning if the profiling data was instrumented with another scope than the configured one."""
+    return stale_scope_message(arguments.dot_dp, "dp", arguments.project_root, arguments.project_config_dir)

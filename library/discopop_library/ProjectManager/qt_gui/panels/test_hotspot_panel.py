@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.configurations.project_environment import record_instrumented_scope
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.plots.hotspot_data import KIND_LOOP, MeasurementRun
 from discopop_library.ProjectManager.qt_gui import widgets
@@ -33,6 +34,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
     HotspotsChanged,
+    ProjectEnvironmentChanged,
     ProjectState,
 )
 
@@ -693,3 +695,47 @@ def test_the_list_follows_clearing_and_ignores_changes_while_running(
 def replace_compile_script(log: MeasurementLog, script: str) -> MeasurementLog:
     log.compile_script = script
     return log
+
+
+def _configure_scope(env: Env, scope: str) -> None:
+    (Path(env.panel.arguments.project_config_dir) / "project_environment.json").write_text(
+        json.dumps({"DP_PROJECT_ROOT_DIR": scope})
+    )
+
+
+def _scope_warning(env: Env) -> str:
+    """The detail of the header chip if it warns about another scope, else ""."""
+    chip = env.panel.header.chip
+    return chip.detail() if chip.text() == "Instrumented with another scope" else ""
+
+
+def test_the_stale_warning_is_hidden_without_a_record(env: Env) -> None:
+    _configure_scope(env, "src")
+    env.panel.update_ui()
+    assert _scope_warning(env) == ""
+
+
+def test_the_stale_warning_is_hidden_for_an_equal_scope_and_for_the_other_mode(env: Env) -> None:
+    _configure_scope(env, "./src/")
+    record_instrumented_scope(str(env.dot_dp), "hd", "src")
+    record_instrumented_scope(str(env.dot_dp), "dp", "other")
+    env.panel.update_ui()
+    assert _scope_warning(env) == ""
+
+
+def test_the_stale_warning_shows_a_different_recorded_scope(env: Env) -> None:
+    _configure_scope(env, "lib")
+    record_instrumented_scope(str(env.dot_dp), "hd", "src")
+    env.panel.update_ui()
+    assert env.panel.header.chip.level == widgets.CHIP_WARN
+    assert "'src'" in _scope_warning(env) and "'lib'" in _scope_warning(env)
+
+
+def test_the_stale_warning_follows_the_project_environment(env: Env) -> None:
+    _configure_scope(env, "src")
+    record_instrumented_scope(str(env.dot_dp), "hd", "src")
+    env.panel.project_state.publish(ProjectEnvironmentChanged())
+    assert _scope_warning(env) == ""
+    _configure_scope(env, "lib")
+    env.panel.project_state.publish(ProjectEnvironmentChanged())
+    assert _scope_warning(env) != ""

@@ -15,6 +15,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Collection, Dict, List, Optional, Sequence, Tuple
 
+from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.project_environment import stale_scope_message
 from discopop_library.ProjectManager.plots import hotspot_charts
 from discopop_library.ProjectManager.plots.hotspot_data import (
     HOTNESS_MAYBE,
@@ -340,3 +342,8 @@ _BUILD_NOTES = {
     BUILD_STALE: "This configuration will be instrumented separately; its runs are combined with the others by source "
     "location.",
 }
+
+
+def stale_hotspot_data_message(arguments: ProjectManagerArguments) -> Optional[str]:
+    """A warning if the hotspot data was instrumented with another scope than the configured one."""
+    return stale_scope_message(arguments.dot_dp, "hd", arguments.project_root, arguments.project_config_dir)
