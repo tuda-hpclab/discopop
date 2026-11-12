@@ -18,7 +18,7 @@ import tempfile
 import time
 from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 
-from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QRegularExpression, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QRegularExpression, QStandardPaths, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -318,11 +318,16 @@ def accent_text_color(palette: QPalette) -> QColor:
 _ARROW_PATHS = {"down": "M1 1l4 4 4-4", "up": "M1 5l4-4 4 4"}
 
 
+def _cache_directory() -> str:
+    location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericCacheLocation)
+    return os.path.join(location or tempfile.mkdtemp(prefix="discopop_project_manager_"), "discopop_project_manager")
+
+
 def arrow_image(direction: str, color: str) -> str:
     """The path of a small chevron (``direction`` "up" or "down") in ``color``, for the arrows of spin and combo boxes:
-    a style sheet draws them from an image only. Written once per color into a directory of the user's temporary
-    files (generated, not shipped)."""
-    directory = os.path.join(tempfile.gettempdir(), f"discopop_project_manager_{os.getuid()}")
+    a style sheet draws them from an image only. Written once per color into the user's cache directory (generated,
+    not shipped; not into the shared temporary directory, where another user could put files first)."""
+    directory = os.path.join(_cache_directory(), "style")
     path = os.path.join(directory, f"arrow_{direction}_{color.lstrip('#')}.svg")
     if not os.path.exists(path):
         os.makedirs(directory, exist_ok=True)
