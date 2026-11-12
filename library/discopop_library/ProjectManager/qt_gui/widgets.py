@@ -391,6 +391,8 @@ def _control_rules(palette: QPalette) -> str:
             "QTabWidget > QTabBar::tab:hover { color: palette(window-text);" f" border-bottom: 2px solid {border}; }}",
             "QTabWidget > QTabBar::tab:selected { color: palette(window-text);"
             f" border-bottom: 2px solid {accent}; }}",
+            # the toolbar of a chart on the pane it lies on, without the frame and gradient of a tool bar
+            f"QToolBar#{CHART_TOOLBAR_NAME} {{ background-color: {surface}; border: none; spacing: 2px; }}",
             # tables and trees: no grid (alternating rows separate them), a flat header, a light selection
             f"QTableView, QTreeView {{ background-color: palette(base); border: 1px solid {border};"
             " border-radius: 6px; gridline-color: transparent; alternate-background-color: palette(alternate-base);"
@@ -430,6 +432,8 @@ def _control_rules(palette: QPalette) -> str:
 # objectNames the style sheet selects on
 CARD_NAME = "card"
 DIVIDER_NAME = "divider"
+# the toolbar below a chart: matplotlib draws its icons light on a dark background, so it needs an opaque one
+CHART_TOOLBAR_NAME = "chartToolbar"
 # a scroll area showing the background of what it lies on (the side bar of the selection details)
 CLEAR_SCROLL_NAME = "clearScroll"
 CHIP_NAME = "chip"
