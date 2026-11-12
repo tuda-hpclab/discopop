@@ -134,6 +134,11 @@ inline bool FileExists(const std::string& filename) {
   return true;
 }
 
+// Whether path lies in the project, i.e. contains DP_PROJECT_ROOT_DIR ("/" if unset) as given or with its
+// symbolic links resolved. A checkout reached through a symbolic link (/home/<user>/git -> /mnt/storage/...)
+// is named either way, depending on whether $PWD or realpath()/getcwd() produced the path.
+bool IsInProjectRoot(const std::string& path);
+
 int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);
 
 // Encode a file id and a line number as LID, see lid_constants.hpp. Returns 0 ("no location") and warns

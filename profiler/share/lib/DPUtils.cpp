@@ -12,6 +12,7 @@
 
 #include "DPUtils.hpp"
 
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
@@ -65,6 +66,26 @@ llvm::cl::opt<bool> dp_memory_profiling_skip_function_arguments(
 
 namespace dputil {
 
+bool IsInProjectRoot(const std::string& path) {
+  const std::string root(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  // the resolved root, computed again only when the variable changes (doInitialization sets it if unset);
+  // allocated once and never destroyed: an object with static storage duration must be trivially destructible
+  static std::string& cached_root = *new std::string();
+  static std::string& cached_real_root = *new std::string();
+  static bool cached = false;
+  if (!cached || root != cached_root) {
+    cached = true;
+    cached_root = root;
+    cached_real_root.clear();
+    if (char* real = realpath(root.c_str(), nullptr)) {
+      cached_real_root = real;
+      std::free(real);  // allocated by realpath
+    }
+  }
+  return path.find(root) != std::string::npos ||
+         (!cached_real_root.empty() && path.find(cached_real_root) != std::string::npos);
+}
+
 std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& full_path_name) {
   // prepare environment variables
   if (FileMappingPath().length() == 0) {
@@ -77,9 +98,8 @@ std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& f
     FileMappingPath() += "/FileMapping.txt";
   }
 
-  // check if path in DP_PROJECT_ROOT_DIR
-  const std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
-  if (full_path_name.find(dp_project_dir) == std::string::npos) {  // function defined outside project
+  // check if path in DP_PROJECT_ROOT_DIR (full_path_name is resolved by realpath() for some callers)
+  if (!dputil::IsInProjectRoot(full_path_name)) {  // function defined outside project
     return 0;
   }
 
