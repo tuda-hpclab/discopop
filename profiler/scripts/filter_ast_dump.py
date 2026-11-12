@@ -24,11 +24,18 @@ effective file must be resolved the same way here as it is when the pruned
 dump is later loaded, and the resolved file is written back explicitly into
 every kept node so a kept node cutting on the topology when a preceding
 sibling is dropped.
+
+The input is processed one top-level declaration at a time (the declarations of
+the translation unit are the items of its ``inner`` array), so the memory
+needed does not scale with the size of the unfiltered dump, which is dominated
+by system headers.
 """
 
+import io
 import json
+import re
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, TextIO
 
 
 def _resolve_macro_loc(loc: dict[str, Any]) -> dict[str, Any]:
@@ -111,29 +118,157 @@ def _filter_subtree(node: dict[str, Any], own_file: Optional[str], project_root:
         node["inner"] = _filter_children(children, own_file, project_root)
 
 
+class _Reader:
+    """Incremental reader that decodes JSON values from a text stream without reading it all at once."""
+
+    _MIN_CHUNK = 1 << 20
+
+    def __init__(self, source: TextIO) -> None:
+        self.source = source
+        self.buf = ""
+        self.pos = 0
+        self.eof = False
+        self.decoder = json.JSONDecoder()
+
+    def fill(self) -> bool:
+        """Read more input, doubling the amount each time (so re-decoding a huge value stays linear)."""
+        if self.eof:
+            return False
+        chunk = self.source.read(max(self._MIN_CHUNK, len(self.buf) - self.pos))
+        if not chunk:
+            self.eof = True
+            return False
+        self.buf = self.buf[self.pos :] + chunk
+        self.pos = 0
+        return True
+
+    def compact(self) -> None:
+        if self.pos > self._MIN_CHUNK:
+            self.buf = self.buf[self.pos :]
+            self.pos = 0
+
+    def skip_ws(self) -> Optional[str]:
+        """Advance to the next non-whitespace character and return it (None at the end of the input)."""
+        while True:
+            while self.pos < len(self.buf) and self.buf[self.pos] in " \t\n\r":
+                self.pos += 1
+            if self.pos < len(self.buf):
+                return self.buf[self.pos]
+            if not self.fill():
+                return None
+
+    def decode_value(self) -> Any:
+        while True:
+            try:
+                obj, end = self.decoder.raw_decode(self.buf, self.pos)
+            except json.JSONDecodeError:
+                # the value may continue beyond the buffer; a genuine syntax error surfaces at the end of the input
+                if not self.fill():
+                    raise
+                continue
+            self.pos = end
+            return obj
+
+
+_INNER_START = re.compile(r'"inner"\s*:\s*\[')
+
+
+def _find_header_end(reader: _Reader) -> Optional[int]:
+    """Position behind the ``[`` of the top-level ``inner`` array, or None if the object has no such header."""
+    search_from = reader.pos
+    while True:
+        match = _INNER_START.search(reader.buf, search_from)
+        if match is not None:
+            header = reader.buf[reader.pos : match.start()].rstrip()
+            try:
+                json.loads(header.rstrip(",") + "}")
+            except ValueError:
+                return None
+            return match.end()
+        if not reader.fill():
+            return None
+        # fill() moved the unread data to the buffer start
+        search_from = 0
+
+
+def _stream_object(reader: _Reader, out: TextIO, project_root: str) -> None:
+    """Prune one top-level object, holding only one declaration of its ``inner`` array in memory at a time."""
+    header_end = _find_header_end(reader)
+    if header_end is None:
+        # no ``inner`` array in the header (unexpected for a clang dump): prune the object as a whole
+        obj = reader.decode_value()
+        obj["inner"] = _filter_children(obj.get("inner", []), None, project_root)
+        out.write(json.dumps(obj))
+        return
+
+    out.write(reader.buf[reader.pos : header_end])
+    reader.pos = header_end
+    ctx_file: Optional[str] = None
+    first = True
+    while True:
+        reader.compact()
+        ch = reader.skip_ws()
+        if ch is None:
+            raise ValueError("truncated AST dump: the top-level 'inner' array is not closed")
+        if ch == ",":
+            reader.pos += 1
+            continue
+        if ch == "]":
+            reader.pos += 1
+            break
+        child = reader.decode_value()
+        own_file = _own_file(child, ctx_file)
+        if _is_kept(own_file, project_root):
+            _filter_subtree(child, own_file, project_root)
+            out.write(("" if first else ", ") + json.dumps(child))
+            first = False
+        # the next sibling's inheritance context advances regardless of whether this one survived
+        ctx_file = own_file
+        del child
+    out.write("]")
+
+    # whatever follows the array inside the top-level object (normally just the closing brace)
+    ch = reader.skip_ws()
+    if ch == ",":
+        # turn the comma into the opening brace, so that the remaining members decode as an object
+        reader.buf = reader.buf[: reader.pos] + "{" + reader.buf[reader.pos + 1 :]
+        extra = reader.decode_value()
+        if extra:
+            out.write(", " + json.dumps(extra)[1:-1])
+        out.write("}")
+    elif ch == "}":
+        reader.pos += 1
+        out.write("}")
+    else:
+        raise ValueError("malformed AST dump: unexpected content behind the top-level 'inner' array")
+
+
+def filter_ast_stream(source: TextIO, out: TextIO, project_root: str) -> None:
+    """Prune one or more concatenated top-level JSON objects read from ``source`` and write them to ``out``.
+
+    The objects are processed declaration by declaration: the memory needed is that of the largest single
+    top-level declaration plus the read buffer, not that of the whole (unfiltered) dump.
+    """
+    if not project_root.endswith("/"):
+        project_root += "/"
+    reader = _Reader(source)
+    first = True
+    while reader.skip_ws() is not None:
+        if not first:
+            out.write("\n")
+        first = False
+        _stream_object(reader, out, project_root)
+
+
 def filter_ast_dump(text: str, project_root: str) -> str:
-    """Parse one or more concatenated top-level JSON objects and prune each.
+    """Prune one or more concatenated top-level JSON objects given as a string (see ``filter_ast_stream``).
 
     Concatenated objects occur when multiple translation units are dumped
     into the same file (one clang invocation per source file, appended).
     """
-    if not project_root.endswith("/"):
-        project_root += "/"
-
-    decoder = json.JSONDecoder()
-    stripped = text.lstrip()
-    pos = 0
-    out_parts: list[str] = []
-
-    while pos < len(stripped):
-        obj, end = decoder.raw_decode(stripped, pos)
-        obj["inner"] = _filter_children(obj.get("inner", []), None, project_root)
-        out_parts.append(json.dumps(obj))
-        pos = end
-        while pos < len(stripped) and stripped[pos] in " \t\n\r":
-            pos += 1
-
-    return "\n".join(out_parts)
+    out = io.StringIO()
+    filter_ast_stream(io.StringIO(text), out, project_root)
+    return out.getvalue()
 
 
 def main() -> None:
@@ -141,11 +276,7 @@ def main() -> None:
         print(f"usage: {sys.argv[0]} <project_root>", file=sys.stderr)
         sys.exit(1)
 
-    project_root = sys.argv[1]
-    text = sys.stdin.read()
-    if not text.strip():
-        return
-    sys.stdout.write(filter_ast_dump(text, project_root))
+    filter_ast_stream(sys.stdin, sys.stdout, sys.argv[1])
 
 
 if __name__ == "__main__":

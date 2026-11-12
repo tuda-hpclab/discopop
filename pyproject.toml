@@ -78,6 +78,7 @@ testpaths = [
     "mcp_server",
     "hotspot_detection",
     "test/project_manager",
+    "test/scripts",
     "test/end_to_end",
     "test/profiler",
     "test/instrumentation",
