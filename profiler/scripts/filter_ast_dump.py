@@ -13,9 +13,10 @@ Clang's JSON AST dump includes every declaration transitively reachable from
 included headers (libc, libstdc++, MPI, ...), not just the user's own source.
 For real C++ projects this makes the dump many times larger than what
 DiscoPoP's explorer pattern detection ever queries (it only ever looks up AST
-nodes by a project file path resolved from FileMapping.txt). This script sits
-between clang and the on-disk ast_dump.json and drops any subtree whose
-resolved source location falls outside the project directory.
+nodes by a file path resolved from FileMapping.txt). This script sits between
+clang and the on-disk ast_dump.json and drops any subtree whose resolved source
+location is not one of the files in FileMapping.txt (or, without it, outside the
+project directory), as well as the type nodes (see ``_Policy``).
 
 Reads clang's JSON on stdin, writes the pruned JSON to stdout. Handles the
 same file/line "unchanged from previous sibling" omission rules as
@@ -33,6 +34,7 @@ by system headers, nor with the largest declaration.
 
 import io
 import json
+import os
 import re
 import sys
 from typing import Any, Optional, TextIO
@@ -59,22 +61,72 @@ def _own_file(node: dict[str, Any], inherited_file: Optional[str]) -> Optional[s
     return loc.get("file", inherited_file)
 
 
-def _is_kept(file_: Optional[str], project_root: str) -> bool:
-    # None means the node's location could not be resolved at all (e.g. a
-    # structural wrapper with no context yet) -- keep rather than risk
-    # dropping project code on an inheritance-resolution edge case.
-    if file_ is None:
-        return True
-    # Clang records the file passed on the compile command line, and any
-    # quote-included ("...") header resolved relative to it, as a bare or
-    # relative path (e.g. "main.cpp", "utils.hpp") -- these are always the
-    # project's own files. Angle-bracket (<...>) includes resolved via the
-    # system/library search path come back as absolute paths. Both project
-    # source passed with an absolute path and project headers pulled in via
-    # an absolute -I are covered by the project_root prefix check.
-    if not file_.startswith("/"):
-        return True
-    return file_.startswith(project_root)
+def _load_file_mapping(path: str) -> frozenset[str]:
+    """The files of ``FileMapping.txt`` (lines ``<id><TAB><path>``), as normalized and as resolved paths."""
+    files: set[str] = set()
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                _, tab, name = line.rstrip("\n").partition("\t")
+                if tab and name:
+                    files.add(os.path.normpath(name))
+                    files.add(os.path.realpath(name))
+    except OSError:
+        pass
+    return frozenset(files)
+
+
+class _Policy:
+    """What is kept: declarations located in files the profiler instrumented, and no type nodes.
+
+    The explorer looks AST nodes up by the files of ``FileMapping.txt`` (the files the LLVM pass registered while
+    instrumenting), so everything located elsewhere is dead weight, wherever it lives: system headers, but also
+    dependencies below the project directory (``_deps`` of a CMake build) and project headers without code. Without a
+    file mapping (not written yet, or empty) the fallback is the project directory.
+
+    Type nodes (``ElaboratedType``, ``TemplateSpecializationType``, ...) have no location and are never queried: the
+    explorer reads types from the ``type`` of the declarations and expressions. Template metaprogramming makes them
+    huge (single type aliases of many GB).
+    """
+
+    def __init__(self, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> None:
+        self.project_root = project_root if project_root.endswith("/") else project_root + "/"
+        self.mapped: frozenset[str] = _load_file_mapping(file_mapping) if file_mapping else frozenset()
+        self.prune_types = prune_types
+        self._cache: dict[str, bool] = {}
+
+    def keeps_file(self, file_: Optional[str]) -> bool:
+        # None means the node's location could not be resolved at all (e.g. a
+        # structural wrapper with no context yet) -- keep rather than risk
+        # dropping project code on an inheritance-resolution edge case.
+        if file_ is None:
+            return True
+        cached = self._cache.get(file_)
+        if cached is None:
+            cached = self._cache[file_] = self._decide(file_)
+        return cached
+
+    def _decide(self, file_: str) -> bool:
+        if self.mapped:
+            # Clang records the file passed on the compile command line, and quote-included headers resolved
+            # relative to it, as relative paths (of the working directory, which the wrapper shares)
+            absolute = file_ if file_.startswith("/") else os.path.join(os.getcwd(), file_)
+            return os.path.normpath(absolute) in self.mapped or os.path.realpath(absolute) in self.mapped
+        # Clang records the file passed on the compile command line, and any
+        # quote-included ("...") header resolved relative to it, as a bare or
+        # relative path (e.g. "main.cpp", "utils.hpp") -- these are always the
+        # project's own files. Angle-bracket (<...>) includes resolved via the
+        # system/library search path come back as absolute paths. Both project
+        # source passed with an absolute path and project headers pulled in via
+        # an absolute -I are covered by the project_root prefix check.
+        if not file_.startswith("/"):
+            return True
+        return file_.startswith(self.project_root)
+
+    def keeps(self, file_: Optional[str], kind: Optional[str]) -> bool:
+        if self.prune_types and isinstance(kind, str) and kind.endswith("Type"):
+            return False
+        return self.keeps_file(file_)
 
 
 def _bake_file(node: dict[str, Any], own_file: Optional[str]) -> None:
@@ -96,14 +148,14 @@ def _bake_file(node: dict[str, Any], own_file: Optional[str]) -> None:
 
 
 def _filter_children(
-    children: list[dict[str, Any]], inherited_file: Optional[str], project_root: str
+    children: list[dict[str, Any]], inherited_file: Optional[str], policy: _Policy
 ) -> list[dict[str, Any]]:
     kept: list[dict[str, Any]] = []
     ctx_file = inherited_file
     for child in children:
         own_file = _own_file(child, ctx_file)
-        if _is_kept(own_file, project_root):
-            _filter_subtree(child, own_file, project_root)
+        if policy.keeps(own_file, child.get("kind")):
+            _filter_subtree(child, own_file, policy)
             kept.append(child)
         # The next sibling's inheritance context advances regardless of
         # whether *this* sibling survived the filter.
@@ -111,11 +163,11 @@ def _filter_children(
     return kept
 
 
-def _filter_subtree(node: dict[str, Any], own_file: Optional[str], project_root: str) -> None:
+def _filter_subtree(node: dict[str, Any], own_file: Optional[str], policy: _Policy) -> None:
     _bake_file(node, own_file)
     children = node.get("inner")
     if children:
-        node["inner"] = _filter_children(children, own_file, project_root)
+        node["inner"] = _filter_children(children, own_file, policy)
 
 
 class _Reader:
@@ -192,7 +244,7 @@ _CONTAINER_HINT = re.compile(r'\{\s*"id"\s*:\s*"[^"]*"\s*,\s*"kind"\s*:\s*"(?:Na
 _HINT_WINDOW = 1024
 
 
-def _stream_children(reader: _Reader, out: TextIO, project_root: str, ctx_file: Optional[str], emit: bool) -> None:
+def _stream_children(reader: _Reader, out: TextIO, policy: _Policy, ctx_file: Optional[str], emit: bool) -> None:
     """Process the elements of an ``inner`` array whose ``[`` was consumed; write the kept ones if ``emit`` is set."""
     first = True
     while True:
@@ -217,12 +269,12 @@ def _stream_children(reader: _Reader, out: TextIO, project_root: str, ctx_file: 
             except _TooLarge:
                 streamed = True
         if streamed:
-            own_file, wrote = _stream_object(reader, out, project_root, ctx_file, emit, sep)
+            own_file, wrote = _stream_object(reader, out, policy, ctx_file, emit, sep)
         else:
             own_file = _own_file(child, ctx_file)
-            wrote = emit and _is_kept(own_file, project_root)
+            wrote = emit and policy.keeps(own_file, child.get("kind"))
             if wrote:
-                _filter_subtree(child, own_file, project_root)
+                _filter_subtree(child, own_file, policy)
                 out.write(sep + json.dumps(child))
             del child
         if wrote:
@@ -232,7 +284,7 @@ def _stream_children(reader: _Reader, out: TextIO, project_root: str, ctx_file: 
 
 
 def _stream_object(
-    reader: _Reader, out: TextIO, project_root: str, ctx_file: Optional[str], emit: bool, sep: str
+    reader: _Reader, out: TextIO, policy: _Policy, ctx_file: Optional[str], emit: bool, sep: str
 ) -> tuple[Optional[str], bool]:
     """Read the object at the reader's position member by member; write it (preceded by ``sep``) if it is kept.
 
@@ -263,19 +315,19 @@ def _stream_object(
         if key == "inner" and not seen_inner and value_start == "[":
             seen_inner = True
             own_file = _own_file(members, ctx_file)
-            keep = emit and _is_kept(own_file, project_root)
+            keep = emit and policy.keeps(own_file, members.get("kind"))
             if keep:
                 _bake_file(members, own_file)
                 out.write(sep + (json.dumps(members)[:-1] + ", " if members else "{") + '"inner": [')
             reader.pos += 1  # "["
-            _stream_children(reader, out, project_root, own_file, keep)
+            _stream_children(reader, out, policy, own_file, keep)
             if keep:
                 out.write("]")
         else:
             (after_inner if seen_inner else members)[key] = reader.decode_value()
     if not seen_inner:
         own_file = _own_file(members, ctx_file)
-        keep = emit and _is_kept(own_file, project_root)
+        keep = emit and policy.keeps(own_file, members.get("kind"))
         if keep:
             _bake_file(members, own_file)
             out.write(sep + json.dumps(members))
@@ -284,7 +336,7 @@ def _stream_object(
     return own_file, keep
 
 
-def filter_ast_stream(source: TextIO, out: TextIO, project_root: str) -> None:
+def filter_ast_stream(source: TextIO, out: TextIO, policy: _Policy) -> None:
     """Prune one or more concatenated top-level JSON objects read from ``source`` and write them to ``out``.
 
     A declaration is held in memory as a whole only if it is small (``_MAX_DECODE``); larger ones are read member by
@@ -292,8 +344,6 @@ def filter_ast_stream(source: TextIO, out: TextIO, project_root: str) -> None:
     """
     # type trees nest deeply, and the pruning of a decoded declaration recurses over them
     sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
-    if not project_root.endswith("/"):
-        project_root += "/"
     reader = _Reader(source)
     first = True
     while (ch := reader.skip_ws()) is not None:
@@ -302,26 +352,27 @@ def filter_ast_stream(source: TextIO, out: TextIO, project_root: str) -> None:
         if not first:
             out.write("\n")
         first = False
-        _stream_object(reader, out, project_root, None, True, "")
+        _stream_object(reader, out, policy, None, True, "")
 
 
-def filter_ast_dump(text: str, project_root: str) -> str:
+def filter_ast_dump(text: str, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> str:
     """Prune one or more concatenated top-level JSON objects given as a string (see ``filter_ast_stream``).
 
     Concatenated objects occur when multiple translation units are dumped
     into the same file (one clang invocation per source file, appended).
     """
     out = io.StringIO()
-    filter_ast_stream(io.StringIO(text), out, project_root)
+    filter_ast_stream(io.StringIO(text), out, _Policy(project_root, file_mapping, prune_types))
     return out.getvalue()
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} <project_root>", file=sys.stderr)
+    args = sys.argv[1:]
+    if len(args) not in (1, 2):
+        print(f"usage: {sys.argv[0]} <project_root> [<FileMapping.txt>]", file=sys.stderr)
         sys.exit(1)
 
-    filter_ast_stream(sys.stdin, sys.stdout, sys.argv[1])
+    filter_ast_stream(sys.stdin, sys.stdout, _Policy(args[0], args[1] if len(args) == 2 else None))
 
 
 if __name__ == "__main__":

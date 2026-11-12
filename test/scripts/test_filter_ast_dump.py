@@ -134,14 +134,14 @@ def test_truncated_input_raises() -> None:
 
 def test_stream_interface() -> None:
     out = io.StringIO()
-    fad.filter_ast_stream(io.StringIO(json.dumps(_translation_unit())), out, ROOT + "/")
+    fad.filter_ast_stream(io.StringIO(json.dumps(_translation_unit())), out, fad._Policy(ROOT + "/"))
     assert len(json.loads(out.getvalue())["inner"]) == 4
 
 
-def _reference(text: str) -> Any:
+def _reference(text: str, policy: Any = None) -> Any:
     """The whole-object algorithm: parse everything, then prune."""
     obj = json.loads(text)
-    obj["inner"] = fad._filter_children(obj["inner"], None, ROOT + "/")
+    obj["inner"] = fad._filter_children(obj["inner"], None, policy or fad._Policy(ROOT))
     return obj
 
 
@@ -211,7 +211,7 @@ def test_large_non_namespace_declaration_is_streamed(monkeypatch: pytest.MonkeyP
     """A class template with a huge, deeply nested ``inner`` tree is never decoded as a whole."""
     deep: dict[str, Any] = {"kind": "Leaf", "loc": {"line": 1}}
     for i in range(300):
-        deep = {"id": str(i), "kind": "ElaboratedType", "loc": {"line": i}, "inner": [deep, {"kind": "Sibling"}]}
+        deep = {"id": str(i), "kind": "Wrapper", "loc": {"line": i}, "inner": [deep, {"kind": "Sibling"}]}
     tu = _translation_unit(1)
     tu["inner"].append(
         {"id": "0xa", "kind": "ClassTemplateDecl", "loc": {"file": ROOT + "/t.hpp", "line": 1}, "inner": [deep]}
@@ -237,3 +237,87 @@ def test_large_non_namespace_declaration_is_streamed(monkeypatch: pytest.MonkeyP
 def test_dropped_namespace_children_are_not_kept() -> None:
     names = [n.get("name") for n in json.loads(fad.filter_ast_dump(json.dumps(_namespace_dump()), ROOT))["inner"]]
     assert "std" not in names and "app" in names and "empty" in names
+
+
+def _mapping(tmp_path: Any, *files: str) -> str:
+    path = tmp_path / "FileMapping.txt"
+    path.write_text("".join(f"{i}\t{f}\n" for i, f in enumerate(files, 1)))
+    return str(path)
+
+
+def test_keeps_only_mapped_files(tmp_path: Any) -> None:
+    """Files below the project directory that the profiler did not map (dependencies, headers) are dropped."""
+    mapping = _mapping(tmp_path, ROOT + "/main.cpp", ROOT + "/./sub/../a.hpp")
+    tu = _translation_unit(0)
+    tu["inner"].append({"kind": "FunctionDecl", "loc": {"file": ROOT + "/_deps/boost/x.hpp", "line": 1}})
+    tu["inner"].append({"kind": "FunctionDecl", "loc": {"file": ROOT + "/a.hpp", "line": 1}})
+    out = json.loads(fad.filter_ast_dump(json.dumps(tu), ROOT, mapping))
+    files = [(n.get("loc") or {}).get("file") for n in out["inner"]]
+    assert ROOT + "/_deps/boost/x.hpp" not in files
+    # main.cpp (mapped) and a.hpp (mapped, after normalization of its entry) stay; util.hpp is relative to the working
+    # directory and not mapped
+    assert ROOT + "/main.cpp" in files and ROOT + "/a.hpp" in files and "util.hpp" not in files
+
+
+def test_relative_paths_are_resolved_against_the_working_directory(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    mapping = _mapping(tmp_path, str(tmp_path / "util.hpp"))
+    tu = _translation_unit(0)
+    out = json.loads(fad.filter_ast_dump(json.dumps(tu), str(tmp_path), mapping))
+    assert [(n["loc"].get("file")) for n in out["inner"] if n["kind"] == "VarDecl" and "file" in n["loc"]] == [
+        "util.hpp",
+        "util.hpp",  # the second declaration inherits the file, which is baked in
+    ]
+
+
+@pytest.mark.parametrize("content", [None, ""])
+def test_without_file_mapping_the_project_directory_decides(tmp_path: Any, content: Any) -> None:
+    mapping = str(tmp_path / "absent.txt")
+    if content is not None:
+        (tmp_path / "FileMapping.txt").write_text(content)
+        mapping = str(tmp_path / "FileMapping.txt")
+    plain = fad.filter_ast_dump(json.dumps(_translation_unit()), ROOT)
+    assert fad.filter_ast_dump(json.dumps(_translation_unit()), ROOT, mapping) == plain
+
+
+def test_type_nodes_are_pruned() -> None:
+    func = {
+        "id": "0xf",
+        "kind": "FunctionDecl",
+        "loc": {"file": ROOT + "/m.cpp", "line": 1},
+        "type": {"qualType": "int (int)"},
+        "inner": [
+            {
+                "kind": "ParmVarDecl",
+                "loc": {"line": 1},
+                "inner": [{"kind": "BuiltinType", "type": {"qualType": "int"}}],
+            },
+            {"kind": "ElaboratedType", "inner": [{"kind": "TemplateArgument", "inner": [{"kind": "RecordType"}]}]},
+            {"kind": "CompoundStmt", "loc": {"line": 2}},
+        ],
+    }
+    tu = {"id": "0x1", "kind": "TranslationUnitDecl", "loc": {}, "inner": [func]}
+    out = json.loads(fad.filter_ast_dump(json.dumps(tu), ROOT))["inner"][0]
+    assert out["type"] == {"qualType": "int (int)"}
+    assert [c["kind"] for c in out["inner"]] == ["ParmVarDecl", "CompoundStmt"]
+    assert "inner" not in out["inner"][0] or out["inner"][0]["inner"] == []
+    kept = json.loads(fad.filter_ast_dump(json.dumps(tu), ROOT, prune_types=False))["inner"][0]
+    assert [c["kind"] for c in kept["inner"]] == ["ParmVarDecl", "ElaboratedType", "CompoundStmt"]
+
+
+@pytest.mark.parametrize("max_decode", [64 << 20, 1])
+def test_type_pruning_in_streamed_declarations(monkeypatch: pytest.MonkeyPatch, max_decode: int) -> None:
+    monkeypatch.setattr(fad, "_MAX_DECODE", max_decode)
+    monkeypatch.setattr(fad._Reader, "_MIN_CHUNK", 16)
+    alias = {
+        "id": "0xa",
+        "kind": "TypeAliasDecl",
+        "loc": {"file": ROOT + "/t.hpp", "line": 1},
+        "inner": [{"kind": "ElaboratedType", "inner": [{"kind": "TemplateSpecializationType", "inner": []}]}] * 5,
+    }
+    ns = {"id": "0xb", "kind": "NamespaceDecl", "loc": {"file": ROOT + "/t.hpp", "line": 1}, "inner": [alias]}
+    tu = {"id": "0x1", "kind": "TranslationUnitDecl", "loc": {}, "inner": [ns]}
+    out = json.loads(fad.filter_ast_dump(json.dumps(tu, indent=1), ROOT))
+    assert out["inner"][0]["inner"][0]["inner"] == []

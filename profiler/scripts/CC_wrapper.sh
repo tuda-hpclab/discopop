@@ -110,7 +110,7 @@ AST_TMP="$(mktemp "$TMP_DOT_DISCOPOP/profiler/ast_dump.XXXXXX")" || exit 1
 trap 'rm -f -- "$AST_TMP"' EXIT
 set -o pipefail
 ${LLVM_CLANG} "$@" -fsyntax-only -Xclang -ast-dump=json |
-  python3 "${PARENT_PATH}/filter_ast_dump.py" "${PROJECT_ROOT}" > "$AST_TMP"
+  python3 "${PARENT_PATH}/filter_ast_dump.py" "${PROJECT_ROOT}" "$TMP_DOT_DISCOPOP/FileMapping.txt" > "$AST_TMP"
 ast_status=$?
 if [ "$ast_status" -ne 0 ]; then
   exit "$ast_status"
