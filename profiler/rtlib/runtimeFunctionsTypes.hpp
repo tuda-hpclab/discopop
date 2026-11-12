@@ -14,8 +14,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <future>
+#include <iostream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <set>
@@ -28,6 +31,7 @@
 #include "DPTypes.hpp"
 #include "functions/FunctionManager.hpp"
 #include "loop/LoopManager.hpp"
+#include "memory/PerfectShadow.hpp"
 #include "memory/ShadowMemory.hpp"
 
 namespace dp {
@@ -151,11 +155,142 @@ using ReportedBBSet = std::unordered_set<ReportedBB, ReportedBBHasher>;
 // capacity, at most half full), which makes that lookup much cheaper than one
 // in a std::unordered_set. The entries are only needed as a set at
 // termination, see get_executions.
+//
+// In front of the table, every sink state has a small direct mapped cache of
+// the executions recorded in it, indexed by the low bits of the block index:
+// a state sees only the reporting blocks of its function, which have
+// consecutive indices, so the cache answers nearly every report with one
+// comparison. Keying the cache by the state rather than by the block matters:
+// a block in a loop executes in a cycle of iteration states (the iteration
+// counters wrap around), which a cache per block never matched.
+//
+// A state's cache is a table of kStateCacheSize = 64 entries of 8 bytes,
+// taken at its first report from a pool, in which the tables of the states lie
+// next to each other in the order of their first reports. The memory of the
+// caches never exceeds the allowance BB_REPORT_CACHE_MB of dp.conf (default
+// 50 MiB, 0 turns the caches off): the table pointer per state id, sized at
+// startup for all callpath states (the caches are off with a warning if the
+// allowance cannot hold it and one table), and the pool of tables with their
+// owners, reserved at once from the rest. At the limit, a state without a
+// table goes without one (its reports cost lookups in the hash table), so
+// the states with tables keep their hits; when such reports pile up, the
+// states in use have changed (e.g. another phase of the program) and all
+// tables are discarded, to be taken by the states reporting next (see
+// CacheInState). Discarding the table of another state, round robin, at
+// every report of a state without a table was slower than no caches at all
+// when far more states were active than tables existed. With the default,
+// about 100000 states get a table; measured on 640M (LULESH -s 10, 8974 states with reports)
+// resp. 2.2G reports (miniFE 32^3, 17980 states), of which 52k resp. 49k were
+// distinct, the caches used 4.6 resp. 9.2 MB and answered 88% resp. 99% of
+// the reports. A cache growing up to 1024 entries for states with many
+// reporting blocks (LULESH has up to 217 in one state) would answer 95% on
+// LULESH and nothing more on miniFE; it was left out, as the extra misses
+// cost LULESH below 0.5% of its run time, while the size every report would
+// have to load costs all of them. A single direct mapped cache for all states
+// (groups of 64 entries selected by the low bits of the state id) was 3-4%
+// slower than these tables.
 class ReportedBBRecorder {
  public:
-  ReportedBBRecorder() : slots_(kInitialCapacity) {}
+  static constexpr std::size_t kDefaultCacheBytes = std::size_t{50} << 20;
+
+  static constexpr std::size_t kDefaultStateIds = std::size_t{1} << 16;
+
+  // cache_bytes: the allowance of the caches in front of the table; state_ids: the number of callpath state ids
+  // (the states with higher ids get no cache), see the class comment
+  explicit ReportedBBRecorder(std::size_t cache_bytes = kDefaultCacheBytes, std::size_t state_ids = kDefaultStateIds)
+      : slots_(kInitialCapacity) {
+    const std::size_t pointer_bytes = state_ids * sizeof(CacheEntry*);
+    if (cache_bytes < pointer_bytes + kBytesPerTable) {
+      std::cerr << CachesOffWarning(cache_bytes, state_ids);
+      return;
+    }
+    table_of_state_.assign(state_ids, nullptr);
+    const std::size_t tables = (cache_bytes - pointer_bytes) / kBytesPerTable;
+    // reserved only: the pages become resident when the tables are taken, and the tables never move
+    tables_.reserve(tables * kStateCacheSize);
+    owners_.reserve(tables);
+  }
+
+  // The allowance in MiB the caches of a program with the given number of callpath states should get: the table
+  // pointers of all states and tables for one in kStatesPerTableEstimate of them (LULESH and miniFE report in 4-5%
+  // of their states), at least the default.
+  static std::size_t RecommendedCacheMb(std::size_t state_ids) {
+    const std::size_t bytes =
+        state_ids * sizeof(CacheEntry*) + (state_ids / kStatesPerTableEstimate + 1) * kBytesPerTable;
+    return std::max((bytes + (std::size_t{1} << 20) - 1) >> 20, kDefaultCacheBytes >> 20);
+  }
+
+  // what the runtime prints when the allowance cannot hold the table pointers and one table
+  static std::string CachesOffWarning(std::size_t cache_bytes, std::size_t state_ids) {
+    const std::size_t minimum_mb =
+        (state_ids * sizeof(CacheEntry*) + kBytesPerTable + (std::size_t{1} << 20) - 1) >> 20;
+    const std::string recommended = std::to_string(RecommendedCacheMb(state_ids));
+    return "DiscoPoP: warning: the caches of the basic block reports are turned off: the program has " +
+           std::to_string(state_ids) + " callpath states, for which they need " + std::to_string(minimum_mb) +
+           " MiB at least, but their allowance is " + std::to_string(cache_bytes >> 20) +
+           " MiB. This slows down the profiling. To turn them on, set the allowance to " + recommended +
+           " MiB (an estimate; the caches may take that much memory): BB_REPORT_CACHE_MB=" + recommended +
+           " in the file dp.conf next to the executable, or the environment variable DP_BB_REPORT_CACHE_MB=" +
+           recommended + ", which takes precedence.\n";
+  }
 
   inline void Record(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
+    if (sink_state < table_of_state_.size()) {
+      const CacheEntry* table = table_of_state_[sink_state];
+      if (table != nullptr) {
+        const CacheEntry& entry = table[bb_index & (kStateCacheSize - 1)];
+        if (entry.bb_index == bb_index && entry.source_state == source_state) {
+          return;
+        }
+      }
+    }
+    RecordInTable(bb_index, source_state, sink_state);
+  }
+
+  // the memory the caches occupy at most (the reserved pool included), never more than their allowance
+  std::size_t CacheBytes() const {
+    return table_of_state_.capacity() * sizeof(CacheEntry*) + owners_.capacity() * sizeof(std::uint32_t) +
+           tables_.capacity() * sizeof(CacheEntry);
+  }
+
+  // how often the tables were discarded at the limit, see the class comment
+  std::size_t CacheResets() const { return cache_resets_; }
+
+  std::size_t size() const { return count_; }
+
+  ReportedBBSet GetExecutions() const {
+    ReportedBBSet executions;
+    executions.reserve(count_);
+    for (const Slot& slot : slots_) {
+      if (slot.used) {
+        executions.insert(ReportedBB{slot.bb_index, static_cast<std::uint32_t>(slot.states >> 32),
+                                     static_cast<std::uint32_t>(slot.states & 0xFFFFFFFF)});
+      }
+    }
+    return executions;
+  }
+
+ private:
+  static constexpr std::size_t kInitialCapacity = 1024;
+  static constexpr std::size_t kStateCacheSize = 64;  // entries per state, a power of two (see the class comment)
+  static constexpr std::size_t kResetFactor = 4;      // see CacheInState
+  static constexpr std::size_t kStatesPerTableEstimate = 16;  // see RecommendedCacheMb
+  struct CacheEntry {
+    std::uint32_t bb_index = ~std::uint32_t{0};  // no block has this index
+    std::uint32_t source_state = 0;
+  };
+  // a table and its owner
+  static constexpr std::size_t kBytesPerTable = kStateCacheSize * sizeof(CacheEntry) + sizeof(std::uint32_t);
+  struct Slot {
+    std::uint64_t states = 0;
+    std::uint32_t bb_index = 0;
+    bool used = false;
+  };
+
+  // the execution was not in the sink state's cache: records it in the table and in the cache
+  [[gnu::noinline]] void RecordInTable(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
+    CacheInState(bb_index, source_state, sink_state);
+
     const std::uint64_t states = (static_cast<std::uint64_t>(source_state) << 32) | sink_state;
     const std::size_t mask = slots_.size() - 1;
     for (std::size_t pos = SlotOf(bb_index, states) & mask;; pos = (pos + 1) & mask) {
@@ -175,27 +310,45 @@ class ReportedBBRecorder {
     }
   }
 
-  std::size_t size() const { return count_; }
-
-  ReportedBBSet GetExecutions() const {
-    ReportedBBSet executions;
-    executions.reserve(count_);
-    for (const Slot& slot : slots_) {
-      if (slot.used) {
-        executions.insert(ReportedBB{slot.bb_index, static_cast<std::uint32_t>(slot.states >> 32),
-                                     static_cast<std::uint32_t>(slot.states & 0xFFFFFFFF)});
+  // remembers the execution in the cache of the sink state, taking a table for the state if it has none
+  void CacheInState(std::uint32_t bb_index, std::uint32_t source_state, std::uint32_t sink_state) {
+    if (sink_state >= table_of_state_.size()) {
+      return;  // the caches are turned off, or the state id is out of the range they were sized for
+    }
+    CacheEntry*& table = table_of_state_[sink_state];
+    if (table == nullptr) {
+      if (owners_.size() < owners_.capacity()) {
+        owners_.push_back(sink_state);
+        tables_.resize(tables_.size() + kStateCacheSize);  // within the reserved capacity: no table moves
+        table = tables_.data() + tables_.size() - kStateCacheSize;
+      } else {
+        // At the limit, a state without a table goes without one, so the states with tables keep their hits.
+        // When such reports pile up (more than a refill of all tables would cost, times kResetFactor), the states
+        // in use have changed, e.g. the program entered another phase: all tables are discarded, and the states
+        // reporting next take them.
+        if (!limit_reached_) {
+          limit_reached_ = true;
+          std::cerr << "DiscoPoP: the caches of the basic block reports reached their allowance (BB_REPORT_CACHE_MB in "
+                       "dp.conf), which slows down the profiling\n";
+        }
+        if (++reports_without_table_ > kResetFactor * owners_.size() * kStateCacheSize) {
+          DiscardTables();
+        }
+        return;
       }
     }
-    return executions;
+    table[bb_index & (kStateCacheSize - 1)] = CacheEntry{bb_index, source_state};
   }
 
- private:
-  static constexpr std::size_t kInitialCapacity = 1024;
-  struct Slot {
-    std::uint64_t states = 0;
-    std::uint32_t bb_index = 0;
-    bool used = false;
-  };
+  void DiscardTables() {
+    for (const std::uint32_t owner : owners_) {
+      table_of_state_[owner] = nullptr;
+    }
+    owners_.clear();
+    tables_.clear();  // keeps the capacity: the tables are taken from the start of the pool again
+    reports_without_table_ = 0;
+    ++cache_resets_;
+  }
 
   static inline std::size_t SlotOf(std::uint32_t bb_index, std::uint64_t states) {
     std::uint64_t h = states * 0x9E3779B97F4A7C15ULL ^ (static_cast<std::uint64_t>(bb_index) * 0xC2B2AE3D27D4EB4FULL);
@@ -223,6 +376,13 @@ class ReportedBBRecorder {
 
   std::vector<Slot> slots_;
   std::size_t count_ = 0;
+  // the caches, see the class comment
+  std::vector<CacheEntry*> table_of_state_;  // per state id: its table in tables_, or nullptr; empty: no caches
+  std::vector<std::uint32_t> owners_;        // per table: the state using it; the capacity is the number of tables
+  std::vector<CacheEntry> tables_;           // kStateCacheSize entries per table, capacity reserved at once
+  std::size_t reports_without_table_ = 0;    // at the limit, since the tables were taken
+  std::size_t cache_resets_ = 0;
+  bool limit_reached_ = false;
 };
 // End HA
 
@@ -236,14 +396,16 @@ class FirstAccessQueueChunk {
 
   std::future<std::vector<AccessInfo>*> GetEntryFuture() { return entry_boundary_first_addr_accesses.get_future(); }
 
-  std::future<AbstractShadow*> GetExitFuture() { return exit_boundary_smem.get_future(); }
+  std::future<std::vector<AddressRecord>*> GetExitFuture() { return exit_boundary_summary.get_future(); }
 
   inline std::vector<AccessInfo>* GetBuffer() { return &buffer_; }
 
   inline std::size_t GetElementCount() const { return element_count_; }
 
+  // grouped by address, in the order of the records of exit_boundary_summary (GroupEntryAccessesByAddress)
   std::promise<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
-  std::promise<AbstractShadow*> exit_boundary_smem;
+  // one record per address the chunk touched: the state its last access left, and its number of entry accesses
+  std::promise<std::vector<AddressRecord>*> exit_boundary_summary;
 
  private:
   std::vector<AccessInfo> buffer_;
@@ -254,13 +416,13 @@ class FirstAccessQueueChunk {
 class SecondAccessQueueElement {
  public:
   SecondAccessQueueElement(std::future<std::vector<AccessInfo>*> fut_first_addr_accesses,
-                           std::future<AbstractShadow*> fut_exit_smem) {
+                           std::future<std::vector<AddressRecord>*> fut_exit_summary) {
     entry_boundary_first_addr_accesses = std::move(fut_first_addr_accesses);
-    exit_boundary_smem = std::move(fut_exit_smem);
+    exit_boundary_summary = std::move(fut_exit_summary);
   }
 
   std::future<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
-  std::future<AbstractShadow*> exit_boundary_smem;
+  std::future<std::vector<AddressRecord>*> exit_boundary_summary;
 };
 
 class SecondAccessQueue {

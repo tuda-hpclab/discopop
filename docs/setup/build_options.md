@@ -45,7 +45,7 @@ These options are compiled into the profiler and affect all programs instrumente
 | Option | Default | Description |
 |---|---|---|
 | `DP_NUM_WORKERS` | not set (the runtime uses 4) | Number of worker threads of the runtime library that analyze the memory accesses during profiling. `0` disables the worker threads. Can be changed per program without rebuilding via `NUM_WORKERS` in [`dp.conf`](./environment_variables.md#runtime-settings-dpconf). |
-| `DP_HYBRID_PROFILING` | `1` | Hybrid profiling: the static analysis of the LLVM pass omits instrumentation that is not needed. `0` instruments everything and slows down the profiling. |
+| `DP_HYBRID_PROFILING` | `1` | Hybrid profiling: the static analysis of the LLVM pass omits instrumentation that is not needed. `0` instruments everything and slows down the profiling. With it, the runtime keeps caches of the reported basic block executions, bounded by `BB_REPORT_CACHE_MB` in [dp.conf](./environment_variables.md#runtime-settings-dpconf). |
 | `DP_BRANCH_TRACKING` | `0` | Adds instrumentation that counts the taken branches (used by the optimizer). Slows down the profiling. |
 | `DP_PTHREAD_COMPATIBILITY_MODE` | `0` | `1` serializes the calls to the runtime functions. Set it if the profiled application uses Pthreads. Slows down the profiling. |
 
@@ -54,6 +54,7 @@ These options are compiled into the profiler and affect all programs instrumente
 | Option | Default | Description |
 |---|---|---|
 | `DP_RTLIB_VERBOSE` | `0` | `1` makes the runtime library print debugging output during profiling. |
+| `DP_DEBUG` | `0` | `1` builds the debug output that the runtime prints for every memory access, function entry and exit and loop iteration when `DP_DEBUG` is set in `dp.conf`. Without it, the check costs the profiling about 2%. |
 | `DP_INTERNAL_TIMER` | `0` | `1` measures the time spent in the functions of the runtime library. Slows down the profiling. |
 | `DP_BUILD_UNITTESTS` | `0` | `1` builds the C++ unit tests and the benchmarks (targets `DiscoPoP_UT`, `DiscoPoP_Pass_UT`, `DiscoPoP_BM`) and the benchmark variants of the runtime. |
 | `DP_SANITIZERS` | empty | Value for `-fsanitize=`, e.g. `address,undefined` or `thread`. Instruments the runtime library and everything linking it (the unit tests). The LLVM pass is not sanitized. `thread` cannot be combined with `address`, `leak` or `memory`. |

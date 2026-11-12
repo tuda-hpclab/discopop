@@ -64,10 +64,6 @@ void ReleaseRegisteredBbDeps() {
   }
 }
 
-std::uint32_t CurrentCallpathStateIdForBbReports() {
-  return current_callpath_state == nullptr ? 0 : static_cast<std::uint32_t>(current_callpath_state->GetId());
-}
-
 namespace {
 
 // One dependency of a handed over dependency string,

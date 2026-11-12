@@ -110,6 +110,7 @@ file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/asse
 file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_HYBRID_PROFILING=\"${DP_HYBRID_PROFILING}\"\n")
 file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_PTHREAD_COMPATIBILITY_MODE=\"${DP_PTHREAD_COMPATIBILITY_MODE}\"\n")
 file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_RTLIB_VERBOSE=\"${DP_RTLIB_VERBOSE}\"\n")
+file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_DEBUG=\"${DP_DEBUG}\"\n")
 file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_NUM_WORKERS=\"${DP_NUM_WORKERS}\"\n")
 file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_INTERNAL_TIMER=\"${DP_INTERNAL_TIMER}\"\n")
 file(APPEND "${DiscoPoP_SOURCE_DIR}/library/discopop_library/ConfigProvider/assets/build_config.py" "DP_BRANCH_TRACKING=\"${DP_BRANCH_TRACKING}\"\n")
