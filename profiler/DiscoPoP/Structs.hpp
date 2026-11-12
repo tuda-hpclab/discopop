@@ -81,8 +81,8 @@ struct Node {
   // isRecursive function (Mo 5.11.2019)
   std::string recursive_function_call = "";
 
-  Node() {
-    id = std::to_string(file_id) + ":" + std::to_string(cu_id_counter++);
+  explicit Node(unsigned int node_id) {
+    id = std::to_string(file_id) + ":" + std::to_string(node_id);
     parent_node = nullptr;
     bb = nullptr;
   }
@@ -116,18 +116,13 @@ struct CU : Node {
   // Map to record function call instruction ids
   std::map<LID, std::vector<llvm::Instruction*>> call_line_to_call_instruction_map;
 
-  CU() {
+  explicit CU(unsigned int node_id) : Node(node_id) {
     type = NodeTypes::kCu;
     read_data_size = 0;
     write_data_size = 0;
     instructions_count = 0;
     // BB = NULL;
     performs_file_io = false;
-  }
-
-  void RemoveCu() {
-    cu_id_counter--;  // if a CU does not contain any instruction, e.g. entry
-                      // basic blocks, then remove it.
   }
 };
 

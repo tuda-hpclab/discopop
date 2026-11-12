@@ -88,37 +88,16 @@ bool DiscoPoP::DoInitialization(Module& m) {
 
   file_id_cache.clear();
 
-  // InstructionID assignment
-  {
-    // required for consecutive and unique assignment of instructionIDs across multiple modules.
-    instruction_id_counter = 1;  // Reserve values 0 for "fallthrough" and 1 for "return"
-    InitializeInstructionIdCounter();
-    // instructionID assignment
-    unique_llvm_ir_instruction_id_ = instruction_id_counter + 1;
-  }
-
-  // CallpathStateID assignment
-  {
-    // Unlike InstructionIDCounter above, the persisted CallpathStateIDCounter holds the next FREE
-    // id rather than the last used one (runOnModule stores the path tree's next free id), so it is
-    // used as-is. A value of 0 means no module has been processed yet; ids then start at 1, as 0 is
-    // reserved for debugging and initialization purposes.
-    callpath_state_id_counter = 0;
-    InitializeCallpathStateIdCounter();
-    if (callpath_state_id_counter == 0) {
-      unique_callpath_state_id_ = 1;
-    } else {
-      unique_callpath_state_id_ = callpath_state_id_counter;
-    }
-  }
+  InitializeInstructionIdCounter();
+  InitializeCallpathStateIdCounter();
+  InitializeBBDepCounter();
+  InitializeStaticMemoryRegionIDCounter();
+  InitializeCuIdCounter();
 
   // CUGeneration
   {
-    cu_id_counter = 0;
     default_is_global_variable_value = false;
     this_module_ = &m;
-
-    InitializeCuIdCounter();
 
     for (Module::global_iterator i = this_module_->global_begin(); i != this_module_->global_end(); i++) {
       Value* global_variable = dyn_cast<Value>(i);

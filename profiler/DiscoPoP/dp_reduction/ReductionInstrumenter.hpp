@@ -25,6 +25,7 @@
 #include "llvm/IR/PassManager.h"
 
 #include "Structs.hpp"
+#include "utils/profiler_files.hpp"
 
 namespace dp_reduction {
 
@@ -62,6 +63,7 @@ class ReductionInstrumenter {
 
   llvm::Module& module_;
   Services services_;
+  profiler_files::FileLock reduction_file_lock_;
   std::ofstream reduction_file_;
   std::vector<LoopInfoT> loops_;
   std::vector<InstrInfoT> instructions_;

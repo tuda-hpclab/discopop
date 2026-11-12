@@ -28,6 +28,7 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include "Globals.hpp"
+#include "DiscoPoP.hpp"
 #include "hybrid_analysis/InstructionCFG.hpp"
 #include "hybrid_analysis/InstructionDG.hpp"
 #include "llvm_compat.hpp"
@@ -65,18 +66,6 @@ using llvm::Value;
 constexpr bool kDumpToDot = false;
 constexpr bool kDpHybridDebug = false;
 
-// reads a counter persisted by an earlier module (see HybridAnalysis::finalize)
-template <typename T>
-static void ReadCounter(const std::string& name, T& value) {
-  std::string counter_file(dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler"));
-  counter_file += "/" + name;
-  if (dputil::FileExists(counter_file)) {
-    std::fstream in_counter(counter_file, std::ios_base::in);
-    in_counter >> value;
-    in_counter.close();
-  }
-}
-
 // Returns the instruction before which the hybrid analysis reports an execution
 // of BB (__dp_report_bb / __dp_report_bb_pair) or records it in a semaphore
 // (__dp_bb_state): the terminator, but in front of the instrumentation of a
@@ -106,12 +95,6 @@ static Instruction* GetHybridReportInsertionPoint(BasicBlock* bb) {
 HybridAnalysis::HybridAnalysis(Module& m) {
   Type* void_type = Type::getVoidTy(m.getContext());
   int32_ = Type::getInt32Ty(m.getContext());
-
-  bb_dep_count = 0;
-  ReadCounter("DP_BBDepCounter.txt", bb_dep_count);
-
-  next_free_static_memory_region_id_ = 0;
-  ReadCounter("DP_StaticMemoryRegionIDCounter.txt", next_free_static_memory_region_id_);
 
   report_bb_ = m.getOrInsertFunction("__dp_report_bb", void_type, int32_);
   report_bb_pair_ = m.getOrInsertFunction("__dp_report_bb_pair", void_type, int32_, int32_);
@@ -196,7 +179,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
   std::string original_var_name;
   std::string static_memory_region_id;
   for (auto v : statically_predictable_values) {
-    next_id = next_free_static_memory_region_id_++;
+    next_id = DiscoPoP::GetNextStaticMemoryRegionId();
     llvm_ir_var_name = vnf_->GetVarName(v);
     // Note: Using variables names as keys is only possible at this point,
     // since the map is created for each function individually. Thus, we can
@@ -331,14 +314,15 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
   for (const auto& pair : conditional_bb_dep_map) {
     // Insert call to reportbb
     Instruction* insertion_point = GetHybridReportInsertionPoint(pair.first);
-    CallInst::Create(report_bb_, ConstantInt::get(int32_, bb_dep_count), "", insertion_point->getIterator());
+    const uint32_t dependency_id = DiscoPoP::GetNextBBDepId();
+    CallInst::Create(report_bb_, ConstantInt::get(int32_, dependency_id), "", insertion_point->getIterator());
 
     // ---- Insert deps into string ----
-    if (bb_dep_count) {
+    if (dependency_id) {
       bb_dep_string_ += "/";
     }
     bool first = true;
-    bb_dep_string_ += std::to_string(bb_dep_count) + "=";
+    bb_dep_string_ += std::to_string(dependency_id) + "=";
     for (const auto& dep : pair.second) {
       if (!first) {
         bb_dep_string_ += ",";
@@ -347,7 +331,6 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
       first = false;
     }
     // ---------------------------------
-    ++bb_dep_count;
   }
 
   // Add observation of in-order execution of pairs of basic blocks
@@ -399,13 +382,14 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
     if (reports != reports_of_block.end()) {
       for (auto& report : reports->second) {
         auto li = new LoadInst(int32_, report.first, Twine(""), false, insertion_point->getIterator());
-        CallInst::Create(report_bb_pair_, ArrayRef<Value*>({li, ConstantInt::get(int32_, bb_dep_count)}), "",
+        const uint32_t dependency_id = DiscoPoP::GetNextBBDepId();
+        CallInst::Create(report_bb_pair_, ArrayRef<Value*>({li, ConstantInt::get(int32_, dependency_id)}), "",
                          insertion_point->getIterator());
         // ---- Insert deps into string ----
-        if (bb_dep_count) {
+        if (dependency_id) {
           bb_dep_string_ += "/";
         }
-        bb_dep_string_ += std::to_string(bb_dep_count);
+        bb_dep_string_ += std::to_string(dependency_id);
         bb_dep_string_ += "=";
         bool first = true;
         for (auto& dep : *report.second) {
@@ -416,7 +400,6 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
           first = false;
         }
         // ----------------------------------
-        ++bb_dep_count;
       }
     }
     if (isa<ReturnInst>(bb.getTerminator())) {
@@ -525,6 +508,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
   // of a conditional reduction - and a lost dependency is what produces a
   // wrong suggestion. An over-approximated one only costs a suggestion.
 
+  profiler_files::FileLock static_dependency_lock("static_dependencies.txt");
   std::ofstream static_dependency_file = profiler_files::Open("static_dependencies.txt");
 
   for (const auto& pair : conditional_bb_dep_map) {
@@ -574,9 +558,5 @@ void HybridAnalysis::Finalize(Module& m) {
     builder.CreateRetVoid();
     appendToGlobalCtors(m, registration, 0);
   }
-  // write the current count of BBs to a file to avoid duplicate BBids
-  profiler_files::WriteCounter("DP_BBDepCounter.txt", bb_dep_count);
-  // write the next free static memory region id to avoid duplicate ids between modules
-  profiler_files::WriteCounter("DP_StaticMemoryRegionIDCounter.txt", next_free_static_memory_region_id_);
 }
 // DPInstrumentationOmission end

@@ -97,5 +97,24 @@ fi
 # projects bloats ast_dump.json to multiple GB even though pattern detection
 # only ever queries project source locations. Filter it down before writing.
 PROJECT_ROOT="$(dirname "${TMP_DOT_DISCOPOP}")"
-${LLVM_CLANGPP} "$@" -fsyntax-only -Xclang -ast-dump=json | python3 "${PARENT_PATH}/filter_ast_dump.py" "${PROJECT_ROOT}" >> "$TMP_DOT_DISCOPOP/profiler/ast_dump.json"
+mkdir -p "$TMP_DOT_DISCOPOP/profiler/locking_files" || exit 1
+AST_TMP="$(mktemp "$TMP_DOT_DISCOPOP/profiler/ast_dump.XXXXXX")" || exit 1
+trap 'rm -f -- "$AST_TMP"' EXIT
+set -o pipefail
+${LLVM_CLANGPP} "$@" -fsyntax-only -Xclang -ast-dump=json |
+  python3 "${PARENT_PATH}/filter_ast_dump.py" "${PROJECT_ROOT}" > "$AST_TMP"
+ast_status=$?
+if [ "$ast_status" -ne 0 ]; then
+  exit "$ast_status"
+fi
+
+AST_FILE="$TMP_DOT_DISCOPOP/profiler/ast_dump.json"
+AST_LOCK="$TMP_DOT_DISCOPOP/profiler/locking_files/ast_dump.json.lock"
+exec {AST_LOCK_FD}>"$AST_LOCK" || exit 1
+flock -x "$AST_LOCK_FD" || exit 1
+cat "$AST_TMP" >> "$AST_FILE"
+append_status=$?
+flock -u "$AST_LOCK_FD"
+exec {AST_LOCK_FD}>&-
+exit "$append_status"
 # WARNING: OUTPUT IS A .ll FILE, ENDING IS .o

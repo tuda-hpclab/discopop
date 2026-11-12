@@ -42,6 +42,8 @@ add_library(DiscoPoP_PassObjects OBJECT
         initialization/initializeCUIDCounter.cpp
         initialization/initializeInstructionIDCounter.cpp
         initialization/initializeCallpathStateIDCounter.cpp
+        initialization/initializeBBDepCounter.cpp
+        initialization/initializeStaticMemoryRegionIDCounter.cpp
 
         llvm_hooks/doInitialization.cpp
         llvm_hooks/doFinalization.cpp

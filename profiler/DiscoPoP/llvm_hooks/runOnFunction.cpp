@@ -127,7 +127,7 @@ bool DiscoPoP::RunOnFunction(Function& f, ModuleAnalysisManager& mam) {
   FunctionCUGraph graph;
   // Created before fileID is set below: the ID of the function node holds the file id of the
   // function processed before (0 for the first one), as it always did in Data.xml.
-  graph.root = new Node;
+  graph.root = new Node(GetNextCuId());
 
   file_id = GetCachedFileId(f);
 

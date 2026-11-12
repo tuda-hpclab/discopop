@@ -14,8 +14,9 @@
 
 #include <string>
 
-StaticCallPathTreeNode* StaticCallPathTreeNode::GetOrRegisterSuccessor(StaticCallPathTree* tree,
-                                                                       StaticCalltreeNode* successor_node) {
+#include "DiscoPoP.hpp"
+
+StaticCallPathTreeNode* StaticCallPathTreeNode::GetOrRegisterSuccessor(StaticCalltreeNode* successor_node) {
   const std::lock_guard<std::mutex> lg(mtx);
   // search for successor
   for (auto succ : successors) {
@@ -24,7 +25,7 @@ StaticCallPathTreeNode* StaticCallPathTreeNode::GetOrRegisterSuccessor(StaticCal
     }
   }
   // register successor
-  StaticCallPathTreeNode* new_node = new StaticCallPathTreeNode(tree->GetNextFreePathId(), successor_node, this);
+  StaticCallPathTreeNode* new_node = new StaticCallPathTreeNode(DiscoPoP::GetNextFreePathId(), successor_node, this);
   successors.push_back(new_node);
   return new_node;
 }
@@ -64,14 +65,7 @@ void StaticCallPathTreeNode::RegisterTransition(int32_t trigger_instruction_id, 
 }
 
 StaticCallPathTree::StaticCallPathTree() {
-  root = new StaticCallPathTreeNode(GetNextFreePathId(), nullptr);
-  RegisterNodeInAllNodes(root);
-}
-
-StaticCallPathTree::StaticCallPathTree(std::uint32_t start_path_id) {
-  // start counting paths from start_path_id
-  next_free_path_id_ = start_path_id;
-  root = new StaticCallPathTreeNode(GetNextFreePathId(), nullptr);
+  root = new StaticCallPathTreeNode(DiscoPoP::GetNextFreePathId(), nullptr);
   RegisterNodeInAllNodes(root);
 }
 
@@ -84,19 +78,5 @@ std::string StaticCallPathTree::ToDotString() const {
   result += "}\n";
   return result;
 }
-
-std::uint32_t StaticCallPathTree::GetNextFreePathId() {
-  /*std::uint32_t buffer;
-  {
-      //std::lock_guard<std::mutex> lg(next_free_path_id_mtx);
-      buffer = next_free_path_id;
-      ++next_free_path_id;
-  }
-  return buffer;
-  */
-  return next_free_path_id_.fetch_add(1);
-}
-
-std::uint32_t StaticCallPathTree::GetCurrentFreePathId() const { return next_free_path_id_.load(); }
 
 void StaticCallPathTree::RegisterNodeInAllNodes(StaticCallPathTreeNode* node_ptr) { all_nodes.push_back(node_ptr); }
