@@ -135,8 +135,10 @@ inline bool FileExists(const std::string& filename) {
 }
 
 // Whether path lies in the project, i.e. contains DP_PROJECT_ROOT_DIR ("/" if unset) as given or with its
-// symbolic links resolved. A checkout reached through a symbolic link (/home/<user>/git -> /mnt/storage/...)
-// is named either way, depending on whether $PWD or realpath()/getcwd() produced the path.
+// symbolic links resolved, but none of the directories of DP_PROJECT_EXCLUDE_DIRS (separated by ':', absolute
+// or relative to the project root, e.g. "build/_deps:third_party"), also in both spellings. A checkout reached
+// through a symbolic link (/home/<user>/git -> /mnt/storage/...) is named either way, depending on whether
+// $PWD or realpath()/getcwd() produced the path. Excluded files are neither instrumented nor mapped.
 bool IsInProjectRoot(const std::string& path);
 
 int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);

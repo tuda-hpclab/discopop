@@ -80,6 +80,23 @@ def _load_file_mapping(path: str) -> tuple[frozenset[str], int]:
     return frozenset(files), count
 
 
+def _excluded_directories(entries: str, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """The directories of a ``:`` separated list, absolute or relative to the project root, in every spelling (each
+    root, with and without symbolic links resolved), with a trailing ``/`` (so ``_deps`` does not exclude ``_deps2``).
+    """
+    directories: list[str] = []
+    for entry in entries.split(":"):
+        if not entry:
+            continue
+        candidates = [entry] if entry.startswith("/") else [os.path.join(root, entry) for root in roots]
+        for candidate in candidates:
+            for spelling in (os.path.normpath(candidate), os.path.realpath(candidate)):
+                directory = os.path.join(spelling, "")
+                if directory not in directories:
+                    directories.append(directory)
+    return tuple(directories)
+
+
 class _Policy:
     """What is kept: declarations located in files the profiler instrumented, and no type nodes.
 
@@ -88,16 +105,28 @@ class _Policy:
     dependencies below the project directory (``_deps`` of a CMake build) and project headers without code. Without a
     file mapping (not written yet, or empty) the fallback is the project directory.
 
+    Files in one of the excluded directories (``DP_PROJECT_EXCLUDE_DIRS`` of the command line tool, the variable the
+    LLVM pass uses as well: separated by ``:``, absolute or relative to the project root) are never kept, with or
+    without a file mapping.
+
     Type nodes (``ElaboratedType``, ``TemplateSpecializationType``, ...) have no location and are never queried: the
     explorer reads types from the ``type`` of the declarations and expressions. Template metaprogramming makes them
     huge (single type aliases of many GB).
     """
 
-    def __init__(self, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> None:
+    def __init__(
+        self,
+        project_root: str,
+        file_mapping: Optional[str] = None,
+        prune_types: bool = True,
+        excluded_dirs: str = "",
+    ) -> None:
         self.project_root = project_root if project_root.endswith("/") else project_root + "/"
         # a checkout reached through a symbolic link (/home/... -> /mnt/storage/...) is named either way, depending on
         # who resolved what: compare with both forms
         self.project_root_real = os.path.join(os.path.realpath(project_root), "")
+        self.excluded_dirs = excluded_dirs
+        self.excluded = _excluded_directories(excluded_dirs, (self.project_root, self.project_root_real))
         self.file_mapping = file_mapping
         self.mapped, self.mapped_files = _load_file_mapping(file_mapping) if file_mapping else (frozenset(), 0)
         self.prune_types = prune_types
@@ -120,10 +149,14 @@ class _Policy:
         return cached
 
     def _decide(self, file_: str) -> bool:
+        # Clang records the file passed on the compile command line, and quote-included headers resolved relative to
+        # it, as relative paths (of the working directory, which the wrapper shares)
+        absolute = file_ if file_.startswith("/") else os.path.join(os.getcwd(), file_)
+        if self.excluded and (
+            os.path.normpath(absolute).startswith(self.excluded) or os.path.realpath(absolute).startswith(self.excluded)
+        ):
+            return False
         if self.mapped:
-            # Clang records the file passed on the compile command line, and quote-included headers resolved
-            # relative to it, as relative paths (of the working directory, which the wrapper shares)
-            absolute = file_ if file_.startswith("/") else os.path.join(os.getcwd(), file_)
             return os.path.normpath(absolute) in self.mapped or os.path.realpath(absolute) in self.mapped
         # Clang records the file passed on the compile command line, and any
         # quote-included ("...") header resolved relative to it, as a bare or
@@ -254,6 +287,8 @@ class _Status:
             )
         else:
             selection = f"no file mapping given, keeping the declarations below {policy.project_root}"
+        if policy.excluded_dirs:
+            selection += f", without the excluded directories {policy.excluded_dirs}"
         self._say(selection + ("; type nodes are dropped" if policy.prune_types else "; type nodes are kept"))
 
     def progress(self) -> None:
@@ -476,14 +511,20 @@ def filter_ast_stream(source: TextIO, out: _Writer, policy: _Policy, log: Option
         status.finish()
 
 
-def filter_ast_dump(text: str, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> str:
+def filter_ast_dump(
+    text: str,
+    project_root: str,
+    file_mapping: Optional[str] = None,
+    prune_types: bool = True,
+    excluded_dirs: str = "",
+) -> str:
     """Prune one or more concatenated top-level JSON objects given as a string (see ``filter_ast_stream``).
 
     Concatenated objects occur when multiple translation units are dumped
     into the same file (one clang invocation per source file, appended).
     """
     out = io.StringIO()
-    filter_ast_stream(io.StringIO(text), out, _Policy(project_root, file_mapping, prune_types))
+    filter_ast_stream(io.StringIO(text), out, _Policy(project_root, file_mapping, prune_types, excluded_dirs))
     return out.getvalue()
 
 
@@ -495,7 +536,10 @@ def main() -> None:
 
     # DP_AST_QUIET=1 silences the status messages (they go to stderr: stdout is the pruned AST)
     log = None if os.environ.get("DP_AST_QUIET") else sys.stderr
-    filter_ast_stream(sys.stdin, sys.stdout, _Policy(args[0], args[1] if len(args) == 2 else None), log)
+    # the directories the LLVM pass does not count as part of the project either
+    excluded_dirs = os.environ.get("DP_PROJECT_EXCLUDE_DIRS", "")
+    policy = _Policy(args[0], args[1] if len(args) == 2 else None, excluded_dirs=excluded_dirs)
+    filter_ast_stream(sys.stdin, sys.stdout, policy, log)
 
 
 if __name__ == "__main__":

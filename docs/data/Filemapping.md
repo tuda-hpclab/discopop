@@ -16,7 +16,7 @@ Each line has the format `<file id><TAB><absolute file path>`:
 ```
 
 - ids start at 1
-- the id 0 stands for code outside of the project root directory (`DP_PROJECT_ROOT_DIR`, default `/`); such code gets no file id
+- the id 0 stands for code outside of the project root directory (`DP_PROJECT_ROOT_DIR`, default `/`) or in one of its excluded directories (`DP_PROJECT_EXCLUDE_DIRS`); such code gets no file id
 - every compiled module appends the files it encounters, so the ids are the same in all translation units of a project; a file that is already listed keeps its id
 
 Remove `.discopop` before you instrument a project again, otherwise stale entries remain.

@@ -12,10 +12,13 @@
 
 #include "DPUtils.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #define DP_DEBUG_TYPE "dputils"
 
@@ -66,24 +69,84 @@ llvm::cl::opt<bool> dp_memory_profiling_skip_function_arguments(
 
 namespace dputil {
 
-bool IsInProjectRoot(const std::string& path) {
-  const std::string root(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
-  // the resolved root, computed again only when the variable changes (doInitialization sets it if unset);
-  // allocated once and never destroyed: an object with static storage duration must be trivially destructible
-  static std::string& cached_root = *new std::string();
-  static std::string& cached_real_root = *new std::string();
-  static bool cached = false;
-  if (!cached || root != cached_root) {
-    cached = true;
-    cached_root = root;
-    cached_real_root.clear();
-    if (char* real = realpath(root.c_str(), nullptr)) {
-      cached_real_root = real;
-      std::free(real);  // allocated by realpath
+namespace {
+
+// A path as given and with its symbolic links resolved (if it exists), each without a trailing '/'.
+std::vector<std::string> Spellings(const std::string& path) {
+  std::vector<std::string> spellings;
+  auto add = [&spellings](std::string spelling) {
+    while (spelling.size() > 1 && spelling.back() == '/') {
+      spelling.pop_back();
+    }
+    if (!spelling.empty() && std::find(spellings.begin(), spellings.end(), spelling) == spellings.end()) {
+      spellings.push_back(spelling);
+    }
+  };
+  add(path);
+  if (char* real = realpath(path.c_str(), nullptr)) {
+    add(real);
+    std::free(real);  // allocated by realpath
+  }
+  return spellings;
+}
+
+// DP_PROJECT_ROOT_DIR and DP_PROJECT_EXCLUDE_DIRS, prepared for the checks of IsInProjectRoot.
+struct ProjectDirectories {
+  std::string root_variable;
+  std::string exclude_variable;
+  std::vector<std::string> roots;
+  // with a trailing '/', so that "_deps" does not exclude "_deps2"
+  std::vector<std::string> excluded;
+};
+
+void Prepare(ProjectDirectories& directories) {
+  directories.roots = Spellings(directories.root_variable);
+  directories.excluded.clear();
+  std::stringstream entries(directories.exclude_variable);
+  std::string entry;
+  while (std::getline(entries, entry, ':')) {
+    if (entry.empty()) {
+      continue;
+    }
+    // relative entries name directories below the project root (in each of its spellings)
+    std::vector<std::string> candidates;
+    if (entry.front() == '/') {
+      candidates.push_back(entry);
+    } else {
+      for (const std::string& root : directories.roots) {
+        candidates.push_back(root == "/" ? "/" + entry : root + "/" + entry);
+      }
+    }
+    for (const std::string& candidate : candidates) {
+      for (const std::string& spelling : Spellings(candidate)) {
+        const std::string directory = spelling == "/" ? spelling : spelling + "/";
+        if (std::find(directories.excluded.begin(), directories.excluded.end(), directory) ==
+            directories.excluded.end()) {
+          directories.excluded.push_back(directory);
+        }
+      }
     }
   }
-  return path.find(root) != std::string::npos ||
-         (!cached_real_root.empty() && path.find(cached_real_root) != std::string::npos);
+}
+
+}  // namespace
+
+bool IsInProjectRoot(const std::string& path) {
+  // prepared again only when one of the variables changes (doInitialization sets DP_PROJECT_ROOT_DIR if unset);
+  // allocated once and never destroyed: an object with static storage duration must be trivially destructible
+  static ProjectDirectories& directories = *new ProjectDirectories();
+  static bool prepared = false;
+  const std::string root_variable(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  const std::string exclude_variable(dputil::GetEnvOrDefault("DP_PROJECT_EXCLUDE_DIRS", ""));
+  if (!prepared || root_variable != directories.root_variable || exclude_variable != directories.exclude_variable) {
+    prepared = true;
+    directories.root_variable = root_variable;
+    directories.exclude_variable = exclude_variable;
+    Prepare(directories);
+  }
+  const auto contains = [&path](const std::string& part) { return path.find(part) != std::string::npos; };
+  return std::any_of(directories.roots.begin(), directories.roots.end(), contains) &&
+         std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
 }
 
 std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& full_path_name) {

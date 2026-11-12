@@ -190,6 +190,53 @@ def test_plugin_project_directory_behind_a_symbolic_link(tmp_path: Path, root_th
     assert {"main.cpp", "util.hpp"} == {node[3] for node in nodes}
 
 
+def _project_with_dependency(directory: Path) -> Path:
+    """The test program with util.hpp moved into deps/ (like a library fetched below the project directory)."""
+    shutil.copytree(SRC_DIR, directory)
+    (directory / "deps").mkdir()
+    (directory / "util.hpp").rename(directory / "deps" / "util.hpp")
+    main = directory / "main.cpp"
+    main.write_text(main.read_text().replace('#include "util.hpp"', '#include "deps/util.hpp"'))
+    return directory
+
+
+def test_wrapper_leaves_out_excluded_directories(tmp_path: Path) -> None:
+    """DP_PROJECT_EXCLUDE_DIRS: neither the pass (FileMapping.txt) nor the AST know the excluded files."""
+    for variant, env in (("plugin", {}), ("dump", {"DP_AST_NO_PLUGIN": "1"})):
+        directory = _project_with_dependency(tmp_path / variant)
+        result = _compile(_libs_dir(), directory, {**env, "DP_PROJECT_EXCLUDE_DIRS": "deps"})
+        assert result.returncode == 0, result.stdout + result.stderr
+        mapping = (directory / ".discopop" / "FileMapping.txt").read_text()
+        assert "main.cpp" in mapping and "util.hpp" not in mapping, (variant, mapping)
+        nodes = _graph_nodes(directory / ".discopop" / "profiler" / "ast_dump.json")
+        assert {node[3] for node in nodes} == {"main.cpp"}, variant
+
+
+def test_plugin_leaves_out_excluded_directories_without_file_mapping(tmp_path: Path) -> None:
+    directory = _project_with_dependency(tmp_path / "src")
+    raw = tmp_path / "raw.json"
+    arguments = [f"root={directory}", "exclude=deps", f"out={raw}"]
+    result = subprocess.run(
+        [
+            "clang++",
+            "-std=c++17",
+            "main.cpp",
+            "-fsyntax-only",
+            "-Xclang",
+            "-load",
+            "-Xclang",
+            str(_plugins(_libs_dir())[0]),
+        ]
+        + ["-Xclang", "-add-plugin", "-Xclang", "dp-ast-export"]
+        + [part for argument in arguments for part in ("-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", argument)],
+        cwd=directory,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert {node[3] for node in _graph_nodes(raw)} == {"main.cpp"}
+
+
 def test_unwritable_output_fails_the_compilation(work_dir: Path) -> None:
     """clang's exit code has to tell the wrapper that there is no output to filter."""
     plugin = _plugins(_libs_dir())[0]

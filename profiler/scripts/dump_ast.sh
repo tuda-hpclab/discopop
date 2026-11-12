@@ -18,7 +18,9 @@
 # MPI, Boost, ...), which for real projects is tens of GB per translation unit. With the AST export plugin
 # (DiscoPoPASTExport-<clang major>.so, built if the Clang development files exist) the unwanted declarations are never
 # written. Without it, or if it fails, the complete dump is filtered while it is written.
-# DP_AST_NO_PLUGIN=1 uses the filtered dump even if the plugin exists.
+# DP_AST_NO_PLUGIN=1 uses the filtered dump even if the plugin exists. The directories of DP_PROJECT_EXCLUDE_DIRS
+# (separated by ':', absolute or relative to the project directory), which the pass does not count as part of the
+# project, are left out by both.
 dp_dump_ast() {
   local clang="$1" dot_dp="$2" out_file="$3"
   shift 3
@@ -34,6 +36,7 @@ dp_dump_ast() {
       if "$clang" "$@" -fsyntax-only -Xclang -load -Xclang "$plugin" -Xclang -add-plugin -Xclang dp-ast-export \
         -Xclang -plugin-arg-dp-ast-export -Xclang "filemap=${file_mapping}" \
         -Xclang -plugin-arg-dp-ast-export -Xclang "root=${project_root}" \
+        -Xclang -plugin-arg-dp-ast-export -Xclang "exclude=${DP_PROJECT_EXCLUDE_DIRS:-}" \
         -Xclang -plugin-arg-dp-ast-export -Xclang "out=${raw_tmp}" &&
         python3 "${PARENT_PATH}/filter_ast_dump.py" "${project_root}" "${file_mapping}" <"$raw_tmp" >"$out_file"; then
         rm -f -- "$raw_tmp"

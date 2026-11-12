@@ -436,3 +436,65 @@ def test_project_directory_behind_a_symbolic_link(tmp_path: Any, root_through_li
     }
     out = json.loads(fad.filter_ast_dump(json.dumps(tu), str(root)))
     assert [n["loc"]["file"] for n in out["inner"]] == [str(file_dir / "main.cpp")]
+
+
+def _excluded_tu(project: Any) -> dict[str, Any]:
+    return {
+        "id": "0x1",
+        "kind": "TranslationUnitDecl",
+        "loc": {},
+        "inner": [
+            {"kind": "FunctionDecl", "name": "own", "loc": {"file": str(project / "main.cpp"), "line": 1}},
+            {"kind": "FunctionDecl", "name": "dep", "loc": {"file": str(project / "build/_deps/x.hpp"), "line": 1}},
+            {"kind": "FunctionDecl", "name": "dep2", "loc": {"file": str(project / "build/_deps2/y.hpp"), "line": 1}},
+            # inherits build/_deps2/y.hpp from its previous sibling
+            {"kind": "VarDecl", "name": "inherited", "loc": {"line": 2}},
+        ],
+    }
+
+
+@pytest.mark.parametrize("with_mapping", [False, True])
+@pytest.mark.parametrize("entry", ["build/_deps", "./build/_deps/", "{project}/build/_deps", "{link}/build/_deps"])
+def test_excluded_directories(tmp_path: Any, with_mapping: bool, entry: str) -> None:
+    project = tmp_path / "storage" / "project"
+    project.mkdir(parents=True)
+    (project / "build" / "_deps").mkdir(parents=True)
+    (project / "build" / "_deps2").mkdir(parents=True)
+    link = tmp_path / "home_project"
+    link.symlink_to(project)
+    mapping = None
+    if with_mapping:
+        # e.g. written by dp-fmap, which knows nothing of the exclusion
+        files = [project / "main.cpp", project / "build/_deps/x.hpp", project / "build/_deps2/y.hpp"]
+        mapping = _mapping(tmp_path, *map(str, files))
+    excluded = "unrelated::" + entry.format(project=project, link=link)
+    out = json.loads(fad.filter_ast_dump(json.dumps(_excluded_tu(project)), str(link), mapping, excluded_dirs=excluded))
+    # "_deps" must not exclude its namesake prefix "_deps2"
+    assert [n["name"] for n in out["inner"]] == ["own", "dep2", "inherited"]
+
+
+def test_no_excluded_directories_keeps_everything_below_the_root(tmp_path: Any) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    out = json.loads(fad.filter_ast_dump(json.dumps(_excluded_tu(project)), str(project)))
+    assert [n["name"] for n in out["inner"]] == ["own", "dep", "dep2", "inherited"]
+
+
+def test_command_line_reads_the_excluded_directories_of_the_pass(tmp_path: Any) -> None:
+    import subprocess
+    import sys
+
+    project = tmp_path / "project"
+    project.mkdir()
+    env = {k: v for k, v in os.environ.items() if k != "DP_AST_QUIET"}
+    env["DP_PROJECT_EXCLUDE_DIRS"] = "build/_deps"
+    result = subprocess.run(
+        [sys.executable, _SCRIPT, str(project)],
+        input=json.dumps(_excluded_tu(project)),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert [n["name"] for n in json.loads(result.stdout)["inner"]] == ["own", "dep2", "inherited"]
+    assert "without the excluded directories build/_deps" in result.stderr

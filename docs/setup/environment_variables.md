@@ -18,6 +18,7 @@ The tools of DiscoPoP read a few environment variables. The profiling runtime is
 |---|---|---|
 | `DOT_DISCOPOP` | `.discopop` in the current directory | Directory in which the instrumentation, the runtime and the hotspot detection write their results. The profiling data ends up in the subdirectory `profiler`. When you start an instrumented program by hand from another directory, the directory has to exist and contain `profiler/`. The project manager sets it for every run of a configuration. |
 | `DP_PROJECT_ROOT_DIR` | `/` | Root directory of the project to analyze. Only functions defined inside it are instrumented; with the default, all functions including library functions are. Read by the profiler's LLVM pass and by the hotspot detection. The project manager sets it for every run. |
+| `DP_PROJECT_EXCLUDE_DIRS` | not set | Directories inside `DP_PROJECT_ROOT_DIR` whose code is no project code, separated by `:`, absolute or relative to `DP_PROJECT_ROOT_DIR`, e.g. `build/_deps:third_party`. Their files are neither instrumented nor listed in `FileMapping.txt`, and the AST of the instrumentation leaves out their declarations, which for template libraries fetched into the build directory saves gigabytes per translation unit. A directory excludes everything below it (`build/_deps` does not exclude `build/_deps2`). Both arguments may name the project through a symbolic link or its resolved path. Read by the profiler's LLVM pass and by the AST export of `discopop_cc` / `discopop_cxx`. The project manager sets it from the excluded directories of the *Project Setup* stage. |
 | `DP_WRITE_CALLPATH_DOT` | not set | If set to any value, the static analysis also writes `static_calltree.dot` and `callpath_state_transitions.dot` to `.discopop/profiler`. They visualize the call graph for debugging, are not read by DiscoPoP, and are the largest files of the static analysis for programs with deep call graphs. |
 | `DP_BB_REPORT_CACHE_MB` | not set | Memory allowance in MiB of the caches of the basic block reports, for one run; takes precedence over `BB_REPORT_CACHE_MB` in `dp.conf` (see [Runtime settings](#runtime-settings-dpconf)). |
 | `DOT_DISCOPOP_PROFILER` | `<DOT_DISCOPOP>/profiler` | Set automatically by the instrumentation from `DOT_DISCOPOP`. Do not set it yourself. |
@@ -26,6 +27,14 @@ Example:
 
 ```bash
 DP_PROJECT_ROOT_DIR=$PWD DOT_DISCOPOP=$PWD/.discopop discopop_cxx example.cpp -o a.out
+```
+
+A CMake project whose dependencies are fetched into the build directory:
+
+```bash
+DP_PROJECT_ROOT_DIR=$PWD DP_PROJECT_EXCLUDE_DIRS=dp_build/_deps DOT_DISCOPOP=$PWD/.discopop \
+    cmake -B dp_build -DCMAKE_C_COMPILER=discopop_cc -DCMAKE_CXX_COMPILER=discopop_cxx
+DP_PROJECT_ROOT_DIR=$PWD DP_PROJECT_EXCLUDE_DIRS=dp_build/_deps DOT_DISCOPOP=$PWD/.discopop make -C dp_build -j
 ```
 
 See the [command line walk-through](../examples/walk_through.md) for the complete workflow.
