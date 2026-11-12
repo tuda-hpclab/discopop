@@ -46,6 +46,11 @@ TAB_ORDER = (
     TAB_REPORT,
 )
 
+# the stages that work on the selected configuration: the configuration selector is at the top of their pages (and
+# nowhere else); Hotspots has a list of its own (measuring several configurations), Pattern Detection works on the
+# profiling data, the Report and the Project Setup on all configurations
+CONFIG_STAGES = (TAB_EDITOR, TAB_PROFILING, TAB_PATCH_REPAIR, TAB_AUTOTUNING, TAB_EXECUTE)
+
 # the workflow sidebar: sections of (tab, title) in display order; the setup first, the results last
 NAV_SECTIONS = (
     ("Setup", ((TAB_SETUP, "Project Setup"), (TAB_EDITOR, "Configuration Setup"))),

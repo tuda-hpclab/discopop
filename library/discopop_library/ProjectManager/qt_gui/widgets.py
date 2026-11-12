@@ -217,18 +217,21 @@ def _faded_text(palette: Optional[QPalette]) -> str:
 
 
 def chrome_color(palette: QPalette) -> QColor:
-    """The background of the window's frame (header bar, sidebar, status line): a shade darker than the pages, so
-    that the navigation and the page content read as separate areas, in a light and in a dark palette."""
+    """The background of the window's frame (sidebar, status line) and of the configuration selector: a shade darker
+    than the pages, so that the navigation and the page content read as separate areas, in a light and in a dark
+    palette."""
     window = palette.color(QPalette.ColorRole.Window)
     return window.darker(140) if is_dark(palette) else window.darker(112)
 
 
 def _chrome_rules(palette: Optional[QPalette]) -> str:
-    """The frame of the main window: header bar and sidebar in the chrome color, with a line towards the page."""
+    """The frame of the main window: sidebar and status line in the chrome color, with a line towards the page; the
+    configuration selector a strip in that color on the page."""
     background = chrome_color(palette).name() if palette is not None else "palette(window)"
+    strip_border = border_color(palette).name() if palette is not None else "palette(mid)"
     selected = selection_color(palette).name() if palette is not None else "palette(highlight)"
     selected_text = accent_text_color(palette).name() if palette is not None else "palette(highlighted-text)"
-    # an unselected configuration: a faint tile (the window color, halfway to the header bar) in a faint frame, so it
+    # an unselected configuration: a faint tile (the window color, halfway to the strip) in a faint frame, so it
     # reads as something to click; hovered, the page color in the frame of a button
     if palette is not None:
         window = palette.color(QPalette.ColorRole.Window)
@@ -239,12 +242,13 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
         tile, tile_border, hover, hover_border = "transparent", "palette(midlight)", "palette(midlight)", "palette(mid)"
     return "\n".join(
         [
-            f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
+            f"QWidget#{CONFIG_BAR_NAME} {{ background-color: {background}; border: 1px solid {strip_border};"
+            " border-radius: 10px; }",
             f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
-            # the configurations in the header bar: the selected one in a light shade of the highlight color, as
+            # the configurations in the selector: the selected one in a light shade of the highlight color, as
             # the selected stage of the sidebar; the others as plain text, shaded while hovered
-            # the selector of the configuration matters on every stage: tabs taller than the buttons of a page, and
+            # the selector of the configuration: tabs taller than the buttons of a page, and
             # at least as wide as a short name, so that "A" and "B" are no narrower targets than "large_input"
             f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background-color: {tile}; border: 1px solid {tile_border};"
             f" border-radius: 6px; padding: 7px 13px; margin: 2px 2px; min-width: {CONFIG_TAB_MIN_WIDTH}px;"
@@ -252,7 +256,7 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
             f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; border-color: {hover_border}; }}",
             f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: {selected}; border-color: {selected};"
             f" color: {selected_text}; }}",
-            # its scroll arrows (while the tabs do not fit) in the color of the header bar, covering the tabs below
+            # its scroll arrows (while the tabs do not fit) in the color of the strip, covering the tabs below
             f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {background}; border: none;"
             " border-radius: 4px; width: 18px; }",
             f"QTabBar#{CONFIG_TABS_NAME} QToolButton:hover {{ background-color: palette(midlight); }}",
@@ -491,8 +495,8 @@ COMPACT_NAME = "compact"
 BANNER_NAME = "warningBanner"
 DANGER_ZONE_NAME = "dangerZone"
 DANGER_TITLE_NAME = "dangerTitle"
-# the frame of the main window (see _chrome_rules)
-HEADER_NAME = "appHeader"
+# the frame of the main window and the configuration selector (see _chrome_rules)
+CONFIG_BAR_NAME = "configBar"
 SIDEBAR_NAME = "appSidebar"
 STATUS_BAR_NAME = "appStatusBar"
 CONFIG_TABS_NAME = "configTabs"

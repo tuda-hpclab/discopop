@@ -6,8 +6,9 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The main window: a header bar with the project and the configuration selector, the workflow sidebar on the left,
-the panel of the selected stage on the right with the output pane below it, the status line at the bottom.
+"""The main window: the workflow sidebar on the left, the panel of the selected stage on the right with the output
+pane below it, the status line at the bottom. The configuration selector is at the top of the stages that work on the
+selected configuration (``tabs.CONFIG_STAGES``), the color theme in a menu at the bottom of the sidebar.
 
 The window assembles the panels and wires them: which panel reacts to which :class:`ProjectState` event, and the
 few callbacks one panel offers another. The panels do not know each other. The window is their :class:`TabHost`:
@@ -25,8 +26,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QMainWindow,
+    QMenu,
     QSplitter,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -49,6 +52,7 @@ from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
 from discopop_library.ProjectManager.qt_gui.tabs import (
+    CONFIG_STAGES,
     NAV_SECTIONS,
     TAB_AUTOTUNING as TAB_AUTOTUNING,
     TAB_EDITOR as TAB_EDITOR,
@@ -231,9 +235,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _add_theme_menu(self) -> None:
-        """The submenu "Theme" (System / Light / Dark) of the "⋯" menu in the header bar."""
-        menu = self.config_list.menu()
-        self.theme_menu = menu.addMenu("Theme")
+        """The menu "Theme" (System / Light / Dark) of the button at the bottom of the sidebar."""
+        self.theme_menu = QMenu("Theme", self)
         self.theme_actions: Dict[str, QAction] = {}
         group = QActionGroup(self.theme_menu)
         group.setExclusive(True)
@@ -265,21 +268,25 @@ class MainWindow(QMainWindow):
             self.editor_panel.save()
 
     def _build_frame(self) -> None:
-        """Header bar on top; sidebar | (panel over output pane) below."""
-        title = widgets.heading_label("DiscoPoP Project Manager", title=True)
-        header_layout = widgets.hbox(title, 32, self.config_list, margins=0, spacing=8)
-        header_layout.setStretch(2, 1)
-        # the header bar, the sidebar and the status line are the frame of the window, in a color of their own
-        # (widgets.chrome_color) and separated from the page by a line
-        self.header = QFrame()
-        self.header.setObjectName(widgets.HEADER_NAME)
-        self.header.setLayout(header_layout)
-        header_layout.setContentsMargins(14, 8, 14, 8)
+        """Sidebar | (panel over output pane), the whole height of the window (no header bar: the title is the
+        window's, the configuration selector is on the stages that use it)."""
+        # the sidebar and the status line are the frame of the window, in a color of their own (widgets.chrome_color)
+        # and separated from the page by a line
         self.sidebar = QFrame()
         self.sidebar.setObjectName(widgets.SIDEBAR_NAME)
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(0, 8, 0, 8)
-        sidebar_layout.addWidget(self.nav)
+        sidebar_layout.addWidget(self.nav, 1)
+        # the settings of the application (the color theme) at the bottom of the sidebar, on every stage
+        self.theme_button = QToolButton()
+        self.theme_button.setObjectName(widgets.FLAT_NAME)
+        self.theme_button.setText("◐ Theme")
+        self.theme_button.setToolTip("The color theme: System, Light or Dark")
+        self.theme_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.theme_button.setMenu(self.theme_menu)
+        footer = widgets.hbox(self.theme_button, None, margins=0)
+        footer.setContentsMargins(10, 4, 10, 0)
+        sidebar_layout.addLayout(footer)
         self.statusBar().setObjectName(widgets.STATUS_BAR_NAME)
 
         self.content_splitter.addWidget(self.stack)
@@ -296,13 +303,14 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self.header)
         layout.addWidget(self.splitter, 1)
         self.setCentralWidget(central)
+        self.stack.currentChanged.connect(lambda _index: self._place_config_selector())
+        self._place_config_selector()
 
     def after_show(self) -> None:
         """Called once the window is visible: the wizard of a fresh project opens on top of it."""
-        # the first stage in the sidebar has the keyboard focus, not the first widget of the header bar
+        # the first stage in the sidebar has the keyboard focus, not the first widget of the page
         self.nav.setFocus()
         self.config_list.maybe_open_wizard(self.was_initialized)
 
@@ -320,6 +328,13 @@ class MainWindow(QMainWindow):
                 old_console = old.output_console()
                 if old_console is not None:
                     self.output_pane.remove_console(old_console)
+            if self.config_list.parentWidget() is old:
+                # the selector outlives the page it was on
+                old_layout = old.layout()
+                if old_layout is not None:
+                    old_layout.removeWidget(self.config_list)
+                self.config_list.setParent(self)
+                self.config_list.setVisible(False)
             index = self.stack.indexOf(old)
             was_current = self.stack.currentWidget() is old
             self.stack.removeWidget(old)
@@ -340,6 +355,34 @@ class MainWindow(QMainWindow):
             self.set_tab_enabled(name, *self._pending_tab_state.pop(name))
         if name in self._pending_tab_titles:
             self.set_tab_title(name, self._pending_tab_titles.pop(name))
+
+    def _place_config_selector(self) -> None:
+        """Put the configuration selector at the top of the stage in front if it works on the selected
+        configuration (``CONFIG_STAGES``), else hide it. Every way to another page (the sidebar, ``show_tab``, a
+        replaced page) changes the current widget of the stack, which calls this."""
+        selector = self.config_list
+        current = self.current_tab()
+        page = self._tab_widgets.get(current)
+        layout = page.layout() if page is not None and current in CONFIG_STAGES else None
+        if not isinstance(layout, QVBoxLayout):
+            # on the other stages it stays where it was, hidden (and parented: it is the parent of its dialogs)
+            selector.setVisible(False)
+            return
+        if selector.parentWidget() is not page:
+            old_parent = selector.parentWidget()
+            old_layout = old_parent.layout() if old_parent is not None else None
+            if old_layout is not None:
+                old_layout.removeWidget(selector)
+            layout.insertWidget(0, selector)
+        selector.setVisible(True)
+
+    def config_selector_stage(self) -> str:
+        """The stage showing the configuration selector ("" if none does)."""
+        if not self.config_list.isVisibleTo(self):
+            return ""
+        return next(
+            (name for name, widget in self._tab_widgets.items() if widget is self.config_list.parentWidget()), ""
+        )
 
     def tab(self, name: str) -> QWidget:
         return self._tab_widgets[name]

@@ -316,11 +316,11 @@ def test_the_window_frame_has_a_color_of_its_own(qtbot: QtBot, tmp_path: Path) -
         # darker than the pages, in a light and in a dark palette
         assert chrome.lightness() < palette.color(QPalette.ColorRole.Window).lightness()
         sheet = widgets.app_style_sheet(palette)
-        for name in (widgets.HEADER_NAME, widgets.SIDEBAR_NAME, widgets.STATUS_BAR_NAME):
+        for name in (widgets.CONFIG_BAR_NAME, widgets.SIDEBAR_NAME, widgets.STATUS_BAR_NAME):
             assert f"#{name} {{ background-color: {chrome.name()};" in sheet
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
-    assert window.header.objectName() == widgets.HEADER_NAME
+    assert window.config_list.objectName() == widgets.CONFIG_BAR_NAME
     assert window.sidebar.objectName() == widgets.SIDEBAR_NAME and window.nav.parentWidget() is window.sidebar
     assert window.statusBar().objectName() == widgets.STATUS_BAR_NAME
     assert window.splitter.widget(0) is window.sidebar

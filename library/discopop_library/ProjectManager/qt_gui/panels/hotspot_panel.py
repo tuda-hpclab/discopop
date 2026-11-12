@@ -171,7 +171,7 @@ class HotspotPanel(Panel):
         self._job: Optional[WorkRunner] = None
         self.session = HotspotSession(arguments)
         # the configurations to measure (checked in the list). Until the user changes a check box, the list follows
-        # the configuration selected in the header bar (only it is checked); afterwards the user's choice stays, and
+        # the selected configuration (only it is checked); afterwards the user's choice stays, and
         # a configuration created later starts unchecked.
         self._checked: Dict[str, bool] = {}
         self._user_chose = False

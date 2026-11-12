@@ -47,7 +47,7 @@ def run_qt_gui(arguments: ProjectManagerArguments) -> None:
     # Stop sends SIGINT to the autotuner and patch repair jobs
     let_children_receive_sigint()
     app = create_application()
-    # the color theme chosen in the "⋯" menu of the header bar (System, i.e. the desktop's, by default)
+    # the color theme chosen with "Theme" at the bottom of the sidebar (System, i.e. the desktop's, by default)
     theme.apply_saved_theme(app)
     was_initialized = False
     if not os.path.exists(arguments.project_config_dir):

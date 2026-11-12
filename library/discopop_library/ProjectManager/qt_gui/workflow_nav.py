@@ -106,7 +106,7 @@ class _StageDelegate(QStyledItemDelegate):
                 painter.drawRoundedRect(QRectF(rect.adjusted(6, 2, -6, -2)).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
             if selected:
                 # the selected stage: a light shade of the highlight with a bar in it at the left (as the selected
-                # configuration in the header bar); from the application's palette: the sidebar's transparent
+                # configuration in the selector); from the application's palette: the sidebar's transparent
                 # background makes its own base color a transparent black
                 background = widgets.selection_color(QApplication.palette())
                 painter.setPen(Qt.PenStyle.NoPen)

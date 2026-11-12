@@ -14,7 +14,7 @@ from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
-from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_PROFILING, TAB_REPORT
+from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
@@ -163,15 +163,13 @@ def test_the_wheel_scrolls_the_tabs_instead_of_switching(qtbot: QtBot, tmp_path:
     assert panel.tab_bar.tabRect(0).x() < first_x
 
 
-def test_selecting_publishes_and_leaves_execute_and_report(env: Env) -> None:
+def test_selecting_publishes_and_keeps_the_stage(env: Env) -> None:
+    # the selector is on the stages that work on the selection: Execute stays in front
     env.tabs.current = TAB_EXECUTE
     click_row(env, 1)
     assert env.panel.project_state.current_config == "b"
     assert env.events == [ConfigChanged("b")]
-    assert env.tabs.shown == [TAB_EDITOR]
-    env.tabs.current = TAB_REPORT
-    click_row(env, 0)
-    assert env.tabs.shown == [TAB_EDITOR, TAB_EDITOR]
+    assert env.tabs.shown == []
 
 
 def test_selecting_while_the_editor_is_in_front_keeps_the_tab(env: Env) -> None:

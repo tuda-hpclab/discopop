@@ -6,7 +6,8 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The configuration selector in the header bar of the main window: select, create, copy, rename, delete, the wizard.
+"""The configuration selector at the top of the stages that work on the selected configuration: select, create,
+copy, rename, delete, the wizard.
 
 Ported from ``gui/mixins/config_list.py``, ``gui/mixins/config_crud.py`` and ``gui/mixins/wizard_launcher.py``
 (without ``_update_execute_modes``: the Execute panel reacts to ``ConfigChanged`` / ``ConfigurationsChanged``).
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import QLabel, QMenu, QSizePolicy, QTabBar, QToolButton, 
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR, TAB_EXECUTE, TAB_PROFILING, TAB_REPORT
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.wizard import ConfigurationWizard
@@ -40,7 +41,7 @@ _STATUS_RESET_MS = 2000
 
 CAPTION = "EXECUTION CONFIGURATION"
 NO_CONFIGURATIONS = "No configurations yet"
-# the tab strip shrinks to this width before the path in the header bar is shortened further
+# the tab strip shrinks to this width before it scrolls
 _STRIP_MIN_WIDTH = 160
 _NEW_BUTTON_WIDTH = 34
 # the vertical margins of a tab (top and bottom, see widgets._chrome_rules)
@@ -51,7 +52,7 @@ class ConfigTabBar(QTabBar):
     """The configurations as a strip of link-like tabs; arrows scroll it when the tabs do not fit.
 
     The mouse wheel scrolls the strip (as the arrows do) instead of switching the configuration, so scrolling over
-    the header bar never switches it by accident.
+    the selector never switches it by accident.
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -84,8 +85,11 @@ class ConfigTabBar(QTabBar):
 
 
 class ConfigListPanel(Panel):
-    """The configurations in the header bar: a strip of tabs, one per configuration (the selected one underlined),
-    "+" for a new one and a "⋯" menu (new with the wizard, copy, rename, delete; the main window adds the theme).
+    """The configurations as a strip of tabs, one per configuration (the selected one filled), "+" for a new one and
+    a "⋯" menu (new with the wizard, copy, rename, delete).
+
+    There is one selector; the main window moves it to the top of the stage in front when that stage works on the
+    selected configuration (``tabs.CONFIG_STAGES``) and hides it on the others.
     Right-clicking a tab offers copy, rename and delete of its configuration.
 
     It used to be a list taking the left side of the window, then a combo box; the tabs show all configurations at
@@ -145,8 +149,12 @@ class ConfigListPanel(Panel):
             self.caption_label, self.tab_bar, self.empty_label, self.new_button, None, self.menu_button, margins=0
         )
         layout.setSpacing(6)
+        layout.setContentsMargins(10, 4, 8, 4)
         self.setLayout(layout)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # a strip of its own on the page, in the color of the window's frame (widgets.CONFIG_BAR_NAME)
+        self.setObjectName(widgets.CONFIG_BAR_NAME)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         self.refresh()
@@ -223,10 +231,8 @@ class ConfigListPanel(Panel):
         self._shown_config = name
         self.project_state.current_config = name
         self._fill_menu()
+        # the stage in front stays: the selector is only shown on the stages that work on the selection
         self.project_state.publish(ConfigChanged(name))
-        # Execute and Report show the results of all configurations: back to the Editor of the selected one
-        if self._tabs.current_tab() in (TAB_EXECUTE, TAB_REPORT):
-            self._tabs.show_tab(TAB_EDITOR)
         return True
 
     # --- the menus ---

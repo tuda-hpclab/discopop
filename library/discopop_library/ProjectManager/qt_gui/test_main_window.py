@@ -111,6 +111,28 @@ def test_selecting_a_stage_in_the_sidebar_shows_its_panel(qtbot: QtBot, tmp_path
     assert window.current_tab() == TAB_REPORT and window.stack.currentWidget() is window.report_panel
 
 
+def test_the_configuration_selector_is_on_the_stages_that_use_it(qtbot: QtBot, tmp_path: Path) -> None:
+    from discopop_library.ProjectManager.qt_gui.tabs import CONFIG_STAGES
+
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window.show()
+    for name in TAB_ORDER:
+        window.nav.select_stage(name)
+        if name in CONFIG_STAGES:
+            # at the top of the page, above its title
+            page = window.tab(name)
+            layout = page.layout()
+            assert window.config_selector_stage() == name and window.config_list.isVisible()
+            assert layout is not None and layout.indexOf(window.config_list) == 0
+        else:
+            assert window.config_selector_stage() == "" and not window.config_list.isVisible()
+    # a page holding it that is replaced leaves it to the window
+    window.show_tab(TAB_EXECUTE)
+    window.add_tab(TAB_EXECUTE, Panel(window.arguments, window.project_state, window.status))
+    assert window.config_list.parentWidget() is not window.execute_panel
+
+
 def test_the_sidebar_shows_what_the_stages_have_done(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
