@@ -273,7 +273,7 @@ class MainWindow(QMainWindow):
         self.header = QFrame()
         self.header.setObjectName(widgets.HEADER_NAME)
         self.header.setLayout(header_layout)
-        header_layout.setContentsMargins(14, 6, 14, 6)
+        header_layout.setContentsMargins(14, 8, 14, 8)
         self.sidebar = QFrame()
         self.sidebar.setObjectName(widgets.SIDEBAR_NAME)
         sidebar_layout = QVBoxLayout(self.sidebar)

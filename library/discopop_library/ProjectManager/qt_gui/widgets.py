@@ -173,8 +173,11 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
             # the configurations in the header bar: the selected one filled in the highlight color, as the selected
             # stage of the sidebar; the others as plain text, shaded while hovered
-            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none; border-radius: 5px;"
-            " padding: 4px 12px; margin: 2px 2px; color: palette(window-text); }",
+            # the selector of the configuration matters on every stage: tabs taller than the buttons of a page, and
+            # at least as wide as a short name, so that "A" and "B" are no narrower targets than "large_input"
+            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none; border-radius: 6px;"
+            f" padding: 8px 14px; margin: 2px 2px; min-width: {CONFIG_TAB_MIN_WIDTH}px;"
+            " color: palette(window-text); }",
             f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; }}",
             f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: palette(highlight);"
             " color: palette(highlighted-text); }",
@@ -226,6 +229,8 @@ HEADER_NAME = "appHeader"
 SIDEBAR_NAME = "appSidebar"
 STATUS_BAR_NAME = "appStatusBar"
 CONFIG_TABS_NAME = "configTabs"
+# the least width of the text of a configuration tab (its padding comes on top)
+CONFIG_TAB_MIN_WIDTH = 56
 CAPTION_NAME = "caption"
 
 APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()

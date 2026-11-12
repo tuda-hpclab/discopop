@@ -42,6 +42,9 @@ CAPTION = "EXECUTION CONFIGURATION"
 NO_CONFIGURATIONS = "No configurations yet"
 # the tab strip shrinks to this width before the path in the header bar is shortened further
 _STRIP_MIN_WIDTH = 160
+_NEW_BUTTON_WIDTH = 34
+# the vertical margins of a tab (top and bottom, see widgets._chrome_rules)
+_TAB_MARGINS = 4
 
 
 class ConfigTabBar(QTabBar):
@@ -126,11 +129,10 @@ class ConfigListPanel(Panel):
         self.tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
         self.empty_label = QLabel(NO_CONFIGURATIONS)
         self.empty_label.setObjectName(widgets.CAPTION_NAME)
-        self.new_button = QToolButton()
-        self.new_button.setObjectName(widgets.FLAT_NAME)
-        self.new_button.setText("+")
-        self.new_button.setToolTip("New configuration")
-        self.new_button.clicked.connect(lambda _checked=False: self.new_config())
+        # a framed button (not a flat one as "⋯"): creating a configuration is a main action of the selector
+        self.new_button = widgets.create_button("+", self.new_config, tooltip="New configuration")
+        self.new_button.setObjectName(widgets.COMPACT_NAME)
+        self.new_button.setFixedWidth(_NEW_BUTTON_WIDTH)
         self.menu_button = QToolButton()
         self.menu_button.setObjectName(widgets.FLAT_NAME)
         self.menu_button.setText("⋯")
@@ -174,6 +176,9 @@ class ConfigListPanel(Panel):
         finally:
             self._updating = False
         self.tab_bar.setVisible(bool(configs))
+        if configs:
+            # "+" as tall as the tabs (without their margins), so that it lines up with them
+            self.new_button.setFixedHeight(max(self.tab_bar.tabRect(0).height() - _TAB_MARGINS, 24))
         self.empty_label.setVisible(not configs)
         self.project_state.current_config = chosen
         self._shown_config = chosen
