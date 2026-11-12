@@ -10,7 +10,7 @@ import logging
 import threading
 
 from pytestqt.qtbot import QtBot
-from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionTab, QTabWidget, QWidget
+from PySide6.QtWidgets import QPushButton, QStyle, QStyleFactory, QStyleOptionTab, QTabWidget, QWidget
 
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.status import READY, StatusLine
@@ -103,8 +103,10 @@ def test_tab_titles_get_room_below_the_font(qtbot: QtBot) -> None:
     tabs.show()
     option = QStyleOptionTab()
     tabs.tabBar().initStyleOption(option, 0)
-    base = tabs.style().subElementRect(QStyle.SubElement.SE_TabBarTabText, option, tabs.tabBar())
-    roomy = widgets.TabTextRoomStyle(tabs.style().name())
+    # against Fusion itself: the style sheet of the application lays out its tabs on its own (with room to spare)
+    fusion = QStyleFactory.create("Fusion")
+    base = fusion.subElementRect(QStyle.SubElement.SE_TabBarTabText, option, tabs.tabBar())
+    roomy = widgets.TabTextRoomStyle("Fusion")
     assert roomy.subElementRect(QStyle.SubElement.SE_TabBarTabText, option, tabs.tabBar()).height() == (
         base.height() + 2 * widgets.TAB_TEXT_EXTRA_PX
     )

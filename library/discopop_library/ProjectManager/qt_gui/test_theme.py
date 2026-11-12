@@ -107,3 +107,31 @@ def test_idle_labels_take_the_hint_color_of_the_palette(qtbot: QtBot) -> None:
     qtbot.addWidget(label)
     widgets.set_label_color(label, widgets.STATUS_IDLE)
     assert label.styleSheet() == f"color: {widgets.HINT_COLOR};"
+
+
+def test_a_checked_box_is_filled_in_the_accent(qtbot: QtBot, qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    from discopop_library.ProjectManager.qt_gui.app import create_application
+
+    create_application()
+    theme.apply_theme(qapp, theme.THEME_LIGHT)
+    box = QCheckBox("x")
+    qtbot.addWidget(box)
+    box.setChecked(True)
+    box.show()
+    image = box.grab().toImage()
+    colors = {image.pixelColor(x, y).name() for x in range(image.width()) for y in range(image.height())}
+    assert widgets.ACCENT in colors
+
+
+def test_the_arrows_of_spin_and_combo_boxes_are_images(qapp: QApplication) -> None:
+    from pathlib import Path as FilePath
+
+    import re
+
+    path = widgets.arrow_image("down", "#123456")
+    assert FilePath(path).read_text().count("#123456") == 1
+    # the style sheet names an arrow image that exists
+    match = re.search(r"QComboBox::down-arrow \{ image: url\(([^)]+)\)", widgets.app_style_sheet(theme.light_palette()))
+    assert match is not None and FilePath(match.group(1)).is_file()

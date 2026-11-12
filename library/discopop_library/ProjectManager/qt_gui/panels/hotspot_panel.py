@@ -307,6 +307,7 @@ class HotspotPanel(Panel):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
         table.verticalHeader().setVisible(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         return table
@@ -559,7 +560,9 @@ class HotspotPanel(Panel):
             color = QBrush(QColor(hotspot_charts.hotness_color(region.hotness)))
             for column, value in enumerate(hotspot_view.region_cells(region)):
                 item = QTableWidgetItem(value)
-                item.setForeground(color)
+                if column == 0:
+                    # the hotness alone in its color: a table of colored rows is hard to read
+                    item.setForeground(color)
                 if column in hotspot_view.REGION_NUMERIC_COLUMNS:
                     item.setTextAlignment(_RIGHT)
                 if column == 0:

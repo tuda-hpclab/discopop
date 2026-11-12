@@ -13,15 +13,20 @@ editors and the thread selector, so components of the same kind look the same in
 """
 
 import logging
+import os
+import tempfile
 import time
 from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 
-from PySide6.QtCore import QObject, QRect, QRegularExpression, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QRegularExpression, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
+    QPainter,
+    QPainterPath,
     QPalette,
+    QPen,
     QRegularExpressionValidator,
     QSyntaxHighlighter,
     QTextCharFormat,
@@ -29,6 +34,7 @@ from PySide6.QtGui import (
     QTextDocument,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -70,7 +76,7 @@ STATUS_IDLE = "gray"
 # the color of hint texts in a style sheet (captions, empty views, idle status lines): the palette's placeholder
 # color, which the themes set dark enough to read on the window and on a card; labels set to STATUS_IDLE get it
 HINT_COLOR = "palette(placeholder-text)"
-STATUS_BUSY = "#1e66f5"
+STATUS_BUSY = "#2563eb"
 STATUS_OK = "#2e7d32"
 STATUS_FAIL = "#c62828"
 STATUS_STOP = "#e65100"
@@ -87,8 +93,12 @@ VARIANT_DANGER = "danger"
 # a destructive action that is not the page's main one: red text and frame, filled red while hovered
 VARIANT_DANGER_OUTLINE = "dangerOutline"
 
+# the accent of the application: the primary buttons and, as the highlight of the Light and Dark themes, selections
+ACCENT = "#2563eb"
+ACCENT_HOVER = "#1d4ed8"
+
 _VARIANT_COLORS = {
-    VARIANT_PRIMARY: ("#1e66f5", "#1a57d1"),
+    VARIANT_PRIMARY: (ACCENT, ACCENT_HOVER),
     VARIANT_SUCCESS: ("#2e7d32", "#256628"),
     VARIANT_DANGER: ("#c62828", "#a52222"),
 }
@@ -141,7 +151,7 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
         f"QPushButton:hover {{ background-color: {hover}; }}",
         f"QPushButton:pressed {{ background-color: {pressed}; }}",
         # disabled: still a framed button (it says what could be done), with its text grayed out
-        f"QPushButton:disabled {{ color: {disabled_text}; border: 1px dashed {border};"
+        f"QPushButton:disabled {{ color: {disabled_text}; border: 1px solid {border};"
         " background-color: palette(window); }",
         # a compact button: framed like the default one, with less padding, for slim bars (the output pane's Clear)
         f"QPushButton#{COMPACT_NAME} {{ padding: 2px 10px; }}",
@@ -168,7 +178,7 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
         f"QPushButton#{VARIANT_DANGER_OUTLINE} {{ color: {danger_text}; border: 1px solid {danger_text}; }}",
         f"QPushButton#{VARIANT_DANGER_OUTLINE}:hover, QPushButton#{VARIANT_DANGER_OUTLINE}:pressed"
         f" {{ background-color: {danger_color}; border-color: {danger_color}; color: white; }}",
-        f"QPushButton#{VARIANT_DANGER_OUTLINE}:disabled {{ color: {disabled_text}; border: 1px dashed {border};"
+        f"QPushButton#{VARIANT_DANGER_OUTLINE}:disabled {{ color: {disabled_text}; border: 1px solid {border};"
         " background-color: palette(window); }",
         # a card of destructive actions: framed in red
         f"QFrame#{DANGER_ZONE_NAME} {{ border: 1px solid {danger_text}; border-radius: 8px; }}",
@@ -209,21 +219,22 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
     """The frame of the main window: header bar and sidebar in the chrome color, with a line towards the page."""
     background = chrome_color(palette).name() if palette is not None else "palette(window)"
     hover = chrome_color(palette).darker(112).name() if palette is not None else "palette(midlight)"
+    selected = selection_color(palette).name() if palette is not None else "palette(highlight)"
+    selected_text = accent_text_color(palette).name() if palette is not None else "palette(highlighted-text)"
     return "\n".join(
         [
             f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
             f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
-            # the configurations in the header bar: the selected one filled in the highlight color, as the selected
-            # stage of the sidebar; the others as plain text, shaded while hovered
+            # the configurations in the header bar: the selected one in a light shade of the highlight color, as
+            # the selected stage of the sidebar; the others as plain text, shaded while hovered
             # the selector of the configuration matters on every stage: tabs taller than the buttons of a page, and
             # at least as wide as a short name, so that "A" and "B" are no narrower targets than "large_input"
             f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none; border-radius: 6px;"
             f" padding: 8px 14px; margin: 2px 2px; min-width: {CONFIG_TAB_MIN_WIDTH}px;"
             " color: palette(window-text); }",
             f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; }}",
-            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: palette(highlight);"
-            " color: palette(highlighted-text); }",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: {selected};" f" color: {selected_text}; }}",
             # its scroll arrows (while the tabs do not fit) in the color of the header bar, covering the tabs below
             f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {background}; border: none;"
             " border-radius: 4px; width: 18px; }",
@@ -270,6 +281,147 @@ def _component_rules(palette: Optional[QPalette] = None) -> str:
     return "\n".join(rules)
 
 
+def surface_color(palette: QPalette) -> QColor:
+    """The background of a raised area (card, pane of a tab widget): see :func:`card_color`; dark, the window color."""
+    return QColor(palette.color(QPalette.ColorRole.Window)) if is_dark(palette) else card_color(palette)
+
+
+def border_color(palette: QPalette) -> QColor:
+    """The frame of cards, panes, tables and input fields: clearly apart from the window, not as dark as a text."""
+    text = palette.color(QPalette.ColorRole.WindowText)
+    return QColor(_mix(text, palette.color(QPalette.ColorRole.Window), 0.22 if is_dark(palette) else 0.2))
+
+
+def selection_color(palette: QPalette) -> QColor:
+    """The background of a selected row, tab or stage: the highlight color, light on the views (opaque, so that the
+    alternating rows of a table do not shine through)."""
+    return QColor(
+        _mix(
+            palette.color(QPalette.ColorRole.Highlight),
+            palette.color(QPalette.ColorRole.Base),
+            0.35 if is_dark(palette) else 0.16,
+        )
+    )
+
+
+def accent_text_color(palette: QPalette) -> QColor:
+    """Text in the highlight color on a selection (:func:`selection_color`) or on the window."""
+    highlight = palette.color(QPalette.ColorRole.Highlight)
+    return highlight.lighter(165) if is_dark(palette) else highlight.darker(118)
+
+
+_ARROW_PATHS = {"down": "M1 1l4 4 4-4", "up": "M1 5l4-4 4 4"}
+
+
+def arrow_image(direction: str, color: str) -> str:
+    """The path of a small chevron (``direction`` "up" or "down") in ``color``, for the arrows of spin and combo boxes:
+    a style sheet draws them from an image only. Written once per color into a directory of the user's temporary
+    files (generated, not shipped)."""
+    directory = os.path.join(tempfile.gettempdir(), f"discopop_project_manager_{os.getuid()}")
+    path = os.path.join(directory, f"arrow_{direction}_{color.lstrip('#')}.svg")
+    if not os.path.exists(path):
+        os.makedirs(directory, exist_ok=True)
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6">'
+            f'<path d="{_ARROW_PATHS[direction]}" fill="none" stroke="{color}" stroke-width="1.5"'
+            ' stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        )
+        # written aside and renamed, so that a second instance never reads a half written file
+        partial = f"{path}.{os.getpid()}"
+        with open(partial, "w") as file:
+            file.write(svg)
+        os.replace(partial, path)
+    return path.replace(os.sep, "/")
+
+
+def _arrow_rules(palette: QPalette) -> str:
+    text = palette.color(QPalette.ColorRole.WindowText)
+    window = palette.color(QPalette.ColorRole.Window)
+    try:
+        down = arrow_image("down", _mix(text, window, 0.7))
+        up = arrow_image("up", _mix(text, window, 0.7))
+    except OSError:
+        return ""  # no temporary directory: the style sheet's own (plain) arrows
+    hover = _mix(text, window, 0.1)
+    return "\n".join(
+        [
+            "QComboBox { padding-right: 22px; }",
+            "QComboBox::drop-down { border: none; width: 22px; }",
+            f"QComboBox::down-arrow {{ image: url({down}); width: 10px; height: 6px; }}",
+            "QAbstractSpinBox { padding-right: 18px; }",
+            "QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { border: none; width: 18px;"
+            " background: transparent; }",
+            "QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover"
+            f" {{ background-color: {hover}; border-radius: 3px; }}",
+            f"QAbstractSpinBox::up-arrow {{ image: url({up}); width: 9px; height: 5px; }}",
+            f"QAbstractSpinBox::down-arrow {{ image: url({down}); width: 9px; height: 5px; }}",
+        ]
+    )
+
+
+def _control_rules(palette: QPalette) -> str:
+    """The stock controls: tabs of a page as underlined titles above a framed pane, tables without a grid, thin
+    scroll bars without arrows, flat input fields. The check boxes and radio buttons are drawn by
+    :class:`TabTextRoomStyle` (a style sheet would need images)."""
+    dark = is_dark(palette)
+    surface = surface_color(palette).name()
+    border = border_color(palette).name()
+    secondary = _secondary_text(palette)
+    accent = palette.color(QPalette.ColorRole.Highlight).name()
+    selected = selection_color(palette).name()
+    window = palette.color(QPalette.ColorRole.Window)
+    hover = _mix(palette.color(QPalette.ColorRole.Highlight), palette.color(QPalette.ColorRole.Base), 0.08)
+    text = palette.color(QPalette.ColorRole.WindowText)
+    handle = _mix(text, window, 0.35 if dark else 0.3)
+    handle_hover = _mix(text, window, 0.55 if dark else 0.5)
+    disabled_background = window.name()
+    return "\n".join(
+        [
+            # tab widgets: the titles as text underlined in the accent when selected, the pane as a card
+            f"QTabWidget::pane {{ border: 1px solid {border}; border-radius: 10px; background-color: {surface};"
+            " top: -1px; }",
+            "QTabWidget::tab-bar { left: 10px; }",
+            "QTabWidget > QTabBar::tab { background: transparent; border: none; border-bottom: 2px solid transparent;"
+            f" padding: 6px 12px; margin-right: 2px; color: {secondary}; }}",
+            "QTabWidget > QTabBar::tab:hover { color: palette(window-text);" f" border-bottom: 2px solid {border}; }}",
+            "QTabWidget > QTabBar::tab:selected { color: palette(window-text);"
+            f" border-bottom: 2px solid {accent}; }}",
+            # tables and trees: no grid (alternating rows separate them), a flat header, a light selection
+            f"QTableView, QTreeView {{ background-color: palette(base); border: 1px solid {border};"
+            " border-radius: 6px; gridline-color: transparent; alternate-background-color: palette(alternate-base);"
+            f" selection-background-color: {selected}; selection-color: palette(text); outline: 0; }}",
+            f"QTableView::item:hover, QTreeView::item:hover {{ background-color: {hover}; }}",
+            f"QTableView::item:selected, QTreeView::item:selected {{ background-color: {selected};"
+            " color: palette(text); }",
+            f"QHeaderView::section {{ background-color: palette(base); color: {secondary}; border: none;"
+            f" border-bottom: 1px solid {border}; padding: 5px 8px; font-weight: 600; }}",
+            "QHeaderView { background-color: transparent; border: none; }",
+            "QTableCornerButton::section { background-color: palette(base); border: none; }",
+            # scroll bars: a rounded handle on a transparent track, no arrows
+            "QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; border: none; }",
+            "QScrollBar:horizontal { background: transparent; height: 12px; margin: 2px; border: none; }",
+            f"QScrollBar::handle {{ background-color: {handle}; border-radius: 4px; }}",
+            f"QScrollBar::handle:hover, QScrollBar::handle:pressed {{ background-color: {handle_hover}; }}",
+            "QScrollBar::handle:vertical { min-height: 28px; }",
+            "QScrollBar::handle:horizontal { min-width: 28px; }",
+            "QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; background: none; }",
+            "QScrollBar::add-page, QScrollBar::sub-page { background: none; }",
+            # input fields: flat, rounded, framed in the accent while they have the focus
+            f"QLineEdit, QAbstractSpinBox, QComboBox {{ border: 1px solid {border}; border-radius: 6px;"
+            " padding: 2px 6px; background-color: palette(base); }",
+            f"QPlainTextEdit, QTextEdit {{ border: 1px solid {border}; border-radius: 6px;"
+            " background-color: palette(base); }",
+            "QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus"
+            f" {{ border: 1px solid {accent}; }}",
+            "QLineEdit:disabled, QAbstractSpinBox:disabled, QComboBox:disabled"
+            f" {{ background-color: {disabled_background}; color: {secondary}; }}",
+            f"QComboBox QAbstractItemView {{ border: 1px solid {border}; background-color: palette(base);"
+            f" selection-background-color: {selected}; selection-color: palette(text); outline: 0; }}",
+            _arrow_rules(palette),
+        ]
+    )
+
+
 # objectNames the style sheet selects on
 CARD_NAME = "card"
 CHIP_NAME = "chip"
@@ -292,7 +444,9 @@ APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 
 def app_style_sheet(palette: QPalette) -> str:
     """The style sheet of the application for ``palette`` (light or dark, see :func:`is_dark`)."""
-    return _button_rules(palette) + "\n" + _component_rules(palette) + "\n" + _chrome_rules(palette)
+    return "\n".join(
+        [_button_rules(palette), _component_rules(palette), _chrome_rules(palette), _control_rules(palette)]
+    )
 
 
 def is_dark(palette: QPalette) -> bool:
@@ -306,12 +460,37 @@ def is_dark(palette: QPalette) -> bool:
 TAB_TEXT_EXTRA_PX = 2
 
 
+_INDICATORS = (
+    QStyle.PrimitiveElement.PE_IndicatorCheckBox,
+    QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck,
+    QStyle.PrimitiveElement.PE_IndicatorRadioButton,
+)
+
+
 class TabTextRoomStyle(QProxyStyle):
-    """The application style, with room for the underscores of tab titles.
+    """The application style, with room for the underscores of tab titles, and flat check boxes and radio buttons.
 
     Fusion clips a tab's title to the height of its font, and the underscore of some fonts (Ubuntu, the default on
     Ubuntu desktops) lies below that: "compile_validate.sh" read as "compile validate.sh".
+
+    The check boxes (also those in tables and trees) and radio buttons are drawn here rather than by the style sheet,
+    which can only draw a check mark from an image: a rounded frame, filled in the highlight color when checked.
     """
+
+    def drawPrimitive(  # noqa: N802 (Qt's name)
+        self,
+        element: QStyle.PrimitiveElement,
+        option: QStyleOption,
+        painter: QPainter,
+        widget: Optional[QWidget] = None,
+    ) -> None:
+        if element == QStyle.PrimitiveElement.PE_IndicatorTabClose:
+            draw_close_mark(painter, option)
+            return
+        if element not in _INDICATORS:
+            super().drawPrimitive(element, option, painter, widget)  # type: ignore[arg-type]
+            return
+        draw_indicator(painter, option, radio=element == QStyle.PrimitiveElement.PE_IndicatorRadioButton)
 
     def subElementRect(  # noqa: N802 (Qt's name)
         self, element: QStyle.SubElement, option: QStyleOption, widget: Optional[QWidget] = None
@@ -321,6 +500,86 @@ class TabTextRoomStyle(QProxyStyle):
         if element == QStyle.SubElement.SE_TabBarTabText:
             rect.adjust(0, -TAB_TEXT_EXTRA_PX, 0, TAB_TEXT_EXTRA_PX)
         return rect
+
+
+def draw_close_mark(painter: QPainter, option: QStyleOption) -> None:
+    """The close button of a tab: a small "×", on a rounded shade while hovered."""
+    palette: QPalette = option.palette  # type: ignore[attr-defined]
+    state = option.state  # type: ignore[attr-defined]
+    rect = QRectF(option.rect).adjusted(1, 1, -1, -1)  # type: ignore[attr-defined]
+    text = palette.color(QPalette.ColorRole.WindowText)
+    window = palette.color(QPalette.ColorRole.Window)
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if state & QStyle.StateFlag.State_MouseOver:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(_mix(text, window, 0.15)))
+            painter.drawRoundedRect(rect, 4, 4)
+        pen = QPen(QColor(_mix(text, window, 0.6)), 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        inset = rect.width() * 0.3
+        mark = rect.adjusted(inset, inset, -inset, -inset)
+        painter.drawLine(mark.topLeft(), mark.bottomRight())
+        painter.drawLine(mark.topRight(), mark.bottomLeft())
+    finally:
+        painter.restore()
+
+
+def draw_indicator(painter: QPainter, option: QStyleOption, *, radio: bool) -> None:
+    """A check box (check mark, or a dash when partially checked) or a radio button (a dot) in ``option.rect``."""
+    palette: QPalette = option.palette  # type: ignore[attr-defined]
+    state = option.state  # type: ignore[attr-defined]
+    enabled = bool(state & QStyle.StateFlag.State_Enabled)
+    checked = bool(state & QStyle.StateFlag.State_On)
+    partial = bool(state & QStyle.StateFlag.State_NoChange)
+    hovered = bool(state & QStyle.StateFlag.State_MouseOver) and enabled
+    full: QRect = option.rect  # type: ignore[attr-defined]
+    side = min(full.width(), full.height(), 16) - 1
+    box = QRectF(full.center().x() - side / 2 + 0.5, full.center().y() - side / 2 + 0.5, side, side)
+    # the application's highlight: in a table or a tree, the style sheet's selection color replaces the palette's
+    accent = QColor(QApplication.palette().color(QPalette.ColorRole.Highlight))
+    base = palette.color(QPalette.ColorRole.Base)
+    text = palette.color(QPalette.ColorRole.Text)
+    if not enabled:
+        accent = QColor(_mix(accent, base, 0.4))
+    frame = accent if hovered else QColor(_mix(text, base, 0.45 if enabled else 0.25))
+    filled = checked or partial
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(accent if filled else frame, 1.2))
+        painter.setBrush(accent if filled else base)
+        if radio:
+            painter.drawEllipse(box)
+        else:
+            painter.drawRoundedRect(box, 3.5, 3.5)
+        if not filled:
+            return
+        mark = QColor("white")
+        if radio:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(mark)
+            painter.drawEllipse(box.center(), side * 0.2, side * 0.2)
+            return
+        pen = QPen(mark, max(1.6, side / 8))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        left, top = box.left(), box.top()
+        if partial:
+            painter.drawLine(
+                QPointF(left + side * 0.27, box.center().y()), QPointF(left + side * 0.73, box.center().y())
+            )
+        else:
+            path = QPainterPath(QPointF(left + side * 0.24, top + side * 0.52))
+            path.lineTo(QPointF(left + side * 0.42, top + side * 0.70))
+            path.lineTo(QPointF(left + side * 0.76, top + side * 0.32))
+            painter.drawPath(path)
+    finally:
+        painter.restore()
 
 
 def monospace_font(point_size: int = 11) -> QFont:

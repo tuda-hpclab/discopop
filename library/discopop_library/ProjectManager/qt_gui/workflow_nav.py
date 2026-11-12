@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractItemView,
     QListWidget,
     QListWidgetItem,
@@ -92,15 +93,26 @@ class _StageDelegate(QStyledItemDelegate):
             selected = bool(state & QStyle.StateFlag.State_Selected)
             hovered = bool(state & QStyle.StateFlag.State_MouseOver) and enabled
             if selected or hovered:
-                background = palette.color(QPalette.ColorRole.Highlight)
-                if not selected:
+                # the selected stage: a light shade of the highlight with a bar in it at the left (as the selected
+                # configuration in the header bar), the hovered one a fainter shade
+                if selected:
+                    # from the application's palette: the sidebar's transparent background makes its own base
+                    # color a transparent black
+                    background = widgets.selection_color(QApplication.palette())
+                else:
+                    background = palette.color(QPalette.ColorRole.Highlight)
                     background.setAlpha(40)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(background)
                 painter.drawRoundedRect(rect.adjusted(6, 2, -6, -2), 6, 6)
-            text_color = palette.color(
-                QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.WindowText
+                if selected:
+                    painter.setBrush(palette.color(QPalette.ColorRole.Highlight))
+                    painter.drawRoundedRect(QRect(rect.left() + 6, rect.top() + 8, 3, rect.height() - 16), 1.5, 1.5)
+            text_color = (
+                widgets.accent_text_color(QApplication.palette())
+                if selected
+                else palette.color(QPalette.ColorRole.WindowText)
             )
             if not enabled:
                 text_color = palette.color(QPalette.ColorRole.PlaceholderText)
@@ -116,7 +128,7 @@ class _StageDelegate(QStyledItemDelegate):
                 painter.setPen(text_color if selected else color)
                 painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), badge)
             elif badge:
-                painter.setPen(QColor("white") if selected else Qt.PenStyle.NoPen)
+                painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(color)
                 painter.drawEllipse(circle)
                 badge_font = QFont(font)

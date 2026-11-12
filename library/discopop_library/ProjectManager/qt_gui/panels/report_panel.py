@@ -242,6 +242,7 @@ class ReportPanel(Panel):
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
         table.verticalHeader().setVisible(False)
         header = table.horizontalHeader()
         header.setStretchLastSection(False)
