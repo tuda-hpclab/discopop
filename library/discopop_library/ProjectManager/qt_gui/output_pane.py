@@ -52,7 +52,9 @@ class OutputPane(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         layout = self._layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 4)
+        # in line with the content of the page above it
+        page_left, _top, page_right, _bottom = widgets.PAGE_MARGINS
+        layout.setContentsMargins(page_left, 2, page_right, 4)
         layout.setSpacing(2)
         layout.addWidget(self.header)
         layout.addWidget(self.tabs, 1)

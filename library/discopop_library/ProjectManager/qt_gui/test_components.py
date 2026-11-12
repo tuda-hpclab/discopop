@@ -110,14 +110,21 @@ def test_buttons_show_a_pointing_hand(qtbot: QtBot) -> None:
     assert check.cursor().shape() == Qt.CursorShape.ArrowCursor
 
 
-def test_overflow_button_runs_the_chosen_action(qtbot: QtBot) -> None:
-    calls: List[str] = []
-    button = widgets.overflow_button([("Reset", lambda: calls.append("reset")), ("Other", lambda: None)])
-    qtbot.addWidget(button)
-    menu = button.menu()
-    assert menu is not None and [a.text() for a in menu.actions()] == ["Reset", "Other"]
-    menu.actions()[0].trigger()
-    assert calls == ["reset"]
+def test_the_settings_can_be_hidden(qtbot: QtBot) -> None:
+    settings, main = QLabel("settings"), QLabel("results")
+    splitter = widgets.SettingsSplitter(settings, main, 300)
+    qtbot.addWidget(splitter)
+    splitter.resize(1000, 400)
+    splitter.show()
+    assert splitter.settings_visible() and splitter.toggle_button.text() == "◂ Hide Settings"
+    assert splitter.handleWidth() == widgets.SETTINGS_GAP
+    splitter.toggle_button.click()
+    assert not splitter.settings_visible() and not settings.isVisible()
+    # the results take the whole width
+    qtbot.waitUntil(lambda: main.width() == 1000, timeout=2000)
+    assert splitter.toggle_button.text() == "▸ Show Settings"
+    splitter.toggle_button.click()
+    assert splitter.settings_visible() and settings.isVisible()
 
 
 def test_panel_header_holds_title_chip_and_actions(qtbot: QtBot) -> None:
@@ -125,16 +132,15 @@ def test_panel_header_holds_title_chip_and_actions(qtbot: QtBot) -> None:
     header = widgets.PanelHeader("Pattern Detection", "Finds parallel patterns.", [run])
     qtbot.addWidget(header)
     header.show()
-    header.add_action(widgets.overflow_button([("Reset", lambda: None)]))
     assert header.title_label.text() == "Pattern Detection" and header.description_label.isVisible()
-    # actions in the given order, the "⋯" in its slot at the right end
+    # actions in the given order; added ones at the right end, or at the given place
     assert header.actions_layout.indexOf(run) == 0 and run.parent() is header
-    last = header.actions_layout.itemAt(header.actions_layout.count() - 1)
-    assert last is not None and last.widget() is header.overflow_slot
-    assert header._overflow_layout.count() == 1
     second = widgets.create_button("Second")
     header.add_action(second)
-    assert header.actions_layout.indexOf(second) == 1
+    assert header.actions_layout.indexOf(second) == 1 and header.actions_layout.count() == 2
+    first = widgets.create_button("First")
+    header.add_action(first, 0)
+    assert [header.actions_layout.indexOf(w) for w in (first, run, second)] == [0, 1, 2]
     header.chip.set_status(widgets.CHIP_OK, "12 suggestions")
     assert header.chip.chip.isVisible()
     plain = widgets.PanelHeader("No description")

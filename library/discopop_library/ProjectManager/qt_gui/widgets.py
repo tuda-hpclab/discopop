@@ -19,7 +19,7 @@ import tempfile
 import time
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
-from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QRegularExpression, QStandardPaths, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QRegularExpression, QStandardPaths, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -44,12 +44,15 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLayoutItem,
-    QMenu,
     QPlainTextEdit,
     QProxyStyle,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QStyle,
     QStyleOption,
+    QStyleOptionComboBox,
+    QStylePainter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -405,7 +408,8 @@ def _arrow_rules(palette: QPalette) -> str:
     hover = _mix(text, window, 0.1)
     return "\n".join(
         [
-            "QComboBox { padding-right: 22px; }",
+            # the text field reaches up to the arrow (the text is at its right end, see _ComboTextAligner)
+            "QComboBox { padding-right: 2px; }",
             "QComboBox::drop-down { border: none; width: 22px; }",
             f"QComboBox::down-arrow {{ image: url('{down}'); width: 10px; height: 6px; }}",
             "QAbstractSpinBox { padding-right: 18px; }",
@@ -573,7 +577,50 @@ class TabTextRoomStyle(QProxyStyle):
         # QStyle.polish is overloaded (widget, palette, application): pass every one on
         if isinstance(target, (QPushButton, QToolButton)):
             target.setCursor(Qt.CursorShape.PointingHandCursor)
+        if isinstance(target, QComboBox):
+            target.installEventFilter(_combo_text_aligner())
         return super().polish(target)
+
+
+class _ComboTextAligner(QObject):
+    """Shows the text of every combo box at its right end, next to the arrow.
+
+    The style sheet's style draws the label of a combo box left-aligned, whatever its style. A combo box that is not
+    editable is painted here: the box as usual, the label into an edit field narrowed from the left to the width of
+    the text (so the colors, the font and the elision stay the style's); an editable one aligns its line edit.
+    """
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt's name)
+        if not isinstance(watched, QComboBox):
+            return False
+        if watched.isEditable():
+            line_edit = watched.lineEdit()
+            if line_edit is not None and event.type() in (QEvent.Type.Show, QEvent.Type.Paint):
+                line_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return False
+        if event.type() != QEvent.Type.Paint:
+            return False
+        painter = QStylePainter(watched)
+        option = QStyleOptionComboBox()
+        watched.initStyleOption(option)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        style = watched.style()
+        field = style.subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, option, QStyle.SubControl.SC_ComboBoxEditField, watched
+        )
+        icon_width = option.iconSize.width() + 4 if not option.currentIcon.isNull() else 0
+        room = field.width() - watched.fontMetrics().horizontalAdvance(option.currentText) - icon_width - 4
+        if room > 0:
+            option.rect.setLeft(option.rect.left() + room)
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
+        painter.end()
+        return True
+
+
+@functools.lru_cache(maxsize=None)
+def _combo_text_aligner() -> _ComboTextAligner:
+    # one filter for all combo boxes; it lives as long as the application
+    return _ComboTextAligner(QApplication.instance())
 
 
 def draw_close_mark(painter: QPainter, option: QStyleOption) -> None:
@@ -609,9 +656,12 @@ def draw_indicator(painter: QPainter, option: QStyleOption, *, radio: bool) -> N
     checked = bool(state & QStyle.StateFlag.State_On)
     partial = bool(state & QStyle.StateFlag.State_NoChange)
     hovered = bool(state & QStyle.StateFlag.State_MouseOver) and enabled
-    full: QRect = option.rect  # type: ignore[attr-defined]
-    side = min(full.width(), full.height(), 16) - 1
-    box = QRectF(full.center().x() - side / 2 + 0.5, full.center().y() - side / 2 + 0.5, side, side)
+    full = QRectF(option.rect)  # type: ignore[attr-defined]
+    # inside the rectangle with its frame line (QRect.center() rounds down: a box centered on it lost half of its left
+    # frame line at the edge of the widget)
+    side = min(full.width(), full.height(), 16.0) - 2
+    box = QRectF(0, 0, side, side)
+    box.moveCenter(full.center())
     # the application's highlight: in a table or a tree, the style sheet's selection color replaces the palette's
     accent = QColor(QApplication.palette().color(QPalette.ColorRole.Highlight))
     base = palette.color(QPalette.ColorRole.Base)
@@ -1410,35 +1460,16 @@ class StatusChip(QWidget):
         return self.detail_label.text()
 
 
-# --- overflow menu ---
-
-
-def overflow_button(actions: Iterable[Tuple[str, Callable[[], None]]], *, tooltip: str = "More actions") -> QToolButton:
-    """A flat "⋯" button opening a menu of ``(text, callback)``; for rare or destructive actions."""
-    button = QToolButton()
-    button.setObjectName(FLAT_NAME)
-    button.setText("⋯")
-    button.setToolTip(tooltip)
-    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-    menu = QMenu(button)
-    for text, callback in actions:
-        action = menu.addAction(text)
-        action.triggered.connect(lambda _checked=False, cb=callback: cb())
-    button.setMenu(menu)
-    return button
-
-
 # --- panel header ---
 
-# the width of the slot of the "⋯" button at the right end of a panel header
-OVERFLOW_SLOT_WIDTH = 32
 # the margins of every panel's page (the main window applies them), so that the stages line up
 PAGE_MARGINS = (16, 12, 16, 8)
 
 
 class PanelHeader(QWidget):
     """The top row of a panel: title and one-line description on the left, a status chip below them, and the
-    panel's actions on the right (the primary one -- usually a :class:`RunStopButton` -- last, then a "⋯" menu).
+    panel's actions on the right (the primary one -- usually a :class:`RunStopButton` -- last, at the right edge of
+    the page, as the content below).
 
     The primary action sits in the same place in every panel and stays visible while the settings below scroll.
     """
@@ -1460,13 +1491,6 @@ class PanelHeader(QWidget):
         self.description_label.setVisible(bool(description))
         self.chip = StatusChip()
         self.actions_layout = hbox()
-        # the "⋯" menu has a slot of its own at the right end, empty in panels without one, so that the primary
-        # action is in the same place in every panel
-        self.overflow_slot = QWidget()
-        self.overflow_slot.setFixedWidth(OVERFLOW_SLOT_WIDTH)
-        self._overflow_layout = hbox(margins=0)
-        self.overflow_slot.setLayout(self._overflow_layout)
-        self.actions_layout.addWidget(self.overflow_slot, 0, Qt.AlignmentFlag.AlignTop)
         for action in actions:
             self.add_action(action)
         text_column = vbox(self.title_label, self.description_label, self.chip, spacing=4)
@@ -1477,12 +1501,64 @@ class PanelHeader(QWidget):
         layout.addLayout(self.actions_layout, 0)
         self.actions_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-    def add_action(self, widget: QWidget) -> None:
-        """Add an action left of the "⋯" slot; an :func:`overflow_button` goes into the slot."""
-        if isinstance(widget, QToolButton) and widget.objectName() == FLAT_NAME and widget.menu() is not None:
-            self._overflow_layout.addWidget(widget)
-        else:
-            self.actions_layout.insertWidget(self.actions_layout.count() - 1, widget)
+    def add_action(self, widget: QWidget, index: int = -1) -> None:
+        """Add an action at the right end (``index`` -1), or at ``index`` (0: the left end)."""
+        self.actions_layout.insertWidget(index, widget, 0, Qt.AlignmentFlag.AlignTop)
+
+
+# the gap between the settings column of a page and its main content
+SETTINGS_GAP = 12
+# the room between the cards of a settings column and its scroll bar
+_SETTINGS_SCROLL_ROOM = 8
+
+
+class SettingsSplitter(QSplitter):
+    """The settings of a stage in a column at the left, its results (the main content) at the right.
+
+    The column scrolls when it is taller than the page, and can be hidden with :attr:`toggle_button` (for the
+    panel's header), so that the results take the whole width. The same layout on every stage with settings: the
+    same gap, the same room for the scroll bar.
+    """
+
+    def __init__(self, settings: QWidget, main: QWidget, width: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        holder = QWidget()
+        holder_layout = QVBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, _SETTINGS_SCROLL_ROOM, 0)
+        holder_layout.addWidget(settings)
+        holder_layout.addStretch(1)
+        self.settings_area = QScrollArea()
+        self.settings_area.setObjectName(CLEAR_SCROLL_NAME)
+        self.settings_area.setWidgetResizable(True)
+        self.settings_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.settings_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_area.setMinimumWidth(width)
+        self.settings_area.setWidget(holder)
+        self.addWidget(self.settings_area)
+        self.addWidget(main)
+        self.setStretchFactor(0, 0)
+        self.setStretchFactor(1, 1)
+        self.setSizes([width, 10_000])
+        self.setChildrenCollapsible(False)
+        self.setHandleWidth(SETTINGS_GAP)
+        self.toggle_button = QToolButton()
+        self.toggle_button.setObjectName(FLAT_NAME)
+        self.toggle_button.clicked.connect(lambda: self.set_settings_visible(not self.settings_visible()))
+        self._update_toggle()
+
+    def settings_visible(self) -> bool:
+        return not self.settings_area.isHidden()
+
+    def set_settings_visible(self, visible: bool) -> None:
+        self.settings_area.setVisible(visible)
+        self._update_toggle()
+
+    def _update_toggle(self) -> None:
+        visible = self.settings_visible()
+        self.toggle_button.setText("◂ Hide Settings" if visible else "▸ Show Settings")
+        self.toggle_button.setToolTip(
+            "Hide the settings: the results take the whole width" if visible else "Show the settings again"
+        )
 
 
 def align_top(widget: QWidget) -> QWidget:

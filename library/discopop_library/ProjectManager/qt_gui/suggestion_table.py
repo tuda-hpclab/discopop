@@ -287,7 +287,9 @@ class SuggestionTable(QWidget):
         layout.setSpacing(4)
         layout.addWidget(self.filter_bar)
         layout.addWidget(self.stack, 1)
-        layout.addWidget(self.count_label)
+        # the number of suggestions at the left; a panel adds its buttons about all of them at the right
+        self.footer_layout = widgets.hbox(self.count_label, None, margins=0)
+        layout.addLayout(self.footer_layout)
 
         self.filter_edit.textChanged.connect(self._filters_changed)
         self.type_combo.currentTextChanged.connect(self._filters_changed)

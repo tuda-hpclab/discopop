@@ -95,7 +95,7 @@ def run_with(panel: PatternDetectionPanel, qtbot: QtBot, code: str) -> List[Expl
 
 def test_without_profiling_data_the_panel_says_why_and_leads_to_execute(panel: PatternDetectionPanel) -> None:
     assert tab_state(panel) == (True, "")  # the tab stays reachable, it explains itself
-    assert not panel.run_button.isEnabled() and not panel.vscode_action.isEnabled()
+    assert not panel.run_button.isEnabled() and not panel.vscode_button.isEnabled()
     assert panel.results_stack.currentIndex() == 1
     assert panel.locked_title.text() == "Needs profiling data"
     assert "Data.xml" in panel.locked_reason.text() and "FileMapping.txt" in panel.locked_reason.text()
@@ -300,7 +300,7 @@ def test_suggestions_fill_the_table_the_chip_and_the_vscode_action(panel: Patter
     write_suggestions(panel, ["2", "10"])
     panel.project_state.publish(PatternsChanged())
     assert [info.id for info in panel.table.suggestions()] == ["2", "10"]
-    assert panel.header.chip.text() == "2 suggestions" and panel.vscode_action.isEnabled()
+    assert panel.header.chip.text() == "2 suggestions" and panel.vscode_button.isEnabled()
     assert not panel.open_vscode_button.isEnabled() and panel.detail_stack.currentWidget() is panel.detail_placeholder
 
 

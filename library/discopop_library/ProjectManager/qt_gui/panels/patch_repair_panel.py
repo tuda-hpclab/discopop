@@ -22,10 +22,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QFrame,
     QHeaderView,
     QLabel,
-    QScrollArea,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -132,28 +130,17 @@ class PatchRepairPanel(Panel):
 
         column = QWidget()
         column_layout = QVBoxLayout(column)
-        column_layout.setContentsMargins(0, 0, 8, 0)
+        column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.addWidget(self._settings_box)
         column_layout.addWidget(self._agent_box)
         column_layout.addWidget(self._scope_box)
         column_layout.addWidget(self._advanced)
-        column_layout.addStretch(1)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setMinimumWidth(_SETTINGS_WIDTH)
-        scroll.setWidget(column)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(scroll)
-        splitter.addWidget(self._build_results())
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_SETTINGS_WIDTH + 20, 700])
+        self.splitter = widgets.SettingsSplitter(column, self._build_results(), _SETTINGS_WIDTH)
+        self.header.add_action(self.splitter.toggle_button, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.header)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.splitter, 1)
 
         project_state.subscribe(ConfigChanged, lambda _event: self._update_ui())
         project_state.subscribe(PatternsChanged, lambda _event: self._update_ui())

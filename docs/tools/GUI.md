@@ -56,7 +56,7 @@ The window has a workflow sidebar, the stage that is selected and an output pane
 - **Stage** (right): the stage that is selected.
 - **Output pane** (bottom): the output of all jobs, see [Output pane](#output-pane).
 
-Every stage has the same header: its title, a one-line description, a status chip (a colored label; some chips have a **Details** toggle for the longer explanation) and its actions at the top right. The primary action, for example **Run**, is one button that turns into **■ Stop** while the job runs. Rare or destructive actions are in a **⋯** menu of the stage. Settings are grouped in cards; settings that are rarely changed are in a collapsed **Advanced** section.
+Every stage has the same header: its title, a one-line description, a status chip (a colored label; some chips have a **Details** toggle for the longer explanation) and its actions at the top right. The primary action, for example **Run**, is one button that turns into **■ Stop** while the job runs, at the right edge of the page. Settings are grouped in cards; settings that are rarely changed are in a collapsed **Advanced** section. On *Hotspots*, *Pattern Detection*, *Patch Repair* and *Autotuning* the settings are a column at the left and the results take the rest of the page; **◂ Hide Settings** in the header hides the column, so the results take the whole width, and **▸ Show Settings** brings it back.
 
 The Tk version (`--gui-toolkit tk`) keeps the old layout: the configuration list on the left with **+ New** and **Edit Compilation**, and the tabs *Editor*, *Execute*, *Report*, *Hotspot Detection*, *Pattern Detection*, *Patch Repair* and *Autotuning* on the right. The functions of the tabs are the same as those of the stages described below; the *Project Setup* stage is the window opened by **Edit Compilation**, the *Configuration Setup* stage is the *Editor* tab, the *Profiling* stage is the button **Prepare Pattern Detection** of the *Execute* tab.
 
@@ -119,19 +119,19 @@ By default, the runtime of `execute.sh` is its wall clock time. Check *Read the 
 ## Hotspots
 ![Hotspots stage after two measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
 
-The stage measures which loops and functions dominate the runtime. See [Hotspot detection](Hotspot_detection.md) for the method. Its tabs are *Runs*, *Regions* and the plot tabs added with **+** (*Hotness quadrant*, *Top-N runtime bars*, *Per-region run profile*). The measurement settings, *Repetitions*, are a column next to these tabs; the column also shows the accumulated runs and the number of code regions per hotness.
+The stage measures which loops and functions dominate the runtime. See [Hotspot detection](Hotspot_detection.md) for the method. Its tabs are *Runs*, *Regions* and the plot tabs added with **+** (*Hotness quadrant*, *Top-N runtime bars*, *Per-region run profile*). The settings column next to these tabs holds the configurations to measure, the measurement settings (*Repetitions*) and the measurements so far: the accumulated runs and the number of code regions per hotness.
 
 The card *Execution configurations* lists the configurations of the project with check boxes (**All** / **None**) and the status of each: how many runs it has, or, during and after a measurement, *queued*, *measuring*, *measured*, *failed* (with the reason) or *stopped*. At first only the selected configuration (see the configuration selector of the other stages) is checked, and the check follows that selection; once you change a check box yourself, your choice stays (a configuration created later starts unchecked).
 
 **Run Measurements** (**■ Stop** while it runs) measures the checked configurations one after another, in `hd` mode in place: it builds the program with `discopop_hotspot_cc`/`discopop_hotspot_cxx` when the build does not serve the configuration (missing, outdated, or another compile script), executes it *Repetitions* times, and at the end calls `discopop_hotspot_analyzer` once on all accumulated runs. A failing configuration does not stop the others; **■ Stop** ends the whole batch, and the configurations not measured yet are marked *stopped*. The status line sums up the batch, e.g. "1 measured, 1 failed ✗". Repeating one configuration only reduces noise. To make the hotness classification meaningful, measure several configurations with different input sizes; the runs of all configurations are combined. The status chip shows the state of the build of the first checked configuration, and the progress ("Measuring 2 of 3: B") while a batch runs.
 
-The **⋯** menu offers the following actions:
+Further actions are buttons in the settings column:
 
-| Action | Effect |
-|---|---|
-| Re-instrument | Build the hotspot-instrumented program again |
-| Re-run Analysis | Run the analyzer again on the accumulated runs |
-| Clear Measurements… | Delete the accumulated runs |
+| Action | Card | Effect |
+|---|---|---|
+| Re-instrument | *Measurement* | Build the hotspot-instrumented program again |
+| Re-run Analysis | *Measurements so far* | Run the analyzer again on the accumulated runs |
+| Clear Measurements… | *Measurements so far* | Delete the accumulated runs |
 
 *Runs* lists every recorded run (runs recorded elsewhere, for example in the Execute stage, by the command line or by the MCP server, are marked `(external)`). *Regions* lists the code regions with hotness (`YES`, `MAYBE`, `NO`), kind, location, average, share, minimum, maximum, ratio and number of runs, with filters for hotness and kind. **Show in VSCode** in the detail bar of a region opens it in VS Code.
 
@@ -159,7 +159,7 @@ The settings are cards:
 | Detection | Pattern Types: `reduction` and `doall` (default); `task` is experimental. Threads: worker processes of the Explorer (`-j`); `auto` = unlimited. |
 | Advanced (collapsed) | Dependency Data: `default (full states)` or `no_states (states ignored)`, i.e. `--ignore-dependency-states`. *Show graph visualization*: Tk version: runs the Explorer inside the GUI process and shows its graphs in the *Graph Visualization* tab; the window is unresponsive while it runs. Qt version: runs `discopop_explorer --visualize`, which shows the graphs in a window of its own (needs the package `discopop-gui`); the GUI stays responsive and *Stop* works. |
 
-**Run Pattern Detection** (**■ Stop** while it runs) starts the detection. Its **⋯** menu offers **Show suggestions in VSCode** (the `code` command must be on your `PATH`) and **Browse / edit patches…**, a window in which the patch files of the suggestions can be edited.
+**Run Pattern Detection** (**■ Stop** while it runs) starts the detection. Below the table of suggestions, next to their number, **Browse / Edit Patches…** opens a window in which the patch files of the suggestions can be edited, and **Show Suggestions in VSCode** shows them in VS Code (the `code` command must be on your `PATH`).
 
 The stage shows its results itself. The table lists the suggestions with ID, type, location, function, hotness and pragma; a filter line and a type filter narrow the rows, and the columns can be sorted. For the selected suggestion, the details and the patch are shown below the table, the patch as a colored diff; **Open in VSCode** opens the source file at the loop of the suggestion. The chip shows the number of suggestions, or that none were found. The patch files are in `.discopop/patch_generator/`.
 

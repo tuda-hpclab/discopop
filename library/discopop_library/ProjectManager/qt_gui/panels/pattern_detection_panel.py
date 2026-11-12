@@ -86,6 +86,8 @@ PATTERN_TYPES = ("reduction", "doall", "task")
 _DEFAULT_PATTERN_TYPES = ("reduction", "doall")
 _RUN_TEXT = "Run Pattern Detection"
 _NONE_FOUND_TEXT = "No patterns found."
+# the width of the settings column
+_SETTINGS_WIDTH = 340
 _SELECT_HINT = "Select a suggestion to see its details and patch."
 _VISUALIZER_MISSING = (
     "Graph visualization needs the package discopop_gui, which is not installed.\n"
@@ -129,43 +131,36 @@ class PatternDetectionPanel(Panel):
 
         self.run_button = widgets.RunStopButton(_RUN_TEXT, self.run_pattern_detection, self.stop_pattern_detection)
         self.run_button.setEnabled(False)
-        self.overflow = widgets.overflow_button(
-            [
-                ("Show suggestions in VSCode", self.open_in_vscode),
-                ("Browse / edit patches…", self.open_suggestion_browser),
-            ]
-        )
-        overflow_menu = self.overflow.menu()
-        assert overflow_menu is not None
-        self.vscode_action = overflow_menu.actions()[0]
-        self.vscode_action.setEnabled(False)
-        self.browse_action = overflow_menu.actions()[1]
-        self.browse_action.setEnabled(False)
         self.header = widgets.PanelHeader(
             "Pattern Detection",
             "Finds parallelization suggestions in the profiling data.",
-            [self.run_button, self.overflow],
+            [self.run_button],
         )
 
         self.console = self.make_console()
         self.table = SuggestionTable()
+        # what concerns all suggestions: below the table, at the right of their number
+        self.browse_button = widgets.create_button(
+            "Browse / Edit Patches…", self.open_suggestion_browser, tooltip="Look at and edit the patches"
+        )
+        self.vscode_button = widgets.create_button(
+            "Show Suggestions in VSCode", self.open_in_vscode, tooltip="Open the suggestions in VSCode"
+        )
+        for button in (self.browse_button, self.vscode_button):
+            button.setObjectName(widgets.COMPACT_NAME)
+            button.setEnabled(False)
+            self.table.footer_layout.addWidget(button)
         self.table.current_changed.connect(self._on_suggestion_selected)
         self.results_stack = QStackedWidget()
         self.results_stack.addWidget(self._build_results())
         self.results_stack.addWidget(self._build_locked_view())
 
-        settings = self._build_settings()
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(settings)
-        splitter.addWidget(self.results_stack)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 1200])
-        splitter.setChildrenCollapsible(False)
+        self.splitter = widgets.SettingsSplitter(self._build_settings(), self.results_stack, _SETTINGS_WIDTH)
+        self.header.add_action(self.splitter.toggle_button, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 8)
         layout.addWidget(self.header)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.splitter, 1)
 
         # prerequisites may appear after a profiling run, the hotspot hint follows the hotspot results
         for event_type in (ResultsChanged, ConfigurationsChanged, HotspotsChanged, PatternsChanged):
@@ -229,18 +224,11 @@ class PatternDetectionPanel(Panel):
 
         column = QWidget()
         column_layout = QVBoxLayout(column)
-        column_layout.setContentsMargins(0, 0, 6, 0)
+        column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.addWidget(detection)
         column_layout.addWidget(self.hotspot_hint)
         column_layout.addWidget(self.advanced)
-        column_layout.addStretch(1)
-        area = QScrollArea()
-        area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.Shape.NoFrame)
-        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        area.setWidget(column)
-        area.setMinimumWidth(320)
-        return area
+        return column
 
     def _build_results(self) -> QWidget:
         self.detail_title = widgets.heading_label("")
@@ -316,8 +304,8 @@ class PatternDetectionPanel(Panel):
             self.table.set_suggestions(infos)
         none_found = explorer_state.pattern_detection_executed(dot_dp) and not explorer_state.patterns_found(dot_dp)
         self.table.set_empty_text(_NONE_FOUND_TEXT if none_found else NO_SUGGESTIONS_TEXT)
-        self.vscode_action.setEnabled(bool(infos))
-        self.browse_action.setEnabled(bool(infos))
+        self.vscode_button.setEnabled(bool(infos))
+        self.browse_button.setEnabled(bool(infos))
         self.detail_area.setVisible(bool(infos))
         self._update_chip(ready, len(infos), none_found)
 

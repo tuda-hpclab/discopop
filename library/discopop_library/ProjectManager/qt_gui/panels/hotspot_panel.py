@@ -205,17 +205,12 @@ class HotspotPanel(Panel):
         self.notebook.setCornerWidget(self.add_plot_button, Qt.Corner.TopRightCorner)
 
         self.header = self._build_header()
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_settings())
-        splitter.addWidget(self.notebook)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_SETTINGS_WIDTH, 1000])
-        splitter.setChildrenCollapsible(False)
+        self.splitter = widgets.SettingsSplitter(self._build_settings(), self.notebook, _SETTINGS_WIDTH)
+        self.header.add_action(self.splitter.toggle_button, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self.header)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.splitter, 1)
 
         project_state.subscribe(ConfigChanged, lambda _event: self.refresh_configurations())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh_configurations())
@@ -229,23 +224,24 @@ class HotspotPanel(Panel):
     def _build_header(self) -> widgets.PanelHeader:
         self.run_button = widgets.RunStopButton(RUN_TEXT, self.run_measurement, self.stop_measurement)
         self.run_button.setEnabled(False)
-        menu_button = widgets.overflow_button(
-            [
-                ("Re-instrument", self.reinstrument),
-                ("Re-run Analysis", self.rerun_analysis),
-                ("Clear Measurements\u2026", self.clear_measurements),
-            ]
+        # the rarer actions are buttons next to what they act on (in the settings column): the build in
+        # "Measurement", the accumulated runs in "Measurements so far"
+        self.reinstrument_button = widgets.create_button(
+            "Re-instrument", self.reinstrument, tooltip="Build the hotspot-instrumented program again"
         )
-        menu = menu_button.menu()
-        assert menu is not None
-        self.reinstrument_action, self.analyze_action, self.clear_action = menu.actions()
-        for action in menu.actions():
-            action.setEnabled(False)
+        self.analyze_button = widgets.create_button(
+            "Re-run Analysis", self.rerun_analysis, tooltip="Run the analyzer again on the accumulated runs"
+        )
+        self.clear_button = widgets.danger_outline_button(
+            "Clear Measurements\u2026", self.clear_measurements, tooltip="Delete the accumulated runs"
+        )
+        for button in (self.reinstrument_button, self.analyze_button, self.clear_button):
+            button.setEnabled(False)
         return widgets.PanelHeader(
             "Hotspot Detection",
             "Measures which code regions take the time; pattern detection, patch repair and the autotuner use the "
             "result.",
-            [self.run_button, menu_button],
+            [self.run_button],
         )
 
     def _build_settings(self) -> QWidget:
@@ -280,14 +276,18 @@ class HotspotPanel(Panel):
             "Runs per configuration. Hotness weighs the average runtime and how much it varies between runs; "
             "repeating one configuration only reduces noise. Timeouts come from the Execute stage.",
         )
+        section.add_widget(widgets.hbox(self.reinstrument_button, None, margins=0))
         self.facts_label = widgets.caption_label("")
+        self.facts_label.setWordWrap(True)
+        results = widgets.FormSection("Measurements so far")
+        results.add_widget(self.facts_label)
+        results.add_widget(widgets.hbox(self.analyze_button, self.clear_button, None, margins=0))
         column = QWidget()
         layout = QVBoxLayout(column)
-        layout.setContentsMargins(0, 0, 8, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(configs)
         layout.addWidget(section)
-        layout.addWidget(self.facts_label)
-        layout.addStretch(1)
+        layout.addWidget(results)
         column.setMinimumWidth(260)
         return column
 
@@ -721,9 +721,9 @@ class HotspotPanel(Panel):
         )
         self.select_all_button.setEnabled(idle)
         self.select_none_button.setEnabled(idle)
-        self.reinstrument_action.setEnabled(idle and has_config)
-        self.analyze_action.setEnabled(idle and bool(self.runs))
-        self.clear_action.setEnabled(idle and self.session.has_data())
+        self.reinstrument_button.setEnabled(idle and has_config)
+        self.analyze_button.setEnabled(idle and bool(self.runs))
+        self.clear_button.setEnabled(idle and self.session.has_data())
 
     # ── running measurements ───────────────────────────────────────────────────
 

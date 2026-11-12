@@ -285,7 +285,8 @@ class MainWindow(QMainWindow):
         self.theme_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.theme_button.setMenu(self.theme_menu)
         footer = widgets.hbox(self.theme_button, None, margins=0)
-        footer.setContentsMargins(10, 4, 10, 0)
+        # in line with the stages above it (their tiles are 6 px in from the edges)
+        footer.setContentsMargins(6, 4, 6, 0)
         sidebar_layout.addLayout(footer)
         self.statusBar().setObjectName(widgets.STATUS_BAR_NAME)
 

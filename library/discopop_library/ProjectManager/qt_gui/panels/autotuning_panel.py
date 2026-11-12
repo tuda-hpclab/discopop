@@ -15,17 +15,13 @@ import os
 import queue
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QFrame,
     QLabel,
     QRadioButton,
-    QScrollArea,
     QSpinBox,
-    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -164,17 +160,13 @@ class AutotuningPanel(Panel):
         self.prerequisites_banner.add_action(self.goto_pattern_detection_button)
         self.prerequisites_banner.setVisible(False)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_left_side())
-        splitter.addWidget(self._build_right_side())
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_OPTIONS_MIN_WIDTH + 20, 900])
+        self.splitter = widgets.SettingsSplitter(self._build_left_side(), self._build_right_side(), _OPTIONS_MIN_WIDTH)
+        self.header.add_action(self.splitter.toggle_button, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.header)
         layout.addWidget(self.prerequisites_banner)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.splitter, 1)
 
         self._update_mode_widgets()
         self._update_algorithm_hint()
@@ -192,19 +184,13 @@ class AutotuningPanel(Panel):
     # ── building ─────────────────────────────────────────────────────────────
 
     def _build_left_side(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setMinimumWidth(_OPTIONS_MIN_WIDTH)
         options = QWidget()
         options_layout = QVBoxLayout(options)
-        options_layout.setContentsMargins(0, 0, 8, 0)
+        options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.addWidget(self._build_settings())
         options_layout.addWidget(self._build_selection())
         options_layout.addWidget(self._build_advanced())
-        options_layout.addStretch(1)
-        scroll.setWidget(options)
-        return scroll
+        return options
 
     def _build_settings(self) -> QWidget:
         self.threads = widgets.ThreadSelector()
