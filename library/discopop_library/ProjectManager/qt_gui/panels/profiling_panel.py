@@ -53,7 +53,6 @@ from discopop_library.ProjectManager.services.project_state import (
 PROFILE_TEXT = "Profile for Pattern Detection"
 _MAX_SECONDS = 10_000_000
 _STATUS_RESET_MS = 3000
-_SETTINGS_MAX_WIDTH = 760
 
 _STATUS_COLORS = {
     StatusKind.BUSY: widgets.STATUS_BUSY,
@@ -150,10 +149,9 @@ class ProfilingPanel(Panel):
         )
 
         column = QWidget()
-        column.setMaximumWidth(_SETTINGS_MAX_WIDTH)
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
-        column_layout.setSpacing(12)
+        column_layout.setSpacing(widgets.CARD_SPACING)
         for section in (data, about, self.limits_section):
             column_layout.addWidget(section)
         column_layout.addStretch(1)

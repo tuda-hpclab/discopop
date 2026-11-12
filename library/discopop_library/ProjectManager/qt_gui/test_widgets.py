@@ -161,5 +161,9 @@ def test_combo_boxes_show_their_text_at_the_right(qtbot: QtBot) -> None:
         if any(with_text.pixelColor(x, y) != without_text.pixelColor(x, y) for y in range(combo.height()))
     ]
     assert columns and min(columns) > combo.width() // 2, columns[:5]
+    # without a selection: the placeholder is shown (QComboBox.paintEvent fills it in, the filter has to as well)
+    combo.setPlaceholderText("pick one")
+    combo.setCurrentIndex(-1)
+    assert combo.grab().toImage() != without_text
     line_edit = editable.lineEdit()
     assert line_edit is not None and line_edit.alignment() & Qt.AlignmentFlag.AlignRight

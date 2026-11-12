@@ -99,7 +99,6 @@ _MAX_THREADS = 4096
 _MAX_SECONDS = 10_000_000
 _MAX_REPETITIONS = 1000
 _STATUS_RESET_MS = 3000
-_SETTINGS_MAX_WIDTH = 760
 
 
 class ExecutePanel(Panel):
@@ -248,10 +247,9 @@ class ExecutePanel(Panel):
 
         # ── layout: the header, below it the settings column (scrollable, left-aligned) ─────────────
         column = QWidget()
-        column.setMaximumWidth(_SETTINGS_MAX_WIDTH)
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
-        column_layout.setSpacing(12)
+        column_layout.setSpacing(widgets.CARD_SPACING)
         for section in (modes_section, run_section, suggestions_section, self.advanced_section):
             column_layout.addWidget(section)
         column_layout.addStretch(1)

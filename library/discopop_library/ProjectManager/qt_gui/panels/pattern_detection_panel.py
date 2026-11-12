@@ -233,7 +233,9 @@ class PatternDetectionPanel(Panel):
     def _build_results(self) -> QWidget:
         self.detail_title = widgets.heading_label("")
         self.open_vscode_button = widgets.create_button(
-            "Open in VSCode", self.open_selected_in_vscode, tooltip="Open the source file at the loop of the suggestion"
+            "Open Code in VSCode",
+            self.open_selected_in_vscode,
+            tooltip="Open the source file at the code of the selected suggestion",
         )
         self.open_vscode_button.setEnabled(False)
         self.detail_form = QFormLayout()

@@ -90,7 +90,7 @@ PLOT_TYPES: Dict[str, Dict[str, str]] = {
 
 RUN_TEXT = "Run Measurements"
 _DETAIL_BAR_WIDTH = 260
-_SETTINGS_WIDTH = 330
+_SETTINGS_WIDTH = 340
 _FIXED_TABS = 2  # Regions, Runs
 _RESET_MS = 3000
 _KEY_ROLE = Qt.ItemDataRole.UserRole
@@ -288,7 +288,6 @@ class HotspotPanel(Panel):
         layout.addWidget(configs)
         layout.addWidget(section)
         layout.addWidget(results)
-        column.setMinimumWidth(260)
         return column
 
     def _build_table(

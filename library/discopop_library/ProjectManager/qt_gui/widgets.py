@@ -17,6 +17,8 @@ import logging
 import os
 import tempfile
 import time
+
+import shiboken6
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QRegularExpression, QStandardPaths, Qt, Signal, Slot
@@ -591,7 +593,12 @@ class _ComboTextAligner(QObject):
     """
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt's name)
-        if not isinstance(watched, QComboBox):
+        # a combo box that paints itself (a subclass overriding paintEvent) is left alone, as is a right-to-left one
+        if (
+            not isinstance(watched, QComboBox)
+            or type(watched).paintEvent is not QComboBox.paintEvent
+            or watched.layoutDirection() == Qt.LayoutDirection.RightToLeft
+        ):
             return False
         if watched.isEditable():
             line_edit = watched.lineEdit()
@@ -603,6 +610,10 @@ class _ComboTextAligner(QObject):
         painter = QStylePainter(watched)
         option = QStyleOptionComboBox()
         watched.initStyleOption(option)
+        if watched.currentIndex() < 0 and watched.placeholderText():
+            # (QComboBox.paintEvent fills in the placeholder itself, initStyleOption does not)
+            option.currentText = watched.placeholderText()
+            option.palette.setBrush(QPalette.ColorRole.ButtonText, option.palette.placeholderText())
         painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
         style = watched.style()
         field = style.subControlRect(
@@ -617,10 +628,16 @@ class _ComboTextAligner(QObject):
         return True
 
 
-@functools.lru_cache(maxsize=None)
+_combo_aligner: Optional[_ComboTextAligner] = None
+
+
 def _combo_text_aligner() -> _ComboTextAligner:
-    # one filter for all combo boxes; it lives as long as the application
-    return _ComboTextAligner(QApplication.instance())
+    """One filter for all combo boxes, a child of the application (a new one for a new application)."""
+    global _combo_aligner
+    app = QApplication.instance()
+    if _combo_aligner is None or not shiboken6.isValid(_combo_aligner) or _combo_aligner.parent() is not app:
+        _combo_aligner = _ComboTextAligner(app)
+    return _combo_aligner
 
 
 def draw_close_mark(painter: QPainter, option: QStyleOption) -> None:
@@ -1508,8 +1525,10 @@ class PanelHeader(QWidget):
 
 # the gap between the settings column of a page and its main content
 SETTINGS_GAP = 12
-# the room between the cards of a settings column and its scroll bar
+# the room between the cards of a settings column and its scroll bar (or where the scroll bar would be)
 _SETTINGS_SCROLL_ROOM = 8
+# the vertical space between the cards of a page
+CARD_SPACING = 8
 
 
 class SettingsSplitter(QSplitter):
@@ -1522,11 +1541,13 @@ class SettingsSplitter(QSplitter):
 
     def __init__(self, settings: QWidget, main: QWidget, width: int, parent: Optional[QWidget] = None) -> None:
         super().__init__(Qt.Orientation.Horizontal, parent)
+        settings_layout = settings.layout()
+        if settings_layout is not None:
+            settings_layout.setSpacing(CARD_SPACING)
         holder = QWidget()
-        holder_layout = QVBoxLayout(holder)
-        holder_layout.setContentsMargins(0, 0, _SETTINGS_SCROLL_ROOM, 0)
-        holder_layout.addWidget(settings)
-        holder_layout.addStretch(1)
+        self._holder_layout = QVBoxLayout(holder)
+        self._holder_layout.addWidget(settings)
+        self._holder_layout.addStretch(1)
         self.settings_area = QScrollArea()
         self.settings_area.setObjectName(CLEAR_SCROLL_NAME)
         self.settings_area.setWidgetResizable(True)
@@ -1534,6 +1555,10 @@ class SettingsSplitter(QSplitter):
         self.settings_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.settings_area.setMinimumWidth(width)
         self.settings_area.setWidget(holder)
+        # the cards end at the same place with and without a scroll bar: its width is kept free while it is hidden
+        scroll_bar = self.settings_area.verticalScrollBar()
+        scroll_bar.rangeChanged.connect(lambda _minimum, maximum: self._reserve_scroll_bar(maximum > 0))
+        self._reserve_scroll_bar(False)
         self.addWidget(self.settings_area)
         self.addWidget(main)
         self.setStretchFactor(0, 0)
@@ -1545,6 +1570,10 @@ class SettingsSplitter(QSplitter):
         self.toggle_button.setObjectName(FLAT_NAME)
         self.toggle_button.clicked.connect(lambda: self.set_settings_visible(not self.settings_visible()))
         self._update_toggle()
+
+    def _reserve_scroll_bar(self, shown: bool) -> None:
+        bar_width = 0 if shown else self.settings_area.verticalScrollBar().sizeHint().width()
+        self._holder_layout.setContentsMargins(0, 0, _SETTINGS_SCROLL_ROOM + bar_width, 0)
 
     def settings_visible(self) -> bool:
         return not self.settings_area.isHidden()
