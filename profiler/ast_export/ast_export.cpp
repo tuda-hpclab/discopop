@@ -52,6 +52,7 @@
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace {
@@ -80,8 +81,16 @@ class ExportConsumer : public clang::ASTConsumer {
  public:
   ExportConsumer(std::set<std::string> mapped, std::string root, std::string out)
       : mapped_(std::move(mapped)), root_(std::move(root)), out_path_(std::move(out)) {
-    if (!root_.empty() && root_.back() != '/') {
-      root_ += '/';
+    // the project directory as given and with symbolic links resolved: a checkout reached through a symbolic link
+    // (/home/... -> /mnt/storage/...) is named either way, depending on who resolved what
+    llvm::SmallString<256> real;
+    if (!root_.empty() && !llvm::sys::fs::real_path(root_, real)) {
+      root_real_ = std::string(real);
+    }
+    for (std::string* root_form : {&root_, &root_real_}) {
+      if (!root_form->empty() && root_form->back() != '/') {
+        *root_form += '/';
+      }
     }
   }
 
@@ -116,7 +125,12 @@ class ExportConsumer : public clang::ASTConsumer {
       llvm::SmallString<256> real;
       const bool resolved = !llvm::sys::fs::real_path(name, real);
       if (mapped_.empty()) {
-        selected = resolved && std::string(real).rfind(root_, 0) == 0;
+        // the name as clang knows it (absolute, without symbolic links resolved) and the resolved one, each against
+        // both forms of the project directory
+        llvm::SmallString<256> absolute(name);
+        llvm::sys::fs::make_absolute(absolute);
+        llvm::sys::path::remove_dots(absolute, /*remove_dot_dot=*/true);
+        selected = BelowRoot(absolute) || (resolved && BelowRoot(real));
       } else {
         selected = (resolved && mapped_.count(std::string(real)) > 0) || mapped_.count(name) > 0;
       }
@@ -161,8 +175,13 @@ class ExportConsumer : public clang::ASTConsumer {
     }
   }
 
+  bool BelowRoot(llvm::StringRef path) const {
+    return (!root_.empty() && path.starts_with(root_)) || (!root_real_.empty() && path.starts_with(root_real_));
+  }
+
   std::set<std::string> mapped_;
   std::string root_;
+  std::string root_real_;
   std::string out_path_;
   // the selection per file, by the hash of its FileID (the files of a translation unit are few, its locations many)
   std::unordered_map<unsigned, bool> cache_;

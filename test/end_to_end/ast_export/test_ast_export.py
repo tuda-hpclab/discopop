@@ -157,6 +157,39 @@ def test_plugin_writes_far_less_than_the_complete_dump(work_dir: Path, tmp_path:
     assert 0 < raw.stat().st_size < len(unfiltered.stdout) / 10
 
 
+@pytest.mark.parametrize("root_through_link", [True, False])
+def test_plugin_project_directory_behind_a_symbolic_link(tmp_path: Path, root_through_link: bool) -> None:
+    """Without a file mapping the project directory decides; a checkout reached through a symbolic link
+    (/home/... -> /mnt/storage/...) must not lose its declarations, whichever form of the path is given."""
+    real = tmp_path / "storage" / "src"
+    shutil.copytree(SRC_DIR, real)
+    link = tmp_path / "home_src"
+    link.symlink_to(real)
+    root = link if root_through_link else real
+    raw = tmp_path / "raw.json"
+    result = subprocess.run(
+        [
+            "clang++",
+            "-std=c++17",
+            "main.cpp",
+            "-fsyntax-only",
+            "-Xclang",
+            "-load",
+            "-Xclang",
+            str(_plugins(_libs_dir())[0]),
+        ]
+        + ["-Xclang", "-add-plugin", "-Xclang", "dp-ast-export"]
+        + ["-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", f"root={root}"]
+        + ["-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", f"out={raw}"],
+        cwd=link,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    nodes = _graph_nodes(raw)
+    assert {"main.cpp", "util.hpp"} == {node[3] for node in nodes}
+
+
 def test_unwritable_output_fails_the_compilation(work_dir: Path) -> None:
     """clang's exit code has to tell the wrapper that there is no output to filter."""
     plugin = _plugins(_libs_dir())[0]

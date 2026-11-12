@@ -414,3 +414,25 @@ def test_size_and_plural_formatting() -> None:
     ]
     assert fad._plural(1, "file") == "1 file" and fad._plural(0, "file") == "0 files"
     assert fad._plural(1234, "node") == "1,234 nodes"
+
+
+@pytest.mark.parametrize("root_through_link", [True, False])
+def test_project_directory_behind_a_symbolic_link(tmp_path: Any, root_through_link: bool) -> None:
+    """Without a file mapping, a file below the project directory is kept whichever side resolved the link."""
+    real = tmp_path / "storage" / "project"
+    real.mkdir(parents=True)
+    (real / "main.cpp").write_text("")
+    link = tmp_path / "home_project"
+    link.symlink_to(real)
+    root, file_dir = (link, real) if root_through_link else (real, link)
+    tu = {
+        "id": "0x1",
+        "kind": "TranslationUnitDecl",
+        "loc": {},
+        "inner": [
+            {"kind": "FunctionDecl", "loc": {"file": str(file_dir / "main.cpp"), "line": 1}},
+            {"kind": "FunctionDecl", "loc": {"file": "/usr/include/stdio.h", "line": 1}},
+        ],
+    }
+    out = json.loads(fad.filter_ast_dump(json.dumps(tu), str(root)))
+    assert [n["loc"]["file"] for n in out["inner"]] == [str(file_dir / "main.cpp")]

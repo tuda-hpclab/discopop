@@ -95,6 +95,9 @@ class _Policy:
 
     def __init__(self, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> None:
         self.project_root = project_root if project_root.endswith("/") else project_root + "/"
+        # a checkout reached through a symbolic link (/home/... -> /mnt/storage/...) is named either way, depending on
+        # who resolved what: compare with both forms
+        self.project_root_real = os.path.join(os.path.realpath(project_root), "")
         self.file_mapping = file_mapping
         self.mapped, self.mapped_files = _load_file_mapping(file_mapping) if file_mapping else (frozenset(), 0)
         self.prune_types = prune_types
@@ -131,7 +134,8 @@ class _Policy:
         # an absolute -I are covered by the project_root prefix check.
         if not file_.startswith("/"):
             return True
-        return file_.startswith(self.project_root)
+        roots = (self.project_root, self.project_root_real)
+        return file_.startswith(roots) or os.path.realpath(file_).startswith(roots)
 
     def keeps(self, file_: Optional[str], kind: Optional[str]) -> bool:
         if self.prune_types and isinstance(kind, str) and kind.endswith("Type"):
