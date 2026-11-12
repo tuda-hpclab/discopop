@@ -103,14 +103,12 @@ fi
 # Unfiltered, clang's JSON AST dump includes every declaration transitively
 # reachable from included headers (libc, libstdc++, MPI, ...), which for real
 # projects bloats ast_dump.json to multiple GB even though pattern detection
-# only ever queries project source locations. Filter it down before writing.
-PROJECT_ROOT="$(dirname "${TMP_DOT_DISCOPOP}")"
+# only ever queries the instrumented files. Reduce it before writing (dump_ast.sh).
 mkdir -p "$TMP_DOT_DISCOPOP/profiler/locking_files" || exit 1
 AST_TMP="$(mktemp "$TMP_DOT_DISCOPOP/profiler/ast_dump.XXXXXX")" || exit 1
 trap 'rm -f -- "$AST_TMP"' EXIT
-set -o pipefail
-${LLVM_CLANG} "$@" -fsyntax-only -Xclang -ast-dump=json |
-  python3 "${PARENT_PATH}/filter_ast_dump.py" "${PROJECT_ROOT}" "$TMP_DOT_DISCOPOP/FileMapping.txt" > "$AST_TMP"
+source "${PARENT_PATH}/dump_ast.sh"
+dp_dump_ast "${LLVM_CLANG}" "$TMP_DOT_DISCOPOP" "$AST_TMP" "$@"
 ast_status=$?
 if [ "$ast_status" -ne 0 ]; then
   exit "$ast_status"

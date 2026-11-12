@@ -11,6 +11,7 @@ install(PROGRAMS
     ${CMAKE_CURRENT_SOURCE_DIR}/CMAKE_wrapper.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/CXX_wrapper.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/dp-fmap
+    ${CMAKE_CURRENT_SOURCE_DIR}/dump_ast.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/filter_ast_dump.py
     ${CMAKE_CURRENT_SOURCE_DIR}/LINKER_wrapper.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/MPI_CC_wrapper.sh

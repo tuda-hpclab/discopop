@@ -17,6 +17,7 @@ DiscoPoP consists of seven Python packages. The profiler (`discopop-profiler`) a
 | Requirement | Version | Used for |
 |---|---|---|
 | LLVM and clang (development packages) | 19, 20, 21 or 22 | the profiler and the hotspot detection build an LLVM pass |
+| `libclang-<version>-dev` (optional) | same as clang | builds the AST export plugin, which makes the instrumentation of template heavy projects much faster; without it the profiler works the same, see [Instrumentation](../tools/Instrumentation.md#ast-export-plugin) |
 | Python (with `venv` and `pip`) | 3.11 or newer | all tools |
 | CMake | 3.28 or newer | building the C++ code |
 | C++20 compiler, `make` | | building the C++ code |
