@@ -118,3 +118,21 @@ def test_several_excluded_directories(tmp_path: Path, monkeypatch: pytest.Monkey
     program = compile_to_ir(SOURCE, directory=str(_project(tmp_path)))
     assert not _instrumented(program, "library_sum") and not _instrumented(program, "other_sum")
     assert _mapped(program) == ["test.cpp"]
+
+
+@pytest.mark.parametrize("root", ["deps/", "deps"])
+def test_the_project_root_does_not_match_its_namesake_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root: str
+) -> None:
+    # the pass tests whether a path contains the root: "<project>/deps" must not take in "<project>/deps2"
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    project = _project(tmp_path)
+    program = compile_to_ir(SOURCE, directory=str(project), project_root=str(project / root))
+
+    def has_callbacks(part: str) -> bool:
+        # main lies outside of the root here, so __dp_func_entry is not there to look for
+        return sum(program.callback_counts(function=_function(program, part)).values()) > 0
+
+    assert has_callbacks("library_sum")
+    assert not has_callbacks("other_sum") and not has_callbacks("sum")
+    assert _mapped(program) == ["deps/library/library.hpp"]

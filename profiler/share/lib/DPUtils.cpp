@@ -94,13 +94,18 @@ std::vector<std::string> Spellings(const std::string& path) {
 struct ProjectDirectories {
   std::string root_variable;
   std::string exclude_variable;
+  // both with a trailing '/', so that "src" does not take in "src2" and "_deps" does not exclude "_deps2"
   std::vector<std::string> roots;
-  // with a trailing '/', so that "_deps" does not exclude "_deps2"
   std::vector<std::string> excluded;
 };
 
+std::string WithTrailingSlash(const std::string& directory) { return directory == "/" ? directory : directory + "/"; }
+
 void Prepare(ProjectDirectories& directories) {
-  directories.roots = Spellings(directories.root_variable);
+  directories.roots.clear();
+  for (const std::string& spelling : Spellings(directories.root_variable)) {
+    directories.roots.push_back(WithTrailingSlash(spelling));
+  }
   directories.excluded.clear();
   std::stringstream entries(directories.exclude_variable);
   std::string entry;
@@ -114,12 +119,12 @@ void Prepare(ProjectDirectories& directories) {
       candidates.push_back(entry);
     } else {
       for (const std::string& root : directories.roots) {
-        candidates.push_back(root == "/" ? "/" + entry : root + "/" + entry);
+        candidates.push_back(root + entry);
       }
     }
     for (const std::string& candidate : candidates) {
       for (const std::string& spelling : Spellings(candidate)) {
-        const std::string directory = spelling == "/" ? spelling : spelling + "/";
+        const std::string directory = WithTrailingSlash(spelling);
         if (std::find(directories.excluded.begin(), directories.excluded.end(), directory) ==
             directories.excluded.end()) {
           directories.excluded.push_back(directory);
