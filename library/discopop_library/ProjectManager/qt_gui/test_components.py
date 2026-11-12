@@ -87,10 +87,27 @@ def test_status_chip(qtbot: QtBot) -> None:
     chip.set_status(widgets.CHIP_WARN, "Build stale", "Sources changed since the build.")
     assert chip.text() == "Build stale" and chip.level == widgets.CHIP_WARN
     assert chip.details_button.isVisible() and not chip.detail_label.isVisible()
+    assert chip.details_button.text() == "▸ Details"
     chip.details_button.click()
     assert chip.detail_label.isVisible() and chip.detail() == "Sources changed since the build."
+    assert chip.details_button.text() == "▾ Details"
     chip.set_status(widgets.CHIP_OK, "Up to date")
     assert not chip.details_button.isVisible() and not chip.detail_label.isVisible()
+
+
+def test_buttons_show_a_pointing_hand(qtbot: QtBot) -> None:
+    from PySide6.QtWidgets import QCheckBox
+
+    style = widgets.TabTextRoomStyle("Fusion")
+    button, chip, check = widgets.create_button("Run"), widgets.StatusChip(), QCheckBox("x")
+    toggle = chip.details_button
+    for parentless in (button, chip, check):
+        qtbot.addWidget(parentless)
+    for widget in (button, toggle, check):
+        style.polish(widget)
+    assert button.cursor().shape() == Qt.CursorShape.PointingHandCursor
+    assert toggle.cursor().shape() == Qt.CursorShape.PointingHandCursor
+    assert check.cursor().shape() == Qt.CursorShape.ArrowCursor
 
 
 def test_overflow_button_runs_the_chosen_action(qtbot: QtBot) -> None:

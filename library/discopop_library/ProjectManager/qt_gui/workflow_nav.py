@@ -15,8 +15,8 @@ A locked stage cannot be selected; its reason is its detail line and tooltip.
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
+from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -92,23 +92,28 @@ class _StageDelegate(QStyledItemDelegate):
             enabled = bool(index.flags() & Qt.ItemFlag.ItemIsEnabled)
             selected = bool(state & QStyle.StateFlag.State_Selected)
             hovered = bool(state & QStyle.StateFlag.State_MouseOver) and enabled
-            if selected or hovered:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            if enabled and not selected:
+                # a stage that can be selected: a faint tile of the page color on the darker sidebar, in a faint frame
+                # (a locked stage has none), so the stages read as things to click
+                app_palette = QApplication.palette()
+                tile = QColor(app_palette.color(QPalette.ColorRole.Window))
+                tile.setAlpha(255 if hovered else 120)
+                frame = widgets.border_color(app_palette)
+                frame.setAlpha(255 if hovered else 110)
+                painter.setPen(QPen(frame, 1))
+                painter.setBrush(tile)
+                painter.drawRoundedRect(QRectF(rect.adjusted(6, 2, -6, -2)).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+            if selected:
                 # the selected stage: a light shade of the highlight with a bar in it at the left (as the selected
-                # configuration in the header bar), the hovered one a fainter shade
-                if selected:
-                    # from the application's palette: the sidebar's transparent background makes its own base
-                    # color a transparent black
-                    background = widgets.selection_color(QApplication.palette())
-                else:
-                    background = palette.color(QPalette.ColorRole.Highlight)
-                    background.setAlpha(40)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                # configuration in the header bar); from the application's palette: the sidebar's transparent
+                # background makes its own base color a transparent black
+                background = widgets.selection_color(QApplication.palette())
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(background)
                 painter.drawRoundedRect(rect.adjusted(6, 2, -6, -2), 6, 6)
-                if selected:
-                    painter.setBrush(palette.color(QPalette.ColorRole.Highlight))
-                    painter.drawRoundedRect(QRect(rect.left() + 6, rect.top() + 8, 3, rect.height() - 16), 1.5, 1.5)
+                painter.setBrush(palette.color(QPalette.ColorRole.Highlight))
+                painter.drawRoundedRect(QRect(rect.left() + 6, rect.top() + 8, 3, rect.height() - 16), 1.5, 1.5)
             text_color = (
                 widgets.accent_text_color(QApplication.palette())
                 if selected
@@ -266,6 +271,13 @@ class WorkflowNav(QListWidget):
         item.setData(_STATE_ROLE, status.state)
         item.setData(_DETAIL_ROLE, status.detail)
         item.setToolTip(status.detail)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 (Qt's name)
+        # a pointing hand over the stages that can be selected (not over headings and locked stages)
+        item = self.itemAt(event.position().toPoint())
+        clickable = item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsEnabled)
+        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor)
+        super().mouseMoveEvent(event)
 
     def _on_current_changed(self, current: Optional[QListWidgetItem], _previous: Optional[QListWidgetItem]) -> None:
         if current is not None and current.data(_NAME_ROLE):

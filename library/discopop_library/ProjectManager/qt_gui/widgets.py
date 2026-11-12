@@ -17,7 +17,7 @@ import logging
 import os
 import tempfile
 import time
-from typing import Callable, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QRegularExpression, QStandardPaths, Qt, Signal, Slot
 from PySide6.QtGui import (
@@ -141,9 +141,12 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
     if palette is not None:
         background, border, hover, pressed = (color.name() for color in button_colors(palette))
         disabled_text = _secondary_text(palette)
+        flat_border = _mix(border_color(palette), palette.color(QPalette.ColorRole.Window), 0.85)
+        flat_text = accent_text_color(palette).name()
     else:
         background, border, hover, pressed = "palette(button)", "palette(mid)", "palette(midlight)", "palette(mid)"
         disabled_text = "palette(mid)"
+        flat_border, flat_text = "palette(midlight)", "palette(link)"
     rules = [
         # the default look: a framed button that stands out from the window (a border radius without a border would
         # draw a bare label)
@@ -156,9 +159,13 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
         " background-color: palette(window); }",
         # a compact button: framed like the default one, with less padding, for slim bars (the output pane's Clear)
         f"QPushButton#{COMPACT_NAME} {{ padding: 2px 10px; }}",
-        # a flat button: the "⋯" overflow menus, the toggles of collapsible sections
-        "QPushButton#flat, QToolButton#flat { border: none; background: transparent; padding: 3px 6px; }",
-        "QPushButton#flat:hover, QToolButton#flat:hover { background-color: palette(midlight); }",
+        # a flat button: the "⋯" overflow menus, "Details", the toggles of collapsible sections; lighter than a
+        # framed button, but still recognizable as one: a faint frame and the text in the accent
+        f"QPushButton#flat, QToolButton#flat {{ border: 1px solid {flat_border}; border-radius: 6px;"
+        f" background: transparent; padding: 3px 8px; color: {flat_text}; }}",
+        "QPushButton#flat:hover, QToolButton#flat:hover { background-color: palette(midlight);"
+        f" border-color: {border}; }}",
+        f"QPushButton#flat:disabled, QToolButton#flat:disabled {{ color: {disabled_text}; }}",
         "QToolButton#flat::menu-indicator { image: none; }",
     ]
     for variant, (color, hover) in _VARIANT_COLORS.items():
@@ -219,9 +226,17 @@ def chrome_color(palette: QPalette) -> QColor:
 def _chrome_rules(palette: Optional[QPalette]) -> str:
     """The frame of the main window: header bar and sidebar in the chrome color, with a line towards the page."""
     background = chrome_color(palette).name() if palette is not None else "palette(window)"
-    hover = chrome_color(palette).darker(112).name() if palette is not None else "palette(midlight)"
     selected = selection_color(palette).name() if palette is not None else "palette(highlight)"
     selected_text = accent_text_color(palette).name() if palette is not None else "palette(highlighted-text)"
+    # an unselected configuration: a faint tile (the window color, halfway to the header bar) in a faint frame, so it
+    # reads as something to click; hovered, the page color in the frame of a button
+    if palette is not None:
+        window = palette.color(QPalette.ColorRole.Window)
+        tile = _mix(window, chrome_color(palette), 0.5)
+        tile_border = _mix(border_color(palette), chrome_color(palette), 0.55)
+        hover, hover_border = window.name(), border_color(palette).name()
+    else:
+        tile, tile_border, hover, hover_border = "transparent", "palette(midlight)", "palette(midlight)", "palette(mid)"
     return "\n".join(
         [
             f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
@@ -231,11 +246,12 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
             # the selected stage of the sidebar; the others as plain text, shaded while hovered
             # the selector of the configuration matters on every stage: tabs taller than the buttons of a page, and
             # at least as wide as a short name, so that "A" and "B" are no narrower targets than "large_input"
-            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none; border-radius: 6px;"
-            f" padding: 8px 14px; margin: 2px 2px; min-width: {CONFIG_TAB_MIN_WIDTH}px;"
+            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background-color: {tile}; border: 1px solid {tile_border};"
+            f" border-radius: 6px; padding: 7px 13px; margin: 2px 2px; min-width: {CONFIG_TAB_MIN_WIDTH}px;"
             " color: palette(window-text); }",
-            f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; }}",
-            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: {selected};" f" color: {selected_text}; }}",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; border-color: {hover_border}; }}",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: {selected}; border-color: {selected};"
+            f" color: {selected_text}; }}",
             # its scroll arrows (while the tabs do not fit) in the color of the header bar, covering the tabs below
             f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {background}; border: none;"
             " border-radius: 4px; width: 18px; }",
@@ -545,6 +561,13 @@ class TabTextRoomStyle(QProxyStyle):
         if element == QStyle.SubElement.SE_TabBarTabText:
             rect.adjust(0, -TAB_TEXT_EXTRA_PX, 0, TAB_TEXT_EXTRA_PX)
         return rect
+
+    def polish(self, target: Any) -> Any:
+        # every push and tool button shows a pointing hand (also those of matplotlib's toolbar and of dialogs);
+        # QStyle.polish is overloaded (widget, palette, application): pass every one on
+        if isinstance(target, (QPushButton, QToolButton)):
+            target.setCursor(Qt.CursorShape.PointingHandCursor)
+        return super().polish(target)
 
 
 def draw_close_mark(painter: QPainter, option: QStyleOption) -> None:
@@ -1328,11 +1351,11 @@ class StatusChip(QWidget):
         self.chip.setObjectName(CHIP_NAME)
         self.details_button = QToolButton()
         self.details_button.setObjectName(FLAT_NAME)
-        self.details_button.setText("Details")
         self.details_button.setCheckable(True)
         self.detail_label = caption_label("")
         self.detail_label.setVisible(False)
-        self.details_button.toggled.connect(self.detail_label.setVisible)
+        self.details_button.toggled.connect(self._on_details_toggled)
+        self._on_details_toggled(False)
         # The row keeps its height when the chip is empty or has no "Details": every page header is equally tall, so
         # the content of all stages starts at the same height and does not jump when a stage's status appears.
         self.row = QWidget()
@@ -1368,6 +1391,11 @@ class StatusChip(QWidget):
         self.details_button.setVisible(bool(detail))
         if not detail:
             self.details_button.setChecked(False)
+
+    def _on_details_toggled(self, shown: bool) -> None:
+        # the chevron of the collapsible sections: it opens and closes something
+        self.details_button.setText(("▾ " if shown else "▸ ") + "Details")
+        self.detail_label.setVisible(shown)
 
     def text(self) -> str:
         return self.chip.text()
