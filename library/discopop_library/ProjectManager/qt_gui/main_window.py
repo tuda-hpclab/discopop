@@ -357,8 +357,9 @@ class MainWindow(QMainWindow):
             self.set_tab_title(name, self._pending_tab_titles.pop(name))
 
     def _place_config_selector(self) -> None:
-        """Put the configuration selector at the top of the stage in front if it works on the selected
-        configuration (``CONFIG_STAGES``), else hide it. Every way to another page (the sidebar, ``show_tab``, a
+        """Put the configuration selector first into the content of the stage in front (below its header, so the
+        titles of all stages are at the same height) if it works on the selected configuration (``CONFIG_STAGES``),
+        else hide it. Every way to another page (the sidebar, ``show_tab``, a
         replaced page) changes the current widget of the stack, which calls this."""
         selector = self.config_list
         current = self.current_tab()
@@ -373,7 +374,10 @@ class MainWindow(QMainWindow):
             old_layout = old_parent.layout() if old_parent is not None else None
             if old_layout is not None:
                 old_layout.removeWidget(selector)
-            layout.insertWidget(0, selector)
+            # the first content of the page: right below its header (a page without one: at the top)
+            header = getattr(page, "header", None)
+            index = layout.indexOf(header) + 1 if isinstance(header, QWidget) else 0
+            layout.insertWidget(max(index, 0), selector, 0, Qt.AlignmentFlag.AlignLeft)
         selector.setVisible(True)
 
     def config_selector_stage(self) -> str:

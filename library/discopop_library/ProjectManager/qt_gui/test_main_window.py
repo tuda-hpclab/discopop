@@ -117,16 +117,21 @@ def test_the_configuration_selector_is_on_the_stages_that_use_it(qtbot: QtBot, t
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
+    titles_y = set()
     for name in TAB_ORDER:
         window.nav.select_stage(name)
+        qtbot.wait(1)
+        header = getattr(window.tab(name), "header")
         if name in CONFIG_STAGES:
-            # at the top of the page, above its title
-            page = window.tab(name)
-            layout = page.layout()
+            # the first content of the page, below its header
+            layout = window.tab(name).layout()
             assert window.config_selector_stage() == name and window.config_list.isVisible()
-            assert layout is not None and layout.indexOf(window.config_list) == 0
+            assert layout is not None and layout.indexOf(window.config_list) == layout.indexOf(header) + 1
         else:
             assert window.config_selector_stage() == "" and not window.config_list.isVisible()
+        titles_y.add(header.title_label.mapTo(window, header.title_label.rect().topLeft()).y())
+    # the titles of all stages are at the same height
+    assert len(titles_y) == 1
     # a page holding it that is replaced leaves it to the window
     window.show_tab(TAB_EXECUTE)
     window.add_tab(TAB_EXECUTE, Panel(window.arguments, window.project_state, window.status))

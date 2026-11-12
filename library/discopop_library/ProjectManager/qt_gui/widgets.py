@@ -226,23 +226,25 @@ def chrome_color(palette: QPalette) -> QColor:
 
 def _chrome_rules(palette: Optional[QPalette]) -> str:
     """The frame of the main window: sidebar and status line in the chrome color, with a line towards the page; the
-    configuration selector a strip in that color on the page."""
+    configuration selector, content of the pages, a card as the other cards."""
     background = chrome_color(palette).name() if palette is not None else "palette(window)"
-    strip_border = border_color(palette).name() if palette is not None else "palette(mid)"
+    card = surface_color(palette).name() if palette is not None else "palette(window)"
+    card_border = border_color(palette).name() if palette is not None else "palette(mid)"
     selected = selection_color(palette).name() if palette is not None else "palette(highlight)"
     selected_text = accent_text_color(palette).name() if palette is not None else "palette(highlighted-text)"
-    # an unselected configuration: a faint tile (the window color, halfway to the strip) in a faint frame, so it
-    # reads as something to click; hovered, the page color in the frame of a button
+    # an unselected configuration: a faint tile (the card color, halfway to the frame of the window) in a faint
+    # frame, so it reads as something to click; hovered, lighter than the card, in the frame of a button
     if palette is not None:
-        window = palette.color(QPalette.ColorRole.Window)
-        tile = _mix(window, chrome_color(palette), 0.5)
-        tile_border = _mix(border_color(palette), chrome_color(palette), 0.55)
-        hover, hover_border = window.name(), border_color(palette).name()
+        surface = surface_color(palette)
+        tile = _mix(surface, chrome_color(palette), 0.5)
+        tile_border = _mix(border_color(palette), surface, 0.55)
+        hover_color = palette.color(QPalette.ColorRole.Button if is_dark(palette) else QPalette.ColorRole.Base)
+        hover, hover_border = hover_color.name(), border_color(palette).name()
     else:
         tile, tile_border, hover, hover_border = "transparent", "palette(midlight)", "palette(midlight)", "palette(mid)"
     return "\n".join(
         [
-            f"QWidget#{CONFIG_BAR_NAME} {{ background-color: {background}; border: 1px solid {strip_border};"
+            f"QWidget#{CONFIG_BAR_NAME} {{ background-color: {card}; border: 1px solid {card_border};"
             " border-radius: 10px; }",
             f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
@@ -256,8 +258,8 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
             f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; border-color: {hover_border}; }}",
             f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: {selected}; border-color: {selected};"
             f" color: {selected_text}; }}",
-            # its scroll arrows (while the tabs do not fit) in the color of the strip, covering the tabs below
-            f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {background}; border: none;"
+            # its scroll arrows (while the tabs do not fit) in the color of the card, covering the tabs below
+            f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {card}; border: none;"
             " border-radius: 4px; width: 18px; }",
             f"QTabBar#{CONFIG_TABS_NAME} QToolButton:hover {{ background-color: palette(midlight); }}",
             f"QLabel#{CAPTION_NAME} {{ color: {_secondary_text(palette)}; }}",

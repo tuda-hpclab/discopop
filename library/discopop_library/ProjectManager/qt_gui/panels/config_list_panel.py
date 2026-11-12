@@ -145,13 +145,14 @@ class ConfigListPanel(Panel):
         self._menu = QMenu(self.menu_button)
         self.menu_button.setMenu(self._menu)
         self._fill_menu()
+        # as wide as its content (as a card of a page), up to the width of the page, where the tabs scroll
         layout = widgets.hbox(
-            self.caption_label, self.tab_bar, self.empty_label, self.new_button, None, self.menu_button, margins=0
+            self.caption_label, self.tab_bar, self.empty_label, self.new_button, self.menu_button, margins=0
         )
         layout.setSpacing(6)
         layout.setContentsMargins(10, 4, 8, 4)
         self.setLayout(layout)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         # a strip of its own on the page, in the color of the window's frame (widgets.CONFIG_BAR_NAME)
         self.setObjectName(widgets.CONFIG_BAR_NAME)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
