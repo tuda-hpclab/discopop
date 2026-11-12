@@ -99,7 +99,7 @@ def test_members_after_inner_and_missing_inner() -> None:
     tu["trailer"] = {"x": 1}
     obj = json.loads(fad.filter_ast_dump(json.dumps(tu), ROOT))
     assert obj["trailer"] == {"x": 1} and len(obj["inner"]) == 4
-    assert json.loads(fad.filter_ast_dump('{"kind": "X"}', ROOT)) == {"kind": "X", "inner": []}
+    assert json.loads(fad.filter_ast_dump('{"kind": "X"}', ROOT)) == {"kind": "X"}
 
 
 def test_empty_inner_and_empty_input() -> None:
@@ -136,3 +136,104 @@ def test_stream_interface() -> None:
     out = io.StringIO()
     fad.filter_ast_stream(io.StringIO(json.dumps(_translation_unit())), out, ROOT + "/")
     assert len(json.loads(out.getvalue())["inner"]) == 4
+
+
+def _reference(text: str) -> Any:
+    """The whole-object algorithm: parse everything, then prune."""
+    obj = json.loads(text)
+    obj["inner"] = fad._filter_children(obj["inner"], None, ROOT + "/")
+    return obj
+
+
+def _namespace_dump() -> dict[str, Any]:
+    tu = _translation_unit(2)
+    tu["inner"] += [
+        # system namespace: dropped with everything in it, even a child claiming a project file
+        {
+            "id": "0x2",
+            "kind": "NamespaceDecl",
+            "loc": {"file": "/usr/include/c++/vector", "line": 1},
+            "name": "std",
+            "inner": [
+                {"kind": "FunctionDecl", "loc": {"line": 2}, "inner": [{"kind": "Z", "loc": {}}]},
+                {"kind": "FunctionDecl", "loc": {"file": ROOT + "/in_std.cpp"}},
+                {"id": "0x9", "kind": "NamespaceDecl", "loc": {"line": 9}, "name": "inner_ns", "inner": []},
+            ],
+        },
+        # project namespace: kept; children are pruned individually, the inherited file is the namespace's
+        {
+            "id": "0x3",
+            "kind": "NamespaceDecl",
+            "loc": {"file": ROOT + "/ns.hpp", "line": 1},
+            "name": "app",
+            "inner": [
+                {"kind": "FunctionDecl", "loc": {"line": 2}},
+                {"kind": "VarDecl", "loc": {"file": "/usr/include/y.h", "line": 3}},
+                {"kind": "VarDecl", "loc": {"line": 4}},
+                {
+                    "id": "0x4",
+                    "kind": "NamespaceDecl",
+                    "loc": {"line": 5},
+                    "name": "nested",
+                    "inner": [{"kind": "FunctionDecl", "loc": {"line": 6}}],
+                },
+                {"id": "0x5", "kind": "LinkageSpecDecl", "loc": {"line": 7}, "language": "C", "inner": []},
+            ],
+        },
+        # namespace without children (no ``inner`` key), directly followed by another container
+        {"id": "0x6", "kind": "NamespaceDecl", "loc": {"file": ROOT + "/e.cpp", "line": 1}, "name": "empty"},
+        {
+            "id": "0x7",
+            "kind": "LinkageSpecDecl",
+            "loc": {"file": ROOT + "/e.cpp", "line": 2},
+            "language": "C",
+            "inner": [{"kind": "FunctionDecl", "loc": {"line": 3}}],
+        },
+    ]
+    return tu
+
+
+@pytest.mark.parametrize("indent", [None, 2])
+@pytest.mark.parametrize("chunk", [1 << 20, 64, 7])
+@pytest.mark.parametrize("max_decode", [64 << 20, 200, 1])
+def test_equals_whole_object_algorithm(
+    monkeypatch: pytest.MonkeyPatch, indent: Any, chunk: int, max_decode: int
+) -> None:
+    """Any declaration larger than ``max_decode`` is read member by member (namespaces always are)."""
+    monkeypatch.setattr(fad._Reader, "_MIN_CHUNK", chunk)
+    monkeypatch.setattr(fad, "_MAX_DECODE", max_decode)
+    for dump in (_namespace_dump(), _translation_unit()):
+        text = json.dumps(dump, indent=indent)
+        assert json.loads(fad.filter_ast_dump(text, ROOT)) == _reference(text)
+
+
+def test_large_non_namespace_declaration_is_streamed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A class template with a huge, deeply nested ``inner`` tree is never decoded as a whole."""
+    deep: dict[str, Any] = {"kind": "Leaf", "loc": {"line": 1}}
+    for i in range(300):
+        deep = {"id": str(i), "kind": "ElaboratedType", "loc": {"line": i}, "inner": [deep, {"kind": "Sibling"}]}
+    tu = _translation_unit(1)
+    tu["inner"].append(
+        {"id": "0xa", "kind": "ClassTemplateDecl", "loc": {"file": ROOT + "/t.hpp", "line": 1}, "inner": [deep]}
+    )
+    text = json.dumps(tu, indent=2)
+    monkeypatch.setattr(fad._Reader, "_MIN_CHUNK", 4096)
+    monkeypatch.setattr(fad, "_MAX_DECODE", 8192)
+    decoded_sizes: list[int] = []
+    original = json.JSONDecoder.raw_decode
+
+    def spy(self: json.JSONDecoder, s: str, idx: int = 0) -> Any:
+        result = original(self, s, idx)
+        decoded_sizes.append(result[1] - idx)
+        return result
+
+    with monkeypatch.context() as spied:
+        spied.setattr(json.JSONDecoder, "raw_decode", spy)
+        out = fad.filter_ast_dump(text, ROOT)
+    assert max(decoded_sizes) < len(text) // 20
+    assert json.loads(out) == _reference(text)
+
+
+def test_dropped_namespace_children_are_not_kept() -> None:
+    names = [n.get("name") for n in json.loads(fad.filter_ast_dump(json.dumps(_namespace_dump()), ROOT))["inner"]]
+    assert "std" not in names and "app" in names and "empty" in names

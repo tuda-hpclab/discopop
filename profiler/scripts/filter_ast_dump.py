@@ -25,10 +25,10 @@ dump is later loaded, and the resolved file is written back explicitly into
 every kept node so a kept node cutting on the topology when a preceding
 sibling is dropped.
 
-The input is processed one top-level declaration at a time (the declarations of
-the translation unit are the items of its ``inner`` array), so the memory
-needed does not scale with the size of the unfiltered dump, which is dominated
-by system headers.
+The input is streamed: a declaration is only held in memory as a whole if it is
+small, larger ones (namespaces, huge class templates) are read member by member,
+so the memory needed scales with neither the unfiltered dump, which is dominated
+by system headers, nor with the largest declaration.
 """
 
 import io
@@ -157,12 +157,20 @@ class _Reader:
             if not self.fill():
                 return None
 
-    def decode_value(self) -> Any:
+    def ensure(self, n: int) -> None:
+        """Make at least ``n`` unread characters available, as far as the input has them."""
+        while len(self.buf) - self.pos < n and self.fill():
+            pass
+
+    def decode_value(self, limit: Optional[int] = None) -> Any:
+        """Decode the next JSON value; raise ``_TooLarge`` if it does not fit into ``limit`` characters of buffer."""
         while True:
             try:
                 obj, end = self.decoder.raw_decode(self.buf, self.pos)
             except json.JSONDecodeError:
                 # the value may continue beyond the buffer; a genuine syntax error surfaces at the end of the input
+                if limit is not None and len(self.buf) - self.pos >= limit:
+                    raise _TooLarge() from None
                 if not self.fill():
                     raise
                 continue
@@ -170,94 +178,131 @@ class _Reader:
             return obj
 
 
-_INNER_START = re.compile(r'"inner"\s*:\s*\[')
+class _TooLarge(Exception):
+    """A value is larger than the amount that may be decoded as a whole."""
 
 
-def _find_header_end(reader: _Reader) -> Optional[int]:
-    """Position behind the ``[`` of the top-level ``inner`` array, or None if the object has no such header."""
-    search_from = reader.pos
-    while True:
-        match = _INNER_START.search(reader.buf, search_from)
-        if match is not None:
-            header = reader.buf[reader.pos : match.start()].rstrip()
-            try:
-                json.loads(header.rstrip(",") + "}")
-            except ValueError:
-                return None
-            return match.end()
-        if not reader.fill():
-            return None
-        # fill() moved the unread data to the buffer start
-        search_from = 0
+# A declaration is decoded as a whole (fast, in C) if it fits into this many characters. A larger one -- the
+# declarations of a namespace such as ``std`` or ``boost``, but also a single class template whose type sugar spans
+# gigabytes -- is read member by member instead, so memory does not grow with the size of any declaration.
+_MAX_DECODE = 64 << 20
+# Namespaces and linkage specifications nearly always are large: stream them directly, instead of first buffering
+# up to _MAX_DECODE in vain. Clang writes ``id`` and ``kind`` first.
+_CONTAINER_HINT = re.compile(r'\{\s*"id"\s*:\s*"[^"]*"\s*,\s*"kind"\s*:\s*"(?:NamespaceDecl|LinkageSpecDecl)"')
+_HINT_WINDOW = 1024
 
 
-def _stream_object(reader: _Reader, out: TextIO, project_root: str) -> None:
-    """Prune one top-level object, holding only one declaration of its ``inner`` array in memory at a time."""
-    header_end = _find_header_end(reader)
-    if header_end is None:
-        # no ``inner`` array in the header (unexpected for a clang dump): prune the object as a whole
-        obj = reader.decode_value()
-        obj["inner"] = _filter_children(obj.get("inner", []), None, project_root)
-        out.write(json.dumps(obj))
-        return
-
-    out.write(reader.buf[reader.pos : header_end])
-    reader.pos = header_end
-    ctx_file: Optional[str] = None
+def _stream_children(reader: _Reader, out: TextIO, project_root: str, ctx_file: Optional[str], emit: bool) -> None:
+    """Process the elements of an ``inner`` array whose ``[`` was consumed; write the kept ones if ``emit`` is set."""
     first = True
     while True:
         reader.compact()
         ch = reader.skip_ws()
         if ch is None:
-            raise ValueError("truncated AST dump: the top-level 'inner' array is not closed")
+            raise ValueError("truncated AST dump: an 'inner' array is not closed")
         if ch == ",":
             reader.pos += 1
             continue
         if ch == "]":
             reader.pos += 1
-            break
-        child = reader.decode_value()
-        own_file = _own_file(child, ctx_file)
-        if _is_kept(own_file, project_root):
-            _filter_subtree(child, own_file, project_root)
-            out.write(("" if first else ", ") + json.dumps(child))
+            return
+        if ch != "{":
+            raise ValueError("malformed AST dump: an element of an 'inner' array is not an object")
+        sep = "" if first else ", "
+        reader.ensure(_HINT_WINDOW)
+        streamed = _CONTAINER_HINT.match(reader.buf, reader.pos) is not None
+        if not streamed:
+            try:
+                child = reader.decode_value(_MAX_DECODE)
+            except _TooLarge:
+                streamed = True
+        if streamed:
+            own_file, wrote = _stream_object(reader, out, project_root, ctx_file, emit, sep)
+        else:
+            own_file = _own_file(child, ctx_file)
+            wrote = emit and _is_kept(own_file, project_root)
+            if wrote:
+                _filter_subtree(child, own_file, project_root)
+                out.write(sep + json.dumps(child))
+            del child
+        if wrote:
             first = False
         # the next sibling's inheritance context advances regardless of whether this one survived
         ctx_file = own_file
-        del child
-    out.write("]")
 
-    # whatever follows the array inside the top-level object (normally just the closing brace)
-    ch = reader.skip_ws()
-    if ch == ",":
-        # turn the comma into the opening brace, so that the remaining members decode as an object
-        reader.buf = reader.buf[: reader.pos] + "{" + reader.buf[reader.pos + 1 :]
-        extra = reader.decode_value()
-        if extra:
-            out.write(", " + json.dumps(extra)[1:-1])
-        out.write("}")
-    elif ch == "}":
+
+def _stream_object(
+    reader: _Reader, out: TextIO, project_root: str, ctx_file: Optional[str], emit: bool, sep: str
+) -> tuple[Optional[str], bool]:
+    """Read the object at the reader's position member by member; write it (preceded by ``sep``) if it is kept.
+
+    Clang writes ``loc`` before ``inner``, so whether the object is kept is known when the ``inner`` array starts and
+    its elements can be processed one at a time. Returns the object's own file and whether it was written.
+    """
+    reader.pos += 1  # "{"
+    members: dict[str, Any] = {}
+    after_inner: dict[str, Any] = {}
+    own_file: Optional[str] = None
+    keep = False
+    seen_inner = False
+    while True:
+        ch = reader.skip_ws()
+        if ch is None:
+            raise ValueError("truncated AST dump: an object is not closed")
+        if ch == ",":
+            reader.pos += 1
+            continue
+        if ch == "}":
+            reader.pos += 1
+            break
+        key = reader.decode_value()
+        if not isinstance(key, str) or reader.skip_ws() != ":":
+            raise ValueError("malformed AST dump: expected a member name followed by ':'")
         reader.pos += 1
-        out.write("}")
-    else:
-        raise ValueError("malformed AST dump: unexpected content behind the top-level 'inner' array")
+        value_start = reader.skip_ws()
+        if key == "inner" and not seen_inner and value_start == "[":
+            seen_inner = True
+            own_file = _own_file(members, ctx_file)
+            keep = emit and _is_kept(own_file, project_root)
+            if keep:
+                _bake_file(members, own_file)
+                out.write(sep + (json.dumps(members)[:-1] + ", " if members else "{") + '"inner": [')
+            reader.pos += 1  # "["
+            _stream_children(reader, out, project_root, own_file, keep)
+            if keep:
+                out.write("]")
+        else:
+            (after_inner if seen_inner else members)[key] = reader.decode_value()
+    if not seen_inner:
+        own_file = _own_file(members, ctx_file)
+        keep = emit and _is_kept(own_file, project_root)
+        if keep:
+            _bake_file(members, own_file)
+            out.write(sep + json.dumps(members))
+    elif keep:
+        out.write((", " + json.dumps(after_inner)[1:-1] if after_inner else "") + "}")
+    return own_file, keep
 
 
 def filter_ast_stream(source: TextIO, out: TextIO, project_root: str) -> None:
     """Prune one or more concatenated top-level JSON objects read from ``source`` and write them to ``out``.
 
-    The objects are processed declaration by declaration: the memory needed is that of the largest single
-    top-level declaration plus the read buffer, not that of the whole (unfiltered) dump.
+    A declaration is held in memory as a whole only if it is small (``_MAX_DECODE``); larger ones are read member by
+    member, so the memory needed does not depend on the size of the (unfiltered) dump or of any declaration.
     """
+    # type trees nest deeply, and the pruning of a decoded declaration recurses over them
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
     if not project_root.endswith("/"):
         project_root += "/"
     reader = _Reader(source)
     first = True
-    while reader.skip_ws() is not None:
+    while (ch := reader.skip_ws()) is not None:
+        if ch != "{":
+            raise ValueError("malformed AST dump: a top-level value is not an object")
         if not first:
             out.write("\n")
         first = False
-        _stream_object(reader, out, project_root)
+        _stream_object(reader, out, project_root, None, True, "")
 
 
 def filter_ast_dump(text: str, project_root: str) -> str:
