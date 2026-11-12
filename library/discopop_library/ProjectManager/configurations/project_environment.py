@@ -233,7 +233,7 @@ def ignored_settings_warning(settings: Mapping[str, str], settings_name: str) ->
         + SCOPE_VARIABLE
         + ") is configured in "
         + PROJECT_ENVIRONMENT_FILE
-        + " (GUI: Editor -> Project environment, command line: --dp-project-root-dir)."
+        + " (GUI: Project Setup, command line: --dp-project-root-dir)."
     )
 
 

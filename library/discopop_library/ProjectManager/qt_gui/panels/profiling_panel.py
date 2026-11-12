@@ -33,6 +33,7 @@ from discopop_library.ProjectManager.services.explorer_state import (
     explorer_prerequisites_met,
     missing_explorer_files,
     required_explorer_files,
+    stale_profiling_data_message,
 )
 from discopop_library.ProjectManager.services.jobs import (
     StatusKind,
@@ -46,6 +47,7 @@ from discopop_library.ProjectManager.services.modes import available_modes
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
+    ProjectEnvironmentChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -174,6 +176,7 @@ class ProfilingPanel(Panel):
         project_state.subscribe(ConfigChanged, lambda _event: self.refresh())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         project_state.subscribe(ResultsChanged, lambda _event: self.refresh())
+        project_state.subscribe(ProjectEnvironmentChanged, lambda _event: self.refresh())
         self.refresh()
 
     @staticmethod
@@ -236,14 +239,18 @@ class ProfilingPanel(Panel):
         self.goto_setup_button.setVisible(setup_fixes_it)
         if not self.is_running():
             self.run_button.setEnabled(not missing and not self._blocked)
-            # the chip says why the button is off; once it is on again, the outcome of the last run is not restored
+            stale = stale_profiling_data_message(self.arguments)
+            # the chip says why the button is off or why the data should be profiled again; once that is over, the
+            # outcome of the last run is not restored
             if missing:
                 self.header.chip.set_status(widgets.CHIP_WARN, "Cannot profile", missing)
             elif self._blocked:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Execute is running")
+            elif stale is not None:
+                self.header.chip.set_status(widgets.CHIP_WARN, "Profiled with another scope", stale)
             elif self._hint_shown:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "")
-            self._hint_shown = bool(missing) or self._blocked
+            self._hint_shown = bool(missing) or self._blocked or stale is not None
 
     def set_blocked(self, blocked: bool) -> None:
         """Another stage runs the configuration (Execute): no profiling run meanwhile."""
@@ -267,6 +274,7 @@ class ProfilingPanel(Panel):
             timeout_validation=self.timeout_validation_spin.value(),
         )
         self._run_failed = False
+        self._hint_shown = False  # the chip shows the outcome of this run
         self.run_button.setEnabled(False)  # remembered: "can a run be started" once this one ended
         self.run_button.set_running(True)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Profiling")

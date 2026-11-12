@@ -15,6 +15,7 @@ from pytestqt.qtbot import QtBot
 
 from PySide6.QtCore import Qt
 
+from discopop_library.ProjectManager.configurations.project_environment import record_instrumented_scope
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.main_window import (
     TAB_AUTOTUNING,
@@ -33,7 +34,7 @@ from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ResultsChanged
+from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ConfigChanged, ResultsChanged
 from discopop_library.ProjectManager.services.workflow_status import StageState
 
 
@@ -148,6 +149,47 @@ def test_the_sidebar_shows_what_the_stages_have_done(qtbot: QtBot, tmp_path: Pat
     (tmp_path / ".discopop" / "FileMapping.txt").write_text("")
     window.project_state.publish(ResultsChanged())
     qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.DONE, timeout=2000)
+
+
+def test_a_changed_scope_marks_the_profiling_data_stale(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    (tmp_path / ".discopop" / "profiler").mkdir(exist_ok=True)
+    for name in ("Data.xml", "dynamic_dependencies.txt", "loop_counter_output.txt", "reduction.txt"):
+        (tmp_path / ".discopop" / "profiler" / name).write_text("")
+    (tmp_path / ".discopop" / "FileMapping.txt").write_text("")
+    record_instrumented_scope(str(tmp_path / ".discopop"), "dp", ".")
+    window.project_state.publish(ResultsChanged())
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.DONE, timeout=2000)
+    (tmp_path / "src").mkdir()
+    window.setup_panel.environment_widget.scope_edit.setText("src")
+    assert window.setup_panel.save()
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.STALE, timeout=2000)
+
+
+def test_the_scope_rewrite_of_project_setup_reaches_configuration_setup(
+    qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder
+) -> None:
+    arguments = make_arguments(tmp_path)
+    configuration = Path(arguments.project_config_dir, "tiny")
+    configuration.mkdir(parents=True)
+    (configuration / "execute.sh").write_text("cd $DP_PROJECT_ROOT_DIR\n")
+    (tmp_path / "src").mkdir()
+    window = MainWindow(arguments)
+    qtbot.addWidget(window)
+    window.project_state.current_config = "tiny"
+    window.project_state.publish(ConfigChanged("tiny"))
+    scope = window.setup_panel.environment_widget
+    scope.scope_edit.setText("src")
+    window.editor_panel.editors["execute.sh"].insertPlainText("edited ")
+    scope.rewrite_button.click()  # vetoed: Configuration Setup holds unsaved changes
+    assert dialog_answers.titles("show_warning") == ["Unsaved changes"]
+    assert (configuration / "execute.sh").read_text() == "cd $DP_PROJECT_ROOT_DIR\n"
+    window.editor_panel.editors["execute.sh"].document().undo()
+    window.editor_panel.editors["execute.sh"].document().setModified(False)
+    scope.rewrite_button.click()
+    assert (configuration / "execute.sh").read_text() == "cd $DP_RUN_ROOT_DIR\n"
+    assert window.editor_panel.editors["execute.sh"].text() == "cd $DP_RUN_ROOT_DIR\n"
 
 
 def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:

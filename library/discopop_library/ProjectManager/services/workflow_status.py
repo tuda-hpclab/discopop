@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.project_environment import stale_scope_message
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.services.autotuner_results import autotuner_results_exist
 from discopop_library.ProjectManager.services.explorer_state import (
@@ -136,9 +137,19 @@ def _editor_status(arguments: ProjectManagerArguments, config: Optional[str]) ->
     return StageStatus(StageState.NOT_RUN, "no execute.sh")
 
 
+# the detail of a stage whose data was instrumented with another scope than the configured one
+OTHER_SCOPE = "instrumented with another scope"
+
+
+def _instrumented_with_another_scope(arguments: ProjectManagerArguments, mode: str) -> bool:
+    return stale_scope_message(arguments.dot_dp, mode, arguments.project_root, arguments.project_config_dir) is not None
+
+
 def _profiling_status(arguments: ProjectManagerArguments) -> StageStatus:
     if not explorer_prerequisites_met(arguments.dot_dp):
         return StageStatus(StageState.NOT_RUN, "no profiling data")
+    if _instrumented_with_another_scope(arguments, "dp"):
+        return StageStatus(StageState.STALE, OTHER_SCOPE)
     return StageStatus(StageState.DONE, "profiled")
 
 
@@ -174,6 +185,8 @@ def _build_state(arguments: ProjectManagerArguments, config: Optional[str]) -> s
 def _hotspot_status(arguments: ProjectManagerArguments, config: Optional[str]) -> StageStatus:
     if not os.path.exists(hotspot_data.hotspots_json_path(arguments.dot_dp)):
         return StageStatus(StageState.NOT_RUN, "no hotspot results")
+    if _instrumented_with_another_scope(arguments, "hd"):
+        return StageStatus(StageState.STALE, OTHER_SCOPE)
     # the same rule as the "Instrumented build" line of the Hotspot panel
     state = _build_state(arguments, config)
     if state == BUILD_MISMATCH:

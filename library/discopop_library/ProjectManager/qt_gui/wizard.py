@@ -269,8 +269,9 @@ class ConfigurationWizard(QWizard):
         return step
 
     def _instrumentation_scope_step(self) -> _Step:
+        # the step names it already: a card without a title
         self.project_environment_widget = ProjectEnvironmentWidget(
-            self.arguments.project_root, self.arguments.project_config_dir
+            self.arguments.project_root, self.arguments.project_config_dir, title=""
         )
         self.project_environment_widget.load()
         return self._step(

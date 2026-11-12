@@ -16,13 +16,19 @@ from unittest import mock
 import pytest
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.configurations.project_environment import record_instrumented_scope
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services import execution_run
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, ProjectState, ResultsChanged
+from discopop_library.ProjectManager.services.project_state import (
+    ConfigChanged,
+    ProjectEnvironmentChanged,
+    ProjectState,
+    ResultsChanged,
+)
 
 ExecuteResult = Optional[Tuple[int, float, str, str]]
 
@@ -176,3 +182,17 @@ def test_profiling_can_be_stopped(qtbot: QtBot, panel: ProfilingPanel) -> None:
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
     assert "preparation stopped by user" in panel.console.text() and panel.header.chip.text() == "Stopped"
     assert panel.status.text() == "Ready"
+
+
+def test_data_profiled_with_another_scope_is_warned_about(panel: ProfilingPanel) -> None:
+    select(panel)
+    record_instrumented_scope(panel.arguments.dot_dp, "dp", "src")
+    Path(panel.arguments.project_config_dir, "project_environment.json").write_text('{"DP_PROJECT_ROOT_DIR": "src"}')
+    panel.project_state.publish(ProjectEnvironmentChanged())
+    assert panel.header.chip.text() == ""
+    Path(panel.arguments.project_config_dir, "project_environment.json").write_text('{"DP_PROJECT_ROOT_DIR": "lib"}')
+    panel.project_state.publish(ProjectEnvironmentChanged())
+    chip = panel.header.chip
+    assert chip.level == widgets.CHIP_WARN and chip.text() == "Profiled with another scope"
+    assert "'src'" in chip.detail() and "'lib'" in chip.detail()
+    assert panel.run_button.isEnabled()  # profiling again is the fix

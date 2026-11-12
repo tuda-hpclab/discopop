@@ -8,12 +8,12 @@
 
 """The directories of the project that are no project code, e.g. dependencies fetched into ``build/_deps``.
 
-The profiler counts every file below the project directory (``DP_PROJECT_ROOT_DIR``) as project code: it instruments
-it, maps it in ``FileMapping.txt``, and the AST export keeps its declarations. For a library fetched into the build
-directory that costs profiling time and, for template libraries, gigabytes of AST per translation unit. The
-directories listed here are left out by all of them: the project manager passes them to every build as
-``DP_PROJECT_EXCLUDE_DIRS`` (``:`` separated, relative to the project directory, so they hold for the copies the
-configurations are built in as well).
+The profiler counts every file below the instrumentation scope (``DP_PROJECT_ROOT_DIR``, by default the project
+directory) as project code: it instruments it, maps it in ``FileMapping.txt``, and the AST export keeps its
+declarations. For a library fetched into the build directory that costs profiling time and, for template libraries,
+gigabytes of AST per translation unit. The directories listed here are left out by all of them: the project manager
+passes them to every build as ``DP_PROJECT_EXCLUDE_DIRS`` (``:`` separated, as absolute paths in the copy of the project
+a configuration is built in; relative entries would be taken relative to the scope).
 
 Stored in ``.discopop/project/excluded_directories.json`` (kept by "Reset Project", like the configurations), as
 paths relative to the project directory with ``/`` as separator. A directory excludes everything below it, so the list

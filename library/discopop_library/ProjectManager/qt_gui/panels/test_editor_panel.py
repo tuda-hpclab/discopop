@@ -28,7 +28,6 @@ from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
-    ProjectEnvironmentChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -359,91 +358,22 @@ def test_a_refresh_of_the_selection_keeps_the_cursor_and_reloads_what_changed_on
     assert editor.text() == "#!/bin/bash\n./other\n"
 
 
-# ── the project environment ─────────────────────────────────────────────────
-
-
-def environment_file(panel: EditorPanel) -> Path:
-    return Path(panel.arguments.project_config_dir, "project_environment.json")
-
-
-def test_the_stored_scope_is_shown(panel: EditorPanel) -> None:
-    (Path(panel.arguments.project_root) / "src").mkdir()
-    environment_file(panel).write_text('{"DP_PROJECT_ROOT_DIR": "src"}')
+def test_scripts_may_be_rewritten_only_without_unsaved_changes(
+    panel: EditorPanel, dialog_answers: DialogRecorder
+) -> None:
     select(panel)
-    widget = panel.environment_widget
-    assert widget.scope_edit.text() == "src"
-    assert widget.resolved_edit.text() == os.path.join(panel.arguments.project_root, "src") + os.sep
-    assert widget.dot_discopop_edit.text() == os.path.join(panel.arguments.project_root, ".discopop")
-    assert not widget.is_modified() and not panel.has_unsaved_changes()
-
-
-def test_editing_and_saving_the_scope_writes_the_file_and_publishes(panel: EditorPanel) -> None:
-    (Path(panel.arguments.project_root) / "src").mkdir()
-    select(panel)
-    events = record(panel, ProjectEnvironmentChanged)
-    panel.environment_widget.scope_edit.setText("src/")
-    assert panel.has_unsaved_changes()
-    assert panel.notebook.tabText(4) == "Project environment *"
-    assert tabs(panel).titles["Editor"] == "Editor *"
-    assert panel.save()
-    assert json.loads(environment_file(panel).read_text()) == {"DP_PROJECT_ROOT_DIR": "src"}
-    assert events == [ProjectEnvironmentChanged()]
-    assert not panel.has_unsaved_changes() and panel.notebook.tabText(4) == "Project environment"
-
-
-def test_the_scope_can_be_saved_without_a_selected_configuration(panel: EditorPanel) -> None:
-    panel.environment_widget.scope_edit.setText("nowhere")
-    events = record(panel, ProjectEnvironmentChanged)
-    assert panel.save()
-    assert events == [ProjectEnvironmentChanged()]
-    assert json.loads(environment_file(panel).read_text()) == {"DP_PROJECT_ROOT_DIR": "nowhere"}
-
-
-def test_a_missing_scope_directory_is_warned_about(panel: EditorPanel) -> None:
-    widget = panel.environment_widget
-    assert widget.warnings_label.isHidden()
-    widget.scope_edit.setText("does_not_exist")
-    assert not widget.warnings_label.isHidden()
-    assert "not an existing directory" in widget.warnings_label.text()
-
-
-def test_browse_chooses_a_directory_inside_the_project(panel: EditorPanel, dialog_answers: DialogRecorder) -> None:
-    (Path(panel.arguments.project_root) / "lib").mkdir()
-    widget = panel.environment_widget
-    dialog_answers.answer("ask_directory", os.path.join(panel.arguments.project_root, "lib"), "/")
-    widget.browse_button.click()
-    assert widget.scope_edit.text() == "lib"
-    widget.browse_button.click()  # outside of the project: refused
-    assert widget.scope_edit.text() == "lib"
-    assert dialog_answers.titles("show_warning") == ["Outside of the project"]
-
-
-def test_scripts_using_the_scope_variable_are_listed_and_rewritten(panel: EditorPanel) -> None:
-    (Path(panel.arguments.project_root) / "src").mkdir()
-    shared = Path(panel.arguments.project_config_dir, "compile.sh")
-    shared.write_text("cmake -S $DP_PROJECT_ROOT_DIR\n")
-    (config_dir(panel) / "execute.sh").write_text("cd ${DP_PROJECT_ROOT_DIR}\n./prog\n")
-    select(panel)
-    widget = panel.environment_widget
-    assert widget.scripts_list.count() == 0  # not narrowed: the variable is the project root
-    widget.scope_edit.setText("src")
-    assert [widget.scripts_list.item(i).text() for i in range(widget.scripts_list.count())] == [
-        "compile.sh",
-        os.path.join(CONFIG, "execute.sh"),
-    ]
-    widget.rewrite_button.click()
-    assert shared.read_text() == "cmake -S $DP_RUN_ROOT_DIR\n"
-    assert (config_dir(panel) / "execute.sh").read_text() == "cd ${DP_RUN_ROOT_DIR}\n./prog\n"
-    assert widget.scripts_list.count() == 0
-    assert panel.editors["execute.sh"].text() == "cd ${DP_RUN_ROOT_DIR}\n./prog\n"  # reloaded
-
-
-def test_the_rewrite_waits_for_unsaved_script_edits(panel: EditorPanel, dialog_answers: DialogRecorder) -> None:
-    (Path(panel.arguments.project_root) / "src").mkdir()
-    (config_dir(panel) / "execute.sh").write_text("cd $DP_PROJECT_ROOT_DIR\n")
-    select(panel)
-    panel.environment_widget.scope_edit.setText("src")
+    assert panel.may_rewrite_scripts()
     panel.editors["execute.sh"].insertPlainText("edited ")
-    panel.environment_widget.rewrite_button.click()
+    assert not panel.may_rewrite_scripts()
     assert dialog_answers.titles("show_warning") == ["Unsaved changes"]
-    assert (config_dir(panel) / "execute.sh").read_text() == "cd $DP_PROJECT_ROOT_DIR\n"
+
+
+def test_rewritten_scripts_are_reloaded_unless_edited(panel: EditorPanel) -> None:
+    select(panel)
+    (config_dir(panel) / "execute.sh").write_text("cd $DP_RUN_ROOT_DIR\n")
+    panel.reload_unmodified()
+    assert panel.editors["execute.sh"].text() == "cd $DP_RUN_ROOT_DIR\n"
+    panel.editors["execute.sh"].insertPlainText("edited ")
+    (config_dir(panel) / "execute.sh").write_text("other\n")
+    panel.reload_unmodified()
+    assert panel.editors["execute.sh"].text().startswith("edited ")

@@ -13,9 +13,11 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
+from discopop_library.ProjectManager.configurations.project_environment import record_instrumented_scope
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services.workflow_status import (
+    OTHER_SCOPE,
     forget_build_states,
     STAGE_AUTOTUNING,
     STAGE_EDITOR,
@@ -218,3 +220,24 @@ def test_the_build_state_is_reused_for_a_while(tmp_path: Path, monkeypatch: pyte
     workflow_status.forget_build_states()
     workflow_status._build_state(arguments, "a")
     assert calls == ["a", "a"]
+
+
+def configure_scope(arguments: ProjectManagerArguments, scope: str) -> None:
+    touch(
+        os.path.join(arguments.project_config_dir, "project_environment.json"),
+        json.dumps({"DP_PROJECT_ROOT_DIR": scope}),
+    )
+
+
+def test_data_instrumented_with_another_scope_is_stale(tmp_path: Path) -> None:
+    arguments = make_arguments(tmp_path)
+    profile(arguments.dot_dp)
+    touch(hotspot_data.hotspots_json_path(arguments.dot_dp), "{}")
+    record_instrumented_scope(arguments.dot_dp, "dp", "src")
+    record_instrumented_scope(arguments.dot_dp, "hd", "src")
+    configure_scope(arguments, "src")
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.DONE, "profiled")
+    assert statuses(arguments)[STAGE_HOTSPOT].state == StageState.DONE
+    configure_scope(arguments, "lib")
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.STALE, OTHER_SCOPE)
+    assert statuses(arguments)[STAGE_HOTSPOT] == StageStatus(StageState.STALE, OTHER_SCOPE)

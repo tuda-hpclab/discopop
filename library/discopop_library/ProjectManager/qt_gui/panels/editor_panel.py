@@ -42,7 +42,6 @@ from discopop_library.ProjectManager.configurations.execution_time import (
 from discopop_library.ProjectManager.configurations.validation import has_validate_script
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
-from discopop_library.ProjectManager.qt_gui.project_environment_widget import ProjectEnvironmentWidget
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -58,7 +57,6 @@ from discopop_library.ProjectManager.services.editor_files import (
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
-    ProjectEnvironmentChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -77,7 +75,6 @@ BASE_LABELS = {
     "validate.sh": "validate.sh",
     "compile_validate.sh": "compile_validate.sh (override)",
 }
-ENVIRONMENT_TAB_LABEL = "Project environment"
 HEADINGS = {
     "execute.sh": "Execution script",
     "compile.sh": "Compilation script override",
@@ -153,19 +150,6 @@ class EditorPanel(Panel):
             self._sub_tab_widgets[name] = page
             self.notebook.addTab(page, BASE_LABELS[name])
 
-        # the project environment is no file of the selected configuration: a page of its own, next to the files
-        self.environment_widget = ProjectEnvironmentWidget(
-            arguments.project_root, arguments.project_config_dir, self._may_rewrite_scripts, self
-        )
-        self.environment_widget.edited.connect(self._refresh_marks)
-        self.environment_widget.scripts_rewritten.connect(self._on_scripts_rewritten)
-        environment_page = QWidget()
-        environment_layout = QVBoxLayout(environment_page)
-        environment_layout.addLayout(widgets.hbox(widgets.heading_label(ENVIRONMENT_TAB_LABEL), None, margins=5))
-        environment_layout.addWidget(self.environment_widget, 1)
-        self.notebook.addTab(environment_page, ENVIRONMENT_TAB_LABEL)
-        self.environment_widget.load()
-
         self.save_button = widgets.primary_button("Save (Ctrl+S)", self._save_clicked)
         self.header = widgets.PanelHeader(
             "Configuration Setup",
@@ -177,27 +161,6 @@ class EditorPanel(Panel):
         layout.addWidget(self.notebook, 1)
 
         project_state.subscribe(ConfigChanged, lambda _event: self._on_config_changed())
-
-    # ── the project environment ─────────────────────────────────────────────
-
-    def _script_editors_modified(self) -> bool:
-        return any(editor.document().isModified() for editor in self.editors.values())
-
-    def _may_rewrite_scripts(self) -> bool:
-        """The one-click fix rewrites files the editors show: not while they hold unsaved changes."""
-        if not self._script_editors_modified():
-            return True
-        dialogs.show_warning(
-            self,
-            "Unsaved changes",
-            "Save or discard the changes in the script editors first: the scripts are rewritten on disk.",
-        )
-        return False
-
-    def _on_scripts_rewritten(self) -> None:
-        if self.project_state.current_config is not None:
-            self.load()
-        self.status.set("Replaced DP_PROJECT_ROOT_DIR by DP_RUN_ROOT_DIR", widgets.STATUS_OK, reset_ms=2000)
 
     # ── the execution time setting ──────────────────────────────────────────
 
@@ -304,13 +267,10 @@ class EditorPanel(Panel):
 
     def has_unsaved_changes(self) -> bool:
         """Whether anything in the Editor tab is waiting to be saved."""
-        return self._script_editors_modified() or self.execution_time_modified or self.environment_widget.is_modified()
+        return any(editor.document().isModified() for editor in self.editors.values()) or self.execution_time_modified
 
     def _on_config_changed(self) -> None:
         config = self.project_state.current_config
-        if not self.environment_widget.is_modified():
-            # another configuration has other scripts to check for the scope variable
-            self.environment_widget.load()
         if config is None:
             self._clear()
         elif config == self._loaded_config and (self.has_unsaved_changes() or self._disk_state() == self._loaded_state):
@@ -432,10 +392,6 @@ class EditorPanel(Panel):
             label = self.sub_tab_labels[name]
             self.notebook.setTabText(index, f"{label} *" if modified else label)
         # imported here: the main window imports the panels, so a module level import would be circular
-        self.notebook.setTabText(
-            len(FILES),
-            ENVIRONMENT_TAB_LABEL + (" *" if self.environment_widget.is_modified() else ""),
-        )
         unsaved = self.has_unsaved_changes()
         self.tabs.set_tab_title(TAB_EDITOR, "Editor *" if unsaved else "Editor")
         if unsaved:
@@ -532,21 +488,11 @@ class EditorPanel(Panel):
 
     def save(self) -> bool:
         """Write the changed files; False if something was rejected or could not be written."""
-        environment_saved = False
-        if self.environment_widget.is_modified():
-            if not self.environment_widget.save():
-                return False
-            environment_saved = True
-            self.project_state.publish(ProjectEnvironmentChanged())
         if not self.project_state.current_config:
-            if environment_saved:
-                self._refresh_marks()
-                self.status.set("Saved project environment", widgets.STATUS_OK, reset_ms=2000)
-                return True
             self.status.set("No configuration selected", widgets.STATUS_FAIL)
             return False
         config_path = self._config_path()
-        saved_files: List[str] = ["project environment"] if environment_saved else []
+        saved_files: List[str] = []
 
         if self.execution_time_modified:
             if not self._save_execution_time_settings(config_path):
@@ -569,8 +515,6 @@ class EditorPanel(Panel):
             saved_files.append(name)
 
         self._refresh_marks()
-        # the scripts may have been edited: the list of those using the scope variable changes
-        self.environment_widget.refresh()
         if not saved_files:
             self.status.set("No changes to save")
             return True
@@ -579,8 +523,7 @@ class EditorPanel(Panel):
             if script_name in saved_files:
                 self._validate_compile_script(os.path.join(config_path, script_name))
         self._loaded_state = self._disk_state()
-        if saved_files != ["project environment"]:
-            self.project_state.publish(ConfigurationsChanged())
+        self.project_state.publish(ConfigurationsChanged())
         return True
 
     def _validate_compile_script(self, path: str) -> None:
@@ -594,6 +537,25 @@ class EditorPanel(Panel):
             dialogs.show_warning(self, COMPILE_SCRIPT_WARNING_TITLE, COMPILE_SCRIPT_WARNING)
 
     # ── what the main window calls ──────────────────────────────────────────
+
+    def may_rewrite_scripts(self) -> bool:
+        """Whether the scripts of the configurations may be rewritten on disk (the instrumentation scope of the Project
+        Setup stage replaces DP_PROJECT_ROOT_DIR in them): not while this stage holds unsaved changes, which would
+        write the old text back."""
+        if not self.has_unsaved_changes():
+            return True
+        dialogs.show_warning(
+            self,
+            "Unsaved changes",
+            "Save or discard the changes in the Configuration Setup stage first: the scripts are rewritten on disk.",
+        )
+        return False
+
+    def reload_unmodified(self) -> None:
+        """Read the files of the selected configuration again unless they hold unsaved changes (after they were
+        rewritten on disk)."""
+        if self.project_state.current_config is not None and not self.has_unsaved_changes():
+            self.load()
 
     def confirm_leave(self) -> bool:
         """Ask what to do with unsaved changes before another configuration is selected.

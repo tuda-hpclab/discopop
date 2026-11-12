@@ -8,15 +8,16 @@
 
 """The project environment: the instrumentation scope (``DP_PROJECT_ROOT_DIR``) and what it resolves to.
 
-Used by the Editor tab and the configuration wizard. What is shown and how it is stored lives in
-``services/project_environment_view.py``; this widget only reads the scope line edit and shows the results.
+Used by the Project Setup stage and the configuration wizard, as a card (``widgets.FormSection``). What is shown and
+how it is stored lives in ``services/project_environment_view.py``; this widget only reads the scope line edit and shows
+the results.
 """
 
 import os
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QLineEdit, QListWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLineEdit, QListWidget, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.configurations.project_environment import (
     DEFAULT_SCOPE,
@@ -35,6 +36,7 @@ from discopop_library.ProjectManager.services.project_environment_view import (
 )
 
 REWRITE_BUTTON_TEXT = "Use DP_RUN_ROOT_DIR in these scripts"
+TITLE = "Instrumentation scope"
 
 
 class ProjectEnvironmentWidget(QWidget):
@@ -54,6 +56,8 @@ class ProjectEnvironmentWidget(QWidget):
         project_config_dir: str,
         before_rewrite: Optional[Callable[[], bool]] = None,
         parent: Optional[QWidget] = None,
+        *,
+        title: str = TITLE,
     ) -> None:
         super().__init__(parent)
         self.project_root = os.path.abspath(project_root)
@@ -68,7 +72,6 @@ class ProjectEnvironmentWidget(QWidget):
         self.browse_button = widgets.create_button("Browse...", self._browse)
         self.resolved_edit = self._read_only_line()
         self.dot_discopop_edit = self._read_only_line()
-        self.hint_label = widgets.caption_label(HINT)
         self.warnings_label = widgets.error_label("")
         self.warnings_label.hide()
         self.scripts_label = widgets.error_label(
@@ -81,16 +84,19 @@ class ProjectEnvironmentWidget(QWidget):
         self.scripts_list.hide()
         self.rewrite_button.hide()
 
+        self.section = widgets.FormSection(title)
+        self.hint_label = self.section.add_row(
+            "Directory:", widgets.hbox(self.scope_edit, self.browse_button, margins=0), HINT
+        )
+        self.section.add_row(SCOPE_VARIABLE + ":", self.resolved_edit, stretch_field=True)
+        self.section.add_row("DOT_DISCOPOP:", self.dot_discopop_edit, stretch_field=True)
+        self.section.add_widget(self.warnings_label)
+        self.section.add_widget(self.scripts_label)
+        self.section.add_widget(self.scripts_list)
+        self.section.add_widget(widgets.hbox(self.rewrite_button, None, margins=0))
         layout = QVBoxLayout(self)
-        layout.addLayout(widgets.vbox(self.hint_label))
-        layout.addLayout(widgets.hbox(QLabel("Instrumentation scope:"), self.scope_edit, self.browse_button))
-        layout.addLayout(widgets.hbox(QLabel(SCOPE_VARIABLE + ":"), self.resolved_edit))
-        layout.addLayout(widgets.hbox(QLabel("DOT_DISCOPOP:"), self.dot_discopop_edit))
-        layout.addWidget(self.warnings_label)
-        layout.addWidget(self.scripts_label)
-        layout.addWidget(self.scripts_list)
-        layout.addLayout(widgets.hbox(self.rewrite_button, None))
-        layout.addStretch(1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.section)
 
         self.scope_edit.textChanged.connect(self._on_text_changed)
         self.refresh()
