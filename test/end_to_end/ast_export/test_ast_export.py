@@ -44,6 +44,13 @@ def _plugins(libs_dir: Path) -> list[Path]:
     return sorted(libs_dir.glob("DiscoPoPASTExport-*.so"))
 
 
+def _clangpp(plugin: Path) -> str:
+    """The clang++ that loads ``plugin`` (DiscoPoPASTExport-<major>.so): clang++-<major>, as the wrappers prefer it,
+    else an unversioned clang++ (e.g. Homebrew)."""
+    major = plugin.stem.rsplit("-", 1)[-1]
+    return shutil.which(f"clang++-{major}") or "clang++"
+
+
 pytestmark = pytest.mark.skipif(
     shutil.which("discopop_cxx") is None or not _plugins(_libs_dir()),
     reason="the profiler is not installed, or was built without the Clang development files (no AST export plugin)",
@@ -139,13 +146,13 @@ def test_plugin_writes_far_less_than_the_complete_dump(work_dir: Path, tmp_path:
     plugin = _plugins(libs_dir)[0]
     raw = tmp_path / "raw.json"
     unfiltered = subprocess.run(
-        ["clang++", "-std=c++17", "main.cpp", "-fsyntax-only", "-Xclang", "-ast-dump=json"],
+        [_clangpp(plugin), "-std=c++17", "main.cpp", "-fsyntax-only", "-Xclang", "-ast-dump=json"],
         cwd=work_dir,
         capture_output=True,
     )
     assert unfiltered.returncode == 0, unfiltered.stderr
     exported = subprocess.run(
-        ["clang++", "-std=c++17", "main.cpp", "-fsyntax-only", "-Xclang", "-load", "-Xclang", str(plugin)]
+        [_clangpp(plugin), "-std=c++17", "main.cpp", "-fsyntax-only", "-Xclang", "-load", "-Xclang", str(plugin)]
         + ["-Xclang", "-add-plugin", "-Xclang", "dp-ast-export"]
         + ["-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", f"root={work_dir}"]
         + ["-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", f"out={raw}"],
@@ -169,7 +176,7 @@ def test_plugin_project_directory_behind_a_symbolic_link(tmp_path: Path, root_th
     raw = tmp_path / "raw.json"
     result = subprocess.run(
         [
-            "clang++",
+            _clangpp(_plugins(_libs_dir())[0]),
             "-std=c++17",
             "main.cpp",
             "-fsyntax-only",
@@ -218,7 +225,7 @@ def test_plugin_leaves_out_excluded_directories_without_file_mapping(tmp_path: P
     arguments = [f"root={directory}", "exclude=deps", f"out={raw}"]
     result = subprocess.run(
         [
-            "clang++",
+            _clangpp(_plugins(_libs_dir())[0]),
             "-std=c++17",
             "main.cpp",
             "-fsyntax-only",
@@ -241,7 +248,7 @@ def test_unwritable_output_fails_the_compilation(work_dir: Path) -> None:
     """clang's exit code has to tell the wrapper that there is no output to filter."""
     plugin = _plugins(_libs_dir())[0]
     result = subprocess.run(
-        ["clang++", "main.cpp", "-fsyntax-only", "-Xclang", "-load", "-Xclang", str(plugin)]
+        [_clangpp(plugin), "main.cpp", "-fsyntax-only", "-Xclang", "-load", "-Xclang", str(plugin)]
         + ["-Xclang", "-add-plugin", "-Xclang", "dp-ast-export"]
         + ["-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", "out=/nonexistent/directory/ast.json"],
         cwd=work_dir,
