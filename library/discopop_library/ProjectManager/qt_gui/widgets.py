@@ -181,7 +181,7 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
         f"QPushButton#{VARIANT_DANGER_OUTLINE}:disabled {{ color: {disabled_text}; border: 1px solid {border};"
         " background-color: palette(window); }",
         # a card of destructive actions: framed in red
-        f"QFrame#{DANGER_ZONE_NAME} {{ border: 1px solid {danger_text}; border-radius: 8px; }}",
+        f"QFrame#{DANGER_ZONE_NAME} {{ border: 1px solid {danger_text}; border-radius: 10px; }}",
         f"QLabel#{DANGER_TITLE_NAME} {{ color: {danger_text}; }}",
     ]
     return "\n".join(rules)
@@ -273,8 +273,13 @@ def _component_rules(palette: Optional[QPalette] = None) -> str:
     else:
         card_background = "palette(window)" if is_dark(palette) else card_color(palette).name()
     rules = [
-        f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 8px;"
+        f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 10px;"
         f" background-color: {card_background}; }}",
+        # a divider: a hairline in the color of the frames (a QFrame line draws a dark, sunken one)
+        f"QFrame#{DIVIDER_NAME} {{ background-color: palette(midlight); border: none; min-height: 1px;"
+        " max-height: 1px; }",
+        f"QScrollArea#{CLEAR_SCROLL_NAME}, QScrollArea#{CLEAR_SCROLL_NAME} > QWidget > QWidget"
+        " { background: transparent; }",
         # a status chip: a rounded, colored pill (StatusChip)
         f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; font-weight: bold; }}",
     ]
@@ -424,6 +429,9 @@ def _control_rules(palette: QPalette) -> str:
 
 # objectNames the style sheet selects on
 CARD_NAME = "card"
+DIVIDER_NAME = "divider"
+# a scroll area showing the background of what it lies on (the side bar of the selection details)
+CLEAR_SCROLL_NAME = "clearScroll"
 CHIP_NAME = "chip"
 FLAT_NAME = "flat"
 COMPACT_NAME = "compact"
@@ -591,14 +599,25 @@ def monospace_font(point_size: int = 11) -> QFont:
 # --- labels ---
 
 
+# how much larger than a :func:`heading_label` title the title of a page is (PanelHeader)
+PAGE_TITLE_EXTRA_PT = 3
+
+
 def heading_label(text: str, *, title: bool = False) -> QLabel:
-    """A bold section header (``title=True`` for the slightly larger panel title)."""
+    """A semibold section header (``title=True`` for the slightly larger panel title)."""
     label = QLabel(text)
     font = label.font()
-    font.setBold(True)
+    font.setWeight(QFont.Weight.DemiBold)
     font.setPointSize(font.pointSize() + (2 if title else 1))
     label.setFont(font)
     return label
+
+
+def divider() -> QFrame:
+    """A horizontal hairline between a title and what it heads."""
+    line = QFrame()
+    line.setObjectName(DIVIDER_NAME)
+    return line
 
 
 def empty_state_label(text: str) -> QLabel:
@@ -1230,7 +1249,7 @@ class WarningBanner(QFrame):
         rgb = f"{color.red()}, {color.green()}, {color.blue()}"
         self.setStyleSheet(
             f"QFrame#{BANNER_NAME} {{ background-color: rgba({rgb}, 30); border: 1px solid rgba({rgb}, 140);"
-            " border-radius: 8px; }"
+            " border-radius: 10px; }"
         )
         self.title_label = heading_label("")
         set_label_color(self.title_label, color.name())
@@ -1362,6 +1381,10 @@ class PanelHeader(QWidget):
     ) -> None:
         super().__init__(parent)
         self.title_label = heading_label(title, title=True)
+        # the page title: the largest text of the page, above its description
+        title_font = self.title_label.font()
+        title_font.setPointSize(title_font.pointSize() + PAGE_TITLE_EXTRA_PT)
+        self.title_label.setFont(title_font)
         self.description_label = caption_label(description)
         self.description_label.setVisible(bool(description))
         self.chip = StatusChip()
