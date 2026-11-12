@@ -12,10 +12,10 @@
 
 #include "runtime_startup.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -73,7 +73,14 @@ void __dp_init() {
   setenv("DOT_DISCOPOP_PROFILER", profiler_directory.c_str(), 1);
 
   out->open(ProfilerOutputPath("dynamic_dependencies.txt").c_str(), std::ios::out);
-  assert(out->is_open() && "Cannot open a file to output dependences.\n");
+  if (!out->is_open()) {
+    // Without it, the run would end with "done" and no results: the static data of the build lives in
+    // another directory (DOT_DISCOPOP unset or relative when the program was started from elsewhere).
+    std::cerr << "DiscoPoP ERROR: cannot write the profiling results to "
+              << std::filesystem::absolute(ProfilerOutputPath("dynamic_dependencies.txt")).string() << ".\n"
+              << "DiscoPoP ERROR: set DOT_DISCOPOP to the absolute path of the .discopop directory of the build.\n";
+    std::_Exit(EXIT_FAILURE);
+  }
 
   // Static callPath tracing
   call_state_graph = new CallStateGraph();
