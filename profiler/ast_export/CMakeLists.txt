@@ -24,8 +24,36 @@ if(NOT Clang_DIR AND EXISTS "${LLVM_DIR}/../clang/ClangConfig.cmake")
     # FORCE: an earlier failed search leaves Clang_DIR-NOTFOUND in the cache, which a plain set() does not replace
     set(Clang_DIR "${_dp_clang_dir}" CACHE PATH "Directory of ClangConfig.cmake" FORCE)
 endif()
-# the version of the LLVM that was found: Clang's package accepts nothing else (it needs the same major.minor)
-find_package(Clang ${LLVM_PACKAGE_VERSION} CONFIG QUIET)
+# Clang's package can be installed without the libraries and headers it imports: apt.llvm.org ships ClangConfig.cmake
+# with the package clang-<version>, the libraries with libclang-<version>-dev. Its ClangTargets.cmake then stops the
+# configuration with a fatal error (QUIET or not), so the package is first loaded by a CMake run of its own, which may
+# fail. Only if it succeeds, the package is loaded here.
+set(_dp_clang_probe_dir "${CMAKE_CURRENT_BINARY_DIR}/clang_package_probe")
+file(WRITE "${_dp_clang_probe_dir}/CMakeLists.txt"
+    "cmake_minimum_required(VERSION ${CMAKE_MINIMUM_REQUIRED_VERSION})\n"
+    "project(DiscoPoP_ClangPackageProbe NONE)\n"
+    "find_package(Clang \"${LLVM_PACKAGE_VERSION}\" CONFIG REQUIRED)\n")
+set(_dp_clang_probe_args "-DLLVM_DIR=${LLVM_DIR}")
+if(Clang_DIR)
+    list(APPEND _dp_clang_probe_args "-DClang_DIR=${Clang_DIR}")
+endif()
+if(CMAKE_PREFIX_PATH)
+    list(JOIN CMAKE_PREFIX_PATH "\\;" _dp_prefix_path)
+    list(APPEND _dp_clang_probe_args "-DCMAKE_PREFIX_PATH=${_dp_prefix_path}")
+endif()
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -S "${_dp_clang_probe_dir}" -B "${_dp_clang_probe_dir}/build" -G "${CMAKE_GENERATOR}"
+            "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}" ${_dp_clang_probe_args}
+    RESULT_VARIABLE _dp_clang_probe_result
+    OUTPUT_QUIET
+    ERROR_VARIABLE _dp_clang_probe_error)
+if(_dp_clang_probe_result EQUAL 0)
+    # the version of the LLVM that was found: Clang's package accepts nothing else (it needs the same major.minor)
+    find_package(Clang ${LLVM_PACKAGE_VERSION} CONFIG QUIET)
+elseif(_dp_clang_probe_error MATCHES "references the file[ \t\r\n]+\"([^\"]+)\"")
+    message(STATUS "AST export plugin: Clang's CMake package is installed, but not the files it references (e.g. "
+                   "${CMAKE_MATCH_1}; Debian/Ubuntu: libclang-${LLVM_MAJOR_VERSION}-dev)")
+endif()
 if(Clang_FOUND)
     find_path(DP_CLANG_JSON_HEADER_DIR clang/AST/JSONNodeDumper.h PATHS ${CLANG_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} NO_DEFAULT_PATH)
 endif()

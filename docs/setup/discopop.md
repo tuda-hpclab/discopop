@@ -30,10 +30,10 @@ If no Boost installation is found, the build downloads Boost with CMake's FetchC
 ### Debian and Ubuntu
 
 ```bash
-sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libomp-19-dev libboost-dev
+sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev libboost-dev
 ```
 
-Replace `19` with `20`, `21` or `22` for another LLVM release. Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages LLVM 19 and 22. Other releases are available from [apt.llvm.org](https://apt.llvm.org).
+`libclang-19-dev` is optional, it builds the AST export plugin (see the table above). Replace `19` with `20`, `21` or `22` for another LLVM release. Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages LLVM 19 and 22. Other releases are available from [apt.llvm.org](https://apt.llvm.org).
 
 ### Versions tested in CI
 

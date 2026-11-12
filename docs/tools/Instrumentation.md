@@ -73,7 +73,8 @@ The explorer reads `ast_dump.json`, but only the nodes of the files in `FileMapp
 - `DP_AST_NO_PLUGIN=1` uses the filtered dump even if the plugin exists.
 - The declarations of the excluded directories (`DP_PROJECT_EXCLUDE_DIRS`, see [Environment variables](../setup/environment_variables.md)) are left out by both, also before a `FileMapping.txt` exists. A dependency fetched below the project directory (`build/_deps`) should be excluded: otherwise it is project code, instrumented and kept in the AST.
 - `filter_ast_dump.py` reports on stderr which files it keeps, how it is doing (every 10 s on long runs) and, when done, how much it read, wrote and dropped, so each translation unit adds two lines to the build log; `DP_AST_QUIET=1` silences them.
-- `-DDP_AST_EXPORT=OFF` (or `REQUIRED`) at build time never builds the plugin (or fails if it cannot be built).
+- `-DDP_AST_EXPORT=OFF` (or `REQUIRED`) at build time never builds the plugin (or fails if it cannot be built). With pip, pass it as `CMAKE_ARGS=-DDP_AST_EXPORT=OFF pip install ./profiler`.
+- The packages of [apt.llvm.org](https://apt.llvm.org) install Clang's CMake files with `clang-<version>`, but the libraries and headers they refer to only with `libclang-<version>-dev`. Without the latter, the build reports the missing files and leaves the plugin out.
 - The plugin only runs with the clang of the version it was built for (the version is part of its file name).
 - Namespaces are not part of the exported AST, their declarations are, and neither are type aliases and the documentation comments of declarations; the explorer does not use them.
 
