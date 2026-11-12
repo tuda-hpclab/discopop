@@ -81,6 +81,8 @@ VARIANT_DEFAULT = "default"
 VARIANT_PRIMARY = "primary"
 VARIANT_SUCCESS = "success"
 VARIANT_DANGER = "danger"
+# a destructive action that is not the page's main one: red text and frame, filled red while hovered
+VARIANT_DANGER_OUTLINE = "dangerOutline"
 
 _VARIANT_COLORS = {
     VARIANT_PRIMARY: ("#1e66f5", "#1a57d1"),
@@ -157,6 +159,18 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
             f"QPushButton#{variant}:disabled {{ background-color: {faded}; color: {_faded_text(palette)};"
             f" border: 1px solid {faded}; }}"
         )
+    danger_color = _VARIANT_COLORS[VARIANT_DANGER][0]
+    danger_text = "#ef6c6c" if palette is not None and is_dark(palette) else danger_color
+    rules += [
+        f"QPushButton#{VARIANT_DANGER_OUTLINE} {{ color: {danger_text}; border: 1px solid {danger_text}; }}",
+        f"QPushButton#{VARIANT_DANGER_OUTLINE}:hover, QPushButton#{VARIANT_DANGER_OUTLINE}:pressed"
+        f" {{ background-color: {danger_color}; border-color: {danger_color}; color: white; }}",
+        f"QPushButton#{VARIANT_DANGER_OUTLINE}:disabled {{ color: {disabled_text}; border: 1px dashed {border};"
+        " background-color: palette(window); }",
+        # a card of destructive actions: framed in red
+        f"QFrame#{DANGER_ZONE_NAME} {{ border: 1px solid {danger_text}; border-radius: 8px; }}",
+        f"QLabel#{DANGER_TITLE_NAME} {{ color: {danger_text}; }}",
+    ]
     return "\n".join(rules)
 
 
@@ -250,6 +264,8 @@ CHIP_NAME = "chip"
 FLAT_NAME = "flat"
 COMPACT_NAME = "compact"
 BANNER_NAME = "warningBanner"
+DANGER_ZONE_NAME = "dangerZone"
+DANGER_TITLE_NAME = "dangerTitle"
 # the frame of the main window (see _chrome_rules)
 HEADER_NAME = "appHeader"
 SIDEBAR_NAME = "appSidebar"
@@ -377,6 +393,13 @@ def primary_button(text: str, on_click: Optional[Callable[[], None]] = None, **k
 def success_button(text: str, on_click: Optional[Callable[[], None]] = None, **kwargs: Optional[str]) -> QPushButton:
     """A button showing a completed state (green)."""
     return create_button(text, on_click, variant=VARIANT_SUCCESS, tooltip=kwargs.get("tooltip"))
+
+
+def danger_outline_button(
+    text: str, on_click: Optional[Callable[[], None]] = None, **kwargs: Optional[str]
+) -> QPushButton:
+    """A destructive action beside others: outlined in red (:data:`VARIANT_DANGER_OUTLINE`)."""
+    return create_button(text, on_click, variant=VARIANT_DANGER_OUTLINE, tooltip=kwargs.get("tooltip"))
 
 
 def danger_button(text: str, on_click: Optional[Callable[[], None]] = None, **kwargs: Optional[str]) -> QPushButton:

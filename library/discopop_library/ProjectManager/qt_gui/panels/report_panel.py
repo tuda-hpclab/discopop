@@ -59,7 +59,6 @@ from discopop_library.ProjectManager.services.reports import (
     format_suggestion_ids,
     has_execution_results,
 )
-from discopop_library.ProjectManager.utilities.reset import reset_project
 
 # chart types offered by the "+" button: a menu label and the stem of the tab title
 PLOT_TYPES: Dict[str, Dict[str, str]] = {
@@ -191,18 +190,10 @@ class ReportPanel(Panel):
         self.view_report_button = widgets.create_button("View Report PDF", self.view_report)
         self.view_report_button.setEnabled(False)
         self.reload_button = widgets.create_button("Reload", self.update_display)
-        self.overflow = widgets.overflow_button(
-            [
-                ("Reset Execution Results…", self._confirm_reset_results),
-                ("Reset Project…", self._confirm_reset_project),
-            ]
-        )
-        menu_actions = self.overflow.menu().actions()
-        self.reset_results_action, self.reset_project_action = menu_actions[0], menu_actions[1]
         self.header = widgets.PanelHeader(
             "Report",
             "Measured runs of all configurations: table and charts.",
-            [self.view_report_button, self.reload_button, self.generate_report_button, self.overflow],
+            [self.view_report_button, self.reload_button, self.generate_report_button],
         )
 
         # the results: a permanent Table tab and closable chart tabs, added from the "+" menu in the corner
@@ -236,7 +227,7 @@ class ReportPanel(Panel):
         layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
 
-        project_state.subscribe(ResultsChanged, lambda _event: self.update_display())
+        project_state.subscribe(ResultsChanged, lambda _event: self._on_results_changed())
         # open with one chart of every type; more can be added from the "+" menu
         for plot_type in PLOT_TYPES:
             self.add_plot(plot_type)
@@ -473,6 +464,12 @@ class ReportPanel(Panel):
             self.update_display()
             self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
 
+    def _on_results_changed(self) -> None:
+        self.update_display()
+        # a reset (Project Setup) deletes the reports
+        if not self._execution_running:
+            self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
+
     def _report_progress(self, text: str) -> None:
         if self._append_output is not None:
             self._append_output(text + "\n")
@@ -509,39 +506,6 @@ class ReportPanel(Panel):
             dialogs.show_warning(self, "No report", message)
             return
         open_file(report_path)
-
-    # ── resets ───────────────────────────────────────────────────────────────
-
-    def _confirm_reset_results(self) -> None:
-        if dialogs.ask_yes_no(
-            self,
-            "Confirm Reset",
-            "Are you sure you want to reset execution results?\nThis will delete all execution data and reports.",
-        ):
-            self.reset(results_only=True)
-
-    def _confirm_reset_project(self) -> None:
-        if dialogs.ask_yes_no(
-            self,
-            "Confirm Reset",
-            "Are you sure you want to reset the entire project?\n"
-            "This will delete all data except the configuration files.",
-        ):
-            self.reset(results_only=False)
-
-    def reset(self, *, results_only: bool) -> None:
-        arguments = copy.copy(self.arguments)
-        arguments.reset = not results_only
-        arguments.reset_execution_results = results_only
-        what = "Execution results" if results_only else "Project"
-        try:
-            reset_project(arguments)
-        except Exception as e:
-            self.status.set(f"Error resetting {what.lower()}: {e}", widgets.STATUS_FAIL)
-            return
-        self.view_report_button.setEnabled(False)
-        self.status.set(f"{what} reset successfully", widgets.STATUS_OK)
-        self.project_state.publish(ResultsChanged())
 
 
 def open_file(path: str) -> None:

@@ -90,6 +90,9 @@ The *Project Setup* stage edits the files shared by all configurations, each in 
 - **Test Compilation** (on the `compile.sh` tab) builds the project with the current script and settings, without recording a result. The output appears in the output pane, the outcome in the status chip.
 - **Derive** (on the `seq_settings.json` tab) creates `dp_settings.json`, `hd_settings.json` and `par_settings.json` from `seq_settings.json`: `discopop_cc`/`discopop_cxx` for `dp`, `discopop_hotspot_cc`/`discopop_hotspot_cxx` and `-fopenmp` for `hd`, `-fopenmp` for `par`.
 - The shared `compile_validate.sh` is optional (**Add** / **Remove**).
+- The **Danger zone** below the files, framed in red, holds the resets, as red-outlined buttons. Both ask for confirmation and are disabled while a run is in progress:
+  - **Reset Execution Results…** deletes the measured runs of all configurations and the reports.
+  - **Reset Project…** deletes everything below `.discopop` except the configurations, `compile.sh` and the settings: profiling data, suggestions, hotspot measurements, autotuning results, measured runs and reports.
 
 Files without unsaved changes are read again when the stage is shown, so the files written by the configuration assistant or by another program appear.
 
@@ -207,7 +210,7 @@ Results are stored in `.discopop/project/execution_results.json`.
 The *Report* stage shows all recorded measurements. The *Table* tab lists configuration, script, setting, label, applied and not applied suggestions, threads, status, time, speedup and efficiency; speedup is relative to the `seq` run of the same script. Times have their units, missing values are shown as "—", and applied suggestions are listed by their IDs. With the **+** button you add plots: *Trade-off scatter*, *Thread scaling*, *Speedup / efficiency bars* and *Runtime bars*. Click a point or bar to see its details.
 
 - **Generate PDF Report** and **View Report PDF** create and open `.discopop/project/reports/<timestamp>/full_report.pdf` (the folder also holds `report.csv` and single PDFs). Viewing uses `xdg-open`.
-- The **⋯** menu offers **Reset Execution Results…**, which deletes the measurements and reports, and **Reset Project…**, which deletes everything below `.discopop` except the configurations. Both ask for confirmation.
+- To delete the measured runs and the reports, use **Reset Execution Results…** in the *Danger zone* of the [Project Setup](#project-setup) stage.
 - **Reload** re-reads the results.
 
 ## What the stages run

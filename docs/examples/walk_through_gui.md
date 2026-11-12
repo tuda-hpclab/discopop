@@ -83,7 +83,7 @@ The stage **Report** shows all stored measurements.
 - The tab "Table" lists Config, Script, Setting, Label, Applied Suggestions, Not Applied, Threads, Status, Time, Speedup and Efficiency. Missing values are shown as "—", and applied suggestions as their IDs.
 - The "+" button adds charts: "Trade-off scatter", "Thread scaling", "Speedup / efficiency bars" and "Runtime bars". Click a point or bar to see its details in the bar at the side.
 - "Generate PDF Report" and "View Report PDF" create and open `full_report.pdf` (written to `.discopop/project/reports/<timestamp>/`); "Reload" refreshes the view.
-- The "⋯" menu offers "Reset Execution Results…", which deletes the measurements and reports, and "Reset Project…", which deletes everything in `.discopop` except the configuration files. Both ask for confirmation.
+- The resets are in the red "Danger zone" of the stage Project Setup: "Reset Execution Results…" deletes the measurements and reports, "Reset Project…" everything in `.discopop` except the configuration files. Both ask for confirmation.
 
 ## Step 7: Hotspot detection (optional)
 The stage **Hotspots** measures which code regions take the most time. Pattern detection and the hotspot-guided autotuning use the result.

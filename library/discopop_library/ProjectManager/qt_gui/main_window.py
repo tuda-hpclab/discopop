@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
     def _run_state_changed(self, other: "ExecutePanel | ProfilingPanel", running: bool) -> None:
         other.set_blocked(running)
         self.report_panel.set_execution_running(running)
+        self.setup_panel.set_blocked(running)
 
     def save_shortcut(self) -> None:
         """Ctrl+S: saves the files of the stage in front (Project Setup or Configuration Setup)."""

@@ -155,15 +155,14 @@ def test_view_report_opens_the_newest_pdf_or_says_there_is_none(
     assert open_file.call_args.args[0].endswith("full_report.pdf")
 
 
-def test_reset_asks_first_and_publishes_results_changed(panel: ReportPanel, dialog_answers: DialogRecorder) -> None:
+def test_the_report_follows_results_changed(panel: ReportPanel) -> None:
     write_results(panel)
     panel.project_state.publish(ResultsChanged())
-    dialog_answers.answer("ask_yes_no", False, True)
-    panel.reset_results_action.trigger()
     assert panel.table.rowCount() == 3
-    panel.reset_results_action.trigger()
-    assert panel.table.rowCount() == 0
-    assert panel.status.text() == "Execution results reset successfully"
+    # a reset in Project Setup deletes the results and the reports
+    Path(panel.arguments.project_dir, "execution_results.json").unlink()
+    panel.project_state.publish(ResultsChanged())
+    assert panel.table.rowCount() == 0 and not panel.view_report_button.isEnabled()
 
 
 def test_3d_tab_has_hide_failed_and_fit_view(panel: ReportPanel) -> None:

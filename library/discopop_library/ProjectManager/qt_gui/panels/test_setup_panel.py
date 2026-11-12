@@ -26,7 +26,14 @@ from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
-from discopop_library.ProjectManager.services.project_state import ConfigurationsChanged, ProjectState
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningChanged,
+    ConfigurationsChanged,
+    HotspotsChanged,
+    PatternsChanged,
+    ProjectState,
+    ResultsChanged,
+)
 
 SETTINGS = {"CC": "clang", "CXX": "clang++", "CFLAGS": "-O2", "CXXFLAGS": "-O2"}
 
@@ -288,3 +295,58 @@ def test_a_test_compilation_opens_the_output_pane(qtbot: QtBot, editor: SetupPan
         with mock.patch.object(setup_panel, "start_work"):
             editor.test_compilation()
     assert editor.output_console() is editor.console
+
+
+def reset_fixture(editor: SetupPanel) -> List[Any]:
+    """A .discopop with profiling data, execution results and a report; the events the panel publishes."""
+    dot_dp = Path(editor.arguments.dot_dp)
+    (dot_dp / "profiler").mkdir(parents=True, exist_ok=True)
+    (dot_dp / "profiler" / "dynamic_dependencies.txt").write_text("x")
+    (dot_dp / "project" / "execution_results.json").write_text("{}")
+    (dot_dp / "project" / "reports").mkdir(exist_ok=True)
+    events: List[Any] = []
+    for event_type in (ResultsChanged, PatternsChanged, HotspotsChanged, AutotuningChanged):
+        editor.project_state.subscribe(event_type, events.append)
+    return events
+
+
+def test_the_resets_are_red_buttons_in_a_danger_zone(editor: SetupPanel) -> None:
+    for button in (editor.reset_results_button, editor.reset_project_button):
+        assert button.objectName() == widgets.VARIANT_DANGER_OUTLINE and button.isEnabled()
+    assert editor.danger_zone.objectName() == widgets.DANGER_ZONE_NAME
+    assert editor.reset_results_button.text() == "Reset Execution Results…"
+    assert editor.reset_project_button.text() == "Reset Project…"
+
+
+def test_reset_execution_results_asks_first(editor: SetupPanel, dialog_answers: DialogRecorder) -> None:
+    events = reset_fixture(editor)
+    dot_dp = Path(editor.arguments.dot_dp)
+    dialog_answers.answer("ask_yes_no", False, True)
+    editor.reset_results_button.click()
+    assert (dot_dp / "project" / "execution_results.json").exists() and events == []
+    editor.reset_results_button.click()
+    assert not (dot_dp / "project" / "execution_results.json").exists()
+    assert not (dot_dp / "project" / "reports").exists()
+    assert (dot_dp / "profiler" / "dynamic_dependencies.txt").exists()
+    assert events == [ResultsChanged()]
+    assert editor.status.text() == "Execution results reset successfully"
+
+
+def test_reset_project_keeps_the_configurations(editor: SetupPanel, dialog_answers: DialogRecorder) -> None:
+    write_files(editor)
+    events = reset_fixture(editor)
+    dot_dp = Path(editor.arguments.dot_dp)
+    dialog_answers.answer("ask_yes_no", True)
+    editor.reset_project_button.click()
+    assert not (dot_dp / "profiler").exists() and not (dot_dp / "project" / "execution_results.json").exists()
+    assert (comp_dir(editor) / "compile.sh").exists()
+    assert events == [ResultsChanged(), PatternsChanged(), HotspotsChanged(), AutotuningChanged()]
+    assert editor.status.text() == "Project reset successfully"
+
+
+def test_no_reset_while_a_run_is_in_progress(editor: SetupPanel) -> None:
+    editor.set_blocked(True)
+    assert not editor.reset_results_button.isEnabled() and not editor.reset_project_button.isEnabled()
+    assert editor.reset_project_button.toolTip() == "Not while a run is in progress."
+    editor.set_blocked(False)
+    assert editor.reset_results_button.isEnabled() and editor.reset_project_button.toolTip() == ""

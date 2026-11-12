@@ -13,11 +13,12 @@ Ported from the compilation editor window (``gui/mixins/compilation_editor.py`` 
 the sidebar, above Configure, and the output of a test compilation goes to the output pane.
 """
 
+import copy
 import os
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtGui import QShowEvent
-from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import (
@@ -43,11 +44,31 @@ from discopop_library.ProjectManager.services.editor_files import (
     run_test_compilation,
 )
 from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
-from discopop_library.ProjectManager.services.project_state import ConfigurationsChanged, ProjectState
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningChanged,
+    ConfigurationsChanged,
+    HotspotsChanged,
+    PatternsChanged,
+    ProjectState,
+    ResultsChanged,
+)
+from discopop_library.ProjectManager.utilities.reset import reset_project
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 
 DERIVE_DISABLED_TOOLTIP = "Save all changes before deriving settings"
 TEST_BUTTON_TEXT = "Test Compilation"
+
+
+RESET_RESULTS_TEXT = "Reset Execution Results…"
+RESET_PROJECT_TEXT = "Reset Project…"
+RESET_RESULTS_HINT = (
+    "<b>Reset execution results</b> deletes the measured runs of all configurations and the reports."
+    " Everything else stays."
+)
+RESET_PROJECT_HINT = (
+    "<b>Reset project</b> deletes everything in .discopop except the configurations, compile.sh and the settings:"
+    " profiling data, suggestions, hotspot measurements, autotuning results, measured runs and reports."
+)
 
 
 class SetupPanel(Panel):
@@ -110,9 +131,76 @@ class SetupPanel(Panel):
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
+        layout.addWidget(self._danger_zone())
 
         self.load_files()
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.reload_unmodified())
+
+    def _danger_zone(self) -> QFrame:
+        """The card of the resets: framed in red, each with what it deletes and what it keeps."""
+        self.reset_results_button = widgets.danger_outline_button(RESET_RESULTS_TEXT, self._confirm_reset_results)
+        self.reset_project_button = widgets.danger_outline_button(RESET_PROJECT_TEXT, self._confirm_reset_project)
+        card = QFrame()
+        card.setObjectName(widgets.DANGER_ZONE_NAME)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 10, 14, 12)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
+        title = widgets.heading_label("⚠ Danger zone")
+        title.setObjectName(widgets.DANGER_TITLE_NAME)
+        grid.addWidget(title, 0, 0, 1, 2)
+        for row, (button, text) in enumerate(
+            ((self.reset_results_button, RESET_RESULTS_HINT), (self.reset_project_button, RESET_PROJECT_HINT)), 1
+        ):
+            hint = QLabel(text)
+            hint.setWordWrap(True)
+            grid.addWidget(hint, row, 0)
+            grid.addWidget(button, row, 1)
+        grid.setColumnStretch(0, 1)
+        self.danger_zone = card
+        return card
+
+    def set_blocked(self, blocked: bool) -> None:
+        """No reset while a run writes into the project (the main window calls this)."""
+        for button in (self.reset_results_button, self.reset_project_button):
+            button.setEnabled(not blocked)
+            button.setToolTip("Not while a run is in progress." if blocked else "")
+
+    # ── resets ──────────────────────────────────────────────────────────────
+
+    def _confirm_reset_results(self) -> None:
+        if dialogs.ask_yes_no(
+            self,
+            "Confirm Reset",
+            "Are you sure you want to reset execution results?\nThis will delete all execution data and reports.",
+        ):
+            self.reset(results_only=True)
+
+    def _confirm_reset_project(self) -> None:
+        if dialogs.ask_yes_no(
+            self,
+            "Confirm Reset",
+            "Are you sure you want to reset the entire project?\n"
+            "This will delete all data except the configuration files.",
+        ):
+            self.reset(results_only=False)
+
+    def reset(self, *, results_only: bool) -> None:
+        arguments = copy.copy(self.arguments)
+        arguments.reset = not results_only
+        arguments.reset_execution_results = results_only
+        what = "Execution results" if results_only else "Project"
+        try:
+            reset_project(arguments)
+        except Exception as e:
+            self.status.set(f"Error resetting {what.lower()}: {e}", widgets.STATUS_FAIL)
+            return
+        self.status.set(f"{what} reset successfully", widgets.STATUS_OK)
+        self.project_state.publish(ResultsChanged())
+        if not results_only:
+            # the profiling data, the suggestions, the hotspots and the autotuner's results are gone too
+            for event in (PatternsChanged(), HotspotsChanged(), AutotuningChanged()):
+                self.project_state.publish(event)
 
     def output_console(self) -> widgets.OutputConsole:
         return self.console
