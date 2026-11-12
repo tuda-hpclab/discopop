@@ -45,8 +45,8 @@ def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.tab_names() == [
         TAB_SETUP,
         TAB_EDITOR,
-        TAB_PROFILING,
         TAB_HOTSPOT,
+        TAB_PROFILING,
         TAB_PATTERN_DETECTION,
         TAB_PATCH_REPAIR,
         TAB_AUTOTUNING,

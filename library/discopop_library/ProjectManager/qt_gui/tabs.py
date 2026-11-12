@@ -30,15 +30,15 @@ TAB_HOTSPOT = STAGE_HOTSPOT
 TAB_PATTERN_DETECTION = STAGE_PATTERN_DETECTION
 TAB_PATCH_REPAIR = STAGE_PATCH_REPAIR
 TAB_AUTOTUNING = STAGE_AUTOTUNING
-# the order of the tabs, as in the sidebar: the build of the project and its configurations first; profiling and
-# hotspots are measured before, and feed into, pattern detection and the autotuner; patch repair sits between them, a
+# the order of the tabs, as in the sidebar: the build of the project and its configurations first; hotspots and
+# profiling are measured before, and feed into, pattern detection and the autotuner; patch repair sits between them, a
 # suggestion that does not build is one the tuner can only record as a failure; Execute measures the configurations
 # with or without the suggestions, the report shows the measurements
 TAB_ORDER = (
     TAB_SETUP,
     TAB_EDITOR,
-    TAB_PROFILING,
     TAB_HOTSPOT,
+    TAB_PROFILING,
     TAB_PATTERN_DETECTION,
     TAB_PATCH_REPAIR,
     TAB_AUTOTUNING,
@@ -52,8 +52,8 @@ NAV_SECTIONS = (
     (
         "Pipeline",
         (
-            (TAB_PROFILING, "Profiling"),
             (TAB_HOTSPOT, "Hotspots"),
+            (TAB_PROFILING, "Profiling"),
             (TAB_PATTERN_DETECTION, "Pattern Detection"),
             (TAB_PATCH_REPAIR, "Patch Repair"),
             (TAB_AUTOTUNING, "Autotuning"),

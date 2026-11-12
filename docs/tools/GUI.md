@@ -49,7 +49,7 @@ The window has a header bar, a workflow sidebar, the stage that is selected and 
 - **Header bar** (top): the title and the execution configurations of the project (the directories below `.discopop/project/configs/`) as tabs; the stages work on the selected one, which is filled in the highlight color like the selected stage of the sidebar. A click on a tab switches to it. When there are more configurations than fit, arrows at the end of the tabs (or the mouse wheel over them) scroll them. **+** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu at the right end offers *New Configuration…*, *New with Wizard…*, *Copy*, *Rename* and *Delete* of the selected configuration, and the submenu *Theme* (*System*, *Light*, *Dark*); right-clicking a tab offers *Copy*, *Rename* and *Delete* of its configuration.
 - **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:
   - **Setup**: *Project Setup*, the build shared by all configurations, and *Configuration Setup*, the scripts of the selected configuration.
-  - **Pipeline**: *Profiling*, *Hotspots*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*. Most of them work on the selected configuration.
+  - **Pipeline**: *Hotspots*, *Profiling*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*. Most of them work on the selected configuration.
   - **Results**: *Report*.
 
   Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). Locked stages can still be opened: *Pattern Detection* explains what is missing and offers **Go to Profiling**; *Autotuning* shows a warning with the missing prerequisite (profiling data or parallelization suggestions) and a button to the stage that creates it, and **Run Autotuning** is unavailable until then.
@@ -116,15 +116,6 @@ The scripts are executed with the project root as working directory and with the
 ### Execution time
 By default, the runtime of `execute.sh` is its wall clock time. Check *Read the execution time from the program's console output* to measure the time the program prints itself instead. *Pattern* is a regular expression whose first capture group holds the value; the default searches for `<DP_EXEC_TIME>1.234</DP_EXEC_TIME>`. **Test** applies the pattern to the output of the last recorded run without executing anything. The setting is stored in `execution_time.json` next to `execute.sh`. See [Measured runtime](Project_manager.md#measured-runtime).
 
-## Profiling
-![Profiling stage with the time of the last profiling run and the timeouts](../assets/screenshots/gui_profiling.svg)
-
-The *Profiling* stage compiles the selected configuration with the DiscoPoP compiler wrappers (`dp_settings.json`) and runs its `execute.sh` once, in place, i.e. in the project directory itself. The profiler records the data dependences that occur in this run; they are kept in `.discopop/profiler`, and the *Pattern Detection* stage works on them. A new profiling run replaces the data of the previous one.
-
-Its header holds **Profile for Pattern Detection** (**■ Stop** while it runs). The cards show the selected configuration and the time of the last profiling run (or which profiling files are missing), and explain the run. The instrumented program runs much slower than the original, so give the configuration a small, but representative input. *Advanced* (collapsed) holds the timeouts for compilation, execution and validation in seconds (0 = disabled).
-
-Without `compile.sh`, `execute.sh` or `dp_settings.json`, the stage says what is missing; **Go to Project Setup** opens the *Project Setup* stage. The *Profiling* and *Execute* stages do not run at the same time.
-
 ## Hotspots
 ![Hotspots stage after two measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
 
@@ -145,6 +136,15 @@ The **⋯** menu offers the following actions:
 *Runs* lists every recorded run (runs recorded elsewhere, for example in the Execute stage, by the command line or by the MCP server, are marked `(external)`). *Regions* lists the code regions with hotness (`YES`, `MAYBE`, `NO`), kind, location, average, share, minimum, maximum, ratio and number of runs, with filters for hotness and kind. **Show in VSCode** in the detail bar of a region opens it in VS Code.
 
 Results are stored in `.discopop/hotspot_detection/` (`Hotspots.json` and the run log `measurement_runs.json`).
+
+## Profiling
+![Profiling stage with the time of the last profiling run and the timeouts](../assets/screenshots/gui_profiling.svg)
+
+The *Profiling* stage compiles the selected configuration with the DiscoPoP compiler wrappers (`dp_settings.json`) and runs its `execute.sh` once, in place, i.e. in the project directory itself. The profiler records the data dependences that occur in this run; they are kept in `.discopop/profiler`, and the *Pattern Detection* stage works on them. A new profiling run replaces the data of the previous one.
+
+Its header holds **Profile for Pattern Detection** (**■ Stop** while it runs). The cards show the selected configuration and the time of the last profiling run (or which profiling files are missing), and explain the run. The instrumented program runs much slower than the original, so give the configuration a small, but representative input. *Advanced* (collapsed) holds the timeouts for compilation, execution and validation in seconds (0 = disabled).
+
+Without `compile.sh`, `execute.sh` or `dp_settings.json`, the stage says what is missing; **Go to Project Setup** opens the *Project Setup* stage. The *Profiling* and *Execute* stages do not run at the same time.
 
 ## Pattern Detection
 ![Pattern Detection stage after a detection run, with the table of suggestions and the details and patch of the selected suggestion](../assets/screenshots/gui_pattern_detection.svg)
