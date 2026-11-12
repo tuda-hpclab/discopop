@@ -34,3 +34,16 @@ def test_an_empty_chart_keeps_only_its_message(qtbot: QtBot) -> None:
     interaction.empty_message(ax, "Nothing yet")
     chart_embedding.redraw(canvas)
     assert not any(spine.get_visible() for spine in ax.spines.values())
+
+
+def test_twin_and_polar_axes(qtbot: QtBot) -> None:
+    widget, figure, canvas, _ = chart_embedding.create_canvas()
+    qtbot.addWidget(widget)
+    ax = figure.add_subplot(121)
+    twin = ax.twinx()
+    polar = figure.add_subplot(122, projection="polar")
+    chart_embedding.redraw(canvas)  # no KeyError for the spines a polar axes lacks
+    # the twin's axis is at the right
+    assert twin.spines["right"].get_visible() and not twin.spines["left"].get_visible()
+    assert ax.spines["left"].get_visible() and not ax.spines["right"].get_visible()
+    assert polar.spines["polar"].get_visible()

@@ -76,17 +76,6 @@ def test_the_clear_button_of_the_output_pane_is_framed(qtbot: QtBot) -> None:
     assert f"QPushButton#{widgets.COMPACT_NAME} {{ padding:" in widgets.app_style_sheet(QPalette(QColor("#efefef")))
 
 
-def _contrast(first: QColor, second: QColor) -> float:
-    def luminance(color: QColor) -> float:
-        def channel(value: float) -> float:
-            return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
-
-        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) + 0.0722 * channel(color.blueF())
-
-    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
-    return (lighter + 0.05) / (darker + 0.05)
-
-
 def test_the_light_theme_has_no_white_views_and_readable_hints(qapp: QApplication) -> None:
     palette = theme.palette_for(qapp, theme.THEME_LIGHT)
     window = palette.color(QPalette.ColorRole.Window)
@@ -97,7 +86,7 @@ def test_the_light_theme_has_no_white_views_and_readable_hints(qapp: QApplicatio
     assert QColor("#ffffff") not in (window, card, palette.color(QPalette.ColorRole.Base))
     assert card.lightness() > window.lightness()
     # hint texts read on the page and on a card (WCAG AA for normal text)
-    assert _contrast(hint, window) >= 4.5 and _contrast(hint, card) >= 4.5
+    assert widgets.contrast_ratio(hint, window) >= 4.5 and widgets.contrast_ratio(hint, card) >= 4.5
 
 
 def test_idle_labels_take_the_hint_color_of_the_palette(qtbot: QtBot) -> None:
@@ -133,5 +122,18 @@ def test_the_arrows_of_spin_and_combo_boxes_are_images(qapp: QApplication) -> No
     path = widgets.arrow_image("down", "#123456")
     assert FilePath(path).read_text().count("#123456") == 1
     # the style sheet names an arrow image that exists
-    match = re.search(r"QComboBox::down-arrow \{ image: url\(([^)]+)\)", widgets.app_style_sheet(theme.light_palette()))
+    match = re.search(
+        r"QComboBox::down-arrow \{ image: url\('([^']+)'\)", widgets.app_style_sheet(theme.light_palette())
+    )
     assert match is not None and FilePath(match.group(1)).is_file()
+
+
+def test_accent_text_and_marks_read_on_any_highlight() -> None:
+    # e.g. a desktop palette with a light blue (KDE Breeze) or a pastel highlight
+    for highlight in ("#3daee9", "#ffe082", widgets.ACCENT):
+        palette = theme.light_palette()
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        text = widgets.accent_text_color(palette)
+        assert widgets.contrast_ratio(text, widgets.selection_color(palette)) >= 4.5
+        mark = widgets.mark_color(QColor(highlight))
+        assert widgets.contrast_ratio(mark, QColor(highlight)) >= 3

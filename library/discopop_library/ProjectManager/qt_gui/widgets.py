@@ -12,6 +12,7 @@ The counterpart of ``gui/widgets.py``: one place for colors, fonts, buttons, the
 editors and the thread selector, so components of the same kind look the same in every panel.
 """
 
+import functools
 import logging
 import os
 import tempfile
@@ -309,16 +310,43 @@ def selection_color(palette: QPalette) -> QColor:
     )
 
 
+def contrast_ratio(first: QColor, second: QColor) -> float:
+    """The WCAG contrast ratio of two colors (1 to 21)."""
+
+    def luminance(color: QColor) -> float:
+        def channel(value: float) -> float:
+            return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) + 0.0722 * channel(color.blueF())
+
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def accent_text_color(palette: QPalette) -> QColor:
-    """Text in the highlight color on a selection (:func:`selection_color`) or on the window."""
-    highlight = palette.color(QPalette.ColorRole.Highlight)
-    return highlight.lighter(165) if is_dark(palette) else highlight.darker(118)
+    """Text in the highlight color on a selection (:func:`selection_color`): darkened (lightened on a dark palette)
+    until it reads on it, whatever highlight a desktop palette brings (a light blue, a pastel)."""
+    color = QColor(palette.color(QPalette.ColorRole.Highlight))
+    background = selection_color(palette)
+    dark = is_dark(palette)
+    for _ in range(12):
+        if contrast_ratio(color, background) >= 4.5:
+            break
+        color = color.lighter(115) if dark else color.darker(118)
+    return color
+
+
+def mark_color(accent: QColor) -> QColor:
+    """A check mark or dot on a filled ``accent``: white, or a dark gray on a light accent."""
+    return QColor("white") if contrast_ratio(QColor("white"), accent) >= 3 else QColor("#1b1d21")
 
 
 _ARROW_PATHS = {"down": "M1 1l4 4 4-4", "up": "M1 5l4-4 4 4"}
 
 
+@functools.lru_cache(maxsize=1)
 def _cache_directory() -> str:
+    """Once per process: without a cache location, one temporary directory (not a new one per theme switch)."""
     location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericCacheLocation)
     return os.path.join(location or tempfile.mkdtemp(prefix="discopop_project_manager_"), "discopop_project_manager")
 
@@ -357,14 +385,14 @@ def _arrow_rules(palette: QPalette) -> str:
         [
             "QComboBox { padding-right: 22px; }",
             "QComboBox::drop-down { border: none; width: 22px; }",
-            f"QComboBox::down-arrow {{ image: url({down}); width: 10px; height: 6px; }}",
+            f"QComboBox::down-arrow {{ image: url('{down}'); width: 10px; height: 6px; }}",
             "QAbstractSpinBox { padding-right: 18px; }",
             "QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { border: none; width: 18px;"
             " background: transparent; }",
             "QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover"
             f" {{ background-color: {hover}; border-radius: 3px; }}",
-            f"QAbstractSpinBox::up-arrow {{ image: url({up}); width: 9px; height: 5px; }}",
-            f"QAbstractSpinBox::down-arrow {{ image: url({down}); width: 9px; height: 5px; }}",
+            f"QAbstractSpinBox::up-arrow {{ image: url('{up}'); width: 9px; height: 5px; }}",
+            f"QAbstractSpinBox::down-arrow {{ image: url('{down}'); width: 9px; height: 5px; }}",
         ]
     )
 
@@ -574,7 +602,7 @@ def draw_indicator(painter: QPainter, option: QStyleOption, *, radio: bool) -> N
             painter.drawRoundedRect(box, 3.5, 3.5)
         if not filled:
             return
-        mark = QColor("white")
+        mark = mark_color(accent)
         if radio:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(mark)

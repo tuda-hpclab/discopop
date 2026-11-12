@@ -76,7 +76,8 @@ def style_axes(figure: Any) -> None:
     from matplotlib.legend import Legend
 
     for ax in figure.axes:
-        if getattr(ax, "name", "") == "3d" or ax.get_label() == "<colorbar>":
+        # rectilinear axes only (no 3D, polar or other projections), no color bars
+        if getattr(ax, "name", "") != "rectilinear" or ax.get_label() == "<colorbar>":
             continue
         if tuple(ax.get_facecolor()) == (1.0, 1.0, 1.0, 1.0):
             ax.set_facecolor(CHART_BACKGROUND)
@@ -86,12 +87,15 @@ def style_axes(figure: Any) -> None:
                 spine.set_visible(False)
             ax.grid(False)
             continue
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
+        # a twin (twinx / twiny) has its axis at the right resp. top, and the grid of the axes it twins
+        y_right = ax.yaxis.get_ticks_position() == "right"
+        x_top = ax.xaxis.get_ticks_position() == "top"
+        for side, axis_line in (("top", x_top), ("right", y_right), ("bottom", not x_top), ("left", not y_right)):
+            ax.spines[side].set_visible(axis_line)
             ax.spines[side].set_color(CHART_SPINE)
         ax.set_axisbelow(True)
-        ax.grid(True, color=CHART_GRID, linewidth=0.8)
+        if not (y_right or x_top):
+            ax.grid(True, color=CHART_GRID, linewidth=0.8)
         ax.tick_params(colors=CHART_TICK, which="both")
         for tick_label in ax.get_xticklabels() + ax.get_yticklabels():
             tick_label.set_color(CHART_TICK)
