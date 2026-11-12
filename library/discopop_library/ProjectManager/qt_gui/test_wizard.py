@@ -270,3 +270,23 @@ def test_the_instrumentation_scope_step_saves_the_scope_when_left(wizard: Config
 def test_leaving_the_scope_step_unchanged_writes_nothing(wizard: ConfigurationWizard) -> None:
     go_to(wizard, 3)
     assert not Path(wizard.arguments.project_config_dir, "project_environment.json").exists()
+
+
+def test_rewriting_the_scripts_in_the_scope_step_updates_the_compile_script_editor(
+    make_wizard: Callable[[ProjectManagerArguments], ConfigurationWizard], tmp_path: Path
+) -> None:
+    arguments = make_arguments(tmp_path / "project")
+    os.makedirs(arguments.project_config_dir, exist_ok=True)
+    Path(arguments.project_root, "src").mkdir()
+    compile_sh = Path(arguments.project_config_dir, "compile.sh")
+    compile_sh.write_text('#!/bin/bash\ncmake -S "$DP_PROJECT_ROOT_DIR" -B build\n')
+    wizard = make_wizard(arguments)
+    go_to(wizard, 2)
+    editor = wizard.project_environment_widget
+    editor.scope_edit.setText("src")
+    assert editor.rewrite_button.isVisibleTo(editor)
+    editor.rewrite_button.click()
+    assert "DP_RUN_ROOT_DIR" in compile_sh.read_text()
+    # finishing the wizard writes the editor's text: it must not bring the old variable back
+    assert "DP_RUN_ROOT_DIR" in wizard.compile_sh_text.toPlainText()
+    assert "DP_PROJECT_ROOT_DIR" not in wizard.compile_sh_text.toPlainText()

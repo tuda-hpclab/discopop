@@ -238,3 +238,20 @@ def test_warning_fields_leave_out_errors_cap_and_count() -> None:
     assert fields["warnings"][:5] == [f"a.c:{n}: warning: w{n}" for n in range(5)]
     assert fields["warnings"][5] == "3 more warnings."
     assert len(fields["warnings"]) == MAX_WARNINGS + 1
+
+
+def test_newest_source_mtime_counts_the_instrumentation_scope(tmp_path: Path) -> None:
+    source = tmp_path / "main.cpp"
+    source.write_text("int main() { return 0; }\n")
+    os.utime(source, (1000.0, 1000.0))
+    assert ToolContext.newest_source_mtime(str(tmp_path)) == 1000.0
+
+    scope_file = tmp_path / ".discopop" / "project" / "configs" / "project_environment.json"
+    scope_file.parent.mkdir(parents=True)
+    scope_file.write_text('{"DP_PROJECT_ROOT_DIR": "src"}')
+    os.utime(scope_file, (2000.0, 2000.0))
+    # a changed scope makes results older than it stale, like a changed source
+    assert ToolContext.newest_source_mtime(str(tmp_path)) == 2000.0
+    # an older scope file does not hide a newer source
+    os.utime(scope_file, (500.0, 500.0))
+    assert ToolContext.newest_source_mtime(str(tmp_path)) == 1000.0

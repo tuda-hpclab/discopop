@@ -97,7 +97,7 @@ The scope is stored in `project_environment.json`, relative to the project root,
 {"DP_PROJECT_ROOT_DIR": "src"}
 ```
 
-Edit it in the GUI (Editor -> Project environment) or in the file; `--dp-project-root-dir <dir>` overrides it for one invocation. The passes test whether a file's path *contains* the scope, so only one directory can be given; the project manager always passes it as an absolute path with a trailing `/`. A scope outside the project root is possible, but the copies of the project are then not instrumented.
+Edit it in the GUI (Editor -> Project environment) or in the file; `--dp-project-root-dir <dir>` overrides it for one invocation. The passes test whether a file's path *contains* the scope, so only one directory can be given; the project manager always passes it as an absolute path with a trailing `/`. A scope outside the project root is possible, but the copies of the project are then not instrumented. The scope is compared with the file paths the compiler records; if the project is reached through a symbolic link and the build resolves it, these are the resolved paths, and the scope matches nothing (the build then warns, see below).
 
 `DP_PROJECT_ROOT_DIR`, `DOT_DISCOPOP` and `DP_RUN_ROOT_DIR` are set by the project manager for every run and cannot be set in a settings file: a value found there is ignored with a warning, and the command line removes it from the settings files. Before the scope could be configured, `$DP_PROJECT_ROOT_DIR` held the project root; a script that uses it that way has to use `$DP_RUN_ROOT_DIR` once the scope is narrowed, and every run of such a script warns about it.
 

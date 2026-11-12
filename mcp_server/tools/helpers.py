@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 
+from discopop_library.ProjectManager.configurations.project_environment import PROJECT_ENVIRONMENT_FILE
 from mcp.types import TextContent
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
@@ -714,8 +715,17 @@ class ToolContext:
     @staticmethod
     def newest_source_mtime(project_path: str) -> Optional[float]:
         """Return the mtime of the most recently modified source file under project_path,
-        excluding the .discopop subtree. Returns None if no source files are found."""
-        return max(ToolContext.source_mtimes(project_path).values(), default=None)
+        excluding the .discopop subtree. Returns None if no source files are found.
+
+        The instrumentation scope (project_environment.json) counts as a source: results instrumented
+        before it changed cover other code."""
+        newest = max(ToolContext.source_mtimes(project_path).values(), default=None)
+        scope_file = Path(project_path) / ".discopop" / "project" / "configs" / PROJECT_ENVIRONMENT_FILE
+        try:
+            scope_mtime = scope_file.stat().st_mtime
+        except OSError:
+            return newest
+        return scope_mtime if newest is None else max(newest, scope_mtime)
 
     @staticmethod
     def source_mtimes(project_path: str) -> dict[Path, float]:

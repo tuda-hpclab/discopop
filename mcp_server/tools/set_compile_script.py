@@ -21,6 +21,8 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 )
 from discopop_library.ProjectManager.configurations.project_environment import (
     ProjectEnvironment,
+    ProjectEnvironmentError,
+    load_project_environment,
     normalize_scope,
     save_project_environment,
     validate_project_environment,
@@ -203,7 +205,13 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         scope = arguments.get("instrumentation_scope")
         if scope is not None:
             environment = ProjectEnvironment(instrumentation_scope=str(scope))
-            save_project_environment(str(configs_dir), project_path, environment)
+            # Written only on a change: the file's mtime marks the analysis results as stale.
+            try:
+                stored: Optional[str] = load_project_environment(str(configs_dir)).instrumentation_scope
+            except ProjectEnvironmentError:
+                stored = None
+            if stored is None or normalize_scope(project_path, stored) != normalize_scope(project_path, str(scope)):
+                save_project_environment(str(configs_dir), project_path, environment)
             scope_result = {
                 "scope": normalize_scope(project_path, environment.instrumentation_scope),
                 "warnings": validate_project_environment(project_path, environment),

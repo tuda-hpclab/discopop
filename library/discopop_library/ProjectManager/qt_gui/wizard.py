@@ -293,7 +293,14 @@ class ConfigurationWizard(QWizard):
             self.compile_sh_text.set_text(existing)
         else:
             self.compile_sh_text = PlaceholderScriptEditor(COMPILE_PLACEHOLDER)
+        # The scope step can rewrite compile.sh on disk; the editor must not write the old text back.
+        self.project_environment_widget.scripts_rewritten.connect(self._reload_compile_sh)
         return self._step(3, _label(COMPILE_HINT), self.compile_sh_text, on_next=self._leave_compile_sh)
+
+    def _reload_compile_sh(self) -> None:
+        existing = existing_compile_script(self.arguments.project_config_dir)
+        if existing is not None and isinstance(self.compile_sh_text, widgets.ScriptEditor):
+            self.compile_sh_text.set_text(existing)
 
     def _leave_compile_sh(self) -> bool:
         self.step_data.compile_sh = script_text(self.compile_sh_text)

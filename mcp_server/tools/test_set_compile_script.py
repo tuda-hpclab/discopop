@@ -134,6 +134,17 @@ class TestSetCompileScript(unittest.TestCase):
         self.assertIn("outside the project root", data["instrumentation_scope"]["warnings"][0])
         self.assertEqual(self._stored_environment(), {"DP_PROJECT_ROOT_DIR": outside})
 
+    def test_unchanged_instrumentation_scope_does_not_rewrite_the_file(self) -> None:
+        # the file's mtime marks the analysis as stale, so an unchanged scope must not touch it
+        os.makedirs(os.path.join(self.project_path, "src"))
+        stored = os.path.join(self.configs_dir, PROJECT_ENVIRONMENT_FILE)
+        with open(stored, "w") as f:
+            f.write('{"DP_PROJECT_ROOT_DIR": "src"}\n')
+        os.utime(stored, (1000.0, 1000.0))
+        data = self._handle(instrumentation_scope="./src/")
+        self.assertEqual(data["instrumentation_scope"]["scope"], "src")
+        self.assertEqual(os.path.getmtime(stored), 1000.0)
+
     def test_omitted_instrumentation_scope_leaves_the_stored_scope_alone(self) -> None:
         os.makedirs(os.path.join(self.project_path, "src"))
         stored = os.path.join(self.configs_dir, PROJECT_ENVIRONMENT_FILE)

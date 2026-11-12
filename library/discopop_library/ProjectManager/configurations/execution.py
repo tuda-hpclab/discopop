@@ -30,6 +30,7 @@ from discopop_library.ProjectManager.configurations.instrumentation_checks impor
     DP_SETTINGS,
     HD_SETTINGS,
     CheckResult,
+    Snapshot,
     check_build,
     check_profiling_run,
     take_snapshot,
@@ -398,7 +399,12 @@ def execute_configuration(
     # for key in my_env:
     #    print("--> ", key, " : ", my_env[key])
 
-    snapshot = take_snapshot(my_env[DOT_DISCOPOP_VARIABLE])
+    # Only the instrumented modes are checked; the others need no marker in .discopop.
+    snapshot = (
+        take_snapshot(my_env[DOT_DISCOPOP_VARIABLE])
+        if settings_name in _INSTRUMENTED_MODES
+        else Snapshot(started=time.time())
+    )
     outcomes: List[_RunOutcome] = []
     for repetition in range(repetitions):
         if repetitions > 1:
