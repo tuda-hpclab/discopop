@@ -34,7 +34,7 @@ discopop_gui
 ```
 Use `discopop_gui -p <project directory>` to start it from another directory. DiscoPoP keeps all its data in the folder `.discopop` of the project.
 
-![The main window with the configuration selector in the header bar, the workflow sidebar and the output pane](assets/screenshots/gui_main_window.svg)
+![The main window with the configuration switcher in the header bar, the workflow sidebar and the output pane](assets/screenshots/gui_main_window.svg)
 
 ## Configure the project
 On the first start, the Configuration Assistant asks for two scripts and checks that they work:

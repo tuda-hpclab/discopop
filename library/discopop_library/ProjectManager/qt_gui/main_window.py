@@ -25,8 +25,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QMainWindow,
+    QMenu,
     QSplitter,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -223,10 +225,16 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _add_theme_menu(self) -> None:
-        """The submenu "Theme" (System / Light / Dark) of the "⋯" menu in the header bar."""
-        menu = self.config_list.menu()
-        menu.addSeparator()
-        self.theme_menu = menu.addMenu("Theme")
+        """The "⋯" menu at the right end of the header bar (the settings of the application): the submenu "Theme"
+        (System / Light / Dark)."""
+        self.app_menu_button = QToolButton()
+        self.app_menu_button.setObjectName(widgets.FLAT_NAME)
+        self.app_menu_button.setText("⋯")
+        self.app_menu_button.setToolTip("Settings: the color theme")
+        self.app_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.app_menu = QMenu(self.app_menu_button)
+        self.app_menu_button.setMenu(self.app_menu)
+        self.theme_menu = self.app_menu.addMenu("Theme")
         self.theme_actions: Dict[str, QAction] = {}
         group = QActionGroup(self.theme_menu)
         group.setExclusive(True)
@@ -260,14 +268,16 @@ class MainWindow(QMainWindow):
         """Header bar on top; sidebar | (panel over output pane) below."""
         title = widgets.heading_label("DiscoPoP Project Manager", title=True)
         self.dot_dp_label.setMinimumWidth(80)
-        header_layout = widgets.hbox(title, 12, self.dot_dp_label, None, self.config_list, margins=0, spacing=8)
+        header_layout = widgets.hbox(
+            title, 12, self.dot_dp_label, None, self.config_list, self.app_menu_button, margins=0, spacing=8
+        )
         header_layout.setStretch(2, 1)
         # the header bar, the sidebar and the status line are the frame of the window, in a color of their own
         # (widgets.chrome_color) and separated from the page by a line
         self.header = QFrame()
         self.header.setObjectName(widgets.HEADER_NAME)
         self.header.setLayout(header_layout)
-        header_layout.setContentsMargins(14, 8, 14, 8)
+        header_layout.setContentsMargins(14, 6, 14, 6)
         self.sidebar = QFrame()
         self.sidebar.setObjectName(widgets.SIDEBAR_NAME)
         sidebar_layout = QVBoxLayout(self.sidebar)
@@ -295,6 +305,8 @@ class MainWindow(QMainWindow):
 
     def after_show(self) -> None:
         """Called once the window is visible: the wizard of a fresh project opens on top of it."""
+        # the first stage in the sidebar has the keyboard focus, not the first widget of the header bar
+        self.nav.setFocus()
         self.config_list.maybe_open_wizard(self.was_initialized)
 
     # --- the stages ---

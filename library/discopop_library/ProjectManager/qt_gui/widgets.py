@@ -170,8 +170,30 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
             f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
             f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
+            # the configuration switcher in the header bar: a field in the color of the input fields, framed, the
+            # frame in the highlight color while hovered or open; its own menu arrow replaces the style's
+            f"QToolButton#{SWITCHER_NAME} {{ background-color: palette(base); border: 1px solid palette(mid);"
+            " border-radius: 6px; }",
+            f"QToolButton#{SWITCHER_NAME}:hover, QToolButton#{SWITCHER_NAME}:focus,"
+            f" QToolButton#{SWITCHER_NAME}:pressed {{ border-color: palette(highlight); }}",
+            f"QToolButton#{SWITCHER_NAME}::menu-indicator {{ image: none; width: 0px; }}",
+            f"QLabel#{SWITCHER_CAPTION_NAME} {{ color: {_secondary_text(palette)}; }}",
         ]
     )
+
+
+def _secondary_text(palette: Optional[QPalette]) -> str:
+    """A text color between the text and the window color: captions next to normal text."""
+    if palette is None:
+        return "gray"
+    text = palette.color(QPalette.ColorRole.WindowText)
+    window = palette.color(QPalette.ColorRole.Window)
+    mixed = QColor(
+        (text.red() * 3 + window.red() * 2) // 5,
+        (text.green() * 3 + window.green() * 2) // 5,
+        (text.blue() * 3 + window.blue() * 2) // 5,
+    )
+    return mixed.name()
 
 
 def _component_rules(dark: bool = False) -> str:
@@ -198,6 +220,8 @@ BANNER_NAME = "warningBanner"
 HEADER_NAME = "appHeader"
 SIDEBAR_NAME = "appSidebar"
 STATUS_BAR_NAME = "appStatusBar"
+SWITCHER_NAME = "configSwitcher"
+SWITCHER_CAPTION_NAME = "switcherCaption"
 
 APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 

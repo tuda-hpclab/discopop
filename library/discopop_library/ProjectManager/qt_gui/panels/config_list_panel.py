@@ -14,8 +14,9 @@ Ported from ``gui/mixins/config_list.py``, ``gui/mixins/config_crud.py`` and ``g
 
 from typing import Callable, List, Optional
 
-from PySide6.QtGui import QAction, QWheelEvent
-from PySide6.QtWidgets import QComboBox, QLabel, QMenu, QSizePolicy, QToolButton, QWidget
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QAction, QActionGroup, QFont
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
@@ -37,19 +38,72 @@ from discopop_library.ProjectManager.services.project_state import ConfigChanged
 
 _STATUS_RESET_MS = 2000
 
+SWITCHER_CAPTION = "EXECUTION CONFIGURATION"
+NO_CONFIGURATION = "No configuration"
+_SWITCHER_MIN_WIDTH = 200
 
-class _NoWheelComboBox(QComboBox):
-    """A combo box the mouse wheel does not change: scrolling over the header must not switch the configuration."""
 
-    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 (Qt's name)
-        event.ignore()
+class ConfigSwitcher(QToolButton):
+    """The button of the switcher: a small caption over the name of the selected configuration, and a "▾".
+
+    A tool button (so it opens its menu on a click and takes the keyboard focus like any button) with labels laid out
+    on it; the labels let the clicks through to the button.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName(widgets.SWITCHER_NAME)
+        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.caption_label = QLabel(SWITCHER_CAPTION)
+        caption_font = QFont(self.font())
+        caption_font.setPointSizeF(max(caption_font.pointSizeF() * 0.75, 6.5))
+        caption_font.setBold(True)
+        caption_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
+        self.caption_label.setFont(caption_font)
+        self.caption_label.setObjectName(widgets.SWITCHER_CAPTION_NAME)
+        self.name_label = QLabel(NO_CONFIGURATION)
+        name_font = QFont(self.font())
+        name_font.setBold(True)
+        self.name_label.setFont(name_font)
+        self.arrow_label = QLabel("▾")
+        self.arrow_label.setObjectName(widgets.SWITCHER_CAPTION_NAME)
+        texts = QVBoxLayout()
+        texts.setContentsMargins(0, 0, 0, 0)
+        texts.setSpacing(0)
+        texts.addWidget(self.caption_label)
+        texts.addWidget(self.name_label)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 3, 10, 4)
+        layout.setSpacing(10)
+        layout.addLayout(texts, 1)
+        layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        for label in (self.caption_label, self.name_label, self.arrow_label):
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def set_name(self, name: Optional[str]) -> None:
+        self.name_label.setText(name if name is not None else NO_CONFIGURATION)
+        self.setAccessibleName(f"Execution configuration: {name or NO_CONFIGURATION}")
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt's name)
+        layout = self.layout()
+        hint = layout.sizeHint() if layout is not None else super().sizeHint()
+        return QSize(max(hint.width(), _SWITCHER_MIN_WIDTH), hint.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 (Qt's name)
+        return self.sizeHint()
 
 
 class ConfigListPanel(Panel):
-    """The configuration selector: a combo box, "+ New" and a "⋯" menu (copy, rename, wizard, delete).
+    """The configuration switcher in the header bar: one button naming the selected configuration; its menu lists the
+    configurations to switch to and creates, copies, renames and deletes them.
 
-    It used to be a list taking the left side of the window; one configuration is worked on at a time, so a selector
-    in the header bar says the same in one line.
+    It used to be a list taking the left side of the window, then a combo box with "+ New" and a "⋯" menu beside it;
+    one configuration is worked on at a time, so one button (as the scheme or run configuration selectors of IDEs)
+    says the same and keeps everything about configurations in one place.
 
     ``confirm_leave_config`` is asked before the user's selection changes; False keeps the old selection (the Editor
     panel uses it for unsaved changes). ``tabs`` switches the tabs of the main window. The files shared by all
@@ -72,25 +126,18 @@ class ConfigListPanel(Panel):
         self._confirm_leave_config = confirm_leave_config
         self._tabs = tabs
         self.config_dir = arguments.project_config_dir
-        self._updating = False
+        self._names: List[str] = []
         self._shown_config: Optional[str] = None
         self._wizard: Optional[ConfigurationWizard] = None
 
-        self.combo = _NoWheelComboBox()
-        self.combo.setMinimumWidth(180)
-        self.combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.combo.setToolTip("The configuration the tabs work on")
-        self.combo.currentIndexChanged.connect(lambda _index: self._on_selection_changed())
-        self.new_button = widgets.create_button("+ New", self.new_config, tooltip="Create a new configuration")
-        self.menu_button = QToolButton()
-        self.menu_button.setObjectName(widgets.FLAT_NAME)
-        self.menu_button.setText("⋯")
-        self.menu_button.setToolTip("Copy, rename or delete the configuration; the color theme")
-        self.menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._menu = self.context_menu()
-        self.menu_button.setMenu(self._menu)
-        label = QLabel("Execution Configuration:")
-        self.setLayout(widgets.hbox(label, self.combo, self.new_button, self.menu_button, margins=0))
+        self.switcher = ConfigSwitcher()
+        self.switcher.setToolTip("The configuration the stages work on: switch, create, copy, rename or delete")
+        self._menu = QMenu(self.switcher)
+        # rebuilt when it opens, so it always lists what is on disk and names the selected configuration
+        self._menu.aboutToShow.connect(self._fill_menu)
+        self.switcher.setMenu(self._menu)
+        self.config_actions: List[QAction] = []
+        self.setLayout(widgets.hbox(self.switcher, margins=0))
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
@@ -99,58 +146,37 @@ class ConfigListPanel(Panel):
     # --- the list ---
 
     def names(self) -> List[str]:
-        return [self.combo.itemText(row) for row in range(self.combo.count())]
+        return list(self._names)
+
+    def selected(self) -> Optional[str]:
+        return self._shown_config
 
     def refresh(self) -> None:
         """Show the configurations on disk; the selection stays, else the first one is selected."""
         previous = self.project_state.current_config
         configs = list_configurations(self.config_dir)
-        self._updating = True
-        try:
-            self.combo.clear()
-            self.combo.addItems(configs)
-            chosen = previous if previous in configs else (configs[0] if configs else None)
-            self.combo.setCurrentIndex(configs.index(chosen) if chosen is not None else -1)
-            self.combo.setEnabled(bool(configs))
-        finally:
-            self._updating = False
+        self._names = list(configs)
+        chosen = previous if previous in configs else (configs[0] if configs else None)
         self.project_state.current_config = chosen
         self._shown_config = chosen
+        self.switcher.set_name(chosen)
         # nothing is selected without configurations: the panels listening must not keep showing the deleted one
         self.project_state.publish(ConfigChanged(chosen))
-
-    def _selected_name(self) -> Optional[str]:
-        return self.combo.currentText() if self.combo.currentIndex() >= 0 else None
-
-    def _select(self, name: Optional[str]) -> None:
-        """Select ``name`` without telling anybody (the caller does)."""
-        self._updating = True
-        try:
-            self.combo.setCurrentIndex(self.names().index(name) if name is not None else -1)
-        finally:
-            self._updating = False
 
     def select(self, name: str) -> bool:
         """Select ``name`` as the user would (asking whether to leave the current one); False if refused."""
         if name == self._shown_config:
             return True
-        self._select(name)
+        if name not in self._names:
+            return False
         return self._change_selection(name)
-
-    def _on_selection_changed(self) -> None:
-        if self._updating:
-            return
-        name = self._selected_name()
-        if name is None or name == self._shown_config:
-            return
-        self._change_selection(name)
 
     def _change_selection(self, name: str) -> bool:
         """The user selected ``name``: ask whether to leave the current configuration, then switch."""
         if not self._confirm_leave_config():
-            self._select(self._shown_config)
             return False
         self._shown_config = name
+        self.switcher.set_name(name)
         self.project_state.current_config = name
         self.project_state.publish(ConfigChanged(name))
         # Execute and Report show the results of all configurations: back to the Editor of the selected one
@@ -161,21 +187,54 @@ class ConfigListPanel(Panel):
     # --- the menu ---
 
     def menu(self) -> QMenu:
-        """The menu of the "⋯" button; the main window adds the entries that are not about configurations."""
+        """The menu of the switcher (filled when it opens, see :meth:`_fill_menu`)."""
         return self._menu
 
-    def context_menu(self) -> QMenu:
-        menu = QMenu(self)
-        copy_action: QAction = menu.addAction("Copy…")
-        copy_action.triggered.connect(lambda _checked=False: self.copy_config())
-        rename_action: QAction = menu.addAction("Rename…")
-        rename_action.triggered.connect(lambda _checked=False: self.rename_config())
-        wizard_action: QAction = menu.addAction("New with wizard…")
-        wizard_action.triggered.connect(lambda _checked=False: self.open_configuration_wizard())
+    def _fill_menu(self) -> None:
+        """The configurations (the selected one checked), then the actions: new, wizard, copy, rename, delete."""
+        menu = self._menu
+        menu.clear()
+        self.config_actions = []
+        if self._names:
+            group = QActionGroup(menu)
+            group.setExclusive(True)
+            for name in self._names:
+                action = menu.addAction(name)
+                action.setCheckable(True)
+                action.setChecked(name == self._shown_config)
+                action.triggered.connect(lambda _checked=False, name=name: self._menu_select(name))
+                group.addAction(action)
+                self.config_actions.append(action)
+        else:
+            empty = menu.addAction("No configurations yet")
+            empty.setEnabled(False)
         menu.addSeparator()
-        delete_action: QAction = menu.addAction("Delete…")
-        delete_action.triggered.connect(lambda _checked=False: self.delete_config())
-        return menu
+        current = self._shown_config
+        self._add_action("New Configuration…", self.new_config)
+        self._add_action("New with Wizard…", self.open_configuration_wizard)
+        menu.addSeparator()
+        for text, slot in (("Copy", self.copy_config), ("Rename", self.rename_config), ("Delete", self.delete_config)):
+            action = self._add_action(f"{text} “{current}”…" if current else f"{text}…", slot)
+            action.setEnabled(current is not None)
+
+    def _add_action(self, text: str, slot: Callable[[], None]) -> QAction:
+        action: QAction = self._menu.addAction(text)
+        action.triggered.connect(lambda _checked=False: slot())
+        return action
+
+    def _menu_select(self, name: str) -> None:
+        self.select(name)
+
+    def menu_actions(self) -> List[str]:
+        """The texts of the menu as it opens (separators as ""), for tests."""
+        self._fill_menu()
+        return [action.text() for action in self._menu.actions()]
+
+    def trigger(self, text: str) -> None:
+        """Trigger the menu entry ``text`` as the user would (for tests)."""
+        self._fill_menu()
+        action = next(action for action in self._menu.actions() if action.text() == text)
+        action.trigger()
 
     # --- create / copy / rename / delete ---
 
