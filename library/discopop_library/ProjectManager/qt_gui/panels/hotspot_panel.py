@@ -713,6 +713,9 @@ class HotspotPanel(Panel):
         self.run_button.setEnabled(idle and has_config)
         count = len(self.selected_configs())
         self.run_button.set_run_text(RUN_TEXT if count != 1 else "Run Measurement")
+        self.run_button.setToolTip(
+            "" if has_config or self.running else "Check at least one execution configuration in the list to measure."
+        )
         self.select_all_button.setEnabled(idle)
         self.select_none_button.setEnabled(idle)
         self.reinstrument_action.setEnabled(idle and has_config)

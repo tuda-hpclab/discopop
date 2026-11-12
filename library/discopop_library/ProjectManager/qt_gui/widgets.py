@@ -124,8 +124,10 @@ def button_colors(palette: QPalette) -> Tuple[QColor, QColor, QColor, QColor]:
 def _button_rules(palette: Optional[QPalette] = None) -> str:
     if palette is not None:
         background, border, hover, pressed = (color.name() for color in button_colors(palette))
+        disabled_text = _secondary_text(palette)
     else:
         background, border, hover, pressed = "palette(button)", "palette(mid)", "palette(midlight)", "palette(mid)"
+        disabled_text = "palette(mid)"
     rules = [
         # the default look: a framed button that stands out from the window (a border radius without a border would
         # draw a bare label)
@@ -133,7 +135,8 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
         f" background-color: {background}; color: palette(button-text); }}",
         f"QPushButton:hover {{ background-color: {hover}; }}",
         f"QPushButton:pressed {{ background-color: {pressed}; }}",
-        "QPushButton:disabled { color: palette(mid); border-color: palette(midlight);"
+        # disabled: still a framed button (it says what could be done), with its text grayed out
+        f"QPushButton:disabled {{ color: {disabled_text}; border: 1px dashed {border};"
         " background-color: palette(window); }",
         # a compact button: framed like the default one, with less padding, for slim bars (the output pane's Clear)
         f"QPushButton#{COMPACT_NAME} {{ padding: 2px 10px; }}",
@@ -148,11 +151,34 @@ def _button_rules(palette: Optional[QPalette] = None) -> str:
             " font-weight: bold; }"
         )
         rules.append(f"QPushButton#{variant}:hover {{ background-color: {hover}; }}")
+        # disabled: the accent faded towards the window, so the primary action stays recognizable where it is
+        faded = _faded(QColor(color), palette)
         rules.append(
-            f"QPushButton#{variant}:disabled {{ background-color: palette(midlight); color: palette(mid);"
-            " border-color: palette(midlight); }"
+            f"QPushButton#{variant}:disabled {{ background-color: {faded}; color: {_faded_text(palette)};"
+            f" border: 1px solid {faded}; }}"
         )
     return "\n".join(rules)
+
+
+def _mix(color: QColor, other: QColor, share: float) -> str:
+    """``share`` of ``color``, the rest of ``other``."""
+    return QColor(
+        round(color.red() * share + other.red() * (1 - share)),
+        round(color.green() * share + other.green() * (1 - share)),
+        round(color.blue() * share + other.blue() * (1 - share)),
+    ).name()
+
+
+def _faded(accent: QColor, palette: Optional[QPalette]) -> str:
+    """The accent of a disabled button: halfway to the window color (further on a dark window, on which a dark
+    accent still reads as active)."""
+    window = palette.color(QPalette.ColorRole.Window) if palette is not None else QColor("#efefef")
+    return _mix(accent, window, 0.3 if palette is not None and is_dark(palette) else 0.45)
+
+
+def _faded_text(palette: Optional[QPalette]) -> str:
+    """The text on a faded accent: white, a little transparent towards the accent."""
+    return "#f0f0f0" if palette is None or not is_dark(palette) else "#9a9a9a"
 
 
 def chrome_color(palette: QPalette) -> QColor:

@@ -181,8 +181,11 @@ def test_checking_a_configuration_enables_running(env: Env) -> None:
     assert not env.panel.analyze_action.isEnabled() and not env.panel.clear_action.isEnabled()
     env.panel.select_none_button.click()
     assert env.panel.selected_configs() == [] and not env.panel.reinstrument_action.isEnabled()
+    # disabled, but still there, saying why
+    assert not env.panel.run_button.isEnabled() and not env.panel.run_button.isHidden()
+    assert env.panel.run_button.toolTip().startswith("Check at least one execution configuration")
     env.panel.select_all_button.click()
-    assert env.panel.run_button.isEnabled()
+    assert env.panel.run_button.isEnabled() and env.panel.run_button.toolTip() == ""
 
 
 def test_by_default_the_configuration_of_the_header_bar_is_checked(env: Env) -> None:
