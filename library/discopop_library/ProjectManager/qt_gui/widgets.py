@@ -165,19 +165,19 @@ def chrome_color(palette: QPalette) -> QColor:
 def _chrome_rules(palette: Optional[QPalette]) -> str:
     """The frame of the main window: header bar and sidebar in the chrome color, with a line towards the page."""
     background = chrome_color(palette).name() if palette is not None else "palette(window)"
+    hover = chrome_color(palette).darker(112).name() if palette is not None else "palette(midlight)"
     return "\n".join(
         [
             f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
             f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
-            # the configurations in the header bar: tabs as links, the selected one underlined in the highlight color
-            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none;"
-            f" border-bottom: 2px solid transparent; padding: 4px 10px; margin: 0px 1px;"
-            f" color: {_secondary_text(palette)}; }}",
-            f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ color: palette(window-text);"
-            " border-bottom-color: palette(mid); }",
-            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ color: palette(window-text);"
-            " border-bottom-color: palette(highlight); }",
+            # the configurations in the header bar: the selected one filled in the highlight color, as the selected
+            # stage of the sidebar; the others as plain text, shaded while hovered
+            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none; border-radius: 5px;"
+            " padding: 4px 12px; margin: 2px 2px; color: palette(window-text); }",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; }}",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: palette(highlight);"
+            " color: palette(highlighted-text); }",
             # its scroll arrows (while the tabs do not fit) in the color of the header bar, covering the tabs below
             f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {background}; border: none;"
             " border-radius: 4px; width: 18px; }",

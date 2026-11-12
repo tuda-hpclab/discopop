@@ -29,7 +29,7 @@ discopop_gui
 
 ![Main window of the GUI](../assets/screenshots/gui_main_window.svg)
 
-The header bar shows the path of the `.discopop` folder and the execution configurations as tabs; the selected one is underlined, and a click on another tab switches to it. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
+The header bar shows the execution configurations as tabs; the selected one is highlighted, and a click on another tab switches to it. The path of the `.discopop` folder is at the right end of the status line at the bottom. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
 
 ## Step 2: Create a configuration with the wizard
 If the project has no real configuration yet, the "Configuration Assistant" opens on its own. Its steps are:

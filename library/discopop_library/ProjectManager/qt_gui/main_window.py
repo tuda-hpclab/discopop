@@ -102,8 +102,8 @@ class ElidedPathLabel(QLabel):
         self.setText(self.fontMetrics().elidedText(self._path, Qt.TextElideMode.ElideMiddle, width))
 
 
-# the widest the path of the .discopop directory is shown in the header bar
-_PATH_MAX_WIDTH = 320
+# the widest the path of the .discopop directory is shown in the status line (shortened in the middle beyond)
+_PATH_MAX_WIDTH = 520
 
 
 class MainWindow(QMainWindow):
@@ -122,7 +122,11 @@ class MainWindow(QMainWindow):
 
         self.status = StatusLine()
         self.statusBar().addWidget(self.status, 1)
+        # the project's path at the right end of the status line: there when needed, without taking the eye
         self.dot_dp_label = ElidedPathLabel(arguments.dot_dp)
+        self.dot_dp_label.setMinimumWidth(80)
+        self.dot_dp_label.setMaximumWidth(_PATH_MAX_WIDTH)
+        self.statusBar().addPermanentWidget(self.dot_dp_label)
 
         self.nav = WorkflowNav([(heading, list(stages)) for heading, stages in NAV_SECTIONS])
         self.nav.stage_selected.connect(self._on_stage_selected)
@@ -262,11 +266,8 @@ class MainWindow(QMainWindow):
     def _build_frame(self) -> None:
         """Header bar on top; sidebar | (panel over output pane) below."""
         title = widgets.heading_label("DiscoPoP Project Manager", title=True)
-        # the path is shortened (its tool tip has all of it), so the tabs of the configurations get the room
-        self.dot_dp_label.setMinimumWidth(80)
-        self.dot_dp_label.setMaximumWidth(_PATH_MAX_WIDTH)
-        header_layout = widgets.hbox(title, 12, self.dot_dp_label, 24, self.config_list, margins=0, spacing=8)
-        header_layout.setStretch(4, 1)
+        header_layout = widgets.hbox(title, 32, self.config_list, margins=0, spacing=8)
+        header_layout.setStretch(2, 1)
         # the header bar, the sidebar and the status line are the frame of the window, in a color of their own
         # (widgets.chrome_color) and separated from the page by a line
         self.header = QFrame()
