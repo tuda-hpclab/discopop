@@ -29,7 +29,7 @@ discopop_gui
 
 ![Main window of the GUI](../assets/screenshots/gui_main_window.svg)
 
-The header bar shows the path of the `.discopop` folder and the configuration switcher, a button captioned "Execution configuration" that names the selected configuration; the "⋯" menu next to it switches the color theme. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
+The header bar shows the path of the `.discopop` folder and the execution configurations as tabs; the selected one is underlined, and a click on another tab switches to it. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
 
 ## Step 2: Create a configuration with the wizard
 If the project has no real configuration yet, the "Configuration Assistant" opens on its own. Its steps are:
@@ -47,7 +47,7 @@ If the project has no real configuration yet, the "Configuration Assistant" open
 
 ![Configuration Assistant, first step (Welcome)](../assets/screenshots/gui_wizard.svg)
 
-You can edit the wizard's results later: the stage **Project Setup** at the top of the sidebar shows `compile.sh` and the settings files, with the buttons "Save (Ctrl+S)", "Test Compilation" (its output appears in the output pane) and "Derive" (derives the settings of the other modes from `seq_settings.json`). The menu of the configuration switcher lists the configurations to switch to and offers "New Configuration…", "New with Wizard…" and "Copy", "Rename" and "Delete" of the selected one.
+You can edit the wizard's results later: the stage **Project Setup** at the top of the sidebar shows `compile.sh` and the settings files, with the buttons "Save (Ctrl+S)", "Test Compilation" (its output appears in the output pane) and "Derive" (derives the settings of the other modes from `seq_settings.json`). "+" next to the configuration tabs adds a further configuration; the "⋯" menu at the right end of the header bar offers "New with Wizard…" and "Copy", "Rename" and "Delete" of the selected one (right-clicking a tab offers them for its configuration).
 
 ## Step 3: Edit the scripts
 The stage **Configuration Setup** shows the files of the selected configuration in the sub-tabs `execute.sh`, `compile.sh (override)`, `validate.sh` and `compile_validate.sh (override)`. "Help" explains each script; "Add Override" and "Add validate.sh" create the optional ones. Save with "Save (Ctrl+S)".

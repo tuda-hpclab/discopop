@@ -25,10 +25,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QMainWindow,
-    QMenu,
     QSplitter,
     QStackedWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -102,6 +100,10 @@ class ElidedPathLabel(QLabel):
         width = self.width() if self.width() > 1 else 10_000
         # in the middle: the start (where the project lives) and the end (its name) are the informative parts
         self.setText(self.fontMetrics().elidedText(self._path, Qt.TextElideMode.ElideMiddle, width))
+
+
+# the widest the path of the .discopop directory is shown in the header bar
+_PATH_MAX_WIDTH = 320
 
 
 class MainWindow(QMainWindow):
@@ -225,16 +227,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _add_theme_menu(self) -> None:
-        """The "⋯" menu at the right end of the header bar (the settings of the application): the submenu "Theme"
-        (System / Light / Dark)."""
-        self.app_menu_button = QToolButton()
-        self.app_menu_button.setObjectName(widgets.FLAT_NAME)
-        self.app_menu_button.setText("⋯")
-        self.app_menu_button.setToolTip("Settings: the color theme")
-        self.app_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.app_menu = QMenu(self.app_menu_button)
-        self.app_menu_button.setMenu(self.app_menu)
-        self.theme_menu = self.app_menu.addMenu("Theme")
+        """The submenu "Theme" (System / Light / Dark) of the "⋯" menu in the header bar."""
+        menu = self.config_list.menu()
+        self.theme_menu = menu.addMenu("Theme")
         self.theme_actions: Dict[str, QAction] = {}
         group = QActionGroup(self.theme_menu)
         group.setExclusive(True)
@@ -267,11 +262,11 @@ class MainWindow(QMainWindow):
     def _build_frame(self) -> None:
         """Header bar on top; sidebar | (panel over output pane) below."""
         title = widgets.heading_label("DiscoPoP Project Manager", title=True)
+        # the path is shortened (its tool tip has all of it), so the tabs of the configurations get the room
         self.dot_dp_label.setMinimumWidth(80)
-        header_layout = widgets.hbox(
-            title, 12, self.dot_dp_label, None, self.config_list, self.app_menu_button, margins=0, spacing=8
-        )
-        header_layout.setStretch(2, 1)
+        self.dot_dp_label.setMaximumWidth(_PATH_MAX_WIDTH)
+        header_layout = widgets.hbox(title, 12, self.dot_dp_label, 24, self.config_list, margins=0, spacing=8)
+        header_layout.setStretch(4, 1)
         # the header bar, the sidebar and the status line are the frame of the window, in a color of their own
         # (widgets.chrome_color) and separated from the page by a line
         self.header = QFrame()

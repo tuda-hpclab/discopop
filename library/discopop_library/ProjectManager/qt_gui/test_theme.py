@@ -23,7 +23,7 @@ def test_the_menu_switches_and_remembers_the_theme(qtbot: QtBot, tmp_path: Path,
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     system_dark = widgets.is_dark(qapp.palette())
-    assert [a.text() for a in window.app_menu.actions()] == ["Theme"]
+    assert window.config_list.menu_actions()[-1] == "Theme"
     assert [a.text() for a in window.theme_menu.actions()] == ["System", "Light", "Dark"]
     assert window.theme_actions[theme.THEME_SYSTEM].isChecked()
 

@@ -170,14 +170,19 @@ def _chrome_rules(palette: Optional[QPalette]) -> str:
             f"QFrame#{HEADER_NAME} {{ background-color: {background}; border-bottom: 1px solid palette(mid); }}",
             f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
             f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
-            # the configuration switcher in the header bar: a field in the color of the input fields, framed, the
-            # frame in the highlight color while hovered or open; its own menu arrow replaces the style's
-            f"QToolButton#{SWITCHER_NAME} {{ background-color: palette(base); border: 1px solid palette(mid);"
-            " border-radius: 6px; }",
-            f"QToolButton#{SWITCHER_NAME}:hover, QToolButton#{SWITCHER_NAME}:focus,"
-            f" QToolButton#{SWITCHER_NAME}:pressed {{ border-color: palette(highlight); }}",
-            f"QToolButton#{SWITCHER_NAME}::menu-indicator {{ image: none; width: 0px; }}",
-            f"QLabel#{SWITCHER_CAPTION_NAME} {{ color: {_secondary_text(palette)}; }}",
+            # the configurations in the header bar: tabs as links, the selected one underlined in the highlight color
+            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background: transparent; border: none;"
+            f" border-bottom: 2px solid transparent; padding: 4px 10px; margin: 0px 1px;"
+            f" color: {_secondary_text(palette)}; }}",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ color: palette(window-text);"
+            " border-bottom-color: palette(mid); }",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ color: palette(window-text);"
+            " border-bottom-color: palette(highlight); }",
+            # its scroll arrows (while the tabs do not fit) in the color of the header bar, covering the tabs below
+            f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {background}; border: none;"
+            " border-radius: 4px; width: 18px; }",
+            f"QTabBar#{CONFIG_TABS_NAME} QToolButton:hover {{ background-color: palette(midlight); }}",
+            f"QLabel#{CAPTION_NAME} {{ color: {_secondary_text(palette)}; }}",
         ]
     )
 
@@ -220,8 +225,8 @@ BANNER_NAME = "warningBanner"
 HEADER_NAME = "appHeader"
 SIDEBAR_NAME = "appSidebar"
 STATUS_BAR_NAME = "appStatusBar"
-SWITCHER_NAME = "configSwitcher"
-SWITCHER_CAPTION_NAME = "switcherCaption"
+CONFIG_TABS_NAME = "configTabs"
+CAPTION_NAME = "caption"
 
 APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 
