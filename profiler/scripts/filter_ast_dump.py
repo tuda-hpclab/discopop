@@ -37,7 +37,8 @@ import json
 import os
 import re
 import sys
-from typing import Any, Optional, TextIO
+import time
+from typing import Any, Callable, Optional, Protocol, TextIO
 
 
 def _resolve_macro_loc(loc: dict[str, Any]) -> dict[str, Any]:
@@ -61,19 +62,22 @@ def _own_file(node: dict[str, Any], inherited_file: Optional[str]) -> Optional[s
     return loc.get("file", inherited_file)
 
 
-def _load_file_mapping(path: str) -> frozenset[str]:
-    """The files of ``FileMapping.txt`` (lines ``<id><TAB><path>``), as normalized and as resolved paths."""
+def _load_file_mapping(path: str) -> tuple[frozenset[str], int]:
+    """The files of ``FileMapping.txt`` (lines ``<id><TAB><path>``), as normalized and as resolved paths, and their
+    number."""
     files: set[str] = set()
+    count = 0
     try:
         with open(path, "r") as f:
             for line in f:
                 _, tab, name = line.rstrip("\n").partition("\t")
                 if tab and name:
+                    count += 1
                     files.add(os.path.normpath(name))
                     files.add(os.path.realpath(name))
     except OSError:
         pass
-    return frozenset(files)
+    return frozenset(files), count
 
 
 class _Policy:
@@ -91,9 +95,15 @@ class _Policy:
 
     def __init__(self, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> None:
         self.project_root = project_root if project_root.endswith("/") else project_root + "/"
-        self.mapped: frozenset[str] = _load_file_mapping(file_mapping) if file_mapping else frozenset()
+        self.file_mapping = file_mapping
+        self.mapped, self.mapped_files = _load_file_mapping(file_mapping) if file_mapping else (frozenset(), 0)
         self.prune_types = prune_types
         self._cache: dict[str, bool] = {}
+        # what happened, for the status messages: nodes kept, and subtrees dropped as a whole
+        self.kept = 0
+        self.dropped_unselected = 0
+        self.dropped_types = 0
+        self.streamed = 0
 
     def keeps_file(self, file_: Optional[str]) -> bool:
         # None means the node's location could not be resolved at all (e.g. a
@@ -125,8 +135,13 @@ class _Policy:
 
     def keeps(self, file_: Optional[str], kind: Optional[str]) -> bool:
         if self.prune_types and isinstance(kind, str) and kind.endswith("Type"):
+            self.dropped_types += 1
             return False
-        return self.keeps_file(file_)
+        if not self.keeps_file(file_):
+            self.dropped_unselected += 1
+            return False
+        self.kept += 1
+        return True
 
 
 def _bake_file(node: dict[str, Any], own_file: Optional[str]) -> None:
@@ -170,6 +185,93 @@ def _filter_subtree(node: dict[str, Any], own_file: Optional[str], policy: _Poli
         node["inner"] = _filter_children(children, own_file, policy)
 
 
+class _Writer(Protocol):
+    def write(self, text: str, /) -> int: ...
+
+
+class _CountingWriter:
+    """Passes what is written on and counts it (the output is ASCII, so characters are bytes)."""
+
+    def __init__(self, target: _Writer) -> None:
+        self.target = target
+        self.count = 0
+
+    def write(self, text: str, /) -> int:
+        self.count += len(text)
+        return self.target.write(text)
+
+
+def _plural(n: int, noun: str) -> str:
+    return f"{n:,} {noun}" if n == 1 else f"{n:,} {noun}s"
+
+
+def _size(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} GB"  # not reached
+
+
+class _Status:
+    """Status messages of a run (to ``log``, stderr in the command line tool: stdout carries the pruned AST)."""
+
+    PREFIX = "DiscoPoP AST filter: "
+    PROGRESS_INTERVAL = 10.0  # seconds; short runs only print the first and the last message
+
+    def __init__(self, log: TextIO, policy: "_Policy", reader: "_Reader", out: _CountingWriter) -> None:
+        self.log = log
+        self.policy = policy
+        self.reader = reader
+        self.out = out
+        self.started = time.monotonic()
+        self.last_progress = self.started
+
+    def _say(self, text: str) -> None:
+        print(self.PREFIX + text, file=self.log, flush=True)
+
+    def _dropped(self) -> str:
+        return (
+            f"dropped {_plural(self.policy.dropped_unselected, 'subtree')} outside the "
+            f"{'mapped files' if self.policy.mapped else 'project directory'}, "
+            f"{_plural(self.policy.dropped_types, 'type node')}"
+        )
+
+    def start(self) -> None:
+        policy = self.policy
+        if policy.mapped:
+            selection = (
+                f"keeping the declarations of the {_plural(policy.mapped_files, 'file')} of {policy.file_mapping}"
+            )
+        elif policy.file_mapping:
+            selection = (
+                f"{policy.file_mapping} is missing or empty (no files are mapped yet), keeping the declarations "
+                f"below {policy.project_root}"
+            )
+        else:
+            selection = f"no file mapping given, keeping the declarations below {policy.project_root}"
+        self._say(selection + ("; type nodes are dropped" if policy.prune_types else "; type nodes are kept"))
+
+    def progress(self) -> None:
+        now = time.monotonic()
+        if now - self.last_progress < self.PROGRESS_INTERVAL:
+            return
+        self.last_progress = now
+        elapsed = now - self.started
+        read = self.reader.chars_read
+        self._say(
+            f"{elapsed:.0f} s: read {_size(read)} ({_size(read / elapsed)}/s), wrote {_size(self.out.count)}, "
+            f"kept {_plural(self.policy.kept, 'node')}, {self._dropped()}"
+        )
+
+    def finish(self) -> None:
+        self._say(
+            f"done in {time.monotonic() - self.started:.1f} s: read {_size(self.reader.chars_read)}, "
+            f"wrote {_size(self.out.count)}, kept {_plural(self.policy.kept, 'node')}, {self._dropped()}; "
+            f"{_plural(self.policy.streamed, 'large declaration')} read member by member"
+        )
+
+
 class _Reader:
     """Incremental reader that decodes JSON values from a text stream without reading it all at once."""
 
@@ -177,6 +279,9 @@ class _Reader:
 
     def __init__(self, source: TextIO) -> None:
         self.source = source
+        self.chars_read = 0
+        # called after every read of the source (the status messages hook in here)
+        self.on_read: Optional[Callable[[], None]] = None
         self.buf = ""
         self.pos = 0
         self.eof = False
@@ -190,8 +295,11 @@ class _Reader:
         if not chunk:
             self.eof = True
             return False
+        self.chars_read += len(chunk)
         self.buf = self.buf[self.pos :] + chunk
         self.pos = 0
+        if self.on_read is not None:
+            self.on_read()
         return True
 
     def compact(self) -> None:
@@ -244,7 +352,7 @@ _CONTAINER_HINT = re.compile(r'\{\s*"id"\s*:\s*"[^"]*"\s*,\s*"kind"\s*:\s*"(?:Na
 _HINT_WINDOW = 1024
 
 
-def _stream_children(reader: _Reader, out: TextIO, policy: _Policy, ctx_file: Optional[str], emit: bool) -> None:
+def _stream_children(reader: _Reader, out: _Writer, policy: _Policy, ctx_file: Optional[str], emit: bool) -> None:
     """Process the elements of an ``inner`` array whose ``[`` was consumed; write the kept ones if ``emit`` is set."""
     first = True
     while True:
@@ -269,6 +377,7 @@ def _stream_children(reader: _Reader, out: TextIO, policy: _Policy, ctx_file: Op
             except _TooLarge:
                 streamed = True
         if streamed:
+            policy.streamed += 1
             own_file, wrote = _stream_object(reader, out, policy, ctx_file, emit, sep)
         else:
             own_file = _own_file(child, ctx_file)
@@ -284,7 +393,7 @@ def _stream_children(reader: _Reader, out: TextIO, policy: _Policy, ctx_file: Op
 
 
 def _stream_object(
-    reader: _Reader, out: TextIO, policy: _Policy, ctx_file: Optional[str], emit: bool, sep: str
+    reader: _Reader, out: _Writer, policy: _Policy, ctx_file: Optional[str], emit: bool, sep: str
 ) -> tuple[Optional[str], bool]:
     """Read the object at the reader's position member by member; write it (preceded by ``sep``) if it is kept.
 
@@ -336,23 +445,31 @@ def _stream_object(
     return own_file, keep
 
 
-def filter_ast_stream(source: TextIO, out: TextIO, policy: _Policy) -> None:
+def filter_ast_stream(source: TextIO, out: _Writer, policy: _Policy, log: Optional[TextIO] = None) -> None:
     """Prune one or more concatenated top-level JSON objects read from ``source`` and write them to ``out``.
 
     A declaration is held in memory as a whole only if it is small (``_MAX_DECODE``); larger ones are read member by
     member, so the memory needed does not depend on the size of the (unfiltered) dump or of any declaration.
+    Status messages go to ``log`` if one is given.
     """
     # type trees nest deeply, and the pruning of a decoded declaration recurses over them
     sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
     reader = _Reader(source)
+    counted_out = _CountingWriter(out)
+    status = _Status(log, policy, reader, counted_out) if log is not None else None
+    if status is not None:
+        status.start()
+        reader.on_read = status.progress
     first = True
     while (ch := reader.skip_ws()) is not None:
         if ch != "{":
             raise ValueError("malformed AST dump: a top-level value is not an object")
         if not first:
-            out.write("\n")
+            counted_out.write("\n")
         first = False
-        _stream_object(reader, out, policy, None, True, "")
+        _stream_object(reader, counted_out, policy, None, True, "")
+    if status is not None:
+        status.finish()
 
 
 def filter_ast_dump(text: str, project_root: str, file_mapping: Optional[str] = None, prune_types: bool = True) -> str:
@@ -372,7 +489,9 @@ def main() -> None:
         print(f"usage: {sys.argv[0]} <project_root> [<FileMapping.txt>]", file=sys.stderr)
         sys.exit(1)
 
-    filter_ast_stream(sys.stdin, sys.stdout, _Policy(args[0], args[1] if len(args) == 2 else None))
+    # DP_AST_QUIET=1 silences the status messages (they go to stderr: stdout is the pruned AST)
+    log = None if os.environ.get("DP_AST_QUIET") else sys.stderr
+    filter_ast_stream(sys.stdin, sys.stdout, _Policy(args[0], args[1] if len(args) == 2 else None), log)
 
 
 if __name__ == "__main__":

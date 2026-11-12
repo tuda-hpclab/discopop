@@ -321,3 +321,96 @@ def test_type_pruning_in_streamed_declarations(monkeypatch: pytest.MonkeyPatch, 
     tu = {"id": "0x1", "kind": "TranslationUnitDecl", "loc": {}, "inner": [ns]}
     out = json.loads(fad.filter_ast_dump(json.dumps(tu, indent=1), ROOT))
     assert out["inner"][0]["inner"][0]["inner"] == []
+
+
+def _status_of(tu: dict[str, Any], policy: Any, monkeypatch: Any = None, interval: Any = None) -> list[str]:
+    if monkeypatch is not None and interval is not None:
+        monkeypatch.setattr(fad._Status, "PROGRESS_INTERVAL", interval)
+    log = io.StringIO()
+    fad.filter_ast_stream(io.StringIO(json.dumps(tu)), io.StringIO(), policy, log)
+    assert all(line.startswith(fad._Status.PREFIX) for line in log.getvalue().splitlines())
+    return log.getvalue().splitlines()
+
+
+def test_status_without_file_mapping() -> None:
+    lines = _status_of(_translation_unit(3), fad._Policy(ROOT))
+    assert len(lines) == 2  # a short run: the policy and the summary
+    assert f"no file mapping given, keeping the declarations below {ROOT}/" in lines[0]
+    assert "type nodes are dropped" in lines[0]
+    # the two leading declarations of the test dump (a system typedef, and a function inheriting its file) and the
+    # three system variables are dropped; what is kept counts the nodes below the kept declarations as well
+    assert "dropped 5 subtrees outside the project directory, 0 type nodes" in lines[1]
+    assert "kept 7 nodes" in lines[1] and lines[1].split("done in ")[1][0].isdigit()
+
+
+def test_status_with_file_mapping_and_types(tmp_path: Any) -> None:
+    mapping = _mapping(tmp_path, ROOT + "/main.cpp", ROOT + "/a.hpp")
+    tu = _translation_unit(0)
+    tu["inner"][2]["inner"].append({"kind": "ElaboratedType"})
+    lines = _status_of(tu, fad._Policy(ROOT, mapping))
+    assert f"keeping the declarations of the 2 files of {mapping}" in lines[0]
+    assert "1 type node," in lines[1].replace("outside the mapped files, ", "") or "1 type node" in lines[1]
+    assert "outside the mapped files" in lines[1]
+
+
+def test_status_names_a_missing_file_mapping(tmp_path: Any) -> None:
+    lines = _status_of(_translation_unit(1), fad._Policy(ROOT, str(tmp_path / "absent.txt")))
+    assert "is missing or empty (no files are mapped yet)" in lines[0]
+    assert f"below {ROOT}/" in lines[0]
+
+
+def test_status_counts_declarations_read_member_by_member(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fad, "_MAX_DECODE", 1)
+    lines = _status_of(_namespace_dump(), fad._Policy(ROOT))
+    assert "1 large declaration read member by member" not in lines[-1]  # several: the namespaces and what is large
+    assert "large declarations read member by member" in lines[-1]
+
+
+def test_status_progress_for_long_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    tu = _translation_unit(500)
+    monkeypatch.setattr(fad._Reader, "_MIN_CHUNK", 256)
+    lines = _status_of(tu, fad._Policy(ROOT), monkeypatch, interval=0.0)
+    progress = [line for line in lines if " s: read " in line and "done in" not in line]
+    assert len(progress) > 3 and all("/s)" in line for line in progress)
+    assert lines[-1].startswith(fad._Status.PREFIX + "done in ")
+
+
+def test_no_status_without_log() -> None:
+    out = io.StringIO()
+    fad.filter_ast_stream(io.StringIO(json.dumps(_translation_unit())), out, fad._Policy(ROOT))
+    assert json.loads(out.getvalue())["kind"] == "TranslationUnitDecl"
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+def test_command_line_status_goes_to_stderr_and_can_be_silenced(tmp_path: Any, quiet: bool) -> None:
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "DP_AST_QUIET"}
+    if quiet:
+        env["DP_AST_QUIET"] = "1"
+    result = subprocess.run(
+        [sys.executable, _SCRIPT, ROOT],
+        input=json.dumps(_translation_unit()),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["kind"] == "TranslationUnitDecl"  # stdout is nothing but the pruned AST
+    assert (result.stderr == "") == quiet
+    if not quiet:
+        assert "DiscoPoP AST filter: done in" in result.stderr
+
+
+def test_size_and_plural_formatting() -> None:
+    assert [fad._size(n) for n in (0, 999, 1500, 2_500_000, 3_400_000_000, 7e12)] == [
+        "0 B",
+        "999 B",
+        "1.5 KB",
+        "2.5 MB",
+        "3.4 GB",
+        "7000.0 GB",
+    ]
+    assert fad._plural(1, "file") == "1 file" and fad._plural(0, "file") == "0 files"
+    assert fad._plural(1234, "node") == "1,234 nodes"
