@@ -88,22 +88,16 @@ bool DiscoPoP::DoInitialization(Module& m) {
 
   file_id_cache.clear();
 
-  // InstructionID assignment
-  {
-    // required for consecutive and unique assignment of instructionIDs across multiple modules.
-    InitializeInstructionIdCounter();
-  }
+  InitializeInstructionIdCounter();
   InitializeCallpathStateIdCounter();
   InitializeBBDepCounter();
   InitializeStaticMemoryRegionIDCounter();
+  InitializeCuIdCounter();
 
   // CUGeneration
   {
-    cu_id_counter = 0;
     default_is_global_variable_value = false;
     this_module_ = &m;
-
-    InitializeCuIdCounter();
 
     for (Module::global_iterator i = this_module_->global_begin(); i != this_module_->global_end(); i++) {
       Value* global_variable = dyn_cast<Value>(i);

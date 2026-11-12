@@ -30,7 +30,7 @@ uint32_t DiscoPoP::GetNextStaticMemoryRegionId() {
     if (static_memory_region_id_counter % kStaticMemoryRegionIdRangeSize == 0) {
         const std::string profiler_directory = dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler");
         const std::string counter_file = profiler_directory + "/DP_StaticMemoryRegionIDCounter.txt";
-        const std::string lock_file = profiler_directory + "/DP_StaticMemoryRegionIDCounter.lock";
+        const std::string lock_file = dputil::ProfilerLockPath(profiler_directory, "DP_StaticMemoryRegionIDCounter.lock");
         const int lock = open(lock_file.c_str(), O_CREAT | O_RDWR, 0666);
 
         if (lock == -1) {
