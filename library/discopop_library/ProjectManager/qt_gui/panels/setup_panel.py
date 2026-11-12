@@ -27,6 +27,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     get_shared_validation_compile_script_path,
 )
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
@@ -58,6 +59,13 @@ from discopop_library.ProjectManager.utilities.scriptFiles import write_script_f
 DERIVE_DISABLED_TOOLTIP = "Save all changes before deriving settings"
 TEST_BUTTON_TEXT = "Test Compilation"
 
+
+EXCLUDED_DIRECTORIES_TITLE = "Excluded directories"
+EXCLUDED_DIRECTORIES_HINT = (
+    "Checked directories are no project code, e.g. dependencies fetched into the build directory (build/_deps):"
+    " they are neither instrumented nor part of the file mapping and the AST. Saved at once; takes effect with the"
+    " next build."
+)
 
 RESET_RESULTS_TEXT = "Reset Execution Results…"
 RESET_PROJECT_TEXT = "Reset Project…"
@@ -128,9 +136,17 @@ class SetupPanel(Panel):
             "How the project is built: compile.sh and the compiler settings, shared by all configurations.",
             [self.derive_button, self.test_compilation_button, self.save_button],
         )
+        self.excluded_directories = ExcludedDirectoriesTree(arguments.project_root, arguments.project_dir)
+        self.excluded_directories.setMinimumHeight(140)
+        self.excluded_directories.changed.connect(self._on_excluded_directories_changed)
+        self.excluded_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
+        excluded_section = widgets.FormSection(EXCLUDED_DIRECTORIES_TITLE)
+        excluded_section.add_widget(self.excluded_directories, EXCLUDED_DIRECTORIES_HINT)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
+        layout.addWidget(excluded_section)
         layout.addWidget(self._danger_zone())
 
         self.load_files()
@@ -202,12 +218,20 @@ class SetupPanel(Panel):
             for event in (PatternsChanged(), HotspotsChanged(), AutotuningChanged()):
                 self.project_state.publish(event)
 
+    def _on_excluded_directories_changed(self, excluded: List[str]) -> None:
+        self.status.set(
+            "Excluded directories: " + (", ".join(excluded) if excluded else "none"), widgets.STATUS_OK, reset_ms=3000
+        )
+        # they change what the builds of every configuration instrument
+        self.project_state.publish(ConfigurationsChanged())
+
     def output_console(self) -> widgets.OutputConsole:
         return self.console
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt's name)
-        # the files may have been changed outside the GUI meanwhile
+        # the files may have been changed outside the GUI meanwhile, and a build may have created directories
         self.reload_unmodified()
+        self.excluded_directories.reload()
         super().showEvent(event)
 
     # ── loading ─────────────────────────────────────────────────────────────

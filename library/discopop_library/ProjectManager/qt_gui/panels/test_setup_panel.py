@@ -350,3 +350,24 @@ def test_no_reset_while_a_run_is_in_progress(editor: SetupPanel) -> None:
     assert editor.reset_project_button.toolTip() == "Not while a run is in progress."
     editor.set_blocked(False)
     assert editor.reset_results_button.isEnabled() and editor.reset_project_button.toolTip() == ""
+
+
+def test_excluded_directories_card(editor: SetupPanel, qtbot: QtBot) -> None:
+    project_root = Path(editor.arguments.project_root)
+    (project_root / "build" / "_deps").mkdir(parents=True)
+    editor.excluded_directories.reload()
+    events: List[object] = []
+    editor.project_state.subscribe(ConfigurationsChanged, events.append)
+    editor.excluded_directories.set_excluded("build/_deps", True)
+    stored = json.loads((Path(editor.arguments.project_dir) / "excluded_directories.json").read_text())
+    assert stored == {"excluded_directories": ["build/_deps"]}
+    assert "build/_deps" in editor.status.text()
+    assert len(events) == 1  # the builds of every configuration change
+
+
+def test_excluded_directories_read_again_when_shown(editor: SetupPanel, qtbot: QtBot) -> None:
+    project_root = Path(editor.arguments.project_root)
+    (project_root / "dp_build").mkdir()
+    editor.show()
+    qtbot.waitExposed(editor)
+    assert editor.excluded_directories.item_of("dp_build") is not None

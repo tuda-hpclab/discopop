@@ -79,6 +79,7 @@ Every script is executed with the project root as its working directory, so rela
 | `$CC`, `$CXX` | compiler executables, taken from the settings file of the active mode |
 | `$CFLAGS`, `$CXXFLAGS` | compiler flags, likewise from the settings file |
 | `$DP_PROJECT_ROOT_DIR` | absolute path of the (possibly copied) project root |
+| `$DP_PROJECT_EXCLUDE_DIRS` | the excluded directories of the project (`.discopop/project/excluded_directories.json`, edited in the *Project Setup* stage of the GUI), relative to the project root and separated by `:`, after the entries a settings file may set; only set if there are any |
 | `$DOT_DISCOPOP` | absolute path of the `.discopop` directory inside that root |
 | `$OMP_NUM_THREADS` | thread count of the current run |
 
