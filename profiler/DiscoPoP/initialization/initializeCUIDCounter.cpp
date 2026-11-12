@@ -30,7 +30,7 @@ unsigned int DiscoPoP::GetNextCuId() {
 	if (cu_id_counter % kCuIdRangeSize == 0) {
 		const std::string profiler_directory = dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler");
 		const std::string counter_file = profiler_directory + "/DP_CUIDCounter.txt";
-		const std::string lock_file = profiler_directory + "/DP_CUIDCounter.lock";
+		const std::string lock_file = dputil::ProfilerLockPath(profiler_directory, "DP_CUIDCounter.lock");
 
 		const int lock = open(lock_file.c_str(), O_CREAT | O_RDWR, 0666);
 

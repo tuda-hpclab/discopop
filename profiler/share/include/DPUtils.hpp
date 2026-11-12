@@ -65,7 +65,9 @@
 #endif
 
 #include <assert.h>
+#include <cerrno>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <fstream>
@@ -87,6 +89,16 @@ namespace dputil {
 inline std::string GetEnvOrDefault(const char* name, const char* fallback) {
   const char* value = getenv(name);
   return std::string(value != nullptr ? value : fallback);
+}
+
+inline std::string ProfilerLockPath(const std::string& profiler_directory, const std::string& name) {
+  const std::string locking_directory = profiler_directory + "/locking_files";
+  
+  if (mkdir(locking_directory.c_str(), 0777) == -1 && errno != EEXIST && errno != ENOENT) {
+    throw std::runtime_error("Could not create profiler locking directory: " + locking_directory);
+  }
+
+  return locking_directory + "/" + name;
 }
 
 inline std::string DecodeLid(int64_t lid) {
