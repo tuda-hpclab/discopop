@@ -15,6 +15,8 @@ from PySide6.QtWidgets import QToolTip, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.plots import interaction
 
+CHART_BACKGROUND = "#f4f5f7"
+
 
 def create_canvas(
     figsize: Tuple[float, float] = (6.0, 3.6),
@@ -30,7 +32,8 @@ def create_canvas(
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
 
-    figure = Figure(figsize=figsize, dpi=dpi, layout="constrained")
+    # the charts stay light in both themes; around the plot area an off-white, so a chart is no white block on a page
+    figure = Figure(figsize=figsize, dpi=dpi, layout="constrained", facecolor=CHART_BACKGROUND)
     canvas = FigureCanvasQTAgg(figure)
     widget = QWidget()
     layout = QVBoxLayout(widget)

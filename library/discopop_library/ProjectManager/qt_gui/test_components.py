@@ -285,7 +285,7 @@ def test_cards_keep_the_window_color_in_a_dark_palette() -> None:
     dark.setColor(QPalette.ColorRole.WindowText, QColor("#e6e6e6"))
     light.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
     assert not widgets.is_dark(light) and widgets.is_dark(dark)
-    assert "background-color: palette(base)" in widgets.app_style_sheet(light)
+    assert f"background-color: {widgets.card_color(light).name()}" in widgets.app_style_sheet(light)
     assert "background-color: palette(window)" in widgets.app_style_sheet(dark)
 
 

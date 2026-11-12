@@ -67,6 +67,9 @@ CONSOLE_FG = CATPPUCCIN_FG
 
 # --- semantic status colors (status line, result marks) ---
 STATUS_IDLE = "gray"
+# the color of hint texts in a style sheet (captions, empty views, idle status lines): the palette's placeholder
+# color, which the themes set dark enough to read on the window and on a card; labels set to STATUS_IDLE get it
+HINT_COLOR = "palette(placeholder-text)"
 STATUS_BUSY = "#1e66f5"
 STATUS_OK = "#2e7d32"
 STATUS_FAIL = "#c62828"
@@ -244,11 +247,20 @@ def _secondary_text(palette: Optional[QPalette]) -> str:
     return mixed.name()
 
 
-def _component_rules(dark: bool = False) -> str:
-    # a card: the framed section of a form (FormSection). Light, it is lifted in the color of the input fields; dark,
-    # input fields and the indicators of check boxes are drawn in that color too and would vanish in it, so the card
-    # keeps the window color and only its frame sets it apart (as in a dialog)
-    card_background = "palette(window)" if dark else "palette(base)"
+def card_color(palette: QPalette) -> QColor:
+    """The background of a card in a light palette: between the window and the input fields, so that the card stands
+    out from the page and its input fields from the card (no white areas on a gray page)."""
+    return QColor(_mix(palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Window), 0.55))
+
+
+def _component_rules(palette: Optional[QPalette] = None) -> str:
+    # a card: the framed section of a form (FormSection). Light, it is lifted towards the color of the input fields;
+    # dark, input fields and the indicators of check boxes are drawn in that color too and would vanish in it, so the
+    # card keeps the window color and only its frame sets it apart (as in a dialog)
+    if palette is None:
+        card_background = "palette(base)"
+    else:
+        card_background = "palette(window)" if is_dark(palette) else card_color(palette).name()
     rules = [
         f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 8px;"
         f" background-color: {card_background}; }}",
@@ -280,7 +292,7 @@ APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
 
 def app_style_sheet(palette: QPalette) -> str:
     """The style sheet of the application for ``palette`` (light or dark, see :func:`is_dark`)."""
-    return _button_rules(palette) + "\n" + _component_rules(dark=is_dark(palette)) + "\n" + _chrome_rules(palette)
+    return _button_rules(palette) + "\n" + _component_rules(palette) + "\n" + _chrome_rules(palette)
 
 
 def is_dark(palette: QPalette) -> bool:
@@ -336,7 +348,7 @@ def empty_state_label(text: str) -> QLabel:
     label = QLabel(text)
     label.setWordWrap(True)
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setStyleSheet(f"color: {STATUS_IDLE};")
+    label.setStyleSheet(f"color: {HINT_COLOR};")
     return label
 
 
@@ -347,7 +359,7 @@ def caption_label(text: str) -> QLabel:
     font = label.font()
     font.setPointSize(max(font.pointSize() - 1, 7))
     label.setFont(font)
-    label.setStyleSheet(f"color: {STATUS_IDLE};")
+    label.setStyleSheet(f"color: {HINT_COLOR};")
     return label
 
 
@@ -360,7 +372,8 @@ def error_label(text: str) -> QLabel:
 
 
 def set_label_color(label: QLabel, color: str) -> None:
-    label.setStyleSheet(f"color: {color};")
+    """``color`` as the text color of ``label``; :data:`STATUS_IDLE` is drawn in the hint color of the palette."""
+    label.setStyleSheet(f"color: {HINT_COLOR if color == STATUS_IDLE else color};")
 
 
 # --- buttons ---

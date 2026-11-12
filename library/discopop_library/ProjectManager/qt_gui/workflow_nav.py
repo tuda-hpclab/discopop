@@ -81,7 +81,7 @@ class _StageDelegate(QStyledItemDelegate):
                 font.setPointSize(max(font.pointSize() - 1, 7))
                 font.setBold(True)
                 painter.setFont(font)
-                painter.setPen(QColor(widgets.STATUS_IDLE))
+                painter.setPen(palette.color(QPalette.ColorRole.PlaceholderText))
                 painter.drawText(
                     rect.adjusted(12, 6, -8, 0),
                     int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -103,7 +103,7 @@ class _StageDelegate(QStyledItemDelegate):
                 QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.WindowText
             )
             if not enabled:
-                text_color = QColor(widgets.STATUS_IDLE)
+                text_color = palette.color(QPalette.ColorRole.PlaceholderText)
             state_value = index.data(_STATE_ROLE)
             badge, badge_color = BADGES.get(state_value, BADGES[None])
             badge_rect = QRect(rect.left() + 10, rect.top(), _BADGE_WIDTH, rect.height())

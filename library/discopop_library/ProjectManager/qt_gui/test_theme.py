@@ -74,3 +74,36 @@ def test_the_clear_button_of_the_output_pane_is_framed(qtbot: QtBot) -> None:
     # a flat button has no frame and read as a label
     assert pane.clear_button.objectName() == widgets.COMPACT_NAME != widgets.FLAT_NAME
     assert f"QPushButton#{widgets.COMPACT_NAME} {{ padding:" in widgets.app_style_sheet(QPalette(QColor("#efefef")))
+
+
+def _contrast(first: QColor, second: QColor) -> float:
+    def luminance(color: QColor) -> float:
+        def channel(value: float) -> float:
+            return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) + 0.0722 * channel(color.blueF())
+
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_the_light_theme_has_no_white_views_and_readable_hints(qapp: QApplication) -> None:
+    palette = theme.palette_for(qapp, theme.THEME_LIGHT)
+    window = palette.color(QPalette.ColorRole.Window)
+    card = widgets.card_color(palette)
+    hint = palette.color(QPalette.ColorRole.PlaceholderText)
+    assert not widgets.is_dark(palette)
+    # views, cards and the page are off-white, a card stands apart from the page
+    assert QColor("#ffffff") not in (window, card, palette.color(QPalette.ColorRole.Base))
+    assert card.lightness() > window.lightness()
+    # hint texts read on the page and on a card (WCAG AA for normal text)
+    assert _contrast(hint, window) >= 4.5 and _contrast(hint, card) >= 4.5
+
+
+def test_idle_labels_take_the_hint_color_of_the_palette(qtbot: QtBot) -> None:
+    from PySide6.QtWidgets import QLabel
+
+    label = QLabel("Ready")
+    qtbot.addWidget(label)
+    widgets.set_label_color(label, widgets.STATUS_IDLE)
+    assert label.styleSheet() == f"color: {widgets.HINT_COLOR};"

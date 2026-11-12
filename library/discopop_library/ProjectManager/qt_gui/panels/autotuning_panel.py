@@ -122,7 +122,7 @@ _OPTIONS_MIN_WIDTH = 480
 def _set_state_text(label: QLabel, text: str, active: bool) -> None:
     """Show ``text`` in the normal text color when ``active``, else grayed out."""
     label.setText(text)
-    label.setStyleSheet("" if active else f"color: {widgets.STATUS_IDLE};")
+    label.setStyleSheet("" if active else f"color: {widgets.HINT_COLOR};")
 
 
 class AutotuningPanel(Panel):

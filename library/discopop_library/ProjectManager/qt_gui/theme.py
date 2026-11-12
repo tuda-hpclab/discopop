@@ -17,7 +17,7 @@ from typing import Callable, Dict, Optional
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication, QStyleFactory
+from PySide6.QtWidgets import QApplication
 
 from discopop_library.ProjectManager.qt_gui import widgets
 
@@ -48,9 +48,35 @@ _DARK_COLORS: Dict[QPalette.ColorRole, str] = {
     QPalette.ColorRole.Light: "#505050",
     QPalette.ColorRole.ToolTipBase: "#353535",
     QPalette.ColorRole.ToolTipText: "#e6e6e6",
-    QPalette.ColorRole.PlaceholderText: "#8a8a8a",
+    QPalette.ColorRole.PlaceholderText: "#9a9a9a",
 }
 _DISABLED_TEXT = "#7a7a7a"
+
+# the light theme: gray pages, off-white views and input fields, frames and hint texts dark enough to read (Fusion's
+# standard palette has white views on an almost white window, with faint frames); the hint texts (captions, empty
+# views, idle status lines) are drawn in the placeholder color
+_LIGHT_COLORS: Dict[QPalette.ColorRole, str] = {
+    QPalette.ColorRole.Window: "#e4e6e9",
+    QPalette.ColorRole.WindowText: "#1b1d21",
+    QPalette.ColorRole.Base: "#f7f8fa",
+    QPalette.ColorRole.AlternateBase: "#eceef1",
+    QPalette.ColorRole.Text: "#1b1d21",
+    QPalette.ColorRole.Button: "#e3e5e8",
+    QPalette.ColorRole.ButtonText: "#1b1d21",
+    QPalette.ColorRole.BrightText: "#ffffff",
+    QPalette.ColorRole.Highlight: "#2f6fdb",
+    QPalette.ColorRole.HighlightedText: "#ffffff",
+    QPalette.ColorRole.Link: "#1f5fc4",
+    QPalette.ColorRole.Mid: "#a3a7ad",
+    QPalette.ColorRole.Midlight: "#c6c9ce",
+    QPalette.ColorRole.Dark: "#8a8e94",
+    QPalette.ColorRole.Shadow: "#5a5d61",
+    QPalette.ColorRole.Light: "#ffffff",
+    QPalette.ColorRole.ToolTipBase: "#ffffe1",
+    QPalette.ColorRole.ToolTipText: "#1b1d21",
+    QPalette.ColorRole.PlaceholderText: "#62666d",
+}
+_LIGHT_DISABLED_TEXT = "#8c9096"
 
 
 def _qsettings() -> QSettings:
@@ -65,18 +91,21 @@ _system_palette: Optional[QPalette] = None
 _current = THEME_SYSTEM
 
 
-def dark_palette() -> QPalette:
+def _palette(colors: Dict[QPalette.ColorRole, str], disabled_text: str) -> QPalette:
     palette = QPalette()
-    for role, color in _DARK_COLORS.items():
+    for role, color in colors.items():
         palette.setColor(role, QColor(color))
     for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
-        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(_DISABLED_TEXT))
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(disabled_text))
     return palette
 
 
+def dark_palette() -> QPalette:
+    return _palette(_DARK_COLORS, _DISABLED_TEXT)
+
+
 def light_palette() -> QPalette:
-    style = QStyleFactory.create("Fusion")
-    return style.standardPalette() if style is not None else QPalette(QColor("#efefef"))
+    return _palette(_LIGHT_COLORS, _LIGHT_DISABLED_TEXT)
 
 
 def system_palette(app: QApplication) -> QPalette:
@@ -87,9 +116,10 @@ def system_palette(app: QApplication) -> QPalette:
 
 
 def palette_for(app: QApplication, theme: str) -> QPalette:
-    """The palette of ``theme``; Light and Dark keep the desktop's palette when it already is light resp. dark."""
+    """The palette of ``theme``: Light is always the one of this application (a light desktop palette is often too
+    faint); Dark keeps the desktop's palette when it already is dark."""
     system = system_palette(app)
-    if theme == THEME_LIGHT and widgets.is_dark(system):
+    if theme == THEME_LIGHT:
         return light_palette()
     if theme == THEME_DARK and not widgets.is_dark(system):
         return dark_palette()
