@@ -32,7 +32,9 @@ namespace static_callpaths {
 // Configuration (environment, the feature is off unless DP_CALLPATH_HOTSPOTS is set):
 //   DP_CALLPATH_HOTSPOTS     path of the Hotspots.json of a hotspot detection run
 //   DP_CALLPATH_HOTNESS      comma separated classes that count as hot, default "yes,maybe"
-//   DP_CALLPATH_SEEDS        "loops" (default): functions containing a hot loop; "functions": hot functions; "both"
+//   DP_CALLPATH_SEEDS        "both" (default): functions that contain a hot loop or are hot themselves (hot
+//                            recursion needs no loop); "loops"; "functions". A hot function without calls and
+//                            loops is no seed unless DP_CALLPATH_KEEP_HOT_LEAVES is set
 //   DP_CALLPATH_HOT_DEPTH    calls kept below a seed function, default 2
 //   DP_CALLPATH_UNCLASSIFIED "keep" (default) or "prune": functions that Hotspots.json does not mention
 class HotspotRelevance {
