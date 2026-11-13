@@ -538,25 +538,6 @@ class EditorPanel(Panel):
 
     # ── what the main window calls ──────────────────────────────────────────
 
-    def may_rewrite_scripts(self) -> bool:
-        """Whether the scripts of the configurations may be rewritten on disk (the instrumentation scope of the Project
-        Setup stage replaces DP_PROJECT_ROOT_DIR in them): not while this stage holds unsaved changes, which would
-        write the old text back."""
-        if not self.has_unsaved_changes():
-            return True
-        dialogs.show_warning(
-            self,
-            "Unsaved changes",
-            "Save or discard the changes in the Configuration Setup stage first: the scripts are rewritten on disk.",
-        )
-        return False
-
-    def reload_unmodified(self) -> None:
-        """Read the files of the selected configuration again unless they hold unsaved changes (after they were
-        rewritten on disk)."""
-        if self.project_state.current_config is not None and not self.has_unsaved_changes():
-            self.load()
-
     def confirm_leave(self) -> bool:
         """Ask what to do with unsaved changes before another configuration is selected.
 

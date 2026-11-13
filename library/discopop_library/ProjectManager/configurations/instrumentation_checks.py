@@ -10,8 +10,8 @@
 
 Both fail silently otherwise: a build that loses ``DOT_DISCOPOP`` on the way to the compiler writes a
 ``.discopop`` of its own into every directory it compiles in, with numbering that does not fit together,
-and the program then reports "done" while it writes its results nowhere. A scope that matches none of
-the compiled files instruments nothing. See :mod:`.project_environment` for the variables.
+and the program then reports "done" while it writes its results nowhere. Project directories that match
+none of the compiled files instrument nothing. See :mod:`.project_environment` for the variables.
 
 The checks look at the files only, so they work for every build system. :func:`take_snapshot` is called
 before a script runs, :func:`check_build` after an instrumented compile script, :func:`check_profiling_run`
@@ -22,7 +22,7 @@ import glob
 import os
 import time
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Sequence
 
 # Mode of a run, as the name of its settings file tells it.
 DP_SETTINGS = "dp_settings.json"
@@ -78,15 +78,17 @@ def take_snapshot(dot_discopop: str) -> Snapshot:
         return Snapshot(started=time.time())
 
 
-def file_mapping_covers(dot_discopop: str, scope: str) -> bool:
-    """Whether ``FileMapping.txt`` names a file below ``scope``.
+def file_mapping_covers(dot_discopop: str, directories: Sequence[str]) -> bool:
+    """Whether ``FileMapping.txt`` names a file below one of ``directories``.
 
-    The passes register every instrumented file there; they decide whether a file belongs to the scope
-    by whether its path contains the scope, which is repeated here.
+    The passes register every instrumented file there; they decide whether a file is project code by whether its
+    path contains the project root or an included directory, which is repeated here (excluded files are never
+    registered).
     """
+    parts = [directory.rstrip("/") + "/" for directory in directories]
     try:
         with open(os.path.join(dot_discopop, "FileMapping.txt"), "r", errors="replace") as f:
-            return any(scope in line for line in f)
+            return any(part in line for line in f for part in parts)
     except OSError:
         return False
 
@@ -121,7 +123,9 @@ def find_stray_dot_discopop_dirs(run_root: str, dot_discopop: str, since: float)
     return sorted(stray)
 
 
-def check_build(snapshot: Snapshot, settings_name: str, run_root: str, dot_discopop: str, scope: str) -> CheckResult:
+def check_build(
+    snapshot: Snapshot, settings_name: str, run_root: str, dot_discopop: str, included: Sequence[str] = ()
+) -> CheckResult:
     """Check the result of an instrumented compile script (dp or hd mode); nothing to check otherwise."""
     result = CheckResult()
     if settings_name not in (DP_SETTINGS, HD_SETTINGS):
@@ -139,13 +143,14 @@ def check_build(snapshot: Snapshot, settings_name: str, run_root: str, dot_disco
             + ". DOT_DISCOPOP did not reach every compiler call (e.g. the build resets the environment, or "
             "it runs a compiler other than $CC / $CXX), so the data of the build does not fit together."
         )
-    if not file_mapping_covers(dot_discopop, scope):
+    if not file_mapping_covers(dot_discopop, [run_root, *included]):
         result.warnings.append(
-            "No instrumented file lies below the instrumentation scope DP_PROJECT_ROOT_DIR="
-            + scope
+            "No instrumented file lies in the project directory DP_PROJECT_ROOT_DIR="
+            + run_root
+            + (" or in an included directory" if included else "")
             + " (none is registered in "
             + os.path.join(dot_discopop, "FileMapping.txt")
-            + "). The scope matches none of the compiled files, or the build compiles sources outside the run "
+            + "). Every compiled file lies in an excluded directory, or the build compiles sources outside the run "
             "root (e.g. through a CMake cache of another directory), so nothing will be profiled."
         )
     return result

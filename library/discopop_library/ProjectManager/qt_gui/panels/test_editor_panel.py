@@ -356,24 +356,3 @@ def test_a_refresh_of_the_selection_keeps_the_cursor_and_reloads_what_changed_on
     (config_dir(panel) / "execute.sh").write_text("#!/bin/bash\n./other\n")
     select(panel)
     assert editor.text() == "#!/bin/bash\n./other\n"
-
-
-def test_scripts_may_be_rewritten_only_without_unsaved_changes(
-    panel: EditorPanel, dialog_answers: DialogRecorder
-) -> None:
-    select(panel)
-    assert panel.may_rewrite_scripts()
-    panel.editors["execute.sh"].insertPlainText("edited ")
-    assert not panel.may_rewrite_scripts()
-    assert dialog_answers.titles("show_warning") == ["Unsaved changes"]
-
-
-def test_rewritten_scripts_are_reloaded_unless_edited(panel: EditorPanel) -> None:
-    select(panel)
-    (config_dir(panel) / "execute.sh").write_text("cd $DP_RUN_ROOT_DIR\n")
-    panel.reload_unmodified()
-    assert panel.editors["execute.sh"].text() == "cd $DP_RUN_ROOT_DIR\n"
-    panel.editors["execute.sh"].insertPlainText("edited ")
-    (config_dir(panel) / "execute.sh").write_text("other\n")
-    panel.reload_unmodified()
-    assert panel.editors["execute.sh"].text().startswith("edited ")

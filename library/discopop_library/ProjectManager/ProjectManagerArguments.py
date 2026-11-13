@@ -52,9 +52,11 @@ class ProjectManagerArguments(GeneralArguments):
     # Which toolkit draws the window of --gui: "qt" (PySide6, the default) or "tk" (the original GUI).
     # Both use the same services.
     gui_toolkit: str = "qt"
-    # Overrides the instrumentation scope (DP_PROJECT_ROOT_DIR) stored in project_environment.json for this
-    # invocation; None leaves it alone. See discopop_library.ProjectManager.configurations.project_environment.
-    dp_project_root_dir: Optional[str] = None
+    # Override the stored included / excluded directories (what is project code besides the project root) for this
+    # invocation, ':' separated; None leaves the stored list alone. See
+    # discopop_library.ProjectManager.configurations.project_environment.
+    project_include_dirs: Optional[str] = None
+    project_exclude_dirs: Optional[str] = None
     # derived values
     dot_dp: str = ""
     project_dir: str = ""

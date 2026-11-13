@@ -13,7 +13,7 @@ import json
 import os
 import stat
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List
 from unittest import mock
 
 import pytest
@@ -31,7 +31,6 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
-    ProjectEnvironmentChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -372,143 +371,3 @@ def test_excluded_directories_read_again_when_shown(editor: SetupPanel, qtbot: Q
     editor.show()
     qtbot.waitExposed(editor)
     assert editor.excluded_directories.item_of("dp_build") is not None
-
-
-# ── the instrumentation scope ───────────────────────────────────────────────
-
-
-def environment_file(editor: SetupPanel) -> Path:
-    return comp_dir(editor) / "project_environment.json"
-
-
-def scope_panel(qtbot: QtBot, tmp_path: Path, may_rewrite: bool = True) -> Tuple[SetupPanel, List[str]]:
-    """A Setup stage whose Configuration Setup stage (the callbacks) allows the rewrite or not; the list records the
-    calls."""
-    calls: List[str] = []
-
-    def may_rewrite_scripts() -> bool:
-        calls.append("may_rewrite")
-        return may_rewrite
-
-    arguments = make_arguments(tmp_path)
-    status = StatusLine()
-    qtbot.addWidget(status)
-    created = SetupPanel(
-        arguments,
-        ProjectState(),
-        status,
-        FakeTabs(),
-        may_rewrite_scripts=may_rewrite_scripts,
-        scripts_rewritten=lambda: calls.append("rewritten"),
-    )
-    qtbot.addWidget(created)
-    return created, calls
-
-
-def test_the_stored_scope_is_shown(editor: SetupPanel) -> None:
-    (Path(editor.arguments.project_root) / "src").mkdir()
-    environment_file(editor).write_text('{"DP_PROJECT_ROOT_DIR": "src"}')
-    editor.reload_unmodified()
-    widget = editor.environment_widget
-    assert widget.section.title_label is not None and widget.section.title_label.text() == "Instrumentation scope"
-    assert widget.scope_edit.text() == "src"
-    assert widget.resolved_edit.text() == os.path.join(editor.arguments.project_root, "src") + os.sep
-    assert widget.dot_discopop_edit.text() == os.path.join(editor.arguments.project_root, ".discopop")
-    assert not widget.is_modified() and not editor.has_unsaved_changes()
-
-
-def test_editing_and_saving_the_scope_writes_the_file_and_publishes(editor: SetupPanel) -> None:
-    (Path(editor.arguments.project_root) / "src").mkdir()
-    environment_events: List[object] = []
-    editor.project_state.subscribe(ProjectEnvironmentChanged, environment_events.append)
-    configuration_events = recorded_changes(editor)
-    editor.environment_widget.scope_edit.setText("src/")
-    assert editor.has_unsaved_changes()
-    assert editor.tabs.titles["Setup"] == "Setup *"  # type: ignore[attr-defined]
-    assert editor.header.chip.text() == "Unsaved changes"
-    assert editor.save()
-    assert json.loads(environment_file(editor).read_text()) == {"DP_PROJECT_ROOT_DIR": "src"}
-    assert environment_events == [ProjectEnvironmentChanged()]
-    assert configuration_events == []  # no file of the configurations changed
-    assert not editor.has_unsaved_changes() and editor.tabs.titles["Setup"] == "Setup"  # type: ignore[attr-defined]
-
-
-def test_an_unsaved_scope_survives_a_reload(editor: SetupPanel) -> None:
-    editor.environment_widget.scope_edit.setText("lib")
-    environment_file(editor).write_text('{"DP_PROJECT_ROOT_DIR": "other"}')
-    editor.reload_unmodified()
-    assert editor.environment_widget.scope_edit.text() == "lib"
-
-
-def test_a_scope_stored_elsewhere_is_shown_on_reload(editor: SetupPanel) -> None:
-    environment_file(editor).write_text('{"DP_PROJECT_ROOT_DIR": "other"}')
-    editor.reload_unmodified()
-    assert editor.environment_widget.scope_edit.text() == "other"
-
-
-def test_a_missing_scope_directory_is_warned_about(editor: SetupPanel) -> None:
-    widget = editor.environment_widget
-    assert widget.warnings_label.isHidden()
-    widget.scope_edit.setText("does_not_exist")
-    assert not widget.warnings_label.isHidden()
-    assert "not an existing directory" in widget.warnings_label.text()
-
-
-def test_browse_chooses_a_directory_inside_the_project(editor: SetupPanel, dialog_answers: DialogRecorder) -> None:
-    (Path(editor.arguments.project_root) / "lib").mkdir()
-    widget = editor.environment_widget
-    dialog_answers.answer("ask_directory", os.path.join(editor.arguments.project_root, "lib"), "/")
-    widget.browse_button.click()
-    assert widget.scope_edit.text() == "lib"
-    widget.browse_button.click()  # outside of the project: refused
-    assert widget.scope_edit.text() == "lib"
-    assert dialog_answers.titles("show_warning") == ["Outside of the project"]
-
-
-def test_scripts_using_the_scope_variable_are_listed_and_rewritten(qtbot: QtBot, tmp_path: Path) -> None:
-    editor, calls = scope_panel(qtbot, tmp_path)
-    (Path(editor.arguments.project_root) / "src").mkdir()
-    write_files(editor, "cmake -S $DP_PROJECT_ROOT_DIR\n")
-    configuration = comp_dir(editor) / "default"
-    configuration.mkdir()
-    (configuration / "execute.sh").write_text("cd ${DP_PROJECT_ROOT_DIR}\n./prog\n")
-    events = recorded_changes(editor)
-    widget = editor.environment_widget
-    widget.refresh()
-    assert widget.scripts_list.count() == 0  # not narrowed: the variable is the project root
-    widget.scope_edit.setText("src")
-    assert [widget.scripts_list.item(i).text() for i in range(widget.scripts_list.count())] == [
-        "compile.sh",
-        os.path.join("default", "execute.sh"),
-    ]
-    widget.rewrite_button.click()
-    assert (comp_dir(editor) / "compile.sh").read_text() == "cmake -S $DP_RUN_ROOT_DIR\n"
-    assert (configuration / "execute.sh").read_text() == "cd ${DP_RUN_ROOT_DIR}\n./prog\n"
-    assert widget.scripts_list.count() == 0
-    assert editor.editors["compile.sh"].text() == "cmake -S $DP_RUN_ROOT_DIR\n"  # reloaded
-    assert calls == ["may_rewrite", "rewritten"]
-    assert events == [ConfigurationsChanged()]
-
-
-def test_the_rewrite_waits_for_unsaved_edits_of_compile_sh(
-    qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder
-) -> None:
-    editor, calls = scope_panel(qtbot, tmp_path)
-    (Path(editor.arguments.project_root) / "src").mkdir()
-    write_files(editor, "cd $DP_PROJECT_ROOT_DIR\n")
-    editor.environment_widget.scope_edit.setText("src")
-    editor.editors["compile.sh"].insertPlainText("edited ")
-    editor.environment_widget.rewrite_button.click()
-    assert dialog_answers.titles("show_warning") == ["Unsaved changes"]
-    assert (comp_dir(editor) / "compile.sh").read_text() == "cd $DP_PROJECT_ROOT_DIR\n"
-    assert calls == []
-
-
-def test_the_configuration_setup_stage_can_veto_the_rewrite(qtbot: QtBot, tmp_path: Path) -> None:
-    editor, calls = scope_panel(qtbot, tmp_path, may_rewrite=False)
-    (Path(editor.arguments.project_root) / "src").mkdir()
-    write_files(editor, "cd $DP_PROJECT_ROOT_DIR\n")
-    editor.environment_widget.scope_edit.setText("src")
-    editor.environment_widget.rewrite_button.click()
-    assert (comp_dir(editor) / "compile.sh").read_text() == "cd $DP_PROJECT_ROOT_DIR\n"
-    assert calls == ["may_rewrite"]

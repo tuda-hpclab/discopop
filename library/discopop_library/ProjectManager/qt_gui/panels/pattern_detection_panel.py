@@ -63,7 +63,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
-    ProjectEnvironmentChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -169,7 +169,7 @@ class PatternDetectionPanel(Panel):
             ConfigurationsChanged,
             HotspotsChanged,
             PatternsChanged,
-            ProjectEnvironmentChanged,
+            ProjectDirectoriesChanged,
         ):
             project_state.subscribe(event_type, lambda _event: self.refresh())
         self.refresh()
@@ -338,7 +338,7 @@ class PatternDetectionPanel(Panel):
         if self.explorer_running:
             chip.set_status(widgets.CHIP_BUSY, "Running...")
         elif (stale := explorer_state.stale_profiling_data_message(self.arguments)) is not None:
-            chip.set_status(widgets.CHIP_WARN, "Profiled with another scope", stale)
+            chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
         elif not ready:
             chip.set_status(widgets.CHIP_IDLE, "Not run yet", "Needs profiling data from the Profiling stage.")
         elif detection_is_stale(dot_dp):

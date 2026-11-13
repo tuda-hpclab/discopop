@@ -54,6 +54,5 @@ def test_build_environment(
         save_excluded_directories(arguments.project_dir, stored)
     copy_root = tmp_path / "copy"
     shutil.copytree(project_root, copy_root)
-    # absolute paths in the copy: relative entries would be taken relative to DP_PROJECT_ROOT_DIR, the
-    # instrumentation scope, which can be a subdirectory of the project
+    # absolute paths in the copy, so the variable does not depend on how a tool resolves relative entries
     assert _run_in_copy(arguments, copy_root) == expected.format(copy=os.path.abspath(copy_root))

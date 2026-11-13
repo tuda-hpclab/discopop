@@ -8,219 +8,169 @@
 
 """The project wide environment of every command the project manager runs.
 
-Three variables tell the DiscoPoP tools where a run happens and what it instruments:
+These variables tell the DiscoPoP tools where a run happens and what is project code:
 
-``DP_RUN_ROOT_DIR``
+``DP_PROJECT_ROOT_DIR``
     The absolute path of the project root the run uses: the project root itself, or the copy of it a run
-    of a configuration works in. Scripts use it to find the project (``cmake -S "$DP_RUN_ROOT_DIR"``).
+    of a configuration works in. Scripts use it to find the project (``cmake -S "$DP_PROJECT_ROOT_DIR"``).
+    The profiler and the hotspot detection instrument the code below it.
 ``DOT_DISCOPOP``
     ``<run root>/.discopop``, always absolute. The compiler wrappers, the LLVM passes and the runtime
     libraries write there. It has to be the same absolute path for every compile step of a build and
     for the instrumented program: a relative or missing value lets each directory a build compiles in
     get a ``.discopop`` of its own, with numbering that does not fit together, and lets the program
     write its results nowhere.
-``DP_PROJECT_ROOT_DIR``
-    The instrumentation scope: only functions defined in a file whose path contains this directory are
-    instrumented, by the profiler and by the hotspot detection. Defaults to the run root. Narrowing it
-    (e.g. to ``src/``) leaves third-party code out, which can shorten profiling runs by an order of
-    magnitude.
+``DP_PROJECT_INCLUDE_DIRS``
+    Directories outside the project root whose code is project code as well (sources shared between
+    projects), absolute, separated by ``:``. They are not copied for the runs of a configuration.
+``DP_PROJECT_EXCLUDE_DIRS``
+    Directories below the project root (or below an included directory) whose code is no project code,
+    e.g. the dependencies a CMake build fetches into ``build/_deps``. Passed as absolute paths in the run
+    root.
 
-The scope is the only one of them that can be configured. It is stored in
-``<project_config_dir>/project_environment.json`` relative to the project root, so that it moves along
-into the copies of the project, and resolved per run by :func:`resolve_project_variables`.
+The two lists are the *project directories*: stored in ``.discopop/project/included_directories.json``
+(:mod:`..services.included_directories`) and ``.discopop/project/excluded_directories.json``
+(:mod:`..services.excluded_directories`), edited in the Project Setup stage of the GUI, and overridden for
+one invocation of the command line with ``--project-include-dirs`` / ``--project-exclude-dirs``.
 :func:`build_environment` is the single place that stacks the layers of a run's environment.
 
-The variables cannot be set in the settings files (``seq_settings.json`` and the files derived from it):
-every run overrides them, :func:`ignored_settings_warning` reports a value found there, and
-:func:`migrate_settings_files` removes them.
+``DP_PROJECT_ROOT_DIR`` and ``DOT_DISCOPOP`` cannot be set in the settings files (``seq_settings.json`` and the
+files derived from it): every run overrides them, :func:`ignored_settings_warning` reports a value found there, and
+:func:`migrate_settings_files` removes them. The two lists can be extended there: entries of a settings file are
+kept in front of the stored ones.
 """
 
 import json
 import os
-import re
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-PROJECT_ENVIRONMENT_FILE = "project_environment.json"
+from discopop_library.ProjectManager.services import excluded_directories, included_directories
 
-RUN_ROOT_VARIABLE = "DP_RUN_ROOT_DIR"
+ROOT_VARIABLE = "DP_PROJECT_ROOT_DIR"
 DOT_DISCOPOP_VARIABLE = "DOT_DISCOPOP"
-SCOPE_VARIABLE = "DP_PROJECT_ROOT_DIR"
+INCLUDE_VARIABLE = included_directories.ENVIRONMENT_VARIABLE
+EXCLUDE_VARIABLE = excluded_directories.ENVIRONMENT_VARIABLE
 
-# Set from the project environment for every run, hence not allowed in a settings file.
-RESERVED_VARIABLES = (SCOPE_VARIABLE, DOT_DISCOPOP_VARIABLE, RUN_ROOT_VARIABLE)
-
-# The scope "the whole project", stored relative to the project root.
-DEFAULT_SCOPE = "."
+# Set from the run root for every run, hence not allowed in a settings file.
+RESERVED_VARIABLES = (ROOT_VARIABLE, DOT_DISCOPOP_VARIABLE)
+# What the log of a run names.
+PROJECT_VARIABLES = (ROOT_VARIABLE, DOT_DISCOPOP_VARIABLE, INCLUDE_VARIABLE, EXCLUDE_VARIABLE)
 
 # The settings files below project_config_dir that are passed to the scripts as environment variables.
 SETTINGS_FILES = ("seq_settings.json", "dp_settings.json", "hd_settings.json", "par_settings.json")
 
-
-class ProjectEnvironmentError(ValueError):
-    """The project environment or a settings file cannot be used as it is."""
+# The file of an earlier development version that held a single instrumentation scope; no longer read.
+OBSOLETE_PROJECT_ENVIRONMENT_FILE = "project_environment.json"
 
 
 @dataclass(frozen=True)
-class ProjectEnvironment:
-    """What ``project_environment.json`` holds.
+class ProjectDirectories:
+    """What is project code besides the project root: ``included`` directories outside of it (absolute,
+    normalized) and ``excluded`` directories below it (relative to the project root, ``/`` separated)."""
 
-    ``instrumentation_scope`` is a directory relative to the project root (``"."`` for all of it), or an
-    absolute path outside of it, which is not moved into copies of the project.
-    """
+    included: Tuple[str, ...] = field(default_factory=tuple)
+    excluded: Tuple[str, ...] = field(default_factory=tuple)
 
-    instrumentation_scope: str = DEFAULT_SCOPE
-
-
-def project_environment_path(project_config_dir: str) -> str:
-    return os.path.join(project_config_dir, PROJECT_ENVIRONMENT_FILE)
-
-
-def load_project_environment(project_config_dir: str) -> ProjectEnvironment:
-    """The stored project environment, or the default one if none is stored.
-
-    Raises :class:`ProjectEnvironmentError` if the file exists but cannot be used: a run with an
-    environment other than the one configured would profile the wrong code without telling anyone.
-    """
-    path = project_environment_path(project_config_dir)
-    if not os.path.exists(path):
-        return ProjectEnvironment()
-    try:
-        with open(path, "r") as f:
-            content = json.load(f)
-    except (OSError, ValueError) as error:  # ValueError: invalid JSON or invalid UTF-8
-        raise ProjectEnvironmentError("cannot read " + path + ": " + str(error)) from error
-    if not isinstance(content, dict):
-        raise ProjectEnvironmentError(path + " has to contain a JSON object")
-    unknown = sorted(set(content) - {SCOPE_VARIABLE})
-    if unknown:
-        raise ProjectEnvironmentError(
-            path + ": unknown key(s) " + ", ".join(unknown) + "; only " + SCOPE_VARIABLE + " can be set"
+    def describe(self) -> str:
+        """One line for messages, e.g. "included: /opt/shared; excluded: build/_deps"."""
+        return (
+            "included: "
+            + (", ".join(self.included) if self.included else "none")
+            + "; excluded: "
+            + (", ".join(self.excluded) if self.excluded else "none")
         )
-    scope = content.get(SCOPE_VARIABLE, DEFAULT_SCOPE)
-    if not isinstance(scope, str):
-        raise ProjectEnvironmentError(path + ": " + SCOPE_VARIABLE + " has to be a string")
-    return ProjectEnvironment(instrumentation_scope=scope.strip() or DEFAULT_SCOPE)
 
 
-def save_project_environment(project_config_dir: str, project_root: str, environment: ProjectEnvironment) -> None:
-    """Store ``environment``, its scope normalized by :func:`normalize_scope`."""
-    scope = normalize_scope(project_root, environment.instrumentation_scope)
-    with open(project_environment_path(project_config_dir), "w") as f:
-        json.dump({SCOPE_VARIABLE: scope}, f, indent=2)
-        f.write("\n")
+def split_entries(value: str) -> List[str]:
+    """The entries of a ``:`` separated list, empty ones dropped."""
+    return [entry for entry in value.split(":") if entry.strip()]
 
 
-def write_default_project_environment(project_config_dir: str) -> None:
-    """Store the default project environment, unless one is stored already."""
-    path = project_environment_path(project_config_dir)
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            json.dump({SCOPE_VARIABLE: DEFAULT_SCOPE}, f, indent=2)
-            f.write("\n")
+def load_project_directories(project_dir: str) -> ProjectDirectories:
+    """The stored project directories; ``project_dir`` is ``.discopop/project``."""
+    return ProjectDirectories(
+        included=tuple(included_directories.load_included_directories(project_dir)),
+        excluded=tuple(excluded_directories.load_excluded_directories(project_dir)),
+    )
 
 
-def _is_below(path: str, directory: str) -> bool:
-    """Whether ``path`` is ``directory`` or lies below it; both absolute and normalized."""
-    return os.path.commonpath([path, directory]) == directory
+def project_directories_of(
+    project_dir: str, project_root: str, include_override: Optional[str], exclude_override: Optional[str]
+) -> ProjectDirectories:
+    """The project directories of a run: the stored ones, each list replaced by a ``:`` separated override (from
+    the command line) if one is given. An override is normalized like a stored list."""
+    stored = load_project_directories(project_dir)
+    included = (
+        tuple(included_directories.minimal(split_entries(include_override), project_root))
+        if include_override is not None
+        else stored.included
+    )
+    excluded = (
+        tuple(excluded_directories.minimal(split_entries(exclude_override)))
+        if exclude_override is not None
+        else stored.excluded
+    )
+    return ProjectDirectories(included=included, excluded=excluded)
 
 
-def normalize_scope(project_root: str, scope: str) -> str:
-    """The form a scope is stored in: relative to ``project_root`` if it lies inside, else absolute.
+def resolve_project_variables(directories: ProjectDirectories, run_root: str) -> Dict[str, str]:
+    """The variables of a run in ``run_root`` (the project root or a copy of it); the lists only if not empty.
 
-    A relative ``scope`` is taken relative to ``project_root``. Neither the trailing slash nor ``..``
-    survive, so equal scopes are stored equally.
+    The excluded directories become absolute paths in ``run_root``, so they hold for a copy of the project as well.
     """
-    scope = scope.strip() or DEFAULT_SCOPE
-    root = os.path.abspath(project_root)
-    absolute = os.path.normpath(os.path.join(root, os.path.expanduser(scope)))
-    if _is_below(absolute, root):
-        return os.path.relpath(absolute, root)
-    return absolute
-
-
-def validate_project_environment(project_root: str, environment: ProjectEnvironment) -> List[str]:
-    """Warnings about ``environment``; an empty list if there is nothing to object to.
-
-    Neither case stops a run: a scope outside the project root may be intended (sources shared between
-    projects), and a scope below it may only be created by the build (generated sources).
-    """
-    warnings: List[str] = []
-    root = os.path.abspath(project_root)
-    scope = normalize_scope(root, environment.instrumentation_scope)
-    absolute = os.path.normpath(os.path.join(root, scope))
-    if not _is_below(absolute, root):
-        warnings.append(
-            "The instrumentation scope "
-            + absolute
-            + " lies outside the project root "
-            + root
-            + ": the copies of the project a configuration runs in are not instrumented, only the sources "
-            "in that directory."
-        )
-    if not os.path.isdir(absolute):
-        warnings.append("The instrumentation scope " + absolute + " is not an existing directory.")
-    return warnings
-
-
-def resolve_scope(environment: ProjectEnvironment, project_root: str, run_root: str) -> str:
-    """The value of ``DP_PROJECT_ROOT_DIR`` for a run in ``run_root``: absolute, with a trailing slash.
-
-    A scope inside the project root is moved into ``run_root``, the copy the run works in. The passes
-    test whether a file's path *contains* the value, so the trailing slash keeps ``.../src/`` from
-    matching ``.../src_old/``.
-    """
-    root = os.path.abspath(project_root)
-    scope = normalize_scope(root, environment.instrumentation_scope)
-    if os.path.isabs(scope):
-        resolved = scope
-    else:
-        resolved = os.path.normpath(os.path.join(os.path.abspath(run_root), scope))
-    return resolved if resolved.endswith(os.sep) else resolved + os.sep
-
-
-def resolve_project_variables(environment: ProjectEnvironment, project_root: str, run_root: str) -> Dict[str, str]:
-    """The three variables of a run in ``run_root`` (the project root or a copy of it)."""
     absolute_run_root = os.path.abspath(run_root)
-    return {
-        RUN_ROOT_VARIABLE: absolute_run_root,
+    variables = {
+        ROOT_VARIABLE: absolute_run_root,
         DOT_DISCOPOP_VARIABLE: os.path.join(absolute_run_root, ".discopop"),
-        SCOPE_VARIABLE: resolve_scope(environment, project_root, absolute_run_root),
     }
+    if directories.included:
+        variables[INCLUDE_VARIABLE] = included_directories.environment_value(directories.included)
+    if directories.excluded:
+        variables[EXCLUDE_VARIABLE] = excluded_directories.environment_value(
+            directories.excluded, root=absolute_run_root
+        )
+    return variables
 
 
 def reserved_variables_in(settings: Mapping[str, str]) -> List[str]:
-    """The variables of ``settings`` that only the project environment may set."""
+    """The variables of ``settings`` that only the project manager may set."""
     return [name for name in RESERVED_VARIABLES if name in settings]
+
+
+def _merged(existing: str, added: str) -> str:
+    """The ``:`` separated entries of ``existing``, then those of ``added`` not among them."""
+    entries: List[str] = []
+    for entry in [*split_entries(existing), *split_entries(added)]:
+        if entry not in entries:
+            entries.append(entry)
+    return ":".join(entries)
 
 
 def build_environment(
     base: Mapping[str, str],
     settings: Mapping[str, str],
-    environment: ProjectEnvironment,
-    project_root: str,
+    directories: ProjectDirectories,
     run_root: str,
-    settings_name: str = "settings file",
 ) -> Dict[str, str]:
     """The environment of a command run in ``run_root``.
 
-    Layers, the later winning: ``base`` (usually the process's environment), ``settings`` (the settings
-    file of the mode), then the variables of the project environment. Values of these variables
-    inherited from ``base`` are overridden, so that a run depends on the project files only. What is
-    specific to one run (``OMP_NUM_THREADS``, ``PATH``) is up to the caller.
-
-    A project variable in ``settings`` is overridden like one inherited from ``base``;
-    :func:`ignored_settings_warning` tells the user about it.
+    Layers, the later winning: ``base`` (usually the process's environment), ``settings`` (the settings file of
+    the mode), then the variables of the project. ``DP_PROJECT_ROOT_DIR`` and ``DOT_DISCOPOP`` inherited from
+    ``base`` or set in ``settings`` are overridden (:func:`ignored_settings_warning` tells the user about the
+    latter); entries of the two lists found there are kept in front of the stored ones. What is specific to one run
+    (``OMP_NUM_THREADS``, ``PATH``) is up to the caller.
     """
     result: Dict[str, str] = dict(base)
     for key, value in settings.items():
         result[key] = value
-    result.update(resolve_project_variables(environment, project_root, run_root))
+    for name, value in resolve_project_variables(directories, run_root).items():
+        result[name] = _merged(result.get(name, ""), value) if name in (INCLUDE_VARIABLE, EXCLUDE_VARIABLE) else value
     return result
 
 
 def ignored_settings_warning(settings: Mapping[str, str], settings_name: str) -> Optional[str]:
-    """A warning if ``settings`` sets project variables, which every run overrides; ``None`` otherwise."""
+    """A warning if ``settings`` sets reserved variables, which every run overrides; ``None`` otherwise."""
     reserved = reserved_variables_in(settings)
     if not reserved:
         return None
@@ -229,69 +179,20 @@ def ignored_settings_warning(settings: Mapping[str, str], settings_name: str) ->
         + " sets "
         + ", ".join(reserved)
         + ", which the project manager sets for every run; the values in the settings file are ignored. "
-        "Remove them there. The instrumentation scope ("
-        + SCOPE_VARIABLE
-        + ") is configured in "
-        + PROJECT_ENVIRONMENT_FILE
-        + " (GUI: Project Setup, command line: --dp-project-root-dir)."
-    )
-
-
-# The variable as a whole word: $DP_PROJECT_ROOT_DIR and ${DP_PROJECT_ROOT_DIR}, not DP_PROJECT_ROOT_DIR_X.
-_SCOPE_VARIABLE_PATTERN = re.compile(r"\b" + SCOPE_VARIABLE + r"\b")
-
-
-def scripts_using_scope_variable(script_paths: Iterable[str]) -> List[str]:
-    """The scripts among ``script_paths`` that mention ``DP_PROJECT_ROOT_DIR``; unreadable ones are skipped.
-
-    Before the scope could be configured, the variable held the project root, and scripts used it as
-    such (``cmake -S "$DP_PROJECT_ROOT_DIR"``). With a narrowed scope they have to use
-    ``DP_RUN_ROOT_DIR`` instead.
-    """
-    found: List[str] = []
-    for path in script_paths:
-        try:
-            with open(path, "r", errors="replace") as f:
-                if _SCOPE_VARIABLE_PATTERN.search(f.read()):
-                    found.append(path)
-        except OSError:
-            continue
-    return found
-
-
-def scope_variable_warning(script_path: str, variables: Mapping[str, str]) -> Optional[str]:
-    """A warning if the scope of ``variables`` is narrowed and the script still uses its variable."""
-    run_root = variables.get(RUN_ROOT_VARIABLE, "")
-    if variables.get(SCOPE_VARIABLE, "").rstrip(os.sep) == run_root.rstrip(os.sep):
-        return None
-    if not scripts_using_scope_variable([script_path]):
-        return None
-    return (
-        os.path.basename(script_path)
-        + " uses "
-        + SCOPE_VARIABLE
-        + ", which holds the instrumentation scope "
-        + variables.get(SCOPE_VARIABLE, "")
-        + " rather than the project root. Use "
-        + RUN_ROOT_VARIABLE
-        + " for the root of the project ("
-        + run_root
-        + ")."
+        "Remove them there. What is project code is configured with the included and excluded directories "
+        "(GUI: Project Setup; command line: --project-include-dirs / --project-exclude-dirs)."
     )
 
 
 def describe_project_variables(variables: Mapping[str, str]) -> str:
     """One line naming the values a run uses, for its log."""
-    return "Environment: " + " ".join(name + "=" + variables.get(name, "") for name in RESERVED_VARIABLES)
+    return "Environment: " + " ".join(name + "=" + variables.get(name, "") for name in PROJECT_VARIABLES)
 
 
 def migrate_settings_files(project_config_dir: str) -> List[str]:
-    """Remove the project variables from the settings files; returns what was done, one message each.
+    """Remove the reserved variables from the settings files; returns what was done, one message each.
 
-    Every run overrode them, so they never had an effect. A ``DP_PROJECT_ROOT_DIR`` found there is not
-    turned into the instrumentation scope: it may be stale (e.g. the path of an old checkout), and a scope
-    that never applied should not start to apply unasked. The message names it, so that it can be set
-    deliberately.
+    Every run overrode them, so they never had an effect.
     """
     messages: List[str] = []
     for name in SETTINGS_FILES:
@@ -316,24 +217,28 @@ def migrate_settings_files(project_config_dir: str) -> List[str]:
             + removed
             + " from "
             + path
-            + ": the project manager sets these variables for every run, the values had no effect. The "
-            "instrumentation scope ("
-            + SCOPE_VARIABLE
-            + ") is configured in "
-            + project_environment_path(project_config_dir)
-            + "."
+            + ": the project manager sets these variables for every run, the values had no effect. What is "
+            "project code is configured with the included and excluded directories."
+        )
+    obsolete = os.path.join(project_config_dir, OBSOLETE_PROJECT_ENVIRONMENT_FILE)
+    if os.path.exists(obsolete):
+        messages.append(
+            obsolete
+            + " is no longer read: the instrumentation scope it holds was replaced by the included and excluded "
+            "directories (GUI: Project Setup). Configure those and delete the file."
         )
     return messages
 
 
-# Written into DOT_DISCOPOP by every instrumented build: the scope its data was instrumented with, per mode.
-INSTRUMENTED_SCOPE_FILE = "instrumented_scope.json"
+# Written into DOT_DISCOPOP by every instrumented build: the project directories its data was instrumented with,
+# per mode.
+INSTRUMENTED_DIRECTORIES_FILE = "instrumented_project_directories.json"
 
 
-def record_instrumented_scope(dot_discopop: str, mode: str, scope: str) -> None:
-    """Note that the data of ``mode`` ("dp" or "hd") in ``dot_discopop`` was instrumented with ``scope``
-    (normalized, as stored). Best effort: a failure only costs the stale data warning."""
-    path = os.path.join(dot_discopop, INSTRUMENTED_SCOPE_FILE)
+def record_instrumented_directories(dot_discopop: str, mode: str, directories: ProjectDirectories) -> None:
+    """Note that the data of ``mode`` ("dp" or "hd") in ``dot_discopop`` was instrumented with ``directories``.
+    Best effort: a failure only costs the stale data warning."""
+    path = os.path.join(dot_discopop, INSTRUMENTED_DIRECTORIES_FILE)
     try:
         with open(path, "r") as f:
             recorded = json.load(f)
@@ -341,7 +246,7 @@ def record_instrumented_scope(dot_discopop: str, mode: str, scope: str) -> None:
             recorded = {}
     except (OSError, ValueError):
         recorded = {}
-    recorded[mode] = scope
+    recorded[mode] = {"included": list(directories.included), "excluded": list(directories.excluded)}
     try:
         with open(path, "w") as f:
             json.dump(recorded, f, indent=2)
@@ -349,36 +254,91 @@ def record_instrumented_scope(dot_discopop: str, mode: str, scope: str) -> None:
         pass
 
 
-def instrumented_scope(dot_discopop: str, mode: str) -> Optional[str]:
-    """The scope the data of ``mode`` in ``dot_discopop`` was instrumented with; ``None`` if unknown."""
+def _string_list(value: object) -> Optional[Tuple[str, ...]]:
+    if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+        return None
+    return tuple(value)
+
+
+def instrumented_directories(dot_discopop: str, mode: str) -> Optional[ProjectDirectories]:
+    """The project directories the data of ``mode`` in ``dot_discopop`` was instrumented with; ``None`` if unknown."""
     try:
-        with open(os.path.join(dot_discopop, INSTRUMENTED_SCOPE_FILE), "r") as f:
+        with open(os.path.join(dot_discopop, INSTRUMENTED_DIRECTORIES_FILE), "r") as f:
             recorded = json.load(f)
     except (OSError, ValueError):
         return None
-    value = recorded.get(mode) if isinstance(recorded, dict) else None
-    return value if isinstance(value, str) else None
+    entry = recorded.get(mode) if isinstance(recorded, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    included = _string_list(entry.get("included"))
+    excluded = _string_list(entry.get("excluded"))
+    if included is None or excluded is None:
+        return None
+    return ProjectDirectories(included=included, excluded=excluded)
 
 
-def stale_scope_message(dot_discopop: str, mode: str, project_root: str, project_config_dir: str) -> Optional[str]:
-    """A message if the data of ``mode`` was instrumented with another scope than the configured one."""
-    recorded = instrumented_scope(dot_discopop, mode)
+def stale_directories_message(dot_discopop: str, mode: str, project_dir: str) -> Optional[str]:
+    """A message if the data of ``mode`` was instrumented with other project directories than the stored ones."""
+    recorded = instrumented_directories(dot_discopop, mode)
     if recorded is None:
         return None
-    try:
-        configured = normalize_scope(project_root, load_project_environment(project_config_dir).instrumentation_scope)
-    except ProjectEnvironmentError:
-        return None
-    if recorded == configured:
+    configured = load_project_directories(project_dir)
+    if sorted(recorded.included) == sorted(configured.included) and sorted(recorded.excluded) == sorted(
+        configured.excluded
+    ):
         return None
     return (
         "The "
         + ("profiling" if mode == "dp" else "hotspot detection")
-        + " data was instrumented with the scope '"
-        + recorded
-        + "', the project's instrumentation scope is now '"
-        + configured
-        + "'. Run the "
+        + " data was instrumented with other project directories ("
+        + recorded.describe()
+        + ") than the project's current ones ("
+        + configured.describe()
+        + "). Run the "
         + mode
         + " mode again to update it."
     )
+
+
+def update_project_directories(
+    project_dir: str,
+    project_root: str,
+    included: Optional[Sequence[str]],
+    excluded: Optional[Sequence[str]],
+) -> Tuple[ProjectDirectories, List[str]]:
+    """Store the lists that are given (None leaves a list alone); returns the stored directories and warnings.
+
+    A list is written only if it changes: the modification time of the files marks analysis results as stale (MCP
+    server). Entries that cannot be used are dropped with a warning: an included directory that is relative, inside
+    the project or missing, an excluded directory that is absolute or outside the project. A missing excluded
+    directory is kept (the build may create it) with a warning.
+    """
+    warnings: List[str] = []
+    stored = load_project_directories(project_dir)
+    if included is not None:
+        usable: List[str] = []
+        for entry in included:
+            reasons = included_directories.problems(project_root, entry)
+            if reasons:
+                warnings.extend("Included directory " + entry + " ignored: " + reason for reason in reasons)
+            else:
+                usable.append(entry)
+        if tuple(included_directories.minimal(usable, project_root)) != stored.included:
+            included_directories.save_included_directories(project_dir, project_root, usable)
+    if excluded is not None:
+        usable = []
+        for entry in excluded:
+            normalized = excluded_directories.normalize(entry)
+            if normalized is None:
+                warnings.append(
+                    "Excluded directory " + entry + " ignored: give a directory below the project root, relative to it."
+                )
+                continue
+            if not os.path.isdir(os.path.join(project_root, normalized)):
+                warnings.append(
+                    "Excluded directory " + normalized + " does not exist (yet); it applies once the build creates it."
+                )
+            usable.append(normalized)
+        if tuple(excluded_directories.minimal(usable)) != stored.excluded:
+            excluded_directories.save_excluded_directories(project_dir, usable)
+    return load_project_directories(project_dir), warnings

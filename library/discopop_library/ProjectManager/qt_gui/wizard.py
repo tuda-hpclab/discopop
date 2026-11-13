@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
-from discopop_library.ProjectManager.qt_gui.project_environment_widget import ProjectEnvironmentWidget
+from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
+from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
 from discopop_library.ProjectManager.services.configurations import (
     WizardData,
     write_seq_settings,
@@ -55,7 +56,7 @@ from discopop_library.ProjectManager.services.wizard import (
 STEP_TITLES = [
     "Welcome",
     "Write Permissions Check",
-    "Instrumentation scope",
+    "Project Directories",
     "Compilation Script",
     "Compilation Settings",
     "Test Compilation",
@@ -70,7 +71,7 @@ This wizard will guide you through the steps necessary to create a valid and com
 
 The wizard will help you with:
 
-1. Choosing the instrumentation scope (which directory of the project is instrumented)
+1. Choosing what is project code (directories to exclude, directories outside the project to include)
 2. Specifying the compilation script (compile.sh)
 3. Configuring compilation settings (compilers and flags)
 4. Testing the compilation configuration
@@ -97,9 +98,11 @@ modified directly. Temporary project copies cannot be created.
 
 You can still proceed with the configuration, but keep this limitation in mind."""
 
-SCOPE_TEXT = (
-    "Choose which part of the project is instrumented. The default is the whole project; a narrower directory "
-    "(e.g. src) leaves third-party code out of the profile."
+DIRECTORIES_TEXT = (
+    "Choose what is project code. By default, everything in the project directory is instrumented. Check the "
+    "directories that are not (e.g. third-party code, or the dependencies a CMake build fetches into build/_deps; "
+    "they can also be checked later in the Project Setup stage, once the build created them), and add directories "
+    "outside the project whose code belongs to it (e.g. shared sources). Every change is saved at once."
 )
 
 COMPILE_HINT = (
@@ -223,7 +226,7 @@ class ConfigurationWizard(QWizard):
         self.steps = [
             self._welcome_step(),
             self._write_access_step(),
-            self._instrumentation_scope_step(),
+            self._project_directories_step(),
             self._compile_sh_step(),
             self._seq_settings_step(),
             self._test_compilation_step(),
@@ -268,23 +271,14 @@ class ConfigurationWizard(QWizard):
         step.layout().addStretch(1)  # type: ignore[union-attr]
         return step
 
-    def _instrumentation_scope_step(self) -> _Step:
-        # the step names it already: a card without a title
-        self.project_environment_widget = ProjectEnvironmentWidget(
-            self.arguments.project_root, self.arguments.project_config_dir, title=""
-        )
-        self.project_environment_widget.load()
-        return self._step(
-            2,
-            _label(SCOPE_TEXT, wrap=True),
-            self.project_environment_widget,
-            on_next=self._leave_instrumentation_scope,
-        )
-
-    def _leave_instrumentation_scope(self) -> bool:
-        if self.project_environment_widget.is_modified():
-            return self.project_environment_widget.save()
-        return True
+    def _project_directories_step(self) -> _Step:
+        self.excluded_directories = ExcludedDirectoriesTree(self.arguments.project_root, self.arguments.project_dir)
+        self.included_directories = IncludedDirectoriesList(self.arguments.project_root, self.arguments.project_dir)
+        excluded = widgets.FormSection("Excluded directories")
+        excluded.add_widget(self.excluded_directories)
+        included = widgets.FormSection("Included directories outside the project")
+        included.add_widget(self.included_directories)
+        return self._step(2, _label(DIRECTORIES_TEXT, wrap=True), excluded, included)
 
     def _compile_sh_step(self) -> _Step:
         existing = existing_compile_script(self.arguments.project_config_dir)
@@ -294,14 +288,7 @@ class ConfigurationWizard(QWizard):
             self.compile_sh_text.set_text(existing)
         else:
             self.compile_sh_text = PlaceholderScriptEditor(COMPILE_PLACEHOLDER)
-        # The scope step can rewrite compile.sh on disk; the editor must not write the old text back.
-        self.project_environment_widget.scripts_rewritten.connect(self._reload_compile_sh)
         return self._step(3, _label(COMPILE_HINT), self.compile_sh_text, on_next=self._leave_compile_sh)
-
-    def _reload_compile_sh(self) -> None:
-        existing = existing_compile_script(self.arguments.project_config_dir)
-        if existing is not None and isinstance(self.compile_sh_text, widgets.ScriptEditor):
-            self.compile_sh_text.set_text(existing)
 
     def _leave_compile_sh(self) -> bool:
         self.step_data.compile_sh = script_text(self.compile_sh_text)

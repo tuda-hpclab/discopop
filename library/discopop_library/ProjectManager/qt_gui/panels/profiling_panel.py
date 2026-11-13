@@ -47,7 +47,7 @@ from discopop_library.ProjectManager.services.modes import available_modes
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
-    ProjectEnvironmentChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -176,7 +176,7 @@ class ProfilingPanel(Panel):
         project_state.subscribe(ConfigChanged, lambda _event: self.refresh())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         project_state.subscribe(ResultsChanged, lambda _event: self.refresh())
-        project_state.subscribe(ProjectEnvironmentChanged, lambda _event: self.refresh())
+        project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.refresh())
         self.refresh()
 
     @staticmethod
@@ -247,7 +247,7 @@ class ProfilingPanel(Panel):
             elif self._blocked:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Execute is running")
             elif stale is not None:
-                self.header.chip.set_status(widgets.CHIP_WARN, "Profiled with another scope", stale)
+                self.header.chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
             elif self._hint_shown:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "")
             self._hint_shown = bool(missing) or self._blocked or stale is not None

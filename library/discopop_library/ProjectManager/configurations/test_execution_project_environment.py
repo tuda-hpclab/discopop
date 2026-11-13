@@ -13,14 +13,19 @@ import os
 import shutil
 import stat
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
+from discopop_library.ProjectManager.services.included_directories import save_included_directories
 
-ENV_SCRIPT = "#!/bin/bash\nenv | grep -E '^(DP_RUN_ROOT_DIR|DOT_DISCOPOP|DP_PROJECT_ROOT_DIR)='\n"
+ENV_SCRIPT = (
+    "#!/bin/bash\n"
+    "env | grep -E '^(DOT_DISCOPOP|DP_PROJECT_ROOT_DIR|DP_PROJECT_INCLUDE_DIRS|DP_PROJECT_EXCLUDE_DIRS)='\n"
+)
 
 
 def _write_project(
@@ -35,12 +40,15 @@ def _write_project(
         os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
 
 
-def _set_scope(project_root: Path, scope: object) -> None:
-    config_dir = project_root / ".discopop" / "project" / "configs"
-    (config_dir / "project_environment.json").write_text(json.dumps({"DP_PROJECT_ROOT_DIR": scope}))
+def _store_directories(project_root: Path, included: List[str], excluded: List[str]) -> None:
+    project_dir = str(project_root / ".discopop" / "project")
+    save_included_directories(project_dir, str(project_root), included)
+    save_excluded_directories(project_dir, excluded)
 
 
-def _arguments(project_root: Path, dp_project_root_dir: Optional[str] = None) -> ProjectManagerArguments:
+def _arguments(
+    project_root: Path, include_dirs: Optional[str] = None, exclude_dirs: Optional[str] = None
+) -> ProjectManagerArguments:
     return ProjectManagerArguments(
         log_level="WARNING",
         write_log=False,
@@ -61,7 +69,8 @@ def _arguments(project_root: Path, dp_project_root_dir: Optional[str] = None) ->
         timeout_execution=None,
         timeout_compilation=None,
         timeout_validation=None,
-        dp_project_root_dir=dp_project_root_dir,
+        project_include_dirs=include_dirs,
+        project_exclude_dirs=exclude_dirs,
     )
 
 
@@ -92,25 +101,26 @@ def _variables(stdout: str) -> Dict[str, str]:
 # ---- the environment of a script
 
 
-def test_script_sees_the_project_variables(tmp_path: Path) -> None:
+def test_script_sees_the_project_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("DP_PROJECT_INCLUDE_DIRS", raising=False)
     root = tmp_path / "project"
     _write_project(root, ENV_SCRIPT)
-    _set_scope(root, "src")
 
     code, _, stdout, stderr = _run(_arguments(root), root)
 
     assert code == 0, stderr
-    assert _variables(stdout) == {
-        "DP_RUN_ROOT_DIR": str(root),
-        "DOT_DISCOPOP": str(root / ".discopop"),
-        "DP_PROJECT_ROOT_DIR": str(root / "src") + "/",
-    }
+    assert _variables(stdout) == {"DP_PROJECT_ROOT_DIR": str(root), "DOT_DISCOPOP": str(root / ".discopop")}
 
 
-def test_script_sees_the_variables_of_the_copy(tmp_path: Path) -> None:
+def test_script_sees_the_directories_of_the_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("DP_PROJECT_INCLUDE_DIRS", raising=False)
     root = tmp_path / "project"
+    shared = tmp_path / "shared"
+    shared.mkdir()
     _write_project(root, ENV_SCRIPT)
-    _set_scope(root, "src")
+    _store_directories(root, [str(shared)], ["build/_deps"])
     copy = tmp_path / "copies" / "project"
     shutil.copytree(root, copy)
 
@@ -118,20 +128,12 @@ def test_script_sees_the_variables_of_the_copy(tmp_path: Path) -> None:
 
     assert code == 0, stderr
     assert _variables(stdout) == {
-        "DP_RUN_ROOT_DIR": str(copy),
+        "DP_PROJECT_ROOT_DIR": str(copy),
         "DOT_DISCOPOP": str(copy / ".discopop"),
-        "DP_PROJECT_ROOT_DIR": str(copy / "src") + "/",
+        # the included directory is shared by all copies, the excluded one lies in the copy
+        "DP_PROJECT_INCLUDE_DIRS": str(shared),
+        "DP_PROJECT_EXCLUDE_DIRS": str(copy / "build" / "_deps"),
     }
-
-
-def test_default_scope_is_the_run_root(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, ENV_SCRIPT)
-
-    code, _, stdout, stderr = _run(_arguments(root), root)
-
-    assert code == 0, stderr
-    assert _variables(stdout)["DP_PROJECT_ROOT_DIR"] == str(root) + "/"
 
 
 def test_inherited_variables_are_overridden(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,104 +147,40 @@ def test_inherited_variables_are_overridden(tmp_path: Path, monkeypatch: pytest.
     assert code == 0, stderr
     variables = _variables(stdout)
     assert variables["DOT_DISCOPOP"] == str(root / ".discopop")
-    assert variables["DP_PROJECT_ROOT_DIR"] == str(root) + "/"
+    assert variables["DP_PROJECT_ROOT_DIR"] == str(root)
 
 
-def test_command_line_scope_overrides_the_stored_one(tmp_path: Path) -> None:
+def test_command_line_directories_override_the_stored_ones(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("DP_PROJECT_INCLUDE_DIRS", raising=False)
     root = tmp_path / "project"
+    shared = tmp_path / "shared"
+    shared.mkdir()
     _write_project(root, ENV_SCRIPT)
-    _set_scope(root, "src")
+    _store_directories(root, [str(shared)], ["build/_deps"])
 
-    code, _, stdout, stderr = _run(_arguments(root, dp_project_root_dir="lib"), root)
+    code, _, stdout, stderr = _run(_arguments(root, include_dirs="", exclude_dirs="third_party"), root)
 
     assert code == 0, stderr
-    assert _variables(stdout)["DP_PROJECT_ROOT_DIR"] == str(root / "lib") + "/"
+    variables = _variables(stdout)
+    assert "DP_PROJECT_INCLUDE_DIRS" not in variables
+    assert variables["DP_PROJECT_EXCLUDE_DIRS"] == str(root / "third_party")
 
 
-def test_command_line_scope_is_moved_into_the_copy(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, ENV_SCRIPT)
-    copy = tmp_path / "copy"
-    shutil.copytree(root, copy)
-
-    code, _, stdout, stderr = _run(_arguments(root, dp_project_root_dir=str(root / "lib")), copy)
-
-    assert code == 0, stderr
-    assert _variables(stdout)["DP_PROJECT_ROOT_DIR"] == str(copy / "lib") + "/"
-
-
-def test_command_line_scope_makes_an_invalid_stored_file_irrelevant(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, ENV_SCRIPT)
-    _set_scope(root, 3)
-
-    code, _, _, stderr = _run(_arguments(root, dp_project_root_dir="lib"), root)
-
-    assert code == 0, stderr
-
-
-def test_invalid_project_environment_fails_the_run(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, ENV_SCRIPT)
-    _set_scope(root, 3)
-
-    code, elapsed, stdout, stderr = _run(_arguments(root), root)
-
-    assert code == 1
-    assert elapsed == 0.0
-    assert stdout == ""
-    assert stderr.startswith("DiscoPoP ERROR: ")
-    assert "project_environment.json" in stderr
-    assert not (root / ".discopop" / "project" / "execution_results.json").exists()
-
-
-@pytest.mark.parametrize("key", ["DP_PROJECT_ROOT_DIR", "DOT_DISCOPOP", "DP_RUN_ROOT_DIR"])
-def test_reserved_variable_in_settings_is_overridden_with_a_warning(tmp_path: Path, key: str) -> None:
+@pytest.mark.parametrize("key", ["DP_PROJECT_ROOT_DIR", "DOT_DISCOPOP"])
+def test_reserved_variable_in_settings_is_overridden_with_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("DP_PROJECT_INCLUDE_DIRS", raising=False)
     root = tmp_path / "project"
     _write_project(root, ENV_SCRIPT, settings={"CC": "clang", key: "/x/"})
 
     code, _, stdout, stderr = _run(_arguments(root), root)
 
     assert code == 0, stderr
-    assert _variables(stdout) == {
-        "DP_RUN_ROOT_DIR": str(root),
-        "DOT_DISCOPOP": str(root / ".discopop"),
-        "DP_PROJECT_ROOT_DIR": str(root) + "/",
-    }
+    assert _variables(stdout) == {"DP_PROJECT_ROOT_DIR": str(root), "DOT_DISCOPOP": str(root / ".discopop")}
     assert "DiscoPoP WARNING: seq_settings.json sets " + key in stderr
-
-
-def test_no_scope_variable_warning_with_the_default_scope(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, '#!/bin/bash\necho "$DP_PROJECT_ROOT_DIR"\n')
-
-    code, _, _, stderr = _run(_arguments(root), root)
-
-    assert code == 0, stderr
-    assert "DiscoPoP" not in stderr
-
-
-def test_scope_variable_warning_with_a_narrowed_scope(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, '#!/bin/bash\necho "$DP_PROJECT_ROOT_DIR"\n')
-    _set_scope(root, "src")
-
-    code, _, _, stderr = _run(_arguments(root), root)
-
-    assert code == 0, stderr
-    assert "DiscoPoP WARNING" in stderr
-    assert "DP_RUN_ROOT_DIR" in stderr
-
-
-def test_no_scope_variable_warning_if_the_script_does_not_use_it(tmp_path: Path) -> None:
-    root = tmp_path / "project"
-    _write_project(root, "#!/bin/bash\necho hi\n")
-    _set_scope(root, "src")
-
-    code, _, _, stderr = _run(_arguments(root), root)
-
-    assert code == 0
-    assert "DiscoPoP" not in stderr
 
 
 def test_seq_run_is_not_checked(tmp_path: Path) -> None:
@@ -301,11 +239,11 @@ def test_dp_compile_without_stray_dirs_succeeds_with_a_warning_without_file_mapp
     assert "FileMapping.txt" in stderr
 
 
-def test_dp_compile_registering_a_file_in_scope_succeeds_without_message(tmp_path: Path) -> None:
+def test_dp_compile_registering_a_project_file_succeeds_without_message(tmp_path: Path) -> None:
     root = tmp_path / "project"
     _write_project(
         root,
-        '#!/bin/bash\nmkdir -p "$DOT_DISCOPOP"\necho "1 $DP_PROJECT_ROOT_DIR"a.c > "$DOT_DISCOPOP/FileMapping.txt"\n',
+        '#!/bin/bash\nmkdir -p "$DOT_DISCOPOP"\necho "1 $DP_PROJECT_ROOT_DIR/a.c" > "$DOT_DISCOPOP/FileMapping.txt"\n',
         settings_name="dp_settings.json",
     )
 
@@ -315,7 +253,7 @@ def test_dp_compile_registering_a_file_in_scope_succeeds_without_message(tmp_pat
     assert "DiscoPoP" not in stderr
 
 
-def test_dp_compile_with_a_mapping_outside_the_scope_warns(tmp_path: Path) -> None:
+def test_dp_compile_with_a_mapping_outside_the_project_warns(tmp_path: Path) -> None:
     root = tmp_path / "project"
     _write_project(
         root,
@@ -326,7 +264,24 @@ def test_dp_compile_with_a_mapping_outside_the_scope_warns(tmp_path: Path) -> No
     code, _, _, stderr = _run(_arguments(root), root, "compile.sh", "dp_settings.json")
 
     assert code == 0, stderr
-    assert "DiscoPoP WARNING: No instrumented file lies below the instrumentation scope" in stderr
+    assert "DiscoPoP WARNING: No instrumented file lies in the project directory" in stderr
+
+
+def test_dp_compile_with_a_mapping_in_an_included_directory_does_not_warn(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    _write_project(
+        root,
+        f'#!/bin/bash\nmkdir -p "$DOT_DISCOPOP"\necho "1 {shared}/a.c" > "$DOT_DISCOPOP/FileMapping.txt"\n',
+        settings_name="dp_settings.json",
+    )
+    _store_directories(root, [str(shared)], [])
+
+    code, _, _, stderr = _run(_arguments(root), root, "compile.sh", "dp_settings.json")
+
+    assert code == 0, stderr
+    assert "DiscoPoP" not in stderr
 
 
 def test_dp_execute_without_results_fails(tmp_path: Path) -> None:

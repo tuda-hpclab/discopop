@@ -24,7 +24,7 @@ It is not suitable when the project cannot be built and run locally, for other l
 ## Prepared results
 The query tools (`get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects`) only read the results in `.discopop`, so they are cheap: the profiling run is the only expensive step. You can run it beforehand, with `gather_data` or by hand (`discopop_cxx`, the profiled run, `discopop_explorer`), and the agent then starts with `get_project_status`, finds the results and queries them without any wait. This needs no `initialize_discopop_directory` and no configuration; start the server with `--tools analysis` to offer just the analysis tools. A repeated `gather_data` call is cheap too, as it skips every step whose outputs are current.
 
-Results are current while no source file is newer than them (modification time), and the instrumentation scope has not changed since; otherwise `get_project_status` reports them as stale. They hold for the inputs that were profiled.
+Results are current while no source file is newer than them (modification time), and the [excluded and included directories](Project_manager.md#project-directories) have not changed since; otherwise `get_project_status` reports them as stale. They hold for the inputs that were profiled.
 
 ## Installation
 The server is part of `pip install discopop`. Activate the environment and check the command:
@@ -57,7 +57,7 @@ The server offers 12 tools. In workflow order:
 | Tool | Purpose |
 |------|---------|
 | `initialize_discopop_directory` | Create the `.discopop` structure of a project (once per project). `reset=true` removes the analysis results and keeps the configuration. |
-| `set_compile_script` | Write the build script `compile.sh` (shared, or per configuration). Optionally sets the project's [instrumentation scope](Project_manager.md#instrumentation-scope) (`instrumentation_scope`, e.g. `src`), which `get_project_status` reports. |
+| `set_compile_script` | Write the build script `compile.sh` (shared, or per configuration). Optionally sets the project's [excluded and included directories](Project_manager.md#project-directories) (`excluded_directories`, e.g. `["build/_deps"]`, and `included_directories`, absolute paths outside the project), which `get_project_status` reports. |
 | `create_execution_configuration` | Create a named configuration with an `execute.sh` (and optional `validate.sh`). |
 | `delete_execution_configuration` | Delete a configuration; its recorded results are kept. |
 | `get_configurations` | Show the build scripts and configurations of a project. |

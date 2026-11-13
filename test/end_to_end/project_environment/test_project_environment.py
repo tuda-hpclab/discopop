@@ -6,11 +6,12 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The instrumentation scope and the checks of instrumented builds and runs, through the project manager's
-command line with the real profiler.
+"""The project directories (excluded directories inside the project, included ones outside of it) and the checks of
+instrumented builds and runs, through the project manager's command line with the real profiler.
 
 The program in src/ consists of src/main.cpp and a header-only "third-party library" third_party/lib.h. With
-the scope src, only main.cpp may be instrumented. A build or a run that loses DOT_DISCOPOP has to fail
+third_party excluded, only main.cpp may be instrumented; a header outside the project is only instrumented if its
+directory is included. A build or a run that loses DOT_DISCOPOP has to fail
 instead of reporting success without results (see
 discopop_library.ProjectManager.configurations.instrumentation_checks)."""
 
@@ -19,9 +20,12 @@ import os
 import pathlib
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pytest
+
+from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
+from discopop_library.ProjectManager.services.included_directories import save_included_directories
 
 SRC_DIR = pathlib.Path(__file__).parent / "src"
 
@@ -72,9 +76,8 @@ def _run_project_manager(root: pathlib.Path, *arguments: str) -> subprocess.Comp
     )
 
 
-def _set_scope(root: pathlib.Path, scope: str) -> None:
-    path = root / ".discopop" / "project" / "configs" / "project_environment.json"
-    path.write_text(json.dumps({"DP_PROJECT_ROOT_DIR": scope}))
+def _project_dir(root: pathlib.Path) -> str:
+    return str(root / ".discopop" / "project")
 
 
 def _results(root: pathlib.Path, script: str) -> List[Dict[str, Any]]:
@@ -114,36 +117,60 @@ def test_default_scope_instruments_the_whole_project(tmp_path: pathlib.Path) -> 
     assert (root / ".discopop" / "profiler" / "dynamic_dependencies.txt").exists()
 
 
-def test_scope_leaves_the_third_party_code_out(tmp_path: pathlib.Path) -> None:
+def test_an_excluded_directory_is_left_out(tmp_path: pathlib.Path) -> None:
     root = _project(tmp_path)
-    _set_scope(root, "src")
+    save_excluded_directories(_project_dir(root), ["third_party"])
     process = _profile(root)
     assert _only_entry(root, "compile.sh")["code"] == 0, _output(process)
     execute = _only_entry(root, "execute.sh")
     assert execute["code"] == 0, _output(process)
-    assert execute["instrumentation_scope"] == "src"
+    assert execute["project_directories"] == {"included": [], "excluded": ["third_party"]}
     mapping = _file_mapping(root / ".discopop")
     assert any(line.endswith("/src/main.cpp") for line in mapping), mapping
     assert not any("third_party" in line for line in mapping), mapping
 
 
-def test_command_line_scope_applies_to_the_copy_of_the_project(tmp_path: pathlib.Path) -> None:
+def test_command_line_exclusion_applies_to_the_copy_of_the_project(tmp_path: pathlib.Path) -> None:
     root = _project(tmp_path)
-    process = _run_project_manager(root, "-x", "tiny:dp", "--skip-cleanup", "--dp-project-root-dir", "src")
+    process = _run_project_manager(root, "-x", "tiny:dp", "--skip-cleanup", "--project-exclude-dirs", "third_party")
     copies = [path for path in tmp_path.iterdir() if path.name.startswith("tiny_dp_settings.json_proj")]
     assert len(copies) == 1, _output(process)
     mapping = _file_mapping(copies[0] / ".discopop")
     assert mapping and all(str(copies[0] / "src") + "/" in line for line in mapping), mapping
 
 
-def test_a_scope_matching_nothing_warns(tmp_path: pathlib.Path) -> None:
+def _project_with_shared_header(tmp_path: pathlib.Path) -> pathlib.Path:
+    """The project with lib.h moved to a directory outside of it, included by its absolute path."""
     root = _project(tmp_path)
-    (root / "empty").mkdir()
-    _set_scope(root, "empty")
+    shared = tmp_path / "shared"
+    shutil.move(str(root / "third_party"), str(shared))
+    main = root / "src" / "main.cpp"
+    main.write_text(main.read_text().replace('"../third_party/lib.h"', '"' + str(shared / "lib.h") + '"'))
+    return root
+
+
+def test_a_directory_outside_the_project_is_only_instrumented_if_included(tmp_path: pathlib.Path) -> None:
+    root = _project_with_shared_header(tmp_path)
+    process = _profile(root)
+    assert _only_entry(root, "execute.sh")["code"] == 0, _output(process)
+    assert not any("shared" in line for line in _file_mapping(root / ".discopop"))
+
+    save_included_directories(_project_dir(root), str(root), [str(tmp_path / "shared")])
+    shutil.rmtree(root / ".discopop" / "profiler")
+    (root / ".discopop" / "FileMapping.txt").unlink()
+    process = _profile(root)
+    assert _results(root, "execute.sh")[-1]["code"] == 0, _output(process)
+    mapping = _file_mapping(root / ".discopop")
+    assert any(line.endswith("/shared/lib.h") for line in mapping), mapping
+
+
+def test_everything_excluded_warns(tmp_path: pathlib.Path) -> None:
+    root = _project(tmp_path)
+    save_excluded_directories(_project_dir(root), ["src", "third_party"])
     process = _profile(root)
     compile_entry = _only_entry(root, "compile.sh")
     assert compile_entry["code"] == 0, _output(process)
-    assert "No instrumented file lies below the instrumentation scope" in compile_entry["stderr"]
+    assert "No instrumented file lies in the project directory" in compile_entry["stderr"]
 
 
 def test_a_build_losing_dot_discopop_fails(tmp_path: pathlib.Path) -> None:
@@ -163,20 +190,6 @@ def test_a_run_losing_dot_discopop_fails(tmp_path: pathlib.Path) -> None:
     assert "dynamic_dependencies.txt" in execute["stderr"]
 
 
-def _compile_only_scope_warning(stderr: str) -> Optional[str]:
-    lines = [line for line in stderr.splitlines() if "DP_RUN_ROOT_DIR" in line]
-    return lines[0] if lines else None
-
-
-def test_a_script_using_the_old_meaning_of_the_scope_variable_warns(tmp_path: pathlib.Path) -> None:
-    root = _project(tmp_path, compile_sh=COMPILE_SH.replace("../src/main.cpp", '"$DP_PROJECT_ROOT_DIR"main.cpp'))
-    _set_scope(root, "src")
-    process = _profile(root)
-    compile_entry = _only_entry(root, "compile.sh")
-    assert compile_entry["code"] == 0, _output(process)
-    assert _compile_only_scope_warning(compile_entry["stderr"]) is not None, compile_entry["stderr"]
-
-
 @pytest.mark.parametrize("variable", ["DP_PROJECT_ROOT_DIR", "DOT_DISCOPOP"])
 def test_a_project_variable_in_the_settings_is_removed(tmp_path: pathlib.Path, variable: str) -> None:
     root = _project(tmp_path)
@@ -190,8 +203,11 @@ def test_a_project_variable_in_the_settings_is_removed(tmp_path: pathlib.Path, v
     assert _only_entry(root, "execute.sh")["code"] == 0, _output(process)
 
 
-def test_init_writes_the_default_scope(tmp_path: pathlib.Path) -> None:
+def test_an_obsolete_scope_file_is_reported(tmp_path: pathlib.Path) -> None:
     root = _project(tmp_path)
-    path = root / ".discopop" / "project" / "configs" / "project_environment.json"
-    assert json.loads(path.read_text()) == {"DP_PROJECT_ROOT_DIR": "."}
+    (root / ".discopop" / "project" / "configs" / "project_environment.json").write_text(
+        '{"DP_PROJECT_ROOT_DIR": "src"}'
+    )
+    process = _profile(root)
+    assert "project_environment.json is no longer read" in _output(process)
     assert os.access(root / ".discopop" / "project" / "configs" / "compile.sh", os.X_OK)

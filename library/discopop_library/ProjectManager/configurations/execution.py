@@ -37,16 +37,12 @@ from discopop_library.ProjectManager.configurations.instrumentation_checks impor
 )
 from discopop_library.ProjectManager.configurations.project_environment import (
     DOT_DISCOPOP_VARIABLE,
-    SCOPE_VARIABLE,
-    ProjectEnvironment,
-    ProjectEnvironmentError,
+    ProjectDirectories,
     build_environment,
     describe_project_variables,
     ignored_settings_warning,
-    load_project_environment,
-    normalize_scope,
-    record_instrumented_scope,
-    scope_variable_warning,
+    project_directories_of,
+    record_instrumented_directories,
 )
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
@@ -55,11 +51,6 @@ from discopop_library.ProjectManager.configurations.repetitions import (
     TIME_AGGREGATE_NOT_MEASURED,
     select_representative,
     validate_repetitions,
-)
-from discopop_library.ProjectManager.services.excluded_directories import (
-    ENVIRONMENT_VARIABLE as EXCLUDE_DIRECTORIES_VARIABLE,
-    environment_value,
-    load_excluded_directories,
 )
 
 PATH = str
@@ -232,12 +223,12 @@ def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) 
     return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
 
 
-def project_environment_of(arguments: ProjectManagerArguments) -> ProjectEnvironment:
-    """The project environment of the runs of ``arguments``: the stored one, with the scope given on the
-    command line (``--dp-project-root-dir``) in place of the stored one."""
-    if arguments.dp_project_root_dir is not None:
-        return ProjectEnvironment(instrumentation_scope=arguments.dp_project_root_dir)
-    return load_project_environment(arguments.project_config_dir)
+def project_directories_of_arguments(arguments: ProjectManagerArguments) -> ProjectDirectories:
+    """The project directories of the runs of ``arguments``: the stored ones, each list replaced by the one given on
+    the command line (``--project-include-dirs`` / ``--project-exclude-dirs``)."""
+    return project_directories_of(
+        arguments.project_dir, arguments.project_root, arguments.project_include_dirs, arguments.project_exclude_dirs
+    )
 
 
 # The settings files of the instrumented modes, and the modes' names.
@@ -348,31 +339,10 @@ def execute_configuration(
     # The process-wide working directory is deliberately left alone: this function runs in
     # worker threads, and os.chdir would change the directory of every other thread.
     # The script is started with cwd=project_copy_root_path instead (see _run_once).
-    try:
-        project_environment = project_environment_of(arguments)
-    except ProjectEnvironmentError as error:
-        # Reported as a failed run rather than raised: every caller (GUI, command line, MCP, autotuner)
-        # shows a failed script, while not every one of them expects an exception here.
-        logger.error(str(error))
-        return (INSTRUMENTATION_CHECK_FAILED_RETURN_CODE, 0.0, "", "DiscoPoP ERROR: " + str(error) + "\n")
-    my_env: Dict[str, str] = build_environment(
-        os.environ,
-        settings,
-        project_environment,
-        arguments.project_root,
-        project_copy_root_path,
-        settings_name,
-    )
-    # the directories of the project that are no project code (Setup stage), stored relative to the project
-    # directory: made absolute in the copy, as relative entries of the variable are taken relative to the
-    # instrumentation scope; entries set in the settings are kept
-    excluded_directories = load_excluded_directories(arguments.project_dir)
-    if excluded_directories:
-        my_env[EXCLUDE_DIRECTORIES_VARIABLE] = environment_value(
-            excluded_directories,
-            my_env.get(EXCLUDE_DIRECTORIES_VARIABLE, ""),
-            root=os.path.abspath(project_copy_root_path),
-        )
+    # what is project code (the included and excluded directories of the Project Setup stage): the excluded ones
+    # become absolute paths in the copy; entries set in the settings are kept
+    project_directories = project_directories_of_arguments(arguments)
+    my_env: Dict[str, str] = build_environment(os.environ, settings, project_directories, project_copy_root_path)
     logger.info(describe_project_variables(my_env))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
 
@@ -493,20 +463,16 @@ def execute_configuration(
                 settings_name,
                 project_copy_root_path,
                 my_env[DOT_DISCOPOP_VARIABLE],
-                my_env[SCOPE_VARIABLE],
+                project_directories.included,
             )
             mode = _INSTRUMENTED_MODES.get(settings_name)
             if mode is not None and not checks.errors:
-                record_instrumented_scope(
-                    my_env[DOT_DISCOPOP_VARIABLE],
-                    mode,
-                    normalize_scope(arguments.project_root, project_environment.instrumentation_scope),
-                )
+                record_instrumented_directories(my_env[DOT_DISCOPOP_VARIABLE], mode, project_directories)
         elif script_name == "execute.sh":
             checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
-    for warning in (ignored_settings_warning(settings, settings_name), scope_variable_warning(script_path, my_env)):
-        if warning is not None:
-            checks.warnings.append(warning)
+    warning = ignored_settings_warning(settings, settings_name)
+    if warning is not None:
+        checks.warnings.append(warning)
     representative = _apply_instrumentation_checks(representative, checks)
     if checks.errors and time_aggregate != TIME_AGGREGATE_FAILED_RUN:
         time_aggregate = TIME_AGGREGATE_FAILED_RUN
@@ -545,9 +511,12 @@ def execute_configuration(
             # recorded but excluded from the choice above.
             "repetition_time_sources": [outcome.time_source for outcome in outcomes],
             "time_aggregate": time_aggregate,
-            # the scope the run was instrumented with, relative to the project root as stored; profiling
-            # results of another scope are stale
-            "instrumentation_scope": normalize_scope(arguments.project_root, project_environment.instrumentation_scope),
+            # what was project code in this run (included directories absolute, excluded ones relative to the
+            # project root)
+            "project_directories": {
+                "included": list(project_directories.included),
+                "excluded": list(project_directories.excluded),
+            },
         },
     )
     if measurement is not None:

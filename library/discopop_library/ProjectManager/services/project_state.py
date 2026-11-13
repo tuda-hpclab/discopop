@@ -47,8 +47,8 @@ class HotspotsChanged:
 
 
 @dataclass(frozen=True)
-class ProjectEnvironmentChanged:
-    """The project environment (the instrumentation scope) was saved."""
+class ProjectDirectoriesChanged:
+    """The included or excluded directories of the project (what is project code) were saved."""
 
 
 @dataclass(frozen=True)

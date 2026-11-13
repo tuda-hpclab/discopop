@@ -7,8 +7,8 @@
 # directory for details.
 
 """The Setup stage: how the project is built. The shared compile.sh, the shared validation build script and the
-settings files, with Test Compilation and Derive; what is project code: the instrumentation scope and the excluded
-directories.
+settings files, with Test Compilation and Derive; what is project code: the included directories outside the project
+and the excluded directories inside it.
 
 Ported from the compilation editor window (``gui/mixins/compilation_editor.py`` in the Tk GUI); here it is a stage of
 the sidebar, above Configure, and the output of a test compilation goes to the output pane.
@@ -16,7 +16,7 @@ the sidebar, above Configure, and the output of a test compilation goes to the o
 
 import copy
 import os
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
@@ -30,9 +30,9 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
+from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
-from discopop_library.ProjectManager.qt_gui.project_environment_widget import ProjectEnvironmentWidget
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
 from discopop_library.ProjectManager.services.editor_files import (
@@ -52,7 +52,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
-    ProjectEnvironmentChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -68,6 +68,12 @@ EXCLUDED_DIRECTORIES_HINT = (
     "Checked directories are no project code, e.g. dependencies fetched into the build directory (build/_deps):"
     " they are neither instrumented nor part of the file mapping and the AST. Saved at once; takes effect with the"
     " next build."
+)
+INCLUDED_DIRECTORIES_TITLE = "Included directories outside the project"
+INCLUDED_DIRECTORIES_HINT = (
+    "Their code is project code as well, e.g. sources shared between projects: instrumented and part of the file"
+    " mapping and the AST. They are not copied for the runs of a configuration, so suggestions for them are only"
+    " applied on request. Saved at once; takes effect with the next build."
 )
 
 RESET_RESULTS_TEXT = "Reset Execution Results…"
@@ -89,10 +95,6 @@ class SetupPanel(Panel):
     change what the configurations can execute. Files without unsaved changes are read again when the stage is shown
     and on ``ConfigurationsChanged`` (the wizard writes them, too). ``tabs`` is the main window: unsaved changes show as
     "Setup *" in the sidebar.
-
-    The instrumentation scope is saved with the files and publishes ``ProjectEnvironmentChanged``. Its one-click fix
-    rewrites scripts of the configurations, too: ``may_rewrite_scripts`` may veto it (the Configuration Setup stage
-    holds unsaved changes), ``scripts_rewritten`` is called afterwards (it reloads them).
     """
 
     output_title = "Setup"
@@ -104,14 +106,9 @@ class SetupPanel(Panel):
         status: StatusLine,
         tabs: TabHost,
         parent: Optional[QWidget] = None,
-        *,
-        may_rewrite_scripts: Optional[Callable[[], bool]] = None,
-        scripts_rewritten: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__(arguments, project_state, status, parent)
         self.tabs = tabs
-        self._may_rewrite_configuration_scripts = may_rewrite_scripts
-        self._configuration_scripts_rewritten = scripts_rewritten
         self.editors: Dict[str, widgets.ScriptEditor] = {}
         self.tab_index: Dict[str, int] = {}
         self._testing = False
@@ -154,17 +151,17 @@ class SetupPanel(Panel):
         self.excluded_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         excluded_section = widgets.FormSection(EXCLUDED_DIRECTORIES_TITLE)
         excluded_section.add_widget(self.excluded_directories, EXCLUDED_DIRECTORIES_HINT)
-        # what is project code: the scope says what is in, the excluded directories what is out of it
-        self.environment_widget = ProjectEnvironmentWidget(
-            arguments.project_root, arguments.project_config_dir, self._may_rewrite_scripts, self
-        )
-        self.environment_widget.edited.connect(self._update_tabs)
-        self.environment_widget.scripts_rewritten.connect(self._on_scripts_rewritten)
-        self.environment_widget.load()
+        self.included_directories = IncludedDirectoriesList(arguments.project_root, arguments.project_dir)
+        self.included_directories.setMinimumHeight(140)
+        self.included_directories.changed.connect(self._on_included_directories_changed)
+        self.included_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
+        included_section = widgets.FormSection(INCLUDED_DIRECTORIES_TITLE)
+        included_section.add_widget(self.included_directories, INCLUDED_DIRECTORIES_HINT)
+        # what is project code: the project directory without the excluded directories, plus the included ones
         project_code = QHBoxLayout()
         project_code.setContentsMargins(0, 0, 0, 0)
-        project_code.addWidget(self.environment_widget, 1)
-        project_code.addWidget(excluded_section, 1)
+        project_code.addWidget(excluded_section, 3)
+        project_code.addWidget(included_section, 2)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
@@ -247,6 +244,14 @@ class SetupPanel(Panel):
         )
         # they change what the builds of every configuration instrument
         self.project_state.publish(ConfigurationsChanged())
+        self.project_state.publish(ProjectDirectoriesChanged())
+
+    def _on_included_directories_changed(self, included: List[str]) -> None:
+        self.status.set(
+            "Included directories: " + (", ".join(included) if included else "none"), widgets.STATUS_OK, reset_ms=3000
+        )
+        self.project_state.publish(ConfigurationsChanged())
+        self.project_state.publish(ProjectDirectoriesChanged())
 
     def output_console(self) -> widgets.OutputConsole:
         return self.console
@@ -255,27 +260,8 @@ class SetupPanel(Panel):
         # the files may have been changed outside the GUI meanwhile, and a build may have created directories
         self.reload_unmodified()
         self.excluded_directories.reload()
+        self.included_directories.reload()
         super().showEvent(event)
-
-    # ── the instrumentation scope ───────────────────────────────────────────
-
-    def _may_rewrite_scripts(self) -> bool:
-        """The one-click fix rewrites files the editors show: not while they hold unsaved changes."""
-        if any(editor.document().isModified() for editor in self.editors.values()):
-            dialogs.show_warning(
-                self,
-                "Unsaved changes",
-                "Save or discard the changes of compile.sh and the settings first: the scripts are rewritten on disk.",
-            )
-            return False
-        return self._may_rewrite_configuration_scripts is None or self._may_rewrite_configuration_scripts()
-
-    def _on_scripts_rewritten(self) -> None:
-        self.reload_unmodified()
-        if self._configuration_scripts_rewritten is not None:
-            self._configuration_scripts_rewritten()
-        self.status.set("Replaced DP_PROJECT_ROOT_DIR by DP_RUN_ROOT_DIR", widgets.STATUS_OK, reset_ms=2000)
-        self.project_state.publish(ConfigurationsChanged())
 
     # ── loading ─────────────────────────────────────────────────────────────
 
@@ -312,12 +298,6 @@ class SetupPanel(Panel):
             text, read_only = self._disk_content(name)
             if text != editor.text() or read_only != editor.isReadOnly():
                 self._load_file(name)
-        if self.environment_widget.is_modified():
-            # the scripts may use the scope variable now, or no longer
-            self.environment_widget.refresh()
-        else:
-            # the wizard or the MCP server may have stored another scope
-            self.environment_widget.load()
         self._update_shared_validation_button()
         self._update_tabs()
 
@@ -356,10 +336,7 @@ class SetupPanel(Panel):
             self.header.chip.set_status(*self._test_chip)
 
     def has_unsaved_changes(self) -> bool:
-        return (
-            any(editor.document().isModified() for editor in self.editors.values())
-            or self.environment_widget.is_modified()
-        )
+        return any(editor.document().isModified() for editor in self.editors.values())
 
     def _on_modification_changed(self) -> None:
         self._update_tabs()
@@ -421,12 +398,6 @@ class SetupPanel(Panel):
         comp_dir = self.arguments.project_config_dir
         os.makedirs(comp_dir, exist_ok=True)
         saved_files: List[str] = []
-        if self.environment_widget.is_modified():
-            if not self.environment_widget.save():
-                self._update_tabs()
-                return False
-            saved_files.append("instrumentation scope")
-            self.project_state.publish(ProjectEnvironmentChanged())
         for name, editor in self.editors.items():
             if not editor.document().isModified():
                 continue
@@ -445,15 +416,12 @@ class SetupPanel(Panel):
                 return False
             editor.document().setModified(False)
             saved_files.append(name)
-        # compile.sh may use the scope variable now, or no longer
-        self.environment_widget.refresh()
         self._update_tabs()
         if not saved_files:
             self.status.set("No changes to save")
             return True
         self.status.set(f"Saved {', '.join(saved_files)}", widgets.STATUS_OK, reset_ms=2000)
-        if saved_files != ["instrumentation scope"]:
-            self.project_state.publish(ConfigurationsChanged())
+        self.project_state.publish(ConfigurationsChanged())
         return True
 
     # ── test compilation ────────────────────────────────────────────────────

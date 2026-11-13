@@ -8,12 +8,12 @@
 
 """The directories of the project that are no project code, e.g. dependencies fetched into ``build/_deps``.
 
-The profiler counts every file below the instrumentation scope (``DP_PROJECT_ROOT_DIR``, by default the project
-directory) as project code: it instruments it, maps it in ``FileMapping.txt``, and the AST export keeps its
-declarations. For a library fetched into the build directory that costs profiling time and, for template libraries,
-gigabytes of AST per translation unit. The directories listed here are left out by all of them: the project manager
-passes them to every build as ``DP_PROJECT_EXCLUDE_DIRS`` (``:`` separated, as absolute paths in the copy of the project
-a configuration is built in; relative entries would be taken relative to the scope).
+The profiler counts every file below the project directory (``DP_PROJECT_ROOT_DIR``) and the included directories
+(``services/included_directories.py``) as project code: it instruments it, maps it in ``FileMapping.txt``, and the AST
+export keeps its declarations. For a library fetched into the build directory that costs profiling time and, for
+template libraries, gigabytes of AST per translation unit. The directories listed here are left out by all of them: the
+project manager passes them to every build as ``DP_PROJECT_EXCLUDE_DIRS`` (``:`` separated, as absolute paths in the
+copy of the project a configuration is built in).
 
 Stored in ``.discopop/project/excluded_directories.json`` (kept by "Reset Project", like the configurations), as
 paths relative to the project directory with ``/`` as separator. A directory excludes everything below it, so the list
@@ -112,9 +112,8 @@ def toggle(directories: Sequence[str], relative: str) -> List[str]:
 
 def environment_value(directories: Sequence[str], existing: str = "", root: Optional[str] = None) -> str:
     """``DP_PROJECT_EXCLUDE_DIRS`` for a build: the entries already set (e.g. in a configuration's settings) and the
-    stored directories, without duplicates. With ``root`` the stored directories are passed as absolute paths below
-    it, as relative entries of the variable are taken relative to ``DP_PROJECT_ROOT_DIR`` (the instrumentation
-    scope), which need not be the project directory."""
+    stored directories, without duplicates. With ``root`` (the project directory of the run) the stored directories
+    are passed as absolute paths below it."""
     stored = minimal(directories)
     if root is not None:
         stored = [os.path.join(root, *directory.split("/")) for directory in stored]

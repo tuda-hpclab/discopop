@@ -101,11 +101,14 @@ def _build_parser() -> ArgumentParser:
                         "string to disable the search even where a configuration enables it. If omitted, each "
                         "configuration's own setting applies.")
 
-    parser.add_argument("--dp-project-root-dir", default=None,
-                        help="Instrumentation scope (DP_PROJECT_ROOT_DIR) for this invocation: only functions defined "
-                        "below this directory are instrumented by the profiler and the hotspot detection. Relative "
-                        "to the project root, which is the default. Overrides the scope stored in "
-                        "project_environment.json.")
+    parser.add_argument("--project-include-dirs", default=None,
+                        help="Directories outside the project root whose code is project code as well (absolute, "
+                        "separated by ':'), for this invocation; overrides the stored list "
+                        "(.discopop/project/included_directories.json). An empty string includes none.")
+    parser.add_argument("--project-exclude-dirs", default=None,
+                        help="Directories below the project root whose code is no project code (relative to the "
+                        "project root, separated by ':', e.g. build/_deps), for this invocation; overrides the stored "
+                        "list (.discopop/project/excluded_directories.json). An empty string excludes none.")
 
     parser.add_argument("--log", type=str, default="WARNING", help="Specify log level: DEBUG, INFO, WARNING, ERROR, "
     "CRITICAL")
@@ -160,7 +163,8 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         execution_time_regex=arguments.execution_time_regex,
         execution_repetitions=arguments.execution_repetitions,
         gui_toolkit=arguments.gui_toolkit,
-        dp_project_root_dir=arguments.dp_project_root_dir,
+        project_include_dirs=arguments.project_include_dirs,
+        project_exclude_dirs=arguments.project_exclude_dirs,
     )
 
 

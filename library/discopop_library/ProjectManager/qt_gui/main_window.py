@@ -73,7 +73,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
-    ProjectEnvironmentChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -181,16 +181,8 @@ class MainWindow(QMainWindow):
             self,
             run_state_changed=lambda running: self._run_state_changed(self.execute_panel, running),
         )
+        self.setup_panel = SetupPanel(args, state, status, self)
         self.editor_panel = EditorPanel(args, state, status, self)
-        # the instrumentation scope of Project Setup can rewrite the scripts of the configurations, too
-        self.setup_panel = SetupPanel(
-            args,
-            state,
-            status,
-            self,
-            may_rewrite_scripts=self.editor_panel.may_rewrite_scripts,
-            scripts_rewritten=self.editor_panel.reload_unmodified,
-        )
         self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
         self.hotspot_panel = HotspotPanel(args, state, status, self.execute_panel.timeouts)
         self.pattern_detection_panel = PatternDetectionPanel(args, state, status, self)
@@ -236,7 +228,7 @@ class MainWindow(QMainWindow):
             HotspotsChanged,
             AutotuningChanged,
             AutotuningFinished,
-            ProjectEnvironmentChanged,
+            ProjectDirectoriesChanged,
         ):
             state.subscribe(event_type, lambda _event: self._status_timer.start())
         # a measurement or a run can rebuild what the hotspot stage compares with the sources

@@ -19,14 +19,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     get_shared_compile_script_path,
     get_shared_validation_compile_script_path,
 )
-from discopop_library.ProjectManager.configurations.project_environment import (
-    ProjectEnvironment,
-    ProjectEnvironmentError,
-    load_project_environment,
-    normalize_scope,
-    save_project_environment,
-    validate_project_environment,
-)
+from discopop_library.ProjectManager.configurations.project_environment import update_project_directories
 from discopop_library.ProjectManager.configurations.validation import VALIDATE_SCRIPT_NAME
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 from mcp_server.tools.helpers import (
@@ -48,11 +41,9 @@ TOOL = Tool(
         "The script is executed from the project root with these environment variables available:\n"
         "  $CC, $CXX          — compiler executables (injected from the active settings file)\n"
         "  $CFLAGS, $CXXFLAGS — compiler flags\n"
-        "  $DP_RUN_ROOT_DIR   — absolute path to the project root (of the copy a run works in)\n"
+        "  $DP_PROJECT_ROOT_DIR — absolute path to the project root (of the copy a run works in)\n"
         "  $DOT_DISCOPOP      — absolute path to the .discopop directory; the build must pass it on to "
         "every compiler call unchanged\n"
-        "  $DP_PROJECT_ROOT_DIR — the instrumentation scope (only code below it is instrumented); "
-        "not a build root, use $DP_RUN_ROOT_DIR for that\n"
         "\n"
         "IMPORTANT: The script body MUST use $CC/$CXX for compilers AND $CFLAGS/$CXXFLAGS "
         "for flags — never hardcode compiler names like g++ or clang++. "
@@ -82,10 +73,12 @@ TOOL = Tool(
         "configurations that have no validate.sh (see create_execution_configuration). "
         "Without it, validate.sh runs against the execute.sh build. "
         "\n\n"
-        "Pass instrumentation_scope (e.g. 'src') to instrument only the code below that directory "
-        "of the project: for a project that brings third-party libraries along in its tree, "
-        "this shortens profiling runs considerably. It applies to the whole project, independent "
-        "of config_name and purpose. "
+        "Everything below the project root is profiled as project code. Pass excluded_directories "
+        "(e.g. ['build/_deps', 'third_party']) to leave out third-party code the project brings along "
+        "in its tree: this shortens profiling runs considerably. Pass included_directories (absolute "
+        "paths) to profile sources outside the project root as well, e.g. shared between projects; "
+        "suggestions for those files are never applied automatically. Both apply to the whole project, "
+        "independent of config_name and purpose. "
         "\n\n"
         "After setting the compile script, call create_execution_configuration to define "
         "how to run the compiled binary."
@@ -130,12 +123,22 @@ TOOL = Tool(
                     "their own compile.sh."
                 ),
             },
-            "instrumentation_scope": {
-                "type": "string",
+            "excluded_directories": {
+                "type": "array",
+                "items": {"type": "string"},
                 "description": (
-                    "Optional. Directory, relative to the project root, whose code is instrumented by "
-                    "the profiler and the hotspot detection; '.' is the whole project (the default). "
-                    "Omit to keep the current scope."
+                    "Optional. Directories below the project root, relative to it, whose code is not "
+                    "profiled (e.g. 'build/_deps'). Replaces the stored list; [] excludes none. Omit to "
+                    "keep the current list."
+                ),
+            },
+            "included_directories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional. Absolute paths of directories outside the project root whose code is "
+                    "profiled as well. Replaces the stored list; [] includes none. Omit to keep the "
+                    "current list."
                 ),
             },
         },
@@ -201,20 +204,21 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         else:
             compile_sh = Path(get_shared_compile_script_path(str(configs_dir)))
 
-        scope_result: Optional[dict[str, Any]] = None
-        scope = arguments.get("instrumentation_scope")
-        if scope is not None:
-            environment = ProjectEnvironment(instrumentation_scope=str(scope))
-            # Written only on a change: the file's mtime marks the analysis results as stale.
-            try:
-                stored: Optional[str] = load_project_environment(str(configs_dir)).instrumentation_scope
-            except ProjectEnvironmentError:
-                stored = None
-            if stored is None or normalize_scope(project_path, stored) != normalize_scope(project_path, str(scope)):
-                save_project_environment(str(configs_dir), project_path, environment)
-            scope_result = {
-                "scope": normalize_scope(project_path, environment.instrumentation_scope),
-                "warnings": validate_project_environment(project_path, environment),
+        directories_result: Optional[dict[str, Any]] = None
+        included = arguments.get("included_directories")
+        excluded = arguments.get("excluded_directories")
+        if included is not None or excluded is not None:
+            # Written only on a change: the files' mtimes mark the analysis results as stale.
+            directories, warnings = update_project_directories(
+                str(configs_dir.parent),
+                project_path,
+                None if included is None else [str(entry) for entry in included],
+                None if excluded is None else [str(entry) for entry in excluded],
+            )
+            directories_result = {
+                "included": list(directories.included),
+                "excluded": list(directories.excluded),
+                "warnings": warnings,
             }
 
         write_script_file(str(compile_sh), script_body)
@@ -228,8 +232,8 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             result["config_name"] = config_name
         if purpose == "validate":
             result["applies_to"] = __describe_validation_scope(configs_dir, config_name)
-        if scope_result is not None:
-            result["instrumentation_scope"] = scope_result
+        if directories_result is not None:
+            result["project_directories"] = directories_result
         result["next_step"] = setup_next_step(configs_dir)
         ctx.log_response("set_compile_script", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]

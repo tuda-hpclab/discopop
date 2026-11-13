@@ -20,6 +20,8 @@ from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.qt_gui.wizard import ConfigurationWizard, PlaceholderScriptEditor
 from discopop_library.ProjectManager.services.configurations import has_real_configuration
+from discopop_library.ProjectManager.services.excluded_directories import load_excluded_directories
+from discopop_library.ProjectManager.services.included_directories import load_included_directories
 
 
 @pytest.fixture
@@ -251,42 +253,22 @@ def test_cancel_asks_for_confirmation(
     assert wizard.result_name is None and not wizard.isVisible()
 
 
-def test_the_instrumentation_scope_step_saves_the_scope_when_left(wizard: ConfigurationWizard) -> None:
+def test_the_project_directories_step_saves_at_once(
+    wizard: ConfigurationWizard, dialog_answers: DialogRecorder, tmp_path: Path
+) -> None:
     assert wizard.windowTitle() == "Configuration Assistant - Step 1 of 9: Welcome"
+    Path(wizard.arguments.project_root, "third_party").mkdir()
+    wizard.excluded_directories.reload()
     go_to(wizard, 2)
-    assert wizard.currentPage().title() == "Step 3 of 9: Instrumentation scope"
-    Path(wizard.arguments.project_root, "src").mkdir()
-    editor = wizard.project_environment_widget
-    assert editor.scope_edit.text() == "."
-    editor.scope_edit.setText("src/")
-    assert editor.resolved_edit.text() == os.path.join(wizard.arguments.project_root, "src") + os.sep
-    environment_file = Path(wizard.arguments.project_config_dir, "project_environment.json")
-    assert not environment_file.exists()
+    assert wizard.currentPage().title() == "Step 3 of 9: Project Directories"
+    item = wizard.excluded_directories.topLevelItem(0)
+    assert item is not None and item.text(0) == "third_party"
+    item.setCheckState(0, Qt.CheckState.Checked)
+    assert load_excluded_directories(wizard.arguments.project_dir) == ["third_party"]
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    dialog_answers.answer("ask_directory", str(shared))
+    wizard.included_directories.add_button.click()
+    assert load_included_directories(wizard.arguments.project_dir) == [str(shared)]
     wizard.next()
     assert wizard.currentId() == 3
-    assert json.loads(environment_file.read_text()) == {"DP_PROJECT_ROOT_DIR": "src"}
-
-
-def test_leaving_the_scope_step_unchanged_writes_nothing(wizard: ConfigurationWizard) -> None:
-    go_to(wizard, 3)
-    assert not Path(wizard.arguments.project_config_dir, "project_environment.json").exists()
-
-
-def test_rewriting_the_scripts_in_the_scope_step_updates_the_compile_script_editor(
-    make_wizard: Callable[[ProjectManagerArguments], ConfigurationWizard], tmp_path: Path
-) -> None:
-    arguments = make_arguments(tmp_path / "project")
-    os.makedirs(arguments.project_config_dir, exist_ok=True)
-    Path(arguments.project_root, "src").mkdir()
-    compile_sh = Path(arguments.project_config_dir, "compile.sh")
-    compile_sh.write_text('#!/bin/bash\ncmake -S "$DP_PROJECT_ROOT_DIR" -B build\n')
-    wizard = make_wizard(arguments)
-    go_to(wizard, 2)
-    editor = wizard.project_environment_widget
-    editor.scope_edit.setText("src")
-    assert editor.rewrite_button.isVisibleTo(editor)
-    editor.rewrite_button.click()
-    assert "DP_RUN_ROOT_DIR" in compile_sh.read_text()
-    # finishing the wizard writes the editor's text: it must not bring the old variable back
-    assert "DP_RUN_ROOT_DIR" in wizard.compile_sh_text.toPlainText()
-    assert "DP_PROJECT_ROOT_DIR" not in wizard.compile_sh_text.toPlainText()

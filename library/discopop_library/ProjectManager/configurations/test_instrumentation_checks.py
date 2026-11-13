@@ -83,7 +83,7 @@ def test_the_marker_is_not_a_stray_directory(tmp_path: Path) -> None:
     dot.mkdir()
     snapshot = take_snapshot(str(dot))
     assert find_stray_dot_discopop_dirs(str(tmp_path), str(dot), snapshot.started - 5) == []
-    result = check_build(snapshot, "dp_settings.json", str(tmp_path), str(dot), str(tmp_path) + "/")
+    result = check_build(snapshot, "dp_settings.json", str(tmp_path), str(dot))
     assert result.errors == []
 
 
@@ -95,23 +95,23 @@ def _mapping(dot: Path, *lines: str) -> None:
     (dot / "FileMapping.txt").write_text("".join(line + "\n" for line in lines))
 
 
-def test_file_mapping_covers_line_under_scope(tmp_path: Path) -> None:
+def test_file_mapping_covers_a_line_below_a_directory(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
     _mapping(dot, "1\t/elsewhere/a.c", "2\t/proj/src/b.c")
-    assert file_mapping_covers(str(dot), "/proj/src/")
+    assert file_mapping_covers(str(dot), ["/proj/src"])
 
 
-def test_file_mapping_does_not_cover_lines_outside_scope(tmp_path: Path) -> None:
+def test_file_mapping_does_not_cover_lines_outside_the_directories(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
     _mapping(dot, "1\t/proj/src_old/a.c", "2\t/elsewhere/b.c")
-    assert not file_mapping_covers(str(dot), "/proj/src/")
+    assert not file_mapping_covers(str(dot), ["/proj/src"])
 
 
 def test_file_mapping_missing_or_empty_does_not_cover(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
-    assert not file_mapping_covers(str(dot), "/proj/")
+    assert not file_mapping_covers(str(dot), ["/proj"])
     _mapping(dot)
-    assert not file_mapping_covers(str(dot), "/proj/")
+    assert not file_mapping_covers(str(dot), ["/proj"])
 
 
 # ---- find_stray_dot_discopop_dirs
@@ -204,7 +204,7 @@ def test_check_build_ignores_seq_and_par(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
     _touch(tmp_path / "a" / ".discopop" / "FileMapping.txt")
     for name in ("seq_settings.json", "par_settings.json"):
-        result = check_build(_snapshot(), name, str(tmp_path), str(dot), str(tmp_path) + "/")
+        result = check_build(_snapshot(), name, str(tmp_path), str(dot))
         assert result.errors == [] and result.warnings == []
 
 
@@ -213,7 +213,7 @@ def test_check_build_reports_stray_dirs_in_dp_and_hd(tmp_path: Path) -> None:
     stray = _touch(tmp_path / "a" / ".discopop" / "FileMapping.txt").parent
     snapshot = Snapshot(started=time.time() - 5)
     for name in ("dp_settings.json", "hd_settings.json"):
-        result = check_build(snapshot, name, str(tmp_path), str(dot), str(tmp_path) + "/")
+        result = check_build(snapshot, name, str(tmp_path), str(dot))
         assert len(result.errors) == 1
         assert str(stray) in result.errors[0]
         assert str(dot) in result.errors[0]
@@ -224,7 +224,7 @@ def test_check_build_truncates_long_stray_lists(tmp_path: Path) -> None:
     for i in range(7):
         _touch(tmp_path / ("d%d" % i) / ".discopop" / "FileMapping.txt")
     snapshot = Snapshot(started=time.time() - 5)
-    result = check_build(snapshot, "hd_settings.json", str(tmp_path), str(dot), str(tmp_path) + "/")
+    result = check_build(snapshot, "hd_settings.json", str(tmp_path), str(dot))
     assert "7 directories" in result.errors[0]
     assert result.errors[0].count(".discopop") >= 5
     assert "..." in result.errors[0]
@@ -233,31 +233,37 @@ def test_check_build_truncates_long_stray_lists(tmp_path: Path) -> None:
 def test_check_build_warns_without_file_mapping(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
     for name in ("dp_settings.json", "hd_settings.json"):
-        result = check_build(Snapshot(time.time()), name, str(tmp_path), str(dot), "/scope/")
+        result = check_build(Snapshot(time.time()), name, str(tmp_path), str(dot))
         assert result.errors == []
         assert len(result.warnings) == 1
-        assert "/scope/" in result.warnings[0]
+        assert str(tmp_path) in result.warnings[0]
         assert "FileMapping.txt" in result.warnings[0]
 
 
-def test_check_build_no_warning_with_a_mapping_line_under_scope(tmp_path: Path) -> None:
+def test_check_build_no_warning_with_a_mapping_line_in_the_project(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
-    _mapping(dot, "1\t/scope/a.c")
+    _mapping(dot, f"1\t{tmp_path}/a.c")
     for name in ("dp_settings.json", "hd_settings.json"):
-        assert check_build(Snapshot(time.time()), name, str(tmp_path), str(dot), "/scope/").messages() == []
+        assert check_build(Snapshot(time.time()), name, str(tmp_path), str(dot)).messages() == []
 
 
-def test_check_build_warns_for_a_mapping_only_outside_scope(tmp_path: Path) -> None:
+def test_check_build_no_warning_with_a_mapping_line_in_an_included_directory(tmp_path: Path) -> None:
+    dot = tmp_path / ".discopop"
+    _mapping(dot, "1\t/shared/a.c")
+    assert check_build(Snapshot(time.time()), "dp_settings.json", str(tmp_path), str(dot), ["/shared"]).messages() == []
+
+
+def test_check_build_warns_for_a_mapping_only_outside_the_project(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
     _mapping(dot, "1\t/other/a.c")
-    result = check_build(Snapshot(time.time()), "dp_settings.json", str(tmp_path), str(dot), "/scope/")
+    result = check_build(Snapshot(time.time()), "dp_settings.json", str(tmp_path), str(dot), ["/shared"])
     assert len(result.warnings) == 1
 
 
 def test_check_build_reports_errors_and_warnings_together(tmp_path: Path) -> None:
     dot = tmp_path / ".discopop"
     _touch(tmp_path / "a" / ".discopop" / "FileMapping.txt")
-    result = check_build(Snapshot(time.time() - 5), "dp_settings.json", str(tmp_path), str(dot), "/scope/")
+    result = check_build(Snapshot(time.time() - 5), "dp_settings.json", str(tmp_path), str(dot))
     assert len(result.errors) == 1 and len(result.warnings) == 1
     assert [m.split(":")[0] for m in result.messages()] == ["ERROR", "WARNING"]
 

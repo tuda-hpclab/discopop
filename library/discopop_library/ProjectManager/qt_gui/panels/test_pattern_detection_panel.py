@@ -16,7 +16,11 @@ import pytest
 from pytestqt.qtbot import QtBot
 from PySide6.QtWidgets import QFormLayout
 
-from discopop_library.ProjectManager.configurations.project_environment import record_instrumented_scope
+from discopop_library.ProjectManager.configurations.project_environment import (
+    ProjectDirectories,
+    record_instrumented_directories,
+)
+from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.qt_gui import main_window, suggestion_browser, widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
@@ -28,7 +32,7 @@ from discopop_library.ProjectManager.services.explorer_state import required_exp
 from discopop_library.ProjectManager.services.project_state import (
     HotspotsChanged,
     PatternsChanged,
-    ProjectEnvironmentChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -417,58 +421,56 @@ def test_cancel_jobs_stops_a_running_detection(qtbot: QtBot, panel: PatternDetec
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
 
 
-def _record_scope(panel: PatternDetectionPanel, scope: str, mode: str = "dp") -> None:
-    record_instrumented_scope(panel.arguments.dot_dp, mode, scope)
+def _record(panel: PatternDetectionPanel, scope: str, mode: str = "dp") -> None:
+    record_instrumented_directories(panel.arguments.dot_dp, mode, ProjectDirectories(excluded=(scope,)))
 
 
-def _configure_scope(panel: PatternDetectionPanel, scope: str) -> None:
-    (Path(panel.arguments.project_config_dir) / "project_environment.json").write_text(
-        json.dumps({"DP_PROJECT_ROOT_DIR": scope})
-    )
+def _exclude(panel: PatternDetectionPanel, directory: str) -> None:
+    save_excluded_directories(panel.arguments.project_dir, [directory])
 
 
-def _scope_warning(panel: PatternDetectionPanel) -> str:
-    """The detail of the header chip if it warns about another scope, else ""."""
+def _directories_warning(panel: PatternDetectionPanel) -> str:
+    """The detail of the header chip if it warns about changed project directories, else ""."""
     chip = panel.header.chip
-    return chip.detail() if chip.text() == "Profiled with another scope" else ""
+    return chip.detail() if chip.text() == "Project directories changed" else ""
 
 
 def test_the_stale_warning_is_hidden_without_a_record(panel: PatternDetectionPanel) -> None:
-    _configure_scope(panel, "src")
+    _exclude(panel, "src")
     panel.refresh()
-    assert _scope_warning(panel) == ""
+    assert _directories_warning(panel) == ""
 
 
 def test_the_stale_warning_is_hidden_for_an_equal_scope(panel: PatternDetectionPanel) -> None:
-    _configure_scope(panel, "./src/")
-    _record_scope(panel, "src")
+    _exclude(panel, "./src/")
+    _record(panel, "src")
     panel.refresh()
-    assert _scope_warning(panel) == ""
+    assert _directories_warning(panel) == ""
 
 
 def test_the_stale_warning_is_hidden_for_the_other_mode(panel: PatternDetectionPanel) -> None:
-    _configure_scope(panel, "lib")
-    _record_scope(panel, "src", "hd")
+    _exclude(panel, "lib")
+    _record(panel, "src", "hd")
     panel.refresh()
-    assert _scope_warning(panel) == ""
+    assert _directories_warning(panel) == ""
 
 
 def test_the_stale_warning_shows_a_different_recorded_scope(panel: PatternDetectionPanel) -> None:
-    _configure_scope(panel, "lib")
-    _record_scope(panel, "src")
+    _exclude(panel, "lib")
+    _record(panel, "src")
     panel.refresh()
     assert panel.header.chip.level == widgets.CHIP_WARN
-    assert "'src'" in _scope_warning(panel) and "'lib'" in _scope_warning(panel)
+    assert "src" in _directories_warning(panel) and "lib" in _directories_warning(panel)
 
 
 def test_the_stale_warning_follows_the_project_environment(panel: PatternDetectionPanel) -> None:
-    _configure_scope(panel, "src")
-    _record_scope(panel, "src")
-    panel.project_state.publish(ProjectEnvironmentChanged())
-    assert _scope_warning(panel) == ""
-    _configure_scope(panel, "lib")
-    panel.project_state.publish(ProjectEnvironmentChanged())
-    assert _scope_warning(panel) != ""
-    _configure_scope(panel, "src")
-    panel.project_state.publish(ProjectEnvironmentChanged())
-    assert _scope_warning(panel) == ""
+    _exclude(panel, "src")
+    _record(panel, "src")
+    panel.project_state.publish(ProjectDirectoriesChanged())
+    assert _directories_warning(panel) == ""
+    _exclude(panel, "lib")
+    panel.project_state.publish(ProjectDirectoriesChanged())
+    assert _directories_warning(panel) != ""
+    _exclude(panel, "src")
+    panel.project_state.publish(ProjectDirectoriesChanged())
+    assert _directories_warning(panel) == ""

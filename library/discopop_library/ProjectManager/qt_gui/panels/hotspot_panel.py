@@ -73,7 +73,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
     HotspotsChanged,
-    ProjectEnvironmentChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
 )
 from discopop_library.ProjectManager.services.vscode import (
@@ -215,7 +215,7 @@ class HotspotPanel(Panel):
 
         project_state.subscribe(ConfigChanged, lambda _event: self.refresh_configurations())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh_configurations())
-        project_state.subscribe(ProjectEnvironmentChanged, lambda _event: self.update_ui())
+        project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.update_ui())
         # open with the quadrant chart shown, mirroring the Report tab opening on a trade-off scatter
         self.add_plot("quadrant")
         self.notebook.setCurrentIndex(0)
@@ -705,7 +705,7 @@ class HotspotPanel(Panel):
         elif self.running:
             self.header.chip.set_status(widgets.CHIP_BUSY, "Measurement running")
         elif stale is not None:
-            self.header.chip.set_status(widgets.CHIP_WARN, "Instrumented with another scope", stale)
+            self.header.chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
         elif not current_config:
             self.header.chip.set_status(
                 widgets.CHIP_IDLE,
