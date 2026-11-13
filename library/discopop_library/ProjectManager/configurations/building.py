@@ -24,7 +24,7 @@ from typing import Callable, Iterator, Optional, Tuple
 
 import subprocess
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
@@ -84,12 +84,58 @@ class BuildOutcome:
         return self.result in (BuildResult.BUILT, BuildResult.REUSED)
 
 
+class BuildLockAborted(Exception):
+    """The caller stopped waiting for the lock of a build."""
+
+
+# what a build does not start with: the data of earlier profiling runs in the project's .discopop
+DATA_LEFT_OUT_OF_BUILDS = ("profiler", "hotspot_detection", "explorer")
+
+
 @contextmanager
-def build_lock(arguments: ProjectManagerArguments, key: BuildKey) -> Iterator[None]:
-    """Serializes everything that uses or changes the build tree of ``key`` (building and running in it)."""
+def build_lock(
+    arguments: ProjectManagerArguments,
+    key: BuildKey,
+    should_abort: Optional[Callable[[], bool]] = None,
+    on_wait: Optional[Callable[[], None]] = None,
+) -> Iterator[None]:
+    """Serializes everything that uses or changes the build tree of ``key`` (building and running in it).
+
+    Waits as long as another run holds the lock, calling ``on_wait`` once, and raises :class:`BuildLockAborted`
+    if ``should_abort`` says so meanwhile.
+    """
     os.makedirs(os.path.dirname(manifest_path_of(arguments.project_dir, key)), exist_ok=True)
-    with FileLock(manifest_path_of(arguments.project_dir, key) + ".build.lock"):
+    lock = FileLock(manifest_path_of(arguments.project_dir, key) + ".build.lock")
+    waiting = False
+    while True:
+        try:
+            lock.acquire(timeout=1)
+            break
+        except Timeout:
+            if not waiting and on_wait is not None:
+                on_wait()
+            waiting = True
+            if should_abort is not None and should_abort():
+                raise BuildLockAborted(key.build_id)
+    try:
         yield
+    finally:
+        lock.release()
+
+
+def refresh_run_scripts(arguments: ProjectManagerArguments, tree: PATH) -> None:
+    """Bring the configuration files of the build tree up to date with the project.
+
+    The runs execute ``execute.sh`` / ``validate.sh`` and read the settings from the copy of ``.discopop/project``
+    in the tree, which was made with the build; editing them (another input, other arguments) must not need a new
+    build, so they are copied again before a run. Whatever changes the compilation is part of the fingerprint.
+    """
+    source = os.path.abspath(arguments.project_config_dir)
+    root = os.path.abspath(arguments.project_root)
+    if os.path.commonpath([source, root]) != root:
+        return
+    destination = os.path.join(tree, os.path.relpath(source, root))
+    shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
 def ensure_build(
@@ -120,6 +166,7 @@ def ensure_build(
 
     if policy == BuildPolicy.REUSE:
         if reusable and status.record is not None:
+            refresh_run_scripts(arguments, status.record.tree)
             message("Reusing the build " + key.build_id + ".\n")
             return BuildOutcome(BuildResult.REUSED, key, status.record.tree, status.record)
         reason = status.reason if not status.usable else "Its suggestions patch files outside of the project."
@@ -129,6 +176,7 @@ def ensure_build(
             message="No usable build " + key.build_id + " and compiling is not allowed (reuse): " + reason,
         )
     if policy == BuildPolicy.AUTO and reusable and status.record is not None:
+        refresh_run_scripts(arguments, status.record.tree)
         message("Reusing the build " + key.build_id + " (compiled " + _age(status.record) + ").\n")
         return BuildOutcome(BuildResult.REUSED, key, status.record.tree, status.record)
     if status.state == BuildState.STALE:
@@ -145,7 +193,9 @@ def ensure_build(
 
     message("Copying project to " + tree + "...\n")
     try:
-        copy_configuration(arguments, config_path, settings_path, destination=tree)
+        copy_configuration(
+            arguments, config_path, settings_path, destination=tree, leave_out_of_dot_discopop=DATA_LEFT_OUT_OF_BUILDS
+        )
     except Exception as error:
         return BuildOutcome(BuildResult.COPY_FAILED, key, message="Error copying project: " + str(error))
 
@@ -223,6 +273,7 @@ def _age(record: BuildRecord) -> str:
 __all__ = [
     "BuildOutcome",
     "BuildResult",
+    "BuildLockAborted",
     "build_lock",
     "delete_build",
     "ensure_build",

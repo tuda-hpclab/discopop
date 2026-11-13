@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.PatchApplicator.PatchApplicationResult import (
     PatchApplicationResult,
@@ -94,11 +94,14 @@ def copy_configuration(
     settings_path: PATH,
     configuration_id: Optional[int] = None,
     destination: Optional[PATH] = None,
+    leave_out_of_dot_discopop: Sequence[str] = (),
 ) -> PATH:
     """Copy the project for one run (or one build) of a configuration and apply the requested suggestions.
 
     ``destination`` is the directory of the copy; by default it is named after the configuration and the settings
     file and lies next to the project root. An existing directory of that name is replaced.
+    ``leave_out_of_dot_discopop`` names directories of the project's ``.discopop`` that are not copied (the data of
+    earlier profiling runs, which a build must not start with).
     """
 
     config_name = os.path.basename(config_path)
@@ -114,7 +117,14 @@ def copy_configuration(
         os.makedirs(os.path.dirname(project_copy_path), exist_ok=True)
     if os.path.exists(project_copy_path):
         shutil.rmtree(project_copy_path)
-    shutil.copytree(arguments.project_root, project_copy_path)
+    ignore = None
+    if leave_out_of_dot_discopop:
+        left_out = os.path.join(os.path.abspath(arguments.project_root), ".discopop")
+
+        def ignore(directory: str, names: List[str]) -> List[str]:  # type: ignore[misc]
+            return list(leave_out_of_dot_discopop) if os.path.abspath(directory) == left_out else []
+
+    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore)
     # correct paths in Filemapping.txt
     fmap_path = os.path.join(project_copy_path, ".discopop", "FileMapping.txt")
     if os.path.exists(fmap_path):

@@ -20,8 +20,13 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult, clear_application_result
-from discopop_library.ProjectManager.configurations.building import BuildResult, build_lock, ensure_build
-from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy
+from discopop_library.ProjectManager.configurations.building import (
+    BuildLockAborted,
+    BuildResult,
+    build_lock,
+    ensure_build,
+)
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, invalidate_build
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
@@ -158,7 +163,9 @@ def run_execution(
 
     compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
 
-    def execute_and_validate(project_copy_path: str, settings_path: str, mode: str) -> bool:
+    def execute_and_validate(
+        project_copy_path: str, settings_path: str, mode: str, key: Optional[BuildKey] = None
+    ) -> bool:
         """Run execute.sh (and validate.sh) in the compiled tree; False if the user stopped the run before it."""
         if ctx.cancel_event.is_set():
             ctx.output("Execution stopped by user.\n")
@@ -220,6 +227,9 @@ def run_execution(
             )
             ctx.clear_process()
 
+            if validation.compile_required and key is not None:
+                # the validation build overwrote the build of the tree: the next run has to compile again
+                invalidate_build(args_copy.project_dir, key)
             if validation.compile_required:
                 if validation.compile_successful:
                     assert validation.compile_result is not None
@@ -327,42 +337,51 @@ def run_execution(
             application_failures.append((mode, application_result))
 
         ctx.status("⏳ Building...", StatusKind.BUSY)
-        with build_lock(args_copy, key):
-            build = ensure_build(
+        try:
+            with build_lock(
                 args_copy,
                 key,
-                config_path,
-                settings_path,
-                compile_sh,
-                1 if mode == "seq" else thread_count,
-                BuildPolicy(request.build_policy),
-                args_copy.timeout_compilation,
-                process_started_callback=ctx.register_process,
-                message=ctx.output,
-                on_application_failure=report_application_failure,
-            )
-            ctx.clear_process()
+                should_abort=ctx.cancel_event.is_set,
+                on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
+            ):
+                build = ensure_build(
+                    args_copy,
+                    key,
+                    config_path,
+                    settings_path,
+                    compile_sh,
+                    1 if mode == "seq" else thread_count,
+                    BuildPolicy(request.build_policy),
+                    args_copy.timeout_compilation,
+                    process_started_callback=ctx.register_process,
+                    message=ctx.output,
+                    on_application_failure=report_application_failure,
+                )
+                ctx.clear_process()
 
-            if build.result == BuildResult.COMPILE_FAILED:
-                ret_code = build.compile_result[0] if build.compile_result else "None"
-                ctx.output(f"Compilation failed (return code: {ret_code})\n")
-                continue
-            if build.result in (BuildResult.UNAVAILABLE, BuildResult.COPY_FAILED):
-                ctx.output(build.message + "\n")
-                continue
-            if not build.usable or build.tree is None:
-                continue
-            if build.result == BuildResult.BUILT and build.compile_result is not None:
-                _, elapsed, stdout, stderr = build.compile_result
-                ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-                if stdout:
-                    ctx.output(f"stdout: {stdout}\n")
-                if stderr:
-                    ctx.output(f"stderr: {stderr}\n")
-            if request.build_only:
-                continue
-            if not execute_and_validate(build.tree, settings_path, mode):
-                break
+                if build.result == BuildResult.COMPILE_FAILED:
+                    ret_code = build.compile_result[0] if build.compile_result else "None"
+                    ctx.output(f"Compilation failed (return code: {ret_code})\n")
+                    continue
+                if build.result in (BuildResult.UNAVAILABLE, BuildResult.COPY_FAILED):
+                    ctx.output(build.message + "\n")
+                    continue
+                if not build.usable or build.tree is None:
+                    continue
+                if build.result == BuildResult.BUILT and build.compile_result is not None:
+                    _, elapsed, stdout, stderr = build.compile_result
+                    ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
+                    if stdout:
+                        ctx.output(f"stdout: {stdout}\n")
+                    if stderr:
+                        ctx.output(f"stderr: {stderr}\n")
+                if request.build_only:
+                    continue
+                if not execute_and_validate(build.tree, settings_path, mode, key):
+                    break
+        except BuildLockAborted:
+            ctx.output("Execution stopped by user.\n")
+            break
 
     return application_failures
 

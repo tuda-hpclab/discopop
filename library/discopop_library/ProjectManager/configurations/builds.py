@@ -26,13 +26,14 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
@@ -142,29 +143,111 @@ def _hash_file(path: PATH) -> str:
     return digest.hexdigest()
 
 
-def source_fingerprint(project_root: PATH) -> str:
-    """A hash over the path, size and modification time of every file below ``project_root``.
+def _git_files(root: PATH) -> Optional[List[str]]:
+    """The files of the project that git knows or does not ignore (relative to ``root``), None if ``root`` is no
+    git work tree or git fails. Build outputs, which a ``.gitignore`` normally lists, thereby do not count."""
+    if not os.path.exists(os.path.join(root, ".git")):
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return [name for name in completed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name]
 
-    Every file counts, not only the C/C++ sources: build files, headers and data can change what a
-    compilation produces, and a build that is reused although it should not be would silently misreport a
-    run. The price is a rebuild after a change that did not matter. Content is not hashed, so that the
-    fingerprint of a large project takes seconds, not minutes.
-    """
-    digest = hashlib.sha256()
-    root = os.path.abspath(project_root)
-    entries: List[str] = []
-    for directory, subdirectories, files in os.walk(root):
+
+def _walk_files(root: PATH) -> List[str]:
+    files: List[str] = []
+    for directory, subdirectories, names in os.walk(root):
         if directory == root:
             subdirectories[:] = [d for d in subdirectories if d not in _FINGERPRINT_PRUNED_DIRS]
-        for name in files:
-            path = os.path.join(directory, name)
-            try:
-                stat = os.lstat(path)
-            except OSError:
-                continue
-            entries.append(os.path.relpath(path, root) + "\0" + str(stat.st_size) + "\0" + str(stat.st_mtime_ns))
+        files.extend(os.path.relpath(os.path.join(directory, name), root) for name in names)
+    return files
+
+
+def source_fingerprint(project_root: PATH) -> str:
+    """A hash over the path, size and modification time of the files below ``project_root``.
+
+    In a git work tree these are the files git knows or does not ignore, so that build outputs (which a
+    ``.gitignore`` lists) do not count; otherwise every file outside ``.discopop`` and ``.git``. Every file counts,
+    not only the C/C++ sources: build files, headers and data can change what a compilation produces, and a build
+    that is reused although it should not be would silently misreport a run. The price is a rebuild after a change
+    that did not matter. A file that disappeared is part of the hash as such. Content is not hashed, so that the
+    fingerprint of a large project takes seconds, not minutes.
+    """
+    root = os.path.abspath(project_root)
+    names = _git_files(root)
+    if names is None:
+        names = _walk_files(root)
+    else:
+        names = [name for name in names if name.split("/", 1)[0] not in _FINGERPRINT_PRUNED_DIRS]
+    return _hash_entries(root, names)
+
+
+def _hash_entries(root: PATH, names: Sequence[str]) -> str:
+    digest = hashlib.sha256()
+    entries: List[str] = []
+    for name in names:
+        try:
+            stat = os.lstat(os.path.join(root, name))
+            entries.append(name + "\0" + str(stat.st_size) + "\0" + str(stat.st_mtime_ns))
+        except OSError:
+            entries.append(name + "\0missing")
     for entry in sorted(entries):
         digest.update(entry.encode("utf-8", errors="surrogateescape") + b"\n")
+    return digest.hexdigest()
+
+
+# the files of a configuration directory that only the runs read; everything else (helper files of compile.sh, ...)
+# can change the build
+_RUN_ONLY_FILES = ("execute.sh", "validate.sh", "execution_time.json")
+
+
+def configuration_fingerprint(arguments: ProjectManagerArguments, key: BuildKey) -> str:
+    """A hash over the files of the configuration directory that can change the build."""
+    directory = os.path.join(arguments.project_config_dir, key.configuration)
+    names = [name for name in _walk_files(directory) if os.path.basename(name) not in _RUN_ONLY_FILES]
+    return _hash_entries(directory, names)
+
+
+def _toolchain_fingerprint(settings_path: PATH) -> str:
+    """A hash over what compiles the code: the installed profiler (its libraries and scripts) and the compilers.
+
+    The version of the profiler package does not change when its pass or runtime is rebuilt locally, hence the
+    files themselves count (path, size, modification time), and so do the compilers the settings and the
+    environment name, which may be a different binary tomorrow.
+    """
+    digest = hashlib.sha256()
+    try:
+        from importlib.metadata import distribution
+
+        files = distribution("discopop-profiler").files or []
+        for entry in sorted(str(f) for f in files if str(f).endswith((".so", ".a", ".sh"))):
+            path = str(distribution("discopop-profiler").locate_file(entry))
+            digest.update(
+                entry.encode() + b"\0" + _hash_entries(os.path.dirname(path), [os.path.basename(path)]).encode()
+            )
+    except Exception:
+        digest.update(b"profiler unknown")
+    try:
+        with open(settings_path, "r") as f:
+            settings = json.load(f)
+    except (OSError, ValueError):
+        settings = {}
+    for variable in ("CC", "CXX"):
+        compiler = settings.get(variable) or os.environ.get(variable) or ""
+        resolved = shutil.which(compiler) if compiler else None
+        digest.update(variable.encode() + b"=" + compiler.encode())
+        if resolved:
+            digest.update(_hash_entries(os.path.dirname(resolved), [os.path.basename(resolved)]).encode())
+    for variable in ("CC", "CXX", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS"):
+        digest.update(variable.encode() + b"=" + os.environ.get(variable, "").encode() + b"\n")
     return digest.hexdigest()
 
 
@@ -180,15 +263,6 @@ def _patch_fingerprint(dot_dp: PATH) -> str:
     return digest.hexdigest()
 
 
-def _profiler_version() -> str:
-    try:
-        from importlib.metadata import version
-
-        return version("discopop-profiler")
-    except Exception:
-        return "unknown"
-
-
 def compute_fingerprint_parts(
     arguments: ProjectManagerArguments, key: BuildKey, compile_script: PATH, settings_path: PATH
 ) -> Dict[str, str]:
@@ -199,7 +273,9 @@ def compute_fingerprint_parts(
     - what is project code (included and excluded directories), as it decides what is instrumented, and the files
       of the included directories
     - for a build with suggestions: the generated patches
-    - the version of the installed profiler
+    - the files of the configuration directory that can change the build (not execute.sh and validate.sh, which
+      the runs take from the project)
+    - the installed profiler and the compilers
 
     The thread count is no part of it: it only reaches the compilation as ``OMP_NUM_THREADS``, which a
     build script has no business to depend on.
@@ -214,7 +290,8 @@ def compute_fingerprint_parts(
         "project_directories": json.dumps(
             {"included": list(directories.included), "excluded": list(directories.excluded)}, sort_keys=True
         ),
-        "profiler": _profiler_version(),
+        "configuration": configuration_fingerprint(arguments, key),
+        "toolchain": _toolchain_fingerprint(settings_path),
     }
     if directories.included:
         # project code outside of the root is compiled as well
@@ -311,11 +388,39 @@ def make_record(
     )
 
 
+def invalidate_build(project_dir: PATH, key: BuildKey) -> None:
+    """Forget the manifest of the build ``key``, so that the next run compiles. For a tree that was changed after
+    its compilation (e.g. by the separate build of a validation), which the fingerprint cannot see."""
+    try:
+        os.remove(manifest_path_of(project_dir, key))
+    except OSError:
+        pass
+
+
+class BuildInUseError(Exception):
+    """The build is used by a run (or is being compiled) and cannot be deleted."""
+
+
 def delete_build(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
     """Delete the manifest and the tree of the build ``key``; True if there was a build."""
     record = read_build(arguments.project_dir, key)
     manifest = manifest_path_of(arguments.project_dir, key)
     existed = record is not None or os.path.exists(manifest)
+    lock = FileLock(manifest + ".build.lock")
+    try:
+        lock.acquire(timeout=0)
+    except Timeout:
+        raise BuildInUseError(key.build_id)
+    try:
+        _delete_build_locked(arguments, key, record, manifest)
+    finally:
+        lock.release()
+    return existed
+
+
+def _delete_build_locked(
+    arguments: ProjectManagerArguments, key: BuildKey, record: Optional[BuildRecord], manifest: PATH
+) -> None:
     if record is not None:
         tree = os.path.abspath(record.tree)
         # only what lives in the directory of the build trees is ever removed
@@ -325,12 +430,11 @@ def delete_build(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
             logger.info("removed build tree: " + tree)
         else:
             logger.warning("not removing " + tree + ": it is no build tree of this project")
-    for path in (manifest, manifest + ".lock"):
+    for path in (manifest, manifest + ".lock", manifest + ".build.lock"):
         try:
             os.remove(path)
         except OSError:
             pass
-    return existed
 
 
 def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequence[str]] = None) -> List[str]:
@@ -340,6 +444,9 @@ def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequen
         if build_ids is not None and record.build_id not in build_ids:
             continue
         key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
-        if delete_build(arguments, key):
-            deleted.append(record.build_id)
+        try:
+            if delete_build(arguments, key):
+                deleted.append(record.build_id)
+        except BuildInUseError:
+            logger.warning("not deleting the build " + record.build_id + ": a run is using it")
     return deleted

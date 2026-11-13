@@ -19,7 +19,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
 from discopop_library.ProjectManager.configurations.building import BuildResult, build_lock, ensure_build
-from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, invalidate_build
 from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
     resolve_requested_suggestions,
@@ -346,7 +346,15 @@ def __run_mode(
             outcome.compile_successful = build.usable
             if build.tree is not None and build.usable and not arguments.build_only:
                 _execute_and_validate(
-                    arguments, build.tree, config, mode, shared_settings, thread_count, execution_time_regex, outcome
+                    arguments,
+                    build.tree,
+                    config,
+                    mode,
+                    shared_settings,
+                    thread_count,
+                    execution_time_regex,
+                    outcome,
+                    key,
                 )
         return outcome
 
@@ -366,6 +374,7 @@ def _execute_and_validate(
     thread_count: int,
     execution_time_regex: Optional[str],
     outcome: _ModeOutcome,
+    key: Optional[BuildKey] = None,
 ) -> None:
     """Run execute.sh of ``config`` in the compiled ``project_path`` and, for seq and par, validate its output."""
     ret = execute_configuration(
@@ -394,6 +403,9 @@ def _execute_and_validate(
             timeout_compilation=arguments.timeout_compilation,
             timeout_validation=arguments.timeout_validation,
         )
+        if validation.compile_required and key is not None:
+            # the validation build overwrote the build of the tree: the next run has to compile again
+            invalidate_build(arguments.project_dir, key)
         outcome.validate_compile_successful = not validation.compile_required or validation.compile_successful
         outcome.validate_successful = validation.verdict(outcome.execute_successful)
 

@@ -295,3 +295,98 @@ def test_listing_and_deleting_builds_on_the_command_line(
     delete_builds_from_cli(arguments)
     assert "Deleted 1 build(s): cfg_seq" in capsys.readouterr().out
     assert list_builds(arguments.project_dir) == []
+
+
+# ── what the review of the design found ──────────────────────────────────────
+
+
+def test_a_reused_build_runs_the_current_execute_script(project: Dict[str, Path]) -> None:
+    first = _build(project)
+    assert first.tree is not None
+    execute = project["configs"] / "cfg" / "execute.sh"
+    execute.write_text(execute.read_text() + 'echo changed >> "' + str(project["tmp"]) + '/marker.txt"\n')
+    second = _build(project)
+    # editing a run script neither makes the build stale ...
+    assert second.result == BuildResult.REUSED
+    # ... nor is the old copy of it run
+    assert "changed" in (Path(second.tree) / ".discopop" / "project" / "configs" / "cfg" / "execute.sh").read_text()  # type: ignore[arg-type]
+
+
+def test_a_helper_file_of_the_configuration_makes_the_build_stale(project: Dict[str, Path]) -> None:
+    _build(project)
+    (project["configs"] / "cfg" / "flags.mk").write_text("-O2\n")
+    assert _build(project).result == BuildResult.BUILT
+
+
+def test_a_build_starts_without_the_profiling_data_of_the_project(project: Dict[str, Path]) -> None:
+    (project["root"] / ".discopop" / "profiler").mkdir()
+    (project["root"] / ".discopop" / "profiler" / "dynamic_dependencies.txt").write_text("old")
+    outcome = _build(project)
+    assert outcome.tree is not None
+    assert not (Path(outcome.tree) / ".discopop" / "profiler").exists()
+
+
+def test_ignored_files_of_a_git_work_tree_do_not_make_a_build_stale(project: Dict[str, Path]) -> None:
+    import shutil
+    import subprocess
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    root = project["root"]
+    (root / ".gitignore").write_text("*.o\n")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    _build(project)
+    (root / "main.o").write_text("object")
+    assert _build(project).result == BuildResult.REUSED
+    (root / "main.c").unlink()
+    # a deleted file is a change (the compilation of the rest fails here, which is not the point)
+    assert _build(project).result != BuildResult.REUSED
+
+
+def test_a_build_that_is_used_cannot_be_deleted(project: Dict[str, Path]) -> None:
+    _build(project)
+    arguments = _arguments(project["root"])
+    with build_lock(arguments, KEY):
+        assert delete_builds(arguments) == []
+    assert delete_builds(arguments) == ["cfg_seq"]
+
+
+def test_waiting_for_a_build_can_be_stopped(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.building import BuildLockAborted
+
+    arguments = _arguments(project["root"])
+    waited = []
+    with build_lock(arguments, KEY):
+        with pytest.raises(BuildLockAborted):
+            with build_lock(arguments, KEY, should_abort=lambda: True, on_wait=lambda: waited.append(1)):
+                pass  # pragma: no cover
+    assert waited == [1]
+
+
+def test_a_validation_build_in_the_tree_invalidates_the_build(project: Dict[str, Path]) -> None:
+    (project["configs"] / "compile_validate.sh").write_text("#!/bin/bash\ncp main.c validate.out\n")
+    (project["configs"] / "cfg" / "validate.sh").write_text("#!/bin/bash\ntest -f validate.out\n")
+    arguments = _arguments(project["root"])
+
+    def run() -> None:
+        request = execution_run.ExecutionRequest(
+            configuration="cfg",
+            modes=("seq",),
+            inplace=False,
+            skip_cleanup=False,
+            thread_count=1,
+            label_prefix="",
+            timeout_execution=0,
+            timeout_compilation=0,
+            timeout_validation=0,
+            repetitions=1,
+            log_level="WARNING",
+            suggestion_ids=(),
+        )
+        execution_run.run_execution(arguments, request, WorkContext(queue.Queue(), threading.Event()))
+
+    run()
+    assert _count(project, "compiles.txt") == 1
+    # the validation build changed the tree, so the next run compiles again
+    run()
+    assert _count(project, "compiles.txt") == 2
