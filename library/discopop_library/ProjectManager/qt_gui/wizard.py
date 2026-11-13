@@ -275,7 +275,7 @@ class ConfigurationWizard(QWizard):
         self.excluded_directories = ExcludedDirectoriesTree(self.arguments.project_root, self.arguments.project_dir)
         self.included_directories = IncludedDirectoriesList(self.arguments.project_root, self.arguments.project_dir)
         excluded = widgets.FormSection("Excluded directories")
-        excluded.add_widget(self.excluded_directories)
+        excluded.add_widget(self.excluded_directories.with_buttons())
         included = widgets.FormSection("Included directories outside the project")
         included.add_widget(self.included_directories)
         return self._step(2, _label(DIRECTORIES_TEXT, wrap=True), excluded, included)
