@@ -13,7 +13,7 @@
 and deletes builds and runs on request: nothing is deleted automatically.
 """
 
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -28,7 +28,9 @@ from PySide6.QtWidgets import (
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.builds import BuildPolicy, list_builds
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.services import build_overview
+from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished, WorkRunner
 
 POLICY_TEXTS = (
     (BuildPolicy.AUTO, "Compile if there is no current build"),
@@ -103,6 +105,8 @@ class BuildsAndRuns(widgets.FormSection):
         super().__init__("Builds and runs", parent=parent)
         self.arguments = arguments
         self._changed = changed
+        self._job: Optional[WorkRunner] = None
+        self._blocked = False
         self.build_table = _table(_BUILD_COLUMNS)
         self.run_table = _table(_RUN_COLUMNS)
         self.note = QLabel("")
@@ -165,10 +169,7 @@ class BuildsAndRuns(widgets.FormSection):
             ]
             for column, value in enumerate(values):
                 self.run_table.setItem(row, column, QTableWidgetItem(value))
-        self.delete_builds_button.setEnabled(bool(builds))
-        self.check_button.setEnabled(bool(builds))
-        self.delete_runs_button.setEnabled(bool(runs))
-        self.activate_button.setEnabled(bool(runs))
+        self._update_buttons()
 
     @staticmethod
     def _selected(table: QTableWidget) -> List[str]:
@@ -188,20 +189,61 @@ class BuildsAndRuns(widgets.FormSection):
 
     # ── actions ─────────────────────────────────────────────────────────────
 
+    def is_busy(self) -> bool:
+        return self._job is not None
+
+    def set_blocked(self, blocked: bool) -> None:
+        """Another job (a profiling run, Execute) uses the builds and runs: nothing is changed meanwhile."""
+        self._blocked = blocked
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        free = not self._blocked and self._job is None
+        has_builds = self.build_table.rowCount() > 0
+        has_runs = self.run_table.rowCount() > 0
+        self.check_button.setEnabled(free and has_builds)
+        self.delete_builds_button.setEnabled(free and has_builds)
+        self.activate_button.setEnabled(free and has_runs)
+        self.delete_runs_button.setEnabled(free and has_runs)
+        self.refresh_button.setEnabled(free)
+        self.sizes_button.setEnabled(free)
+
+    def _in_background(
+        self, text: str, work: Callable[[], Any], finished: Callable[[Any, Optional[str]], None]
+    ) -> None:
+        """Run ``work`` on a worker thread (it reads or rewrites whole projects), then ``finished(result, error)``."""
+        self.note.setText(text)
+
+        def handle(event: WorkEvent) -> None:
+            if isinstance(event, WorkFinished):
+                self._job = None
+                finished(event.result, None if event.error is None else str(event.error))
+                self._update_buttons()
+
+        self._job = start_work(self, lambda _ctx: work(), handle)
+        self._update_buttons()
+
     def check_selected_builds(self) -> None:
         ids = self.selected_builds()
         if not ids:
             self.note.setText("Select the builds to check.")
             return
-        for record in list_builds(self.arguments.project_dir):
-            if record.build_id not in ids:
-                continue
-            state = build_overview.build_state_of(self.arguments, record)
+        records = [record for record in list_builds(self.arguments.project_dir) if record.build_id in ids]
+
+        def work() -> Dict[str, str]:
+            return {record.build_id: build_overview.build_state_of(self.arguments, record) for record in records}
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            if error is not None:
+                self.note.setText("Checking failed: " + error)
+                return
             for row in range(self.build_table.rowCount()):
                 item = self.build_table.item(row, 0)
-                if item is not None and item.text() == record.build_id:
-                    self.build_table.setItem(row, len(_BUILD_COLUMNS) - 1, QTableWidgetItem(state))
-        self.note.setText("")
+                if item is not None and item.text() in result:
+                    self.build_table.setItem(row, len(_BUILD_COLUMNS) - 1, QTableWidgetItem(result[item.text()]))
+            self.note.setText("")
+
+        self._in_background("Checking the builds (this reads the whole project)...", work, finished)
 
     def delete_selected_builds(self) -> None:
         ids = self.selected_builds()
@@ -215,16 +257,22 @@ class BuildsAndRuns(widgets.FormSection):
             "Their runs and your project are not touched.",
         ):
             return
-        deleted = build_overview.delete_selected_builds(self.arguments, ids)
-        skipped = [build for build in ids if build not in deleted]
-        self.note.setText(
-            "Deleted "
-            + (", ".join(deleted) or "nothing")
-            + "."
-            + (" Not deleted (in use or unknown): " + ", ".join(skipped) + "." if skipped else "")
-        )
-        self.refresh()
-        self._notify()
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            if error is not None:
+                self.note.setText("Deleting failed: " + error)
+            else:
+                skipped = [build for build in ids if build not in result]
+                self.note.setText(
+                    "Deleted "
+                    + (", ".join(result) or "nothing")
+                    + "."
+                    + (" Not deleted (in use or unknown): " + ", ".join(skipped) + "." if skipped else "")
+                )
+            self.refresh()
+            self._notify()
+
+        self._in_background("Deleting...", lambda: build_overview.delete_selected_builds(self.arguments, ids), finished)
 
     def delete_selected_runs(self) -> None:
         ids = self.selected_runs()
@@ -235,13 +283,19 @@ class BuildsAndRuns(widgets.FormSection):
             self,
             "Delete runs",
             "Delete the results of the runs " + ", ".join(ids) + "?\n\nData that was put into the project (used for "
-            "pattern detection) stays.",
+            "pattern detection) stays. A run that may still be running is not deleted.",
         ):
             return
-        deleted = build_overview.delete_selected_runs(self.arguments, ids)
-        self.note.setText("Deleted " + (", ".join(deleted) or "nothing") + ".")
-        self.refresh()
-        self._notify()
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            if error is not None:
+                self.note.setText("Deleting failed: " + error)
+            else:
+                self.note.setText("Deleted " + (", ".join(result) or "nothing") + ".")
+            self.refresh()
+            self._notify()
+
+        self._in_background("Deleting...", lambda: build_overview.delete_selected_runs(self.arguments, ids), finished)
 
     def activate_selected_run(self) -> None:
         ids = self.selected_runs()
@@ -255,10 +309,17 @@ class BuildsAndRuns(widgets.FormSection):
             "detection results derived from the data that is there now are outdated afterwards.",
         ):
             return
-        problem = build_overview.activate(self.arguments, ids[0])
-        if problem:
-            dialogs.show_error(self, "Cannot use the run", problem)
-            return
-        self.note.setText("The run " + ids[0] + " is the data of the project now.")
-        self.refresh()
-        self._notify()
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            problem = error if error is not None else result
+            if problem:
+                dialogs.show_error(self, "Cannot use the run", str(problem))
+                self.note.setText("")
+                return
+            self.note.setText("The run " + ids[0] + " is the data of the project now.")
+            self.refresh()
+            self._notify()
+
+        self._in_background(
+            "Putting the run into the project...", lambda: build_overview.activate(self.arguments, ids[0]), finished
+        )

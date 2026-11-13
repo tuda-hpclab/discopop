@@ -535,6 +535,9 @@ def _profile_in_build(
         ctx.output(f"stderr: {stderr}\n")
     if run is None:
         return True
+    if ctx.cancel_event.is_set():
+        ctx.output("Stopped: the run is not put into the project (see Builds and runs).\n")
+        return False
     try:
         replaced = activate_run(arguments, run)
     except ActivationError as error:

@@ -269,6 +269,8 @@ class ProfilingPanel(Panel):
     def set_blocked(self, blocked: bool) -> None:
         """Another stage runs the configuration (Execute): no profiling run meanwhile."""
         self._blocked = blocked
+        if not self.is_running():
+            self.builds_and_runs.set_blocked(blocked)
         self.refresh()
 
     # ── running ──────────────────────────────────────────────────────────────
@@ -294,6 +296,7 @@ class ProfilingPanel(Panel):
         self._hint_shown = False  # the chip shows the outcome of this run
         self.run_button.setEnabled(False)  # remembered: "can a run be started" once this one ended
         self.run_button.set_running(True)
+        self.builds_and_runs.set_blocked(True)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Profiling")
         self.status.set("⏳ Preparing pattern detection...", widgets.STATUS_BUSY)
         self.console.clear()
@@ -334,6 +337,7 @@ class ProfilingPanel(Panel):
     def _end_run(self, stopped: bool) -> None:
         self._job = None
         self.run_button.set_running(False)
+        self.builds_and_runs.set_blocked(self._blocked)
         if stopped:
             self.header.chip.set_status(widgets.CHIP_WARN, "Stopped")
         elif self._run_failed:

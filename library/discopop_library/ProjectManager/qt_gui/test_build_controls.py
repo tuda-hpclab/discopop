@@ -91,15 +91,16 @@ def test_the_builds_and_the_runs_are_listed(widget: BuildsAndRuns) -> None:
     assert widget.build_table.item(0, 5).text() == "2.0 KiB"  # type: ignore[union-attr]
 
 
-def test_a_build_can_be_checked(widget: BuildsAndRuns) -> None:
+def test_a_build_can_be_checked(qtbot: QtBot, widget: BuildsAndRuns) -> None:
     widget.build_table.selectRow(0)
     widget.check_button.click()
+    qtbot.waitUntil(lambda: not widget.is_busy(), timeout=20000)
     # no project files, no configuration: whatever the state is, it is told
     assert widget.build_table.item(0, 6).text() != ""  # type: ignore[union-attr]
 
 
 def test_deleting_builds_asks_and_deletes_only_the_selected(
-    widget: BuildsAndRuns, dialog_answers: DialogRecorder
+    qtbot: QtBot, widget: BuildsAndRuns, dialog_answers: DialogRecorder
 ) -> None:
     changes: List[str] = []
     widget._changed = lambda: changes.append("changed")
@@ -109,16 +110,18 @@ def test_deleting_builds_asks_and_deletes_only_the_selected(
     assert len(list_builds(widget.arguments.project_dir)) == 2
     dialog_answers.answer("ask_yes_no", True)
     widget.delete_builds_button.click()
+    qtbot.waitUntil(lambda: not widget.is_busy(), timeout=20000)
     assert [b.build_id for b in list_builds(widget.arguments.project_dir)] == ["tiny_dp"]
     assert widget.build_table.rowCount() == 1 and changes == ["changed"]
     # the runs stay
     assert len(list_all_runs(widget.arguments)) == 2
 
 
-def test_deleting_runs(widget: BuildsAndRuns, dialog_answers: DialogRecorder) -> None:
+def test_deleting_runs(qtbot: QtBot, widget: BuildsAndRuns, dialog_answers: DialogRecorder) -> None:
     widget.run_table.selectRow(1)
     dialog_answers.answer("ask_yes_no", True)
     widget.delete_runs_button.click()
+    qtbot.waitUntil(lambda: not widget.is_busy(), timeout=20000)
     assert [r.run_id for r in list_all_runs(widget.arguments)] == ["20260101-000000"]
     assert widget.run_table.rowCount() == 1
 
@@ -131,10 +134,27 @@ def test_nothing_selected_deletes_nothing(widget: BuildsAndRuns) -> None:
 
 
 def test_a_run_that_failed_cannot_be_used_for_pattern_detection(
-    widget: BuildsAndRuns, dialog_answers: DialogRecorder
+    qtbot: QtBot, widget: BuildsAndRuns, dialog_answers: DialogRecorder
 ) -> None:
     widget.run_table.selectRow(1)
     dialog_answers.answer("ask_yes_no", True)
     widget.activate_button.click()
+    qtbot.waitUntil(lambda: not widget.is_busy(), timeout=20000)
     assert "Cannot use the run" in dialog_answers.titles("show_error")
     assert not Path(widget.arguments.dot_dp, "active_run.json").exists()
+
+
+def test_nothing_is_changed_while_a_job_uses_the_builds(widget: BuildsAndRuns) -> None:
+    widget.set_blocked(True)
+    assert not any(
+        button.isEnabled()
+        for button in (
+            widget.check_button,
+            widget.delete_builds_button,
+            widget.activate_button,
+            widget.delete_runs_button,
+            widget.refresh_button,
+        )
+    )
+    widget.set_blocked(False)
+    assert widget.delete_builds_button.isEnabled() and widget.delete_runs_button.isEnabled()

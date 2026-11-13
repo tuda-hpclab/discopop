@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Iterator
 
@@ -206,14 +207,20 @@ def test_replacing_paths_works_across_the_boundaries_of_chunks(
 ) -> None:
     monkeypatch.setattr(runs, "_CHUNK_SIZE", chunk)
     old, new = "/b/tree_xyz", "/p"
-    content = ("a" * 5 + old + "b" * 11 + old + old + "c" + old[:-1] + "." + old).encode()
+    # a path counts where it ends: the tree is no part of the name of another build or of its runs
+    content = (
+        "aaaaa " + old + "/f.c " + old + "\n" + old + '"' + old + "_s1a2b " + old + ".runs/x " + old + "-x " + old
+    ).encode()
+    expected = (
+        "aaaaa " + new + "/f.c " + new + "\n" + new + '"' + old + "_s1a2b " + old + ".runs/x " + old + "-x " + new
+    ).encode()
     source, destination = tmp_path / "in", tmp_path / "out"
     source.write_bytes(content)
     assert replace_in_file(str(source), str(destination), old, new) is True
-    assert destination.read_bytes() == content.replace(old.encode(), new.encode())
-    source.write_bytes(b"nothing to replace /b/tree")
+    assert destination.read_bytes() == expected
+    source.write_bytes(b"nothing to replace /b/tree " + old.encode() + b"_s1")
     assert replace_in_file(str(source), str(destination), old, new) is False
-    assert destination.read_bytes() == b"nothing to replace /b/tree"
+    assert destination.read_bytes() == source.read_bytes()
 
 
 @pytest.mark.parametrize(
@@ -295,3 +302,96 @@ def test_a_preparation_compiles_once_and_puts_each_run_into_the_project(project:
 def test_a_preparation_without_a_usable_build_fails(project: Dict[str, Path]) -> None:
     assert _prepare(project, build_policy="reuse") is False
     assert not (project["root"] / ".discopop" / "profiler").exists()
+
+
+# ── what the second review found ─────────────────────────────────────────────
+
+
+def test_result_files_a_compilation_left_in_the_build_do_not_reach_the_runs(project: Dict[str, Path]) -> None:
+    _run(project)
+    arguments = _arguments(project["root"])
+    (build,) = list_builds(arguments.project_dir)
+    # configure tests of a build system run instrumented programs, which write results into the build
+    leftover = Path(build.tree) / ".discopop" / "profiler" / "dynamic_dependencies.txt"
+    leftover.write_text("from the compilation\n")
+    _run(project)
+    first, second = list_all_runs(arguments)
+    assert (Path(second.dot_discopop) / "profiler" / "dynamic_dependencies.txt").read_text() == "run with A\n"
+    # neither a run nor the build's file changed another
+    assert (Path(first.dot_discopop) / "profiler" / "dynamic_dependencies.txt").read_text() == "run with A\n"
+    assert leftover.read_text() == "from the compilation\n"
+
+
+def test_run_ids_are_unique_across_builds(project: Dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "strftime", lambda _format: "20260101-000000")
+    (project["configs"] / "cfg" / "execute.sh").write_text("#!/bin/bash\nmkdir -p $DOT_DISCOPOP/profiler\ntrue\n")
+    _run(project, mode="dp")
+    _run(project, mode="hd")
+    ids = [run.run_id for run in list_all_runs(_arguments(project["root"]))]
+    assert len(ids) == 2 and len(set(ids)) == 2
+
+
+def test_a_run_that_is_going_on_is_not_deleted(project: Dict[str, Path]) -> None:
+    _run(project)
+    arguments = _arguments(project["root"])
+    (run,) = list_all_runs(arguments)
+    runs.write_run(runs.RunRecord(**{**run.__dict__, "return_code": None, "finished_at": None}))
+    assert delete_runs(arguments) == []
+    runs.write_run(runs.RunRecord(**{**run.__dict__, "return_code": None, "started_at": time.time() - 3 * 86400}))
+    assert delete_runs(arguments) == [run.run_id]
+
+
+def test_the_latest_run_to_activate_has_no_suggestions(project: Dict[str, Path]) -> None:
+    _run(project)
+    arguments = _arguments(project["root"])
+    (run,) = list_all_runs(arguments)
+    other = runs.RunRecord(**{**run.__dict__, "run_id": "9999", "started_at": time.time() + 10, "suggestions": ["1"]})
+    other_dot = Path(run.dot_discopop).parent / "9999"
+    other_dot.mkdir()
+    runs.write_run(runs.RunRecord(**{**other.__dict__, "dot_discopop": str(other_dot)}))
+    assert latest_successful_run(arguments) == run
+
+
+def test_activating_a_run_whose_file_ids_contradict_the_data_that_stays_is_refused(project: Dict[str, Path]) -> None:
+    _run(project)
+    arguments = _arguments(project["root"])
+    (run,) = list_all_runs(arguments)
+    dot = project["root"] / ".discopop"
+    # data of the other kind in the project, with other file ids
+    (dot / "hotspot_detection").mkdir(parents=True)
+    (dot / "FileMapping.txt").write_text(f"2\t{project['root']}/main.c\n")
+    with pytest.raises(ActivationError, match="file ids"):
+        activate_run(arguments, run)
+    assert (dot / "FileMapping.txt").read_text() == f"2\t{project['root']}/main.c\n"
+    # without such data, the mapping of the run simply replaces the project's
+    (dot / "hotspot_detection").rmdir()
+    activate_run(arguments, run)
+    assert (dot / "FileMapping.txt").read_text() == f"1\t{project['root']}/main.c\n"
+
+
+def test_a_failing_activation_leaves_the_data_of_the_project_as_it_was(
+    project: Dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _run(project)
+    arguments = _arguments(project["root"])
+    (run,) = list_all_runs(arguments)
+    dot = project["root"] / ".discopop"
+    (dot / "profiler").mkdir()
+    (dot / "profiler" / "old.txt").write_text("old")
+    (dot / "FileMapping.txt").write_text(f"1\t{project['root']}/main.c\n")
+
+    real_replace = os.replace
+
+    def failing(source: str, destination: str) -> None:
+        # the second swap fails: the first entry is in place already
+        if str(destination).endswith("/profiler") and ".activating" in str(source):
+            raise OSError("no space left")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", failing)
+    with pytest.raises(ActivationError, match="no space left"):
+        activate_run(arguments, run)
+    monkeypatch.undo()
+    assert (dot / "profiler" / "old.txt").read_text() == "old"
+    assert not (dot / ".activating").exists() and not (dot / ".replaced").exists()
+    assert not (dot / "active_run.json").exists()

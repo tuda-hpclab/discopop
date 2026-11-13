@@ -28,10 +28,13 @@ This module imports no GUI toolkit.
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Sequence
+
+from filelock import FileLock, Timeout
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.builds import BuildRecord, build_trees_dir_of
@@ -53,11 +56,20 @@ PROFILING_MODES = ("dp", "hd")
 _COPIED_PROFILER_FILE_PREFIXES = ("DP_",)
 _COPIED_PROFILER_DIRECTORIES = ("statistics", "locking_files")
 
+# a run without a result is taken for one that is going on this long, then for one that was aborted
+_UNFINISHED_RUN_GRACE_SECONDS = 24 * 3600
+
 # how much of a file is read at once when paths are replaced
 _CHUNK_SIZE = 8 << 20
 
 # the files below the data of a run that hold paths of the build tree, which are replaced on activation
 _REWRITTEN_SUFFIXES = (".txt", ".json", ".xml", ".dot")
+
+# what an instrumented program writes: never carried into a run. The compilation may have run instrumented programs
+# (configure tests), which leave such files in the build; a run must start without them (and a link to them would let
+# every run overwrite the others' results)
+_RESULT_FILES = ("dynamic_dependencies.txt", "loop_counter_output.txt", "cu_taken_branch_counter_output.txt")
+_RESULT_FILE_PREFIXES = ("hotspot_result_",)
 
 # the top level files and directories of a ``.discopop`` that a profiling run needs / produces, per mode
 _RUN_FILES = {
@@ -93,11 +105,22 @@ def runs_directory_of(project_root: PATH, build_id: str) -> PATH:
     return os.path.join(build_trees_dir_of(project_root), build_id + RUNS_DIRECTORY_SUFFIX)
 
 
+def _taken(run_id: str, trees: PATH) -> bool:
+    """Whether a run of any build has the id (ids are used on their own, e.g. by ``--delete-runs``)."""
+    if not os.path.isdir(trees):
+        return False
+    return any(
+        entry.endswith(RUNS_DIRECTORY_SUFFIX) and os.path.exists(os.path.join(trees, entry, run_id))
+        for entry in os.listdir(trees)
+    )
+
+
 def _new_run_id(runs_directory: PATH) -> str:
+    trees = os.path.dirname(runs_directory)
     base = time.strftime("%Y%m%d-%H%M%S")
     run_id = base
     counter = 1
-    while os.path.exists(os.path.join(runs_directory, run_id)):
+    while _taken(run_id, trees):
         counter += 1
         run_id = base + "-" + str(counter)
     return run_id
@@ -120,12 +143,18 @@ def _link_or_copy(source: PATH, destination: PATH, link: bool) -> None:
     shutil.copy2(source, destination)
 
 
+def _is_result_file(name: str) -> bool:
+    return name in _RESULT_FILES or name.startswith(_RESULT_FILE_PREFIXES)
+
+
 def _clone_directory(source: PATH, destination: PATH, link_files: bool) -> None:
     for directory, subdirectories, files in os.walk(source):
         relative = os.path.relpath(directory, source)
         target = destination if relative == "." else os.path.join(destination, relative)
         os.makedirs(target, exist_ok=True)
         for name in files:
+            if _is_result_file(name):
+                continue
             relative_file = name if relative == "." else os.path.join(relative, name)
             _link_or_copy(
                 os.path.join(directory, name),
@@ -207,7 +236,7 @@ def list_all_runs(arguments: ProjectManagerArguments) -> List[RunRecord]:
 
 
 def latest_successful_run(arguments: ProjectManagerArguments, mode: str = "dp") -> Optional[RunRecord]:
-    candidates = [r for r in list_all_runs(arguments) if r.mode == mode and r.return_code == 0]
+    candidates = [r for r in list_all_runs(arguments) if r.mode == mode and r.return_code == 0 and not r.suggestions]
     return candidates[-1] if candidates else None
 
 
@@ -234,6 +263,9 @@ def delete_runs(arguments: ProjectManagerArguments, run_ids: Optional[Sequence[s
     for record in list_all_runs(arguments):
         if run_ids is not None and record.run_id not in run_ids:
             continue
+        if record.return_code is None and time.time() - record.started_at < _UNFINISHED_RUN_GRACE_SECONDS:
+            logger.warning("not deleting the run " + record.run_id + ": it may still be running")
+            continue
         target = os.path.abspath(record.dot_discopop)
         parent = os.path.dirname(target)
         if os.path.dirname(parent) != trees or not parent.endswith(RUNS_DIRECTORY_SUFFIX) or not os.path.isdir(target):
@@ -254,12 +286,15 @@ class ActivationError(Exception):
 
 
 def replace_in_file(source: PATH, destination: PATH, old: str, new: str) -> bool:
-    """Copy ``source`` to ``destination`` with every ``old`` replaced by ``new``; True if there was one.
+    """Copy ``source`` to ``destination`` with every path ``old`` replaced by ``new``; True if there was one.
 
-    Streams the file, so a large file (the AST dump) is never held in memory. A file without ``old`` is copied as is.
+    ``old`` is a directory: it only counts where it ends (the next character is no part of a name), so that the tree
+    ``/b/cfg_dp`` is not found in ``/b/cfg_dp_s1a2b`` or ``/b/cfg_dp.runs``. Streams the file, so a large file (the AST
+    dump) is never held in memory. A file without ``old`` is copied as is.
     """
-    old_bytes, new_bytes = old.encode(), new.encode()
-    keep = len(old_bytes) - 1
+    pattern = re.compile(re.escape(old.encode()) + rb"(?![\w.\-])")
+    new_bytes = new.encode()
+    keep = len(old.encode()) + 1
     replaced = False
     with open(source, "rb") as src, open(destination, "wb") as dst:
         carry = b""
@@ -268,16 +303,19 @@ def replace_in_file(source: PATH, destination: PATH, old: str, new: str) -> bool
             if not chunk:
                 break
             data = carry + chunk
-            # what is written now must not end inside an ``old``, nor in what may become one with the next chunk
+            # what is written now must not end inside an ``old`` or before the character that decides whether it counts
             cut = max(len(data) - keep, 0)
-            straddling = data.find(old_bytes, max(0, cut - len(old_bytes) + 1))
-            if straddling != -1 and straddling < cut:
-                cut = straddling
+            for match in pattern.finditer(data, max(0, cut - keep)):
+                if match.start() < cut < match.end() + 1:
+                    cut = match.start()
+                    break
             head, carry = data[:cut], data[cut:]
-            replaced = replaced or old_bytes in head
-            dst.write(head.replace(old_bytes, new_bytes))
-        replaced = replaced or old_bytes in carry
-        dst.write(carry.replace(old_bytes, new_bytes))
+            head, count = pattern.subn(lambda _match: new_bytes, head)
+            replaced = replaced or count > 0
+            dst.write(head)
+        carry, count = pattern.subn(lambda _match: new_bytes, carry)
+        replaced = replaced or count > 0
+        dst.write(carry)
     shutil.copystat(source, destination)
     return replaced
 
@@ -296,16 +334,54 @@ def _copy_tree_rewriting(source: PATH, destination: PATH, old: str, new: str) ->
                 shutil.copy2(source_file, destination_file)
 
 
+def _mapping_of(path: PATH) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    try:
+        with open(path, "r", errors="replace") as f:
+            for line in f:
+                file_id, separator, file_path = line.rstrip("\n").partition("\t")
+                if separator:
+                    mapping[file_id] = file_path
+    except OSError:
+        pass
+    return mapping
+
+
+def _mapping_conflict(project_mapping: PATH, run_mapping: PATH, tree: PATH, root: PATH) -> Optional[str]:
+    """Why the file ids of the run (paths of the tree turned into those of the project) differ from those of the
+    project, None if they agree where both know a file."""
+    mine = _mapping_of(project_mapping)
+    theirs = {
+        file_id: (root + path[len(tree) :] if path == tree or path.startswith(tree + os.sep) else path)
+        for file_id, path in _mapping_of(run_mapping).items()
+    }
+    by_path = {path: file_id for file_id, path in mine.items()}
+    for file_id, path in theirs.items():
+        if file_id in mine and mine[file_id] != path:
+            return "the file id " + file_id + " is " + mine[file_id] + " in the project and " + path + " in the run"
+        if path in by_path and by_path[path] != file_id:
+            return path + " has the file id " + by_path[path] + " in the project and " + file_id + " in the run"
+    return None
+
+
+def _write_json_atomically(path: PATH, data: Dict[str, Any]) -> None:
+    temporary = path + ".tmp"
+    with open(temporary, "w") as f:
+        json.dump(data, f, indent=4)
+    os.replace(temporary, path)
+
+
 def activate_run(arguments: ProjectManagerArguments, run: RunRecord) -> List[str]:
     """Put the data of ``run`` into the ``.discopop`` of the project, where the pattern detection reads it.
 
     The data of the same kind that was there is replaced (``profiler`` for a dp run, ``hotspot_detection`` for an
     hd run), the paths of the build tree in it become paths of the project, and the results derived from the data
     that was there (explorer, patches) are left alone, which the workflow status then reports as outdated. Returns
-    the replaced entries of ``.discopop``.
+    the replaced entries of ``.discopop``. Either everything is replaced or, if that fails, nothing.
 
-    Raises :class:`ActivationError` for a run that is unfinished or failed, or whose build has suggestions applied
-    (its line numbers do not match the project's sources).
+    Raises :class:`ActivationError` for a run that is unfinished or failed, whose build has suggestions applied (its
+    line numbers do not match the project's sources), or whose file ids contradict those of the data of the other
+    kind that stays in the project (the file ids belong to the build; dp and hd builds assign them independently).
     """
     if run.mode not in PROFILING_MODES:
         raise ActivationError("only runs of the modes " + ", ".join(PROFILING_MODES) + " write profiling data")
@@ -325,10 +401,37 @@ def activate_run(arguments: ProjectManagerArguments, run: RunRecord) -> List[str
     root = os.path.abspath(arguments.project_root)
     dot = arguments.dot_dp
     os.makedirs(dot, exist_ok=True)
+    # the data that stays: whatever the run does not replace, but depends on the file ids
+    other = {"dp": "hotspot_detection", "hd": "profiler"}[run.mode]
+    if os.path.isdir(os.path.join(dot, other)):
+        conflict = _mapping_conflict(
+            os.path.join(dot, "FileMapping.txt"), os.path.join(run_dot, "FileMapping.txt"), tree, root
+        )
+        if conflict is not None:
+            raise ActivationError(
+                "the file ids of the run do not fit the " + other + " data in the project (" + conflict + "); "
+                "profile that mode again or delete its data first"
+            )
+    try:
+        with FileLock(os.path.join(dot, ".activate.lock"), timeout=0):
+            return _activate_locked(arguments, run, run_dot, tree, root, dot)
+    except Timeout:
+        raise ActivationError("another run is being put into the project right now")
+    except OSError as error:
+        raise ActivationError("the run could not be put into the project: " + str(error))
+
+
+def _activate_locked(
+    arguments: ProjectManagerArguments, run: RunRecord, run_dot: PATH, tree: PATH, root: PATH, dot: PATH
+) -> List[str]:
     staging = os.path.join(dot, ".activating")
+    backup = os.path.join(dot, ".replaced")
     shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(backup, ignore_errors=True)
     os.makedirs(staging)
+    os.makedirs(backup)
     replaced: List[str] = []
+    swapped: List[str] = []
     try:
         for name in _RUN_FILES[run.mode]:
             if os.path.isfile(os.path.join(run_dot, name)):
@@ -336,18 +439,28 @@ def activate_run(arguments: ProjectManagerArguments, run: RunRecord) -> List[str
         for name in _RUN_DIRECTORIES[run.mode]:
             if os.path.isdir(os.path.join(run_dot, name)):
                 _copy_tree_rewriting(os.path.join(run_dot, name), os.path.join(staging, name), tree, root)
-        # everything is prepared: swap it in
+        # everything is prepared: swap it in, keeping what it replaces until all is in place
         for name in sorted(os.listdir(staging)):
             target = os.path.join(dot, name)
-            if os.path.isdir(target) and not os.path.islink(target):
-                shutil.rmtree(target)
-            elif os.path.lexists(target):
-                os.remove(target)
+            if os.path.lexists(target):
+                os.replace(target, os.path.join(backup, name))
+            swapped.append(name)
             os.replace(os.path.join(staging, name), target)
             replaced.append(name)
+        _write_json_atomically(
+            os.path.join(dot, "active_run.json"), {"run_id": run.run_id, "build_id": run.build_id, "mode": run.mode}
+        )
+    except BaseException:
+        # put back what was there
+        for name in swapped:
+            target = os.path.join(dot, name)
+            saved = os.path.join(backup, name)
+            if os.path.lexists(saved):
+                if os.path.isdir(target) and not os.path.islink(target):
+                    shutil.rmtree(target, ignore_errors=True)
+                os.replace(saved, target)
+        raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-    # which run the data of the project comes from
-    with open(os.path.join(dot, "active_run.json"), "w") as f:
-        json.dump({"run_id": run.run_id, "build_id": run.build_id, "mode": run.mode}, f, indent=4)
+        shutil.rmtree(backup, ignore_errors=True)
     return replaced
