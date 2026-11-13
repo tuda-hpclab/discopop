@@ -28,6 +28,7 @@ from discopop_library.ProjectManager.configurations.building import (
 )
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
 from discopop_library.ProjectManager.configurations.running import execute_in_build
+from discopop_library.ProjectManager.configurations.runs import ActivationError, activate_run
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
@@ -86,6 +87,12 @@ class PreparationRequest:
     timeout_execution: int
     timeout_compilation: int
     timeout_validation: int
+    # compile in the project root and run there, as before builds existed: no build is kept, the data of the run is
+    # written to the .discopop of the project
+    inplace: bool = False
+    # when the preparation compiles (see configurations/builds.py: auto, rebuild, reuse); only compile, do not run
+    build_policy: str = "auto"
+    build_only: bool = False
 
 
 def suggestion_ids_to_apply(
@@ -407,6 +414,137 @@ def run_execution(
 
 
 def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequest, ctx: WorkContext) -> bool:
+    """Profile ``request.configuration`` in ``request.mode`` and make the result the data of the project; True if it
+    worked.
+
+    The default compiles in a build that later preparations reuse as long as it is current, runs in a run directory
+    of its own and puts the result into the ``.discopop`` of the project (see
+    :mod:`~discopop_library.ProjectManager.configurations.runs`). ``request.inplace`` compiles and runs in the
+    project root instead.
+    """
+    if request.inplace:
+        return _run_preparation_inplace(arguments, request, ctx)
+    mode = request.mode
+    status_noun = request.status_noun
+    current_config = request.configuration
+    config_path = os.path.join(arguments.project_config_dir, current_config)
+    args_copy = copy.copy(arguments)
+    args_copy.execute_inplace = False
+    args_copy.skip_cleanup = False
+    args_copy.label_prefix = ""
+    args_copy.timeout_execution = request.timeout_execution
+    args_copy.timeout_compilation = request.timeout_compilation
+    args_copy.timeout_validation = request.timeout_validation
+    args_copy.log_level = "INFO"
+    args_copy.apply_suggestions = None
+
+    logger = logging.getLogger(f"Prepare {status_noun.title()}")
+    logger.info(f"Starting {status_noun} preparation for: {current_config}")
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
+    shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
+    key = BuildKey(current_config, mode, ())
+
+    success = False
+    ctx.status("⏳ Building...", StatusKind.BUSY)
+    try:
+        with build_lock(
+            args_copy,
+            key,
+            should_abort=ctx.cancel_event.is_set,
+            on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
+        ):
+            build = ensure_build(
+                args_copy,
+                key,
+                config_path,
+                shared_settings,
+                compile_sh,
+                1,
+                BuildPolicy(request.build_policy),
+                args_copy.timeout_compilation,
+                process_started_callback=ctx.register_process,
+                message=ctx.output,
+            )
+            ctx.clear_process()
+            if build.result == BuildResult.COMPILE_FAILED:
+                ret_code = build.compile_result[0] if build.compile_result else "None"
+                ctx.output(f"Compilation failed (return code: {ret_code})\n")
+            elif not build.usable or build.record is None:
+                ctx.output((build.message or "The build failed.") + "\n")
+            else:
+                if build.result == BuildResult.BUILT and build.compile_result is not None:
+                    _, elapsed, stdout, stderr = build.compile_result
+                    ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
+                    if stdout:
+                        ctx.output(f"stdout: {stdout}\n")
+                    if stderr:
+                        ctx.output(f"stderr: {stderr}\n")
+                if request.build_only:
+                    success = True
+                elif ctx.cancel_event.is_set():
+                    ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
+                else:
+                    success = _profile_in_build(
+                        arguments, args_copy, request, ctx, build.record, config_path, shared_settings
+                    )
+    except BuildLockAborted:
+        ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
+
+    if not ctx.cancel_event.is_set():
+        outcome = "complete" if success else "failed"
+        ctx.output(f"\n=== {status_noun.capitalize()} preparation {outcome} ===\n")
+    return success
+
+
+def _profile_in_build(
+    arguments: ProjectManagerArguments,
+    args_copy: ProjectManagerArguments,
+    request: PreparationRequest,
+    ctx: WorkContext,
+    build: BuildRecord,
+    config_path: str,
+    settings_path: str,
+) -> bool:
+    """Run the configuration in ``build`` and activate the run; True if both worked."""
+    ctx.status("⏳ Executing...", StatusKind.BUSY)
+    ctx.output("Executing...\n")
+    execution_time_regex = resolve_execution_time_regex(config_path, arguments.execution_time_regex)
+    execute_result, run = execute_in_build(
+        args_copy,
+        build,
+        config_path,
+        settings_path,
+        1,
+        args_copy.timeout_execution,
+        execution_time_regex,
+        1,
+        process_started_callback=ctx.register_process,
+        on_run=lambda started: ctx.output(f"Run {started.run_id}: results in {started.dot_discopop}\n"),
+    )
+    ctx.clear_process()
+    if execute_result is None or execute_result[0] != 0:
+        ret_code = execute_result[0] if execute_result else "None"
+        ctx.output(f"Execution failed (return code: {ret_code})\n")
+        return False
+    _, elapsed, stdout, stderr = execute_result
+    described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
+    ctx.output(f"Execution succeeded ({described})\n")
+    if stdout:
+        ctx.output(f"stdout: {stdout}\n")
+    if stderr:
+        ctx.output(f"stderr: {stderr}\n")
+    if run is None:
+        return True
+    try:
+        replaced = activate_run(arguments, run)
+    except ActivationError as error:
+        ctx.output(f"The run could not be put into the project: {error}\n")
+        return False
+    ctx.output(f"Activated the run {run.run_id}: {', '.join(replaced)} of {arguments.dot_dp} replaced.\n")
+    return True
+
+
+def _run_preparation_inplace(arguments: ProjectManagerArguments, request: PreparationRequest, ctx: WorkContext) -> bool:
     """Compile and execute ``request.configuration`` in ``request.mode`` in place; True if both succeeded."""
     mode = request.mode
     status_noun = request.status_noun

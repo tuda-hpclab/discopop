@@ -252,3 +252,46 @@ def test_listing_deleting_and_activating_runs_on_the_command_line(
     arguments.delete_runs = "all"
     delete_runs_from_cli(arguments)
     assert "Deleted 1 run(s)" in capsys.readouterr().out
+
+
+def _prepare(project: Dict[str, Path], **kw: object) -> bool:
+    arguments = _arguments(project["root"])
+    request = execution_run.PreparationRequest(
+        configuration="cfg",
+        mode="dp",
+        settings_filename="dp_settings.json",
+        status_noun="pattern detection",
+        timeout_execution=0,
+        timeout_compilation=0,
+        timeout_validation=0,
+        **kw,  # type: ignore[arg-type]
+    )
+    return execution_run.run_preparation(arguments, request, WorkContext(queue.Queue(), threading.Event()))
+
+
+def test_a_preparation_compiles_once_and_puts_each_run_into_the_project(project: Dict[str, Path]) -> None:
+    assert _prepare(project) is True
+    dot = project["root"] / ".discopop"
+    assert (dot / "profiler" / "dynamic_dependencies.txt").read_text() == "run with A\n"
+    assert (dot / "FileMapping.txt").read_text() == f"1\t{project['root']}/main.c\n"
+    # nothing was compiled or run in the project itself
+    assert not (project["root"] / "COUNTER").exists()
+    first_run = json.loads((dot / "active_run.json").read_text())["run_id"]
+
+    execute = project["configs"] / "cfg" / "execute.sh"
+    execute.write_text(execute.read_text().replace("run with", "again with"))
+    assert _prepare(project) is True
+    assert (project["tmp"] / "compiles.txt").read_text().count("compiled") == 1
+    assert (dot / "profiler" / "dynamic_dependencies.txt").read_text() == "again with A\n"
+    assert json.loads((dot / "active_run.json").read_text())["run_id"] != first_run
+    assert len(list_all_runs(_arguments(project["root"]))) == 2
+
+    # compile only, and in place as before builds existed
+    assert _prepare(project, build_only=True, build_policy="rebuild") is True
+    assert (project["tmp"] / "compiles.txt").read_text().count("compiled") == 2
+    assert len(list_all_runs(_arguments(project["root"]))) == 2
+
+
+def test_a_preparation_without_a_usable_build_fails(project: Dict[str, Path]) -> None:
+    assert _prepare(project, build_policy="reuse") is False
+    assert not (project["root"] / ".discopop" / "profiler").exists()

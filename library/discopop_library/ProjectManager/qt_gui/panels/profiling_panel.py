@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QSpinBox
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.build_controls import BuildOptions, BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -69,9 +70,11 @@ WHAT_HAPPENS = (
     "runs its execute.sh once. The instrumented program records the data dependences that occur while it runs; "
     "the pattern detection works on them."
 )
-IN_PLACE_NOTE = (
-    "The build and the run happen in the project directory itself (in place), so that the profiling data is kept "
-    "in .discopop/profiler. A new profiling run replaces the data of the previous one."
+BUILD_NOTE = (
+    "The configuration is compiled in a build, a copy of the project that is kept: the next profiling run uses it "
+    "again as long as nothing changed, so a long compilation is not repeated. Every run keeps its results in a "
+    "directory of its own; the data of the latest successful run is put into .discopop/profiler of the project, "
+    "where the pattern detection reads it. Builds and runs are only deleted by you."
 )
 INPUT_NOTE = (
     "The instrumented program runs much slower than the original one: give the configuration a small, but "
@@ -110,7 +113,7 @@ class ProfilingPanel(Panel):
         # ── what happens ────────────────────────────────────────────────────
         about = widgets.FormSection("What happens")
         about.add_widget(self._wrapped(WHAT_HAPPENS))
-        about.add_widget(self._wrapped(IN_PLACE_NOTE))
+        about.add_widget(self._wrapped(BUILD_NOTE))
         about.add_widget(self._wrapped(INPUT_NOTE))
 
         # ── the data of the last run ────────────────────────────────────────
@@ -140,9 +143,19 @@ class ProfilingPanel(Panel):
         limits.add_row("Validation timeout (s):", self.timeout_validation_spin, "0 = disabled; validate.sh only")
         self.limits_section = widgets.CollapsibleSection("Advanced", limits, summary="timeouts")
 
+        # ── builds and runs ─────────────────────────────────────────────────
+        self.build_options = BuildOptions()
+        self.builds_and_runs = BuildsAndRuns(arguments, changed=lambda: project_state.publish(ResultsChanged()))
+        self.builds_section = widgets.CollapsibleSection(
+            "Builds and runs", self.builds_and_runs, summary="list, check, delete"
+        )
+
         # ── header ──────────────────────────────────────────────────────────
         self.run_button = widgets.RunStopButton(PROFILE_TEXT, self._profile, self._stop)
-        self.run_button.setToolTip("Runs the selected configuration in 'dp' mode with 'inplace' enabled.")
+        self.run_button.setToolTip(
+            "Compiles (if needed) and runs the selected configuration in 'dp' mode; the result is used for the "
+            "pattern detection."
+        )
         self.run_button.setEnabled(False)
         self.header = widgets.PanelHeader(
             "Profiling",
@@ -154,7 +167,7 @@ class ProfilingPanel(Panel):
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.setSpacing(widgets.CARD_SPACING)
-        for section in (data, about, self.limits_section):
+        for section in (data, about, self.build_options, self.limits_section, self.builds_section):
             column_layout.addWidget(section)
         column_layout.addStretch(1)
         options = QWidget()
@@ -235,6 +248,7 @@ class ProfilingPanel(Panel):
         """The configuration, the data of the last run and whether a run can start."""
         self.configuration_label.setText(self.project_state.current_config or "—")
         self.data_label.setText(self._data_text())
+        self.builds_and_runs.refresh()
         missing, setup_fixes_it = self._missing_requirement()
         self.goto_setup_button.setVisible(setup_fixes_it)
         if not self.is_running():
@@ -272,6 +286,9 @@ class ProfilingPanel(Panel):
             timeout_execution=self.timeout_execution_spin.value(),
             timeout_compilation=self.timeout_compilation_spin.value(),
             timeout_validation=self.timeout_validation_spin.value(),
+            inplace=self.build_options.in_place(),
+            build_policy=self.build_options.build_policy(),
+            build_only=self.build_options.build_only(),
         )
         self._run_failed = False
         self._hint_shown = False  # the chip shows the outcome of this run

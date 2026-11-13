@@ -15,53 +15,9 @@ from typing import List
 from tabulate import tabulate  # type: ignore
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.builds import (
-    BuildKey,
-    BuildRecord,
-    BuildState,
-    build_status,
-    delete_builds,
-    list_builds,
-)
-from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
-from discopop_library.ProjectManager.services.modes import settings_path as mode_settings_path
-
-
-def build_state_of(arguments: ProjectManagerArguments, record: BuildRecord) -> str:
-    """``current``, ``stale (<why>)`` or ``missing`` for the build of ``record``."""
-    settings = mode_settings_path(arguments.project_config_dir, record.mode)
-    config_dir = os.path.join(arguments.project_config_dir, record.configuration)
-    if settings is None or not os.path.isdir(config_dir):
-        return "stale (the configuration or its settings do not exist any more)"
-    key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
-    status = build_status(
-        arguments, key, resolve_compile_script_path(arguments.project_config_dir, record.configuration), settings
-    )
-    if status.state == BuildState.CURRENT:
-        return "current"
-    if status.state == BuildState.NONE:
-        return "missing (" + status.reason + ")"
-    return "stale (" + status.reason + ")"
-
-
-def disk_usage(path: str) -> int:
-    """The size of the files below ``path`` in bytes."""
-    total = 0
-    for directory, _subdirectories, files in os.walk(path):
-        for name in files:
-            try:
-                total += os.lstat(os.path.join(directory, name)).st_size
-            except OSError:
-                pass
-    return total
-
-
-def format_size(size: float) -> str:
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if size < 1024:
-            return ("%.0f %s" if unit == "B" else "%.1f %s") % (size, unit)
-        size /= 1024
-    return "%.1f TiB" % size
+from discopop_library.ProjectManager.configurations.builds import delete_builds, list_builds
+from discopop_library.ProjectManager.configurations.runs import disk_usage
+from discopop_library.ProjectManager.services.build_overview import build_state_of, format_size
 
 
 def show_builds(arguments: ProjectManagerArguments) -> None:

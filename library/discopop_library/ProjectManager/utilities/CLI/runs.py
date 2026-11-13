@@ -24,7 +24,7 @@ from discopop_library.ProjectManager.configurations.runs import (
     latest_successful_run,
     list_all_runs,
 )
-from discopop_library.ProjectManager.utilities.CLI.builds import format_size
+from discopop_library.ProjectManager.services.build_overview import active_run_id, format_size
 
 
 def show_runs(arguments: ProjectManagerArguments) -> None:
@@ -32,7 +32,7 @@ def show_runs(arguments: ProjectManagerArguments) -> None:
     if not runs:
         print("No runs. A dp or hd run of a configuration in a build (without --inplace) creates one.")
         return
-    active = _active_run_id(arguments)
+    active = active_run_id(arguments)
     table: List[List[str]] = [["Run", "Build", "Mode", "Threads", "Started", "Result", "Size", "Active"]]
     for run in runs:
         table.append(
@@ -48,16 +48,6 @@ def show_runs(arguments: ProjectManagerArguments) -> None:
             ]
         )
     print(tabulate(table, headers="firstrow", tablefmt="grid"))
-
-
-def _active_run_id(arguments: ProjectManagerArguments) -> str:
-    import json
-
-    try:
-        with open(os.path.join(arguments.dot_dp, "active_run.json")) as f:
-            return str(json.load(f).get("run_id", ""))
-    except (OSError, ValueError):
-        return ""
 
 
 def delete_runs_from_cli(arguments: ProjectManagerArguments) -> None:
