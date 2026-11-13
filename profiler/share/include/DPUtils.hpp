@@ -93,7 +93,7 @@ inline std::string GetEnvOrDefault(const char* name, const char* fallback) {
 
 inline std::string ProfilerLockPath(const std::string& profiler_directory, const std::string& name) {
   const std::string locking_directory = profiler_directory + "/locking_files";
-  
+
   if (mkdir(locking_directory.c_str(), 0777) == -1 && errno != EEXIST && errno != ENOENT) {
     throw std::runtime_error("Could not create profiler locking directory: " + locking_directory);
   }
@@ -133,6 +133,14 @@ inline bool FileExists(const std::string& filename) {
   }
   return true;
 }
+
+// Whether path lies in the project, i.e. contains DP_PROJECT_ROOT_DIR ("/" if unset) followed by a '/' (so that
+// "src" does not take in "src2"), as given or with its symbolic links resolved, but none of the directories of
+// DP_PROJECT_EXCLUDE_DIRS (separated by ':', absolute or relative to the project root, e.g.
+// "build/_deps:third_party"), also in both spellings. A checkout reached through a symbolic link
+// (/home/<user>/git -> /mnt/storage/...) is named either way, depending on whether $PWD or realpath()/getcwd()
+// produced the path. Excluded files are neither instrumented nor mapped.
+bool IsInProjectRoot(const std::string& path);
 
 int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);
 

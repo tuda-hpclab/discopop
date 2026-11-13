@@ -187,6 +187,8 @@ endif()
 
 add_subdirectory(DiscoPoP)
 
+add_subdirectory(ast_export)
+
 add_subdirectory(rtlib)
 
 add_subdirectory(scripts)

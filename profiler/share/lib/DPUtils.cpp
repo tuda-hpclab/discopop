@@ -12,9 +12,13 @@
 
 #include "DPUtils.hpp"
 
+#include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
+#include <vector>
 
 #define DP_DEBUG_TYPE "dputils"
 
@@ -65,6 +69,91 @@ llvm::cl::opt<bool> dp_memory_profiling_skip_function_arguments(
 
 namespace dputil {
 
+namespace {
+
+// A path as given and with its symbolic links resolved (if it exists), each without a trailing '/'.
+std::vector<std::string> Spellings(const std::string& path) {
+  std::vector<std::string> spellings;
+  auto add = [&spellings](std::string spelling) {
+    while (spelling.size() > 1 && spelling.back() == '/') {
+      spelling.pop_back();
+    }
+    if (!spelling.empty() && std::find(spellings.begin(), spellings.end(), spelling) == spellings.end()) {
+      spellings.push_back(spelling);
+    }
+  };
+  add(path);
+  if (char* real = realpath(path.c_str(), nullptr)) {
+    add(real);
+    std::free(real);  // allocated by realpath
+  }
+  return spellings;
+}
+
+// DP_PROJECT_ROOT_DIR and DP_PROJECT_EXCLUDE_DIRS, prepared for the checks of IsInProjectRoot.
+struct ProjectDirectories {
+  std::string root_variable;
+  std::string exclude_variable;
+  // both with a trailing '/', so that "src" does not take in "src2" and "_deps" does not exclude "_deps2"
+  std::vector<std::string> roots;
+  std::vector<std::string> excluded;
+};
+
+std::string WithTrailingSlash(const std::string& directory) { return directory == "/" ? directory : directory + "/"; }
+
+void Prepare(ProjectDirectories& directories) {
+  directories.roots.clear();
+  for (const std::string& spelling : Spellings(directories.root_variable)) {
+    directories.roots.push_back(WithTrailingSlash(spelling));
+  }
+  directories.excluded.clear();
+  std::stringstream entries(directories.exclude_variable);
+  std::string entry;
+  while (std::getline(entries, entry, ':')) {
+    if (entry.empty()) {
+      continue;
+    }
+    // relative entries name directories below the project root (in each of its spellings)
+    std::vector<std::string> candidates;
+    if (entry.front() == '/') {
+      candidates.push_back(entry);
+    } else {
+      for (const std::string& root : directories.roots) {
+        candidates.push_back(root + entry);
+      }
+    }
+    for (const std::string& candidate : candidates) {
+      for (const std::string& spelling : Spellings(candidate)) {
+        const std::string directory = WithTrailingSlash(spelling);
+        if (std::find(directories.excluded.begin(), directories.excluded.end(), directory) ==
+            directories.excluded.end()) {
+          directories.excluded.push_back(directory);
+        }
+      }
+    }
+  }
+}
+
+}  // namespace
+
+bool IsInProjectRoot(const std::string& path) {
+  // prepared again only when one of the variables changes (doInitialization sets DP_PROJECT_ROOT_DIR if unset);
+  // allocated once and never destroyed: an object with static storage duration must be trivially destructible
+  static ProjectDirectories& directories = *new ProjectDirectories();
+  static bool prepared = false;
+  const std::string root_variable(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  const std::string exclude_variable(dputil::GetEnvOrDefault("DP_PROJECT_EXCLUDE_DIRS", ""));
+  if (!prepared || root_variable != directories.root_variable || exclude_variable != directories.exclude_variable) {
+    prepared = true;
+    directories.root_variable = root_variable;
+    directories.exclude_variable = exclude_variable;
+    Prepare(directories);
+  }
+  const auto contains = [&path](const std::string& part) { return path.find(part) != std::string::npos; };
+  return std::any_of(directories.roots.begin(), directories.roots.end(), contains) &&
+         std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
+}
+
 std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& full_path_name) {
   // prepare environment variables
   if (FileMappingPath().length() == 0) {
@@ -77,9 +166,8 @@ std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& f
     FileMappingPath() += "/FileMapping.txt";
   }
 
-  // check if path in DP_PROJECT_ROOT_DIR
-  const std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
-  if (full_path_name.find(dp_project_dir) == std::string::npos) {  // function defined outside project
+  // check if path in DP_PROJECT_ROOT_DIR (full_path_name is resolved by realpath() for some callers)
+  if (!dputil::IsInProjectRoot(full_path_name)) {  // function defined outside project
     return 0;
   }
 

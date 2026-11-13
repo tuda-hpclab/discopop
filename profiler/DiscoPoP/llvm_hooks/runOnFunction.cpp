@@ -36,8 +36,6 @@ bool DiscoPoP::IsInstrumentedFunction(Function& f) {
     return false;
   }
 
-  const std::string dp_project_dir(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
-
   SmallVector<std::pair<unsigned, MDNode*>, 4> mds;
   f.getAllMetadata(mds);
   bool func_defined_in_project = false;
@@ -50,7 +48,7 @@ bool DiscoPoP::IsInstrumentedFunction(Function& f) {
           full_file_name += "/";
         }
         full_file_name += sub_program->getFilename().str();
-        if (full_file_name.find(dp_project_dir) != std::string::npos) {  // function defined inside project
+        if (dputil::IsInProjectRoot(full_file_name)) {  // function defined inside project
           func_defined_in_project = true;
         }
       }

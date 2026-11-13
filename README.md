@@ -27,9 +27,9 @@ You need Python 3.11 or newer, LLVM/clang 19-22 with development files, CMake 3.
 
 On Debian and Ubuntu:
 ```bash
-sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libomp-19-dev libboost-dev
+sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev libboost-dev
 ```
-Replace 19 with 20, 21, or 22 for a newer LLVM release. Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages 19 and 22; other versions are available from [apt.llvm.org](https://apt.llvm.org).
+`libclang-19-dev` is optional: it makes the instrumentation of template heavy projects much faster. Replace 19 with 20, 21, or 22 for a newer LLVM release. Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages 19 and 22; other versions are available from [apt.llvm.org](https://apt.llvm.org).
 
 For Arch-based distributions (`pacman`) and macOS (Homebrew), see the [installation page](https://tuda-hpclab.github.io/discopop/setup/discopop/). These routes are not tested in CI.
 

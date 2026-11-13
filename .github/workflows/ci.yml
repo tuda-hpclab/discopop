@@ -105,10 +105,10 @@ jobs:
 
           # clang-tools provides clang-scan-deps: CMake 3.28 scans the C++20 sources of a Ninja build with it, and without it
           # the C++ OpenMP probe of the profiler build fails ("Could NOT find OpenMP_CXX", CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS-NOTFOUND)
-          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.11 ubuntu:24.04 python3.11 "$apt_common && $apt_install software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && $apt_install python3.11 python3.11-venv python3.11-tk python3.11-dev && $apt_install llvm-19-dev clang-19 clang-tools-19 libomp-19-dev")"
-          e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && $apt_install llvm-20-dev clang-20 clang-tools-20 libomp-20-dev")"
-          e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && $apt_llvm_org && $apt_install llvm-21-dev clang-21 clang-tools-21 libomp-21-dev")"
-          e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && $apt_install llvm-22-dev clang-22 clang-tools-22 libomp-22-dev")"
+          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.11 ubuntu:24.04 python3.11 "$apt_common && $apt_install software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && $apt_install python3.11 python3.11-venv python3.11-tk python3.11-dev && $apt_install llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev")"
+          e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && $apt_install llvm-20-dev clang-20 clang-tools-20 libclang-20-dev libomp-20-dev")"
+          e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && $apt_llvm_org && $apt_install llvm-21-dev clang-21 clang-tools-21 libclang-21-dev libomp-21-dev")"
+          e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && $apt_install llvm-22-dev clang-22 clang-tools-22 libclang-22-dev libomp-22-dev")"
           # the sanitized unit tests and the coverage (no venv needed); llvm-19 provides llvm-cov and llvm-profdata,
           # libclang-rt-19-dev the sanitizer and profile runtimes (only recommended by clang-19)
           e_tools="$(entry ubuntu-24-04-llvm-19-tools ubuntu:24.04 python3 "$apt_common && $apt_install llvm-19 llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev")"

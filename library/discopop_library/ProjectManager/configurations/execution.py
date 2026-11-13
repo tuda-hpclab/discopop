@@ -34,6 +34,11 @@ from discopop_library.ProjectManager.configurations.repetitions import (
     select_representative,
     validate_repetitions,
 )
+from discopop_library.ProjectManager.services.excluded_directories import (
+    ENVIRONMENT_VARIABLE as EXCLUDE_DIRECTORIES_VARIABLE,
+    environment_value,
+    load_excluded_directories,
+)
 
 PATH = str
 
@@ -295,6 +300,13 @@ def execute_configuration(
     for key in settings:
         my_env[key] = settings[key]
     my_env["DP_PROJECT_ROOT_DIR"] = project_copy_root_path
+    # the directories of the project that are no project code (Setup stage), relative to the project directory, so
+    # they hold for the copy as well; entries set in the settings are kept
+    excluded_directories = load_excluded_directories(arguments.project_dir)
+    if excluded_directories:
+        my_env[EXCLUDE_DIRECTORIES_VARIABLE] = environment_value(
+            excluded_directories, my_env.get(EXCLUDE_DIRECTORIES_VARIABLE, "")
+        )
     my_env["DOT_DISCOPOP"] = project_copy_dp_path
     my_env["OMP_NUM_THREADS"] = str(thread_count)
 

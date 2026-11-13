@@ -14,7 +14,7 @@ This page takes you from the installation to the first parallelization suggestio
 * A small, representative input. The instrumented program runs much slower than the original one, and DiscoPoP only sees the code paths that are executed.
 
 ```bash
-sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libomp-19-dev libboost-dev
+sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev libboost-dev
 ```
 LLVM 19 to 22 are supported. For other distributions and versions, see [Installation](setup/discopop.md).
 

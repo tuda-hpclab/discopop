@@ -17,6 +17,7 @@ DiscoPoP consists of seven Python packages. The profiler (`discopop-profiler`) a
 | Requirement | Version | Used for |
 |---|---|---|
 | LLVM and clang (development packages) | 19, 20, 21 or 22 | the profiler and the hotspot detection build an LLVM pass |
+| `libclang-<version>-dev` (optional) | same as clang | builds the AST export plugin, which makes the instrumentation of template heavy projects much faster; without it the profiler works the same, see [Instrumentation](../tools/Instrumentation.md#ast-export-plugin) |
 | Python (with `venv` and `pip`) | 3.11 or newer | all tools |
 | CMake | 3.28 or newer | building the C++ code |
 | C++20 compiler, `make` | | building the C++ code |
@@ -29,10 +30,10 @@ If no Boost installation is found, the build downloads Boost with CMake's FetchC
 ### Debian and Ubuntu
 
 ```bash
-sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libomp-19-dev libboost-dev
+sudo apt install python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev libboost-dev
 ```
 
-Replace `19` with `20`, `21` or `22` for another LLVM release. Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages LLVM 19 and 22. Other releases are available from [apt.llvm.org](https://apt.llvm.org).
+`libclang-19-dev` is optional, it builds the AST export plugin (see the table above). Replace `19` with `20`, `21` or `22` for another LLVM release. Ubuntu 24.04 packages LLVM 19 and 20, Debian 13 packages LLVM 19 and 22. Other releases are available from [apt.llvm.org](https://apt.llvm.org).
 
 ### Versions tested in CI
 

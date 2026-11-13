@@ -62,8 +62,21 @@ The directory `discopop-profiler.libs` contains further scripts that are not ins
 | `LINKER_wrapper.sh` | Links objects with the DiscoPoP runtime (`-lDiscoPoP_RT`), without instrumenting |
 | `MPI_CC_wrapper.sh`, `MPI_CXX_wrapper.sh`, `MPI_LINKER_wrapper.sh` | Variants for MPI programs; need the MPI compiler wrappers on the `PATH` (compile with `MPI_CC_wrapper.sh` / `MPI_CXX_wrapper.sh`, link with `MPI_LINKER_wrapper.sh`) |
 | `CMAKE_wrapper.sh` | Calls `cmake` with `CC_wrapper.sh` / `CXX_wrapper.sh` as compilers |
-| `filter_ast_dump.py` | Used by the wrappers to filter the AST dump |
+| `filter_ast_dump.py` | Used by the wrappers to reduce the AST: keeps the declarations of the files in `FileMapping.txt` (below the project directory without one) and drops the type nodes |
+| `dump_ast.sh` | Sourced by `CC_wrapper.sh` and `CXX_wrapper.sh`: writes the AST of a translation unit, with the AST export plugin if there is one, otherwise by filtering clang's complete dump |
+| `DiscoPoPASTExport-<clang version>.so` | The AST export plugin (only built if the Clang development files are installed, see below) |
 | `dp-fmap` | Creates a [file mapping](../data/Filemapping.md) by hand. This is not necessary anymore since the instrumentation creates `FileMapping.txt`. |
+
+### AST export plugin
+The explorer reads `ast_dump.json`, but only the nodes of the files in `FileMapping.txt`. Clang's complete JSON dump contains every declaration of the included headers as well, which is tens of GB for a single translation unit of a template heavy project. If the Clang development files (`libclang-<version>-dev` on Debian and Ubuntu) were installed when the profiler was built, the build also creates the clang plugin `DiscoPoPASTExport-<clang version>.so`. The wrappers then let clang write only the declarations of the mapped files (a few seconds instead of minutes, and a few hundred MB instead of tens of GB per translation unit). Without the plugin, or if it fails, the wrappers filter the complete dump while it is written: the result is the same, but slower and needing more disk throughput.
+
+- `DP_AST_NO_PLUGIN=1` uses the filtered dump even if the plugin exists.
+- The declarations of the excluded directories (`DP_PROJECT_EXCLUDE_DIRS`, see [Environment variables](../setup/environment_variables.md)) are left out by both, also before a `FileMapping.txt` exists. A dependency fetched below the project directory (`build/_deps`) should be excluded: otherwise it is project code, instrumented and kept in the AST.
+- `filter_ast_dump.py` reports on stderr which files it keeps, how it is doing (every 10 s on long runs) and, when done, how much it read, wrote and dropped, so each translation unit adds two lines to the build log; `DP_AST_QUIET=1` silences them.
+- `-DDP_AST_EXPORT=OFF` (or `REQUIRED`) at build time never builds the plugin (or fails if it cannot be built). With pip, pass it as `CMAKE_ARGS=-DDP_AST_EXPORT=OFF pip install ./profiler`.
+- The packages of [apt.llvm.org](https://apt.llvm.org) install Clang's CMake files with `clang-<version>`, but the libraries and headers they refer to only with `libclang-<version>-dev`. Without the latter, the build reports the missing files and leaves the plugin out.
+- The plugin only runs with the clang of the version it was built for (the version is part of its file name).
+- Namespaces are not part of the exported AST, their declarations are, and neither are type aliases and the documentation comments of declarations; the explorer does not use them.
 
 <!-- UNVERIFIED: the MPI wrappers and LINKER_wrapper.sh were not run. -->
 

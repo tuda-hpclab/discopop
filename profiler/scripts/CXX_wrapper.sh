@@ -85,6 +85,25 @@ PTHREAD_XLINKER_FLAGS=()
 # Mach-O prefixes C symbols with an underscore, so ld64 has to be asked for ___dp_init.
 DP_INIT_SYMBOL="__dp_init"; [[ "$(uname)" == "Darwin" ]] && DP_INIT_SYMBOL="___dp_init"
 ${LLVM_CLANGPP} "$@" -g -O0 -fno-discard-value-names -Xclang -load -Xclang ${DISCOPOP_PLUGIN} -Xclang -fpass-plugin=${DISCOPOP_PLUGIN} -fPIC -Xlinker -L${PARENT_PATH} -Xlinker -u -Xlinker ${DP_INIT_SYMBOL} -Xlinker -lDiscoPoP_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v
+compile_status=$?
+
+# Assembly inputs (.s/.S/.sx or -x assembler[-with-cpp]) cannot be parsed by the C frontend,
+# so -fsyntax-only -ast-dump would fail on them. They contain no AST to dump: skip the dump.
+_is_asm=0
+_prev=""
+for _arg in "$@"; do
+  case "$_arg" in
+    *.s|*.S|*.sx) _is_asm=1 ;;
+    -xassembler|-xassembler-with-cpp) _is_asm=1 ;;
+  esac
+  if [ "$_prev" = "-x" ]; then
+    case "$_arg" in assembler|assembler-with-cpp) _is_asm=1 ;; esac
+  fi
+  _prev="$_arg"
+done
+if [ "$_is_asm" -eq 1 ]; then
+  exit "$compile_status"
+fi
 
 # dump ast for later use during pattern detection
 if [ -n "$DOT_DISCOPOP" ]; then
@@ -95,14 +114,12 @@ fi
 # Unfiltered, clang's JSON AST dump includes every declaration transitively
 # reachable from included headers (libc, libstdc++, MPI, ...), which for real
 # projects bloats ast_dump.json to multiple GB even though pattern detection
-# only ever queries project source locations. Filter it down before writing.
-PROJECT_ROOT="$(dirname "${TMP_DOT_DISCOPOP}")"
+# only ever queries the instrumented files. Reduce it before writing (dump_ast.sh).
 mkdir -p "$TMP_DOT_DISCOPOP/profiler/locking_files" || exit 1
 AST_TMP="$(mktemp "$TMP_DOT_DISCOPOP/profiler/ast_dump.XXXXXX")" || exit 1
 trap 'rm -f -- "$AST_TMP"' EXIT
-set -o pipefail
-${LLVM_CLANGPP} "$@" -fsyntax-only -Xclang -ast-dump=json |
-  python3 "${PARENT_PATH}/filter_ast_dump.py" "${PROJECT_ROOT}" > "$AST_TMP"
+source "${PARENT_PATH}/dump_ast.sh"
+dp_dump_ast "${LLVM_CLANGPP}" "$TMP_DOT_DISCOPOP" "$AST_TMP" "$@"
 ast_status=$?
 if [ "$ast_status" -ne 0 ]; then
   exit "$ast_status"
