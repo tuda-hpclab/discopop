@@ -12,6 +12,7 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 import logging
 
 from discopop_library.ProjectManager.reports.full import generate_full_report
+from discopop_library.ProjectManager.utilities.CLI.builds import delete_builds_from_cli, show_builds
 from discopop_library.ProjectManager.utilities.CLI.listConfiguration import (
     show_configurations_with_execution,
     show_configurations_without_execution,
@@ -66,6 +67,13 @@ def run(arguments: ProjectManagerArguments) -> None:
         return
 
     derive_settings_files(arguments.project_config_dir)
+
+    if arguments.list_builds:
+        show_builds(arguments)
+        return
+    if arguments.delete_builds is not None:
+        delete_builds_from_cli(arguments)
+        return
 
     if arguments.list:
         show_configurations_without_execution(arguments)

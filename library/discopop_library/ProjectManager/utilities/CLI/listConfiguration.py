@@ -18,13 +18,13 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     validation_needs_separate_compile,
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
+from discopop_library.ProjectManager.configurations.building import BuildResult, build_lock, ensure_build
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy
 from discopop_library.ProjectManager.configurations.copying import (
-    copy_configuration,
-    get_application_result,
-    restore_outside_patches,
     patch_applicator_dir_of,
+    resolve_requested_suggestions,
 )
-from discopop_library.ProjectManager.configurations.deletion import delete_configuration
+from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult
 from discopop_library.ProjectManager.configurations.execution import (
     execute_configuration,
     record_skipped_execution,
@@ -305,67 +305,97 @@ def __run_mode(
     thread_count: int,
     execution_time_regex: Optional[str],
 ) -> _ModeOutcome:
-    """Compile and execute ``config`` in ``mode`` (copy, compile, execute, validate, clean up)."""
+    """Compile and execute ``config`` in ``mode``: in the project root (``--inplace``), otherwise in a build that is
+    kept and reused as long as it is current (see :mod:`discopop_library.ProjectManager.configurations.builds`)."""
     outcome = _ModeOutcome(settings_exist=os.path.exists(shared_settings))
-    project_path = (
-        arguments.project_root if arguments.execute_inplace else copy_configuration(arguments, config, shared_settings)
-    )
-
-    # A failed patch application leaves the copy holding the original code;
-    # compiling and measuring it would misreport it as a parallel run.
-    application_failed = __handle_application_failure(
-        arguments, project_path, config, shared_settings, os.path.join(config, "execute.sh"), thread_count
-    )
-    ret = (
-        None
-        if application_failed
-        else execute_configuration(
-            arguments,
-            project_path,
-            config,
-            shared_settings,
-            compile_sh,
-            thread_count,
-            arguments.timeout_compilation,
-        )
-    )
-    outcome.compile_successful = ret is not None and ret[0] == 0
-
-    if outcome.compile_successful:
+    if arguments.execute_inplace:
+        project_path = arguments.project_root
         ret = execute_configuration(
-            arguments,
-            project_path,
-            config,
-            shared_settings,
-            os.path.join(config, "execute.sh"),
-            thread_count,
-            arguments.timeout_execution,
-            execution_time_regex=execution_time_regex,
-            # only seq and par are repeated; dp and hd are profiling runs
-            repetitions=repetitions_for_mode(mode, arguments.execution_repetitions),
+            arguments, project_path, config, shared_settings, compile_sh, thread_count, arguments.timeout_compilation
         )
-        outcome.execute_successful = ret is not None and ret[0] == 0
+        outcome.compile_successful = ret is not None and ret[0] == 0
+    else:
+        key = BuildKey(
+            os.path.basename(config),
+            mode,
+            tuple(resolve_requested_suggestions(arguments, arguments.dot_dp, log_skipped=False)),
+        )
 
-        # optional output validation (auto-run when validate.sh exists);
-        # no validate.sh => execute.sh alone decides correctness
-        if mode in _VALIDATED_MODES and outcome.execute_successful:
-            validation = run_validation_phase(
+        def application_failed(tree: str, result: PatchApplicationResult) -> None:
+            print("WARNING: " + result.summary())
+            print("Skipping this run: executing the copy would measure the UNMODIFIED code.")
+            record_skipped_execution(
+                arguments, tree, config, shared_settings, os.path.join(config, "execute.sh"), thread_count, result
+            )
+
+        with build_lock(arguments, key):
+            build = ensure_build(
                 arguments,
-                project_path,
+                key,
                 config,
                 shared_settings,
+                compile_sh,
                 thread_count,
-                timeout_compilation=arguments.timeout_compilation,
-                timeout_validation=arguments.timeout_validation,
+                BuildPolicy(arguments.build_policy),
+                arguments.timeout_compilation,
+                message=print,
+                on_application_failure=application_failed,
             )
-            outcome.validate_compile_successful = not validation.compile_required or validation.compile_successful
-            outcome.validate_successful = validation.verdict(outcome.execute_successful)
-    if not arguments.execute_inplace:
-        # files outside the project are restored even if the copy is kept
-        restore_outside_patches(project_path)
-    if not (arguments.skip_cleanup or arguments.execute_inplace):
-        delete_configuration(arguments, project_path)
+            if build.result == BuildResult.UNAVAILABLE:
+                print("ERROR: " + build.message)
+            outcome.compile_successful = build.usable
+            if build.tree is not None and build.usable and not arguments.build_only:
+                _execute_and_validate(
+                    arguments, build.tree, config, mode, shared_settings, thread_count, execution_time_regex, outcome
+                )
+        return outcome
+
+    if outcome.compile_successful and not arguments.build_only:
+        _execute_and_validate(
+            arguments, project_path, config, mode, shared_settings, thread_count, execution_time_regex, outcome
+        )
     return outcome
+
+
+def _execute_and_validate(
+    arguments: ProjectManagerArguments,
+    project_path: str,
+    config: str,
+    mode: str,
+    shared_settings: str,
+    thread_count: int,
+    execution_time_regex: Optional[str],
+    outcome: _ModeOutcome,
+) -> None:
+    """Run execute.sh of ``config`` in the compiled ``project_path`` and, for seq and par, validate its output."""
+    ret = execute_configuration(
+        arguments,
+        project_path,
+        config,
+        shared_settings,
+        os.path.join(config, "execute.sh"),
+        thread_count,
+        arguments.timeout_execution,
+        execution_time_regex=execution_time_regex,
+        # only seq and par are repeated; dp and hd are profiling runs
+        repetitions=repetitions_for_mode(mode, arguments.execution_repetitions),
+    )
+    outcome.execute_successful = ret is not None and ret[0] == 0
+
+    # optional output validation (auto-run when validate.sh exists);
+    # no validate.sh => execute.sh alone decides correctness
+    if mode in _VALIDATED_MODES and outcome.execute_successful:
+        validation = run_validation_phase(
+            arguments,
+            project_path,
+            config,
+            shared_settings,
+            thread_count,
+            timeout_compilation=arguments.timeout_compilation,
+            timeout_validation=arguments.timeout_validation,
+        )
+        outcome.validate_compile_successful = not validation.compile_required or validation.compile_successful
+        outcome.validate_successful = validation.verdict(outcome.execute_successful)
 
 
 def __is_selected(config_restrictions: Dict[NAME, List[str]], config: str, mode: str) -> bool:
@@ -395,27 +425,3 @@ def __get_default_thread_count() -> int:
         return 4  # default if no value could be determined
 
     return int(cpu_count / 2)  # account of hyperthreading typically encountered as a default
-
-
-def __handle_application_failure(
-    arguments: ProjectManagerArguments,
-    project_path: str,
-    config: str,
-    settings_path: str,
-    script_path: str,
-    thread_count: int,
-) -> bool:
-    """True when the copy's requested suggestions did not all reach the code.
-
-    A placeholder entry is recorded in that case, so the skipped run stays visible in
-    the reports instead of silently looking like a parallel run without a speedup.
-    """
-    if arguments.execute_inplace:
-        return False
-    result = get_application_result(project_path)
-    if result is None or not result.failure:
-        return False
-    print("WARNING: " + result.summary())
-    print("Skipping this run: executing the copy would measure the UNMODIFIED code.")
-    record_skipped_execution(arguments, project_path, config, settings_path, script_path, thread_count, result)
-    return True
