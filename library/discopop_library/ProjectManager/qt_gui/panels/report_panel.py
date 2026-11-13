@@ -15,7 +15,6 @@ import copy
 import functools
 import json
 import os
-import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -24,9 +23,11 @@ from PySide6.QtGui import QAction, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QHeaderView,
     QLabel,
     QMenu,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -50,10 +51,14 @@ from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinishe
 from discopop_library.ProjectManager.services.project_state import ProjectState, ResultsChanged
 from discopop_library.ProjectManager.services.reports import (
     ReportProblem,
+    NO_VALUE,
     find_latest_report_pdf,
+    format_limit,
+    format_ratio,
+    format_seconds,
+    format_suggestion_ids,
     has_execution_results,
 )
-from discopop_library.ProjectManager.utilities.reset import reset_project
 
 # chart types offered by the "+" button: a menu label and the stem of the tab title
 PLOT_TYPES: Dict[str, Dict[str, str]] = {
@@ -82,6 +87,10 @@ TABLE_COLUMNS = (
     "Amdahl limit",
 )
 
+# the columns holding numbers (right-aligned): Threads, Time, Speedup, Efficiency, Amdahl ceiling, Amdahl limit
+_NUMERIC_COLUMNS = frozenset({6, 8, 9, 10, 11, 12})
+_LABEL_COLUMN = 3  # takes the width the other columns leave
+_EMPTY_TEXT = "No execution results yet — run a configuration in the Execute stage."
 _NOT_APPLIED_BG = "#f3e6f7"
 _BEST_BG = "#d6ebd5"
 _DETAIL_BAR_WIDTH = 280
@@ -121,24 +130,27 @@ def _load_regions(project_dir: str) -> Optional[Dict[int, SuggestionRegion]]:
         return None
 
 
-def _limit_text(limit: Optional[float]) -> str:
-    if limit is None:
-        return "-"
-    return "unbounded" if limit == float("inf") else str(round(limit, 3))
-
-
 def record_fields(record: ExecutionRecord) -> List[tuple[str, str]]:
     """What the detail bar shows for a clicked record."""
     fields = [
         ("Config", record.config),
         ("Mode", record.mode),
-        ("Suggestions", str(record.applied_suggestions) if record.applied_suggestions else "(none)"),
+        ("Suggestions", format_suggestion_ids(record.applied_suggestions) if record.applied_suggestions else "(none)"),
         ("Threads", str(record.thread_count)),
         ("Runtime", f"{record.time:.3f} s" if record.has_measurement else "not executed"),
         ("Status", report_charts.record_status_text(record)),
     ]
     if record.application_failed:
-        fields.append(("Not applied", str(record.failed_suggestions or record.requested_suggestions) or "(unknown)"))
+        fields.append(
+            (
+                "Not applied",
+                (
+                    format_suggestion_ids(record.failed_suggestions or record.requested_suggestions)
+                    if (record.failed_suggestions or record.requested_suggestions)
+                    else "(unknown)"
+                ),
+            )
+        )
     if record.speedup is not None:
         fields.append(("Speedup", f"{record.speedup:.3f}×"))
     if record.efficiency is not None:
@@ -174,19 +186,27 @@ class ReportPanel(Panel):
         self.plot_tabs: List[PlotTab] = []
         self._plot_counter = 0
 
-        self.reset_results_button = widgets.danger_button("Reset Execution Results", self._confirm_reset_results)
-        self.reset_project_button = widgets.danger_button("Reset Project", self._confirm_reset_project)
         self.generate_report_button = widgets.primary_button("Generate PDF Report", self.generate_report)
         self.view_report_button = widgets.create_button("View Report PDF", self.view_report)
         self.view_report_button.setEnabled(False)
-        self.reload_button = widgets.create_button("⟳ Reload", self.update_display)
+        self.reload_button = widgets.create_button("Reload", self.update_display)
+        self.header = widgets.PanelHeader(
+            "Report",
+            "Measured runs of all configurations: table and charts.",
+            [self.view_report_button, self.reload_button, self.generate_report_button],
+        )
 
         # the results: a permanent Table tab and closable chart tabs, added from the "+" menu in the corner
         self.notebook = QTabWidget()
         self.notebook.setTabsClosable(True)
         self.notebook.tabCloseRequested.connect(self._close_tab)
         self.table = self._build_table()
-        self.notebook.addTab(self.table, "Table")
+        # without results a caption says what to do instead of an empty table
+        self.empty_label = widgets.empty_state_label(_EMPTY_TEXT)
+        self.table_stack = QStackedWidget()
+        self.table_stack.addWidget(self.empty_label)
+        self.table_stack.addWidget(self.table)
+        self.notebook.addTab(self.table_stack, "Table")
         table_close = self.notebook.tabBar().tabButton(0, self.notebook.tabBar().ButtonPosition.RightSide)
         if table_close is not None:
             table_close.resize(0, 0)
@@ -204,19 +224,10 @@ class ReportPanel(Panel):
         self.notebook.setCornerWidget(self.add_plot_button, Qt.Corner.TopRightCorner)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(
-            widgets.hbox(
-                self.reset_results_button,
-                self.reset_project_button,
-                self.generate_report_button,
-                self.view_report_button,
-                None,
-                self.reload_button,
-            )
-        )
+        layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
 
-        project_state.subscribe(ResultsChanged, lambda _event: self.update_display())
+        project_state.subscribe(ResultsChanged, lambda _event: self._on_results_changed())
         # open with one chart of every type; more can be added from the "+" menu
         for plot_type in PLOT_TYPES:
             self.add_plot(plot_type)
@@ -231,8 +242,12 @@ class ReportPanel(Panel):
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setStretchLastSection(True)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(_LABEL_COLUMN, QHeaderView.ResizeMode.Stretch)
         return table
 
     def records(self) -> List[ExecutionRecord]:
@@ -266,30 +281,30 @@ class ReportPanel(Panel):
             setting = record.mode if (record.config, record.script, record.mode) != previous else ""
             previous = (record.config, record.script, record.mode)
             not_applied = (
-                textwrap.shorten(
-                    str(record.failed_suggestions or record.requested_suggestions), width=20, placeholder="...]"
-                )
+                format_suggestion_ids(record.failed_suggestions or record.requested_suggestions)
                 if record.application_failed
-                else "-"
+                else NO_VALUE
             )
             values = (
                 config,
                 script,
                 setting,
-                record.label,
-                textwrap.shorten(str(record.applied_suggestions), width=20, placeholder="...]"),
+                record.label or NO_VALUE,
+                format_suggestion_ids(record.applied_suggestions),
                 not_applied,
                 str(record.thread_count),
                 report_charts.record_status_text(record),
                 # a skipped run has no runtime to show
-                str(record.time) if record.has_measurement else "-",
-                "-" if record.speedup is None else str(round(record.speedup, 3)),
-                "-" if record.efficiency is None else str(round(record.efficiency, 3)),
-                "-" if record.amdahl_ceiling is None else str(round(record.amdahl_ceiling, 3)),
-                _limit_text(record.amdahl_limit),
+                format_seconds(record.time) if record.has_measurement else NO_VALUE,
+                format_ratio(record.speedup),
+                format_ratio(record.efficiency),
+                format_ratio(record.amdahl_ceiling),
+                format_limit(record.amdahl_limit),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                if column in _NUMERIC_COLUMNS:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 # a skipped run (suggestions not applied) is neither a failure nor a result
                 if record.application_failed:
                     item.setForeground(QColor(mode_style.status_color(mode_style.NOT_APPLIED_STATUS)))
@@ -299,7 +314,7 @@ class ReportPanel(Panel):
                 if best_index.get(record.config) == row:
                     item.setBackground(QColor(_BEST_BG))
                 self.table.setItem(row, column, item)
-        self.table.resizeColumnsToContents()
+        self.table_stack.setCurrentWidget(self.table if records else self.empty_label)
 
     # ── the chart tabs ───────────────────────────────────────────────────────
 
@@ -431,7 +446,7 @@ class ReportPanel(Panel):
 
     def _close_tab(self, index: int) -> None:
         widget = self.notebook.widget(index)
-        if widget is None or widget is self.table:
+        if widget is None or widget is self.table_stack:
             return
         self.plot_tabs = [tab for tab in self.plot_tabs if tab.widget is not widget]
         self.notebook.removeTab(index)
@@ -448,6 +463,12 @@ class ReportPanel(Panel):
             self.view_report_button.setEnabled(False)
         else:
             self.update_display()
+            self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
+
+    def _on_results_changed(self) -> None:
+        self.update_display()
+        # a reset (Project Setup) deletes the reports
+        if not self._execution_running:
             self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
 
     def _report_progress(self, text: str) -> None:
@@ -486,39 +507,6 @@ class ReportPanel(Panel):
             dialogs.show_warning(self, "No report", message)
             return
         open_file(report_path)
-
-    # ── resets ───────────────────────────────────────────────────────────────
-
-    def _confirm_reset_results(self) -> None:
-        if dialogs.ask_yes_no(
-            self,
-            "Confirm Reset",
-            "Are you sure you want to reset execution results?\nThis will delete all execution data and reports.",
-        ):
-            self.reset(results_only=True)
-
-    def _confirm_reset_project(self) -> None:
-        if dialogs.ask_yes_no(
-            self,
-            "Confirm Reset",
-            "Are you sure you want to reset the entire project?\n"
-            "This will delete all data except the configuration files.",
-        ):
-            self.reset(results_only=False)
-
-    def reset(self, *, results_only: bool) -> None:
-        arguments = copy.copy(self.arguments)
-        arguments.reset = not results_only
-        arguments.reset_execution_results = results_only
-        what = "Execution results" if results_only else "Project"
-        try:
-            reset_project(arguments)
-        except Exception as e:
-            self.status.set(f"Error resetting {what.lower()}: {e}", widgets.STATUS_FAIL)
-            return
-        self.view_report_button.setEnabled(False)
-        self.status.set(f"{what} reset successfully", widgets.STATUS_OK)
-        self.project_state.publish(ResultsChanged())
 
 
 def open_file(path: str) -> None:

@@ -13,11 +13,12 @@ from typing import Any, List, Optional, Tuple
 from unittest import mock
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.plots import hotspot_data
-from discopop_library.ProjectManager.plots.hotspot_data import KIND_LOOP
+from discopop_library.ProjectManager.plots.hotspot_data import KIND_LOOP, MeasurementRun
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.panels import hotspot_panel
@@ -27,7 +28,13 @@ from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services import hotspot_session
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
 from discopop_library.ProjectManager.services.jobs import WorkContext
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, HotspotsChanged, ProjectState
+from discopop_library.ProjectManager.plots.hotspot_data import MeasurementLog
+from discopop_library.ProjectManager.services.project_state import (
+    ConfigChanged,
+    ConfigurationsChanged,
+    HotspotsChanged,
+    ProjectState,
+)
 
 CS_ID = "1 loop 10 1\n2 func 20 1 compute\n3 loop 30 1\n"
 
@@ -49,6 +56,11 @@ class Env:
         self.compile_exit_code = 0
         self.gate: Optional[threading.Event] = None
         self.threads: List[bool] = []
+        self.executed_configs: List[str] = []  # the configuration of every execute.sh run
+        self.failing_configs: List[str] = []  # their execute.sh fails
+        self.compiled_scripts: List[str] = []  # the compile script of every build
+        self.failing_compile_configs: List[str] = []  # their build fails
+        self.gated_configs: Optional[List[str]] = None  # the gate holds only these (None: all)
 
     def add_configuration(self, name: str = "tiny") -> None:
         (self.root / ".discopop" / "project" / "configs" / name).mkdir(parents=True, exist_ok=True)
@@ -82,14 +94,21 @@ class Env:
         private = self.dot_dp / "hotspot_detection" / "private"
         private.mkdir(parents=True, exist_ok=True)
         if name == "compile.sh":
+            self.compiled_scripts.append(script)
+            if Path(config_path).name in self.failing_compile_configs:
+                return (2, 0.1, "", "")
             if self.compile_exit_code != 0:
                 return (self.compile_exit_code, 0.1, "", "")
             (private / "cs_id.txt").write_text(CS_ID)
             (self.dot_dp / "FileMapping.txt").write_text(f"1\t{self.source}\n")
             return (0, 0.1, "", "")
         else:
-            if self.gate is not None:
+            config = Path(config_path).name
+            self.executed_configs.append(config)
+            if self.gate is not None and (self.gated_configs is None or config in self.gated_configs):
                 self.gate.wait(5)
+            if config in self.failing_configs:
+                return (3, 0.25, "", "broken input")
             if self.exit_code == 0:
                 (private / f"hotspot_result_{self.next_result}.txt").write_text("1 2.0\n2 0.5\n3 0\n")
                 self.next_result += 1
@@ -127,44 +146,141 @@ def wait_idle(qtbot: QtBot, panel: HotspotPanel) -> None:
 def test_the_tab_starts_without_results_and_a_configuration(env: Env) -> None:
     panel = env.panel
     tabs = [panel.notebook.tabText(i) for i in range(panel.notebook.count())]
-    assert tabs == ["Measurement", "Runs", "Regions", "Quadrant 1"]
-    assert panel.config_label.text() == "(none selected)"
+    assert tabs == ["Regions", "Runs", "Quadrant 1"]
+    assert panel.header.chip.text() == "No configuration selected"
     assert not any(
-        button.isEnabled()
-        for button in (
-            panel.run_button,
-            panel.stop_button,
-            panel.reinstrument_button,
-            panel.analyze_button,
-            panel.clear_button,
-        )
+        item.isEnabled()
+        for item in (panel.run_button, panel.reinstrument_button, panel.analyze_button, panel.clear_button)
     )
-    assert panel.build_label.text() == "Instrumented build: none (will be compiled)"
-    assert panel.runs_label.text() == "Accumulated runs: 0"
-    assert panel.hotness_label.text() == "Code regions: no analysis results yet"
-    assert panel.warning_label.isHidden()
+    assert panel.facts_label.text() == "Accumulated runs: 0 · Code regions: no analysis results yet"
+    assert panel.regions_stack.currentIndex() == 0
+    assert panel.regions_empty_label.text() == "No measurement yet — press Run Measurement."
+    assert panel.runs_stack.currentIndex() == 0
+    assert panel.output.parent() is panel and panel.output_console() is panel.output
+    assert panel.output_title == "Hotspots"
     assert panel.regions_table.rowCount() == 0 and panel.runs_table.rowCount() == 0
 
 
-def test_selecting_a_configuration_enables_running(env: Env) -> None:
+def configs_in_list(panel: HotspotPanel) -> List[Tuple[str, bool, str]]:
+    items = [panel.config_list.topLevelItem(row) for row in range(panel.config_list.topLevelItemCount())]
+    return [(i.text(0), i.checkState(0) == Qt.CheckState.Checked, i.text(1)) for i in items if i is not None]
+
+
+def test_checking_a_configuration_enables_running(env: Env) -> None:
     env.add_configuration()
-    env.select("tiny")
-    assert env.panel.config_label.text() == "tiny"
+    env.panel.project_state.publish(ConfigurationsChanged())
+    # nothing is selected in the header bar: nothing is checked
+    assert configs_in_list(env.panel) == [("tiny", False, "not measured")]
+    assert not env.panel.run_button.isEnabled() and env.panel.header.chip.text() == "No configuration selected"
+    item = env.panel.config_list.topLevelItem(0)
+    assert item is not None
+    item.setCheckState(0, Qt.CheckState.Checked)
+    assert env.panel.header.chip.text() == "No measurement yet"
     assert env.panel.run_button.isEnabled() and env.panel.reinstrument_button.isEnabled()
-    assert not env.panel.analyze_button.isEnabled() and not env.panel.stop_button.isEnabled()
-    env.select(None)
-    assert not env.panel.run_button.isEnabled()
+    assert env.panel.run_button.text() == "Run Measurement"
+    assert not env.panel.analyze_button.isEnabled() and not env.panel.clear_button.isEnabled()
+    env.panel.select_none_button.click()
+    assert env.panel.selected_configs() == [] and not env.panel.reinstrument_button.isEnabled()
+    # disabled, but still there, saying why
+    assert not env.panel.run_button.isEnabled() and not env.panel.run_button.isHidden()
+    assert env.panel.run_button.toolTip().startswith("Check at least one execution configuration")
+    env.panel.select_all_button.click()
+    assert env.panel.run_button.isEnabled() and env.panel.run_button.toolTip() == ""
+
+
+def test_by_default_the_configuration_of_the_header_bar_is_checked(env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.select("small")
+    assert configs_in_list(env.panel) == [("big", False, "not measured"), ("small", True, "not measured")]
+    assert env.panel.run_button.text() == "Run Measurement"
+    # until the user changes a check box, the list follows the header bar
+    env.select("big")
+    assert env.panel.selected_configs() == ["big"]
+    env.panel.select_all_button.click()
+    assert env.panel.run_button.text() == "Run Measurements"
+    # afterwards the choice stays, and a new configuration starts unchecked
+    env.select("small")
+    env.add_configuration("new")
+    env.panel.project_state.publish(ConfigurationsChanged())
+    assert env.panel.selected_configs() == ["big", "small"]
+
+
+def test_several_configurations_are_measured_one_after_another(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small", "unused"):
+        env.add_configuration(name)
+    env.panel.set_selected_configs(["big", "small"])
+    env.panel.run_button.click()
+    assert [state for _name, _checked, state in configs_in_list(env.panel)][:2] == ["queued", "queued"]
+    wait_idle(qtbot, env.panel)
+    # one build serves both (the same compile.sh), each is executed, the runs are analyzed once
+    assert [name for name, _timeout in env.executed] == ["compile.sh", "execute.sh", "execute.sh"]
+    assert env.executed_configs == ["big", "small"]
+    out = env.panel.output.text()
+    assert "=== big (1/2) ===" in out and "=== small (2/2) ===" in out and out.count("analyzed") == 1
+    assert configs_in_list(env.panel) == [
+        ("big", True, "✓ 1 run"),
+        ("small", True, "✓ 1 run"),
+        ("unused", False, "not measured"),
+    ]
+    assert [cell(env.panel.runs_table, row, 1) for row in range(2)] == ["big", "small"]
+    assert env.panel.status.text() == "Hotspot measurement completed (2 measured)"
+    assert len(env.published) == 1
+
+
+def test_a_failing_configuration_does_not_stop_the_batch(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.failing_configs = ["big"]
+    env.panel.select_all_button.click()
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert env.executed_configs == ["big", "small"] and "analyzed" in env.panel.output.text()
+    assert configs_in_list(env.panel) == [
+        ("big", True, "✗ failed: execution failed (return code 3)"),
+        ("small", True, "✓ 1 run"),
+    ]
+    assert env.panel.status.text() == "Hotspot measurement failed (1 measured, 1 failed ✗)"
+    assert env.panel.status.color == widgets.STATUS_FAIL
+
+
+def test_stop_ends_the_batch(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.panel.select_all_button.click()
+    env.gate = threading.Event()
+    env.panel.run_button.click()
+    qtbot.waitUntil(lambda: env.executed_configs == ["big"], timeout=10000)
+    qtbot.waitUntil(lambda: env.panel.header.chip.text() == "Measuring 1 of 2: big", timeout=10000)
+    assert configs_in_list(env.panel)[0][2] == "⏳ measuring…: 1/2"
+    assert not env.panel.select_all_button.isEnabled()
+    env.panel.run_button.click()
+    env.gate.set()
+    wait_idle(qtbot, env.panel)
+    assert env.executed_configs == ["big"] and "analyzed" not in env.panel.output.text()
+    assert [state for _name, _checked, state in configs_in_list(env.panel)] == ["stopped", "stopped"]
+    assert env.panel.status.text() == "Hotspot measurement stopped (2 stopped)"
 
 
 def test_results_fill_the_tables_and_the_summary(env: Env) -> None:
     env.write_results()
     env.panel.refresh_results()
     panel = env.panel
-    assert panel.hotness_label.text() == "Code regions: 3   YES 1 / MAYBE 1 / NO 1"
-    assert panel.regions_table.rowCount() == 3
+    assert panel.facts_label.text() == "Accumulated runs: 0 · Code regions: 3 (YES 1 / MAYBE 1 / NO 1)"
+    assert panel.regions_table.rowCount() == 3 and panel.regions_stack.currentIndex() == 1
     first = [panel.regions_table.item(0, column).text() for column in range(10)]  # type: ignore[union-attr]
-    assert first[:4] == ["● YES", KIND_LOOP, "main.cpp:10", "-"] and first[4] == "3.000000" and first[9] == "2"
+    assert first[:4] == ["● YES", KIND_LOOP, "main.cpp:10", "—"] and first[4] == "3.00 s" and first[9] == "2"
+    assert first[8] == "0.900" and first[6] == "1.00 s"
+    avg = panel.regions_table.item(0, 4)
+    assert avg is not None and avg.textAlignment() & Qt.AlignmentFlag.AlignRight
     assert panel.clear_button.isEnabled()
+    assert panel.regions_empty_label.text() == "No measurement yet — press Run Measurement."
+
+
+def test_results_without_an_analysis_say_so(env: Env) -> None:
+    env.panel.runs = [MeasurementRun(0, "c")]
+    env.panel._populate_regions_table()
+    assert env.panel.regions_stack.currentIndex() == 0 and "Re-run Analysis" in env.panel.regions_empty_label.text()
 
 
 def test_filters_and_sorting_of_the_regions_table(env: Env) -> None:
@@ -182,11 +298,11 @@ def test_filters_and_sorting_of_the_regions_table(env: Env) -> None:
     panel.kind_combo.setCurrentText("all")
     panel.hotness_checks["NO"].setChecked(True)
     panel._sort_regions_by_section(4)  # Avg (s): descending first
-    assert column(4) == ["3.000000", "1.000000", "0.100000"]
+    assert column(4) == ["3.00 s", "1.00 s", "100 ms"]
     panel._sort_regions_by_section(4)
-    assert column(4) == ["0.100000", "1.000000", "3.000000"]
+    assert column(4) == ["100 ms", "1.00 s", "3.00 s"]
     panel._sort_regions_by_section(3)  # Name
-    assert column(3) == ["compute", "-", "-"]
+    assert column(3) == ["compute", "—", "—"]
 
 
 def test_a_clicked_row_shows_in_the_detail_bar_and_opens_in_vscode(env: Env) -> None:
@@ -230,7 +346,7 @@ def test_chart_tabs_are_added_rendered_and_closed(env: Env) -> None:
     env.panel.refresh_results()
     panel = env.panel
     bars = panel.add_plot("bars")
-    assert panel.notebook.tabText(4) == "Bars 2" and panel.notebook.currentWidget() is bars.widget
+    assert panel.notebook.tabText(3) == "Bars 2" and panel.notebook.currentWidget() is bars.widget
     assert bars.top_n is not None
     bars.top_n.setCurrentText("10")  # re-renders without an error
     profile = panel.add_plot("profile")
@@ -240,11 +356,11 @@ def test_chart_tabs_are_added_rendered_and_closed(env: Env) -> None:
     assert profile.region_combo.currentIndex() == 1
     panel.refresh_results()  # keeps the picked region
     assert profile.region_combo.currentIndex() == 1
-    panel.notebook.tabCloseRequested.emit(4)
+    panel.notebook.tabCloseRequested.emit(3)
     assert len(panel.plot_tabs) == 2
-    for fixed in (0, 1, 2):
+    for fixed in (0, 1):
         panel.notebook.tabCloseRequested.emit(fixed)
-    assert panel.notebook.count() == 5 and panel.notebook.tabText(0) == "Measurement"
+    assert panel.notebook.count() == 4 and panel.notebook.tabText(0) == "Regions"
     panel._close_tab_widget(profile.widget)
     assert len(panel.plot_tabs) == 1 and panel.notebook.currentIndex() == 0
 
@@ -274,8 +390,9 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
 
     panel._on_work_complete = complete  # type: ignore[method-assign]
     panel.run_button.click()
-    assert panel.running and panel.run_button.text() == "⟳ Running..." and panel.stop_button.isEnabled()
-    assert not panel.run_button.isEnabled() and not panel.reinstrument_button.isEnabled()
+    assert panel.running and panel.run_button.is_running() and panel.run_button.isEnabled()
+    assert panel.run_button.text() == "■ Stop" and not panel.reinstrument_button.isEnabled()
+    assert panel.header.chip.text() == "Measurement running" and not panel.run_button.can_run()
     assert panel.status.text() == "⏳ Hotspot measurement in progress..."
     wait_idle(qtbot, panel)
     assert completed_on == [True]  # the handler ran on the main thread
@@ -290,7 +407,8 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
         "✓ ok",
         "2",
     ]
-    assert panel.runs_label.text() == "Accumulated runs: 2"
+    assert panel.facts_label.text().startswith("Accumulated runs: 2 ·")
+    assert panel.header.chip.text() == "Up to date"
     assert panel.regions_table.rowCount() == 3
     out = panel.output.text()
     assert "Compiling 'tiny' in 'hd' mode (inplace)..." in out and "Executing 'tiny' (2/2)..." in out
@@ -298,7 +416,7 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
     assert len(env.published) == 1
     assert panel.status.text() == "Hotspot measurement completed" and panel.status.color == widgets.STATUS_OK
     assert panel.run_button.text() == "Run Measurement" and panel.run_button.isEnabled()
-    assert not panel.stop_button.isEnabled() and panel.analyze_button.isEnabled()
+    assert not panel.run_button.is_running() and panel.analyze_button.isEnabled()
     assert all(env.threads[:1]) is False  # the work ran off the main thread
     log = hotspot_data.deserialize_log(json.loads(Path(hotspot_data.sidecar_path(panel.arguments.dot_dp)).read_text()))
     assert len(log.runs) == 2 and log.compile_script is not None
@@ -309,7 +427,7 @@ def test_a_current_build_is_not_compiled_again_and_reinstrument_does_not_run(qtb
     env.select("tiny")
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert env.panel.build_label.text() == "Instrumented build: current"
+    assert env.panel.header.chip.text() == "Only one run"
     env.executed.clear()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
@@ -343,7 +461,7 @@ def test_a_failing_run_is_reported(qtbot: QtBot, env: Env) -> None:
 def test_a_crashing_worker_does_not_leave_the_tab_stuck(qtbot: QtBot, env: Env) -> None:
     env.add_configuration()
     env.select("tiny")
-    with mock.patch.object(HotspotSession, "run", side_effect=RuntimeError("kaboom")):
+    with mock.patch.object(HotspotSession, "run_batch", side_effect=RuntimeError("kaboom")):
         env.panel.run_button.click()
         wait_idle(qtbot, env.panel)
     assert "Error: kaboom" in env.panel.output.text()
@@ -366,8 +484,8 @@ def test_stop_cancels_the_measurement(qtbot: QtBot, env: Env) -> None:
     env.panel.repetitions.setValue(3)
     env.panel.run_button.click()
     qtbot.waitUntil(lambda: ("execute.sh", 11.0) in env.executed, timeout=10000)
-    env.panel.stop_button.click()
-    assert not env.panel.stop_button.isEnabled()
+    env.panel.run_button.click()
+    assert not env.panel.run_button.isEnabled() and env.panel.run_button.text() == "Stopping…"
     assert (
         env.panel.status.text() == "Stopping hotspot measurement..." and env.panel.status.color == widgets.STATUS_STOP
     )
@@ -401,7 +519,7 @@ def test_rerun_analysis_needs_runs_and_does_not_execute(qtbot: QtBot, env: Env) 
     env.published.clear()
     env.panel.output.set_text("old output")
     env.panel.analyze_button.click()
-    assert env.panel.running and env.panel.stop_button.isEnabled() and env.panel.output.text() == ""
+    assert env.panel.running and env.panel.run_button.is_running() and env.panel.output.text() == ""
     assert env.panel.status.text() == "⏳ Hotspot analysis in progress..."
     wait_idle(qtbot, env.panel)
     assert env.executed == [] and "analyzed" in env.panel.output.text() and len(env.published) == 1
@@ -442,6 +560,7 @@ def test_clearing_asks_first_removes_the_data_and_publishes(
     assert len(env.published) == 1 and env.panel.output.text() == ""
     assert env.panel.status.text() == "Hotspot measurements cleared"
     assert not env.panel.clear_button.isEnabled() and not env.panel.analyze_button.isEnabled()
+    assert env.panel.regions_stack.currentIndex() == 0
 
 
 def test_one_accumulated_run_warns_about_the_ratio(qtbot: QtBot, env: Env) -> None:
@@ -449,7 +568,128 @@ def test_one_accumulated_run_warns_about_the_ratio(qtbot: QtBot, env: Env) -> No
     env.select("tiny")
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert not env.panel.warning_label.isHidden() and "Only one run accumulated" in env.panel.warning_label.text()
+    chip = env.panel.header.chip
+    assert chip.level == widgets.CHIP_WARN and chip.text() == "Only one run"
+    assert "every ratio is 0.5" in chip.detail()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert env.panel.warning_label.isHidden()
+    assert chip.level == widgets.CHIP_OK and chip.text() == "Up to date" and chip.detail() == ""
+
+
+def test_starting_a_job_opens_the_output_pane(qtbot: QtBot, env: Env) -> None:
+    env.add_configuration()
+    env.select("tiny")
+    with qtbot.waitSignal(env.panel.output_requested):
+        env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    with qtbot.waitSignal(env.panel.output_requested):
+        env.panel.reinstrument_button.click()
+    wait_idle(qtbot, env.panel)
+    with qtbot.waitSignal(env.panel.output_requested):
+        env.panel.analyze_button.click()
+    wait_idle(qtbot, env.panel)
+
+
+def test_the_detail_bar_shows_no_stale_placeholder_before_the_event_loop_runs(env: Env) -> None:
+    env.write_results()
+    env.panel.refresh_results()
+    env.panel.show()
+    bar = env.panel.regions_detail
+    item = bar._body_layout.itemAt(0)
+    assert item is not None
+    placeholder = item.widget()
+    assert placeholder is not None
+    bar.show_fields([("Kind", "LOOP")])
+    assert placeholder.isHidden()  # deleteLater has not run yet
+
+
+def test_a_configuration_with_its_own_compile_script_is_instrumented_again(qtbot: QtBot, env: Env) -> None:
+    for name in ("a", "b", "c"):
+        env.add_configuration(name)
+    configs = env.root / ".discopop" / "project" / "configs"
+    (configs / "compile.sh").write_text("$CXX main.cpp\n")
+    (configs / "b" / "compile.sh").write_text("$CXX -DBIG main.cpp\n")
+    env.panel.select_all_button.click()
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    # a: shared script; b: its own; c: the shared one again
+    assert env.compiled_scripts == [
+        str(configs / "compile.sh"),
+        str(configs / "b" / "compile.sh"),
+        str(configs / "compile.sh"),
+    ]
+    assert env.executed_configs == ["a", "b", "c"]
+
+
+def test_a_failed_instrumentation_is_not_reused_by_the_next_configuration(qtbot: QtBot, env: Env) -> None:
+    for name in ("a", "b"):
+        env.add_configuration(name)
+    env.panel.select_all_button.click()
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    # the build is current now; a failing rebuild of a must not let b run on what it left behind
+    env.compiled_scripts.clear()
+    env.executed_configs.clear()
+    env.failing_compile_configs = ["a"]
+    env.panel.reinstrument_button.setEnabled(True)
+    env.panel.session.save_log(replace_compile_script(env.panel.session.load_log(), "/elsewhere/compile.sh"))
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert len(env.compiled_scripts) == 2 and env.executed_configs == ["b"]
+    assert configs_in_list(env.panel)[0][2] == "✗ failed: instrumentation failed (return code 2)"
+
+
+def test_nothing_measured_skips_the_analysis(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.failing_configs = ["big", "small"]
+    env.panel.select_all_button.click()
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert "the analysis is skipped" in env.panel.output.text() and "analyzed" not in env.panel.output.text()
+    assert env.panel.status.text() == "Hotspot measurement failed (2 failed ✗)"
+
+
+def test_a_stop_after_a_measured_configuration_keeps_its_runs(qtbot: QtBot, env: Env) -> None:
+    for name in ("big", "small"):
+        env.add_configuration(name)
+    env.panel.select_all_button.click()
+    env.gate = threading.Event()
+    env.gated_configs = ["small"]
+    env.panel.run_button.click()
+    qtbot.waitUntil(lambda: env.executed_configs == ["big", "small"], timeout=10000)
+    env.panel.run_button.click()
+    env.gate.set()
+    wait_idle(qtbot, env.panel)
+    assert "use Re-run Analysis" in env.panel.output.text() and "analyzed" not in env.panel.output.text()
+    assert [state for _name, _checked, state in configs_in_list(env.panel)] == ["✓ 1 run", "stopped"]
+    assert env.panel.analyze_button.isEnabled()
+
+
+def test_the_list_follows_clearing_and_ignores_changes_while_running(
+    qtbot: QtBot, env: Env, dialog_answers: DialogRecorder
+) -> None:
+    env.add_configuration("big")
+    env.select("big")
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert configs_in_list(env.panel) == [("big", True, "✓ 1 run")]
+    dialog_answers.answer("ask_yes_no", True)
+    env.panel.clear_measurements()
+    assert configs_in_list(env.panel) == [("big", True, "not measured")]
+
+    env.gate = threading.Event()
+    env.panel.run_button.click()
+    qtbot.waitUntil(lambda: env.executed_configs[-1:] == ["big"] and env.panel.running, timeout=10000)
+    env.add_configuration("new")
+    env.panel.project_state.publish(ConfigurationsChanged())
+    assert [name for name, _checked, _state in configs_in_list(env.panel)] == ["big"]
+    env.gate.set()
+    wait_idle(qtbot, env.panel)
+    # rebuilt once the batch ended (the header bar still selects big)
+    assert [(name, checked) for name, checked, _state in configs_in_list(env.panel)] == [("big", True), ("new", False)]
+
+
+def replace_compile_script(log: MeasurementLog, script: str) -> MeasurementLog:
+    log.compile_script = script
+    return log

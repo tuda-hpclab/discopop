@@ -8,7 +8,7 @@
 
 import sys
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 
 import pytest
 from pytestqt.qtbot import QtBot
@@ -18,21 +18,45 @@ from PySide6.QtCore import Qt
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.main_window import (
     TAB_AUTOTUNING,
+    TAB_EDITOR,
+    TAB_EXECUTE,
+    TAB_HOTSPOT,
     TAB_ORDER,
+    TAB_PATCH_REPAIR,
     TAB_PATTERN_DETECTION,
+    TAB_PROFILING,
+    TAB_REPORT,
+    TAB_SETUP,
     MainWindow,
 )
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
+from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ResultsChanged
+from discopop_library.ProjectManager.services.workflow_status import StageState
 
 
 def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
-    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == list(TAB_ORDER)
+    # the sidebar: the setup, the pipeline, the results
+    assert window.tab_names() == [
+        TAB_SETUP,
+        TAB_EDITOR,
+        TAB_HOTSPOT,
+        TAB_PROFILING,
+        TAB_PATTERN_DETECTION,
+        TAB_PATCH_REPAIR,
+        TAB_AUTOTUNING,
+        TAB_EXECUTE,
+        TAB_REPORT,
+    ]
+    assert window.tab_names() == list(TAB_ORDER)
+    assert [window.stack.indexOf(window.tab(name)) for name in TAB_ORDER] == list(range(len(TAB_ORDER)))
+    assert window.tab_title(TAB_SETUP) == "Project Setup" and window.tab_title(TAB_PROFILING) == "Profiling"
+    assert window.tab_title(TAB_EDITOR) == "Configuration Setup" and window.current_tab() == TAB_EDITOR
     assert window.dot_dp_label.toolTip() == str(tmp_path / ".discopop")
 
 
@@ -46,7 +70,7 @@ def test_closing_the_window_cancels_the_jobs_of_the_panels(qtbot: QtBot, tmp_pat
             cancelled.append("busy")
 
     window.add_tab(TAB_ORDER[1], Busy(window.arguments, window.project_state, window.status))
-    assert window.tabs.tabText(1) == TAB_ORDER[1] and isinstance(window.tab(TAB_ORDER[1]), Busy)
+    assert isinstance(window.tab(TAB_ORDER[1]), Busy) and window.stack.indexOf(window.tab(TAB_ORDER[1])) == 1
     window.show()
     window.close()
     assert cancelled == ["busy"]
@@ -66,20 +90,77 @@ def test_tab_host(qtbot: QtBot, tmp_path: Path) -> None:
     qtbot.addWidget(window)
     window.show_tab(TAB_ORDER[2])
     assert window.current_tab() == TAB_ORDER[2]
-    window.set_tab_title(TAB_ORDER[0], "Editor *")
-    assert window.tabs.tabText(0) == "Editor *" and window.current_tab() == TAB_ORDER[2]
+    assert window.nav.current_stage() == TAB_ORDER[2]
+    window.set_tab_title(TAB_EDITOR, "Editor *")
+    assert window.tab_title(TAB_EDITOR) == "Configuration Setup *" and window.current_tab() == TAB_ORDER[2]
+    window.set_tab_title(TAB_EDITOR, "Editor")
+    assert window.tab_title(TAB_EDITOR) == "Configuration Setup"
     window.set_tab_enabled(TAB_ORDER[4], False, "no profiling data")
-    assert not window.tabs.isTabEnabled(4) and window.tabs.tabToolTip(4) == "no profiling data"
+    assert not window.is_tab_enabled(TAB_ORDER[4]) and window.tab_tooltip(TAB_ORDER[4]) == "no profiling data"
+    assert window.nav.detail(TAB_ORDER[4]) == "no profiling data"
+    # a stage that becomes disabled while it is shown gives way to the Configuration Setup stage
+    window.show_tab(TAB_ORDER[4])
+    window.set_tab_enabled(TAB_ORDER[4], False, "gone")
+    assert window.current_tab() == TAB_EDITOR
+
+
+def test_selecting_a_stage_in_the_sidebar_shows_its_panel(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window.nav.select_stage(TAB_REPORT)
+    assert window.current_tab() == TAB_REPORT and window.stack.currentWidget() is window.report_panel
+
+
+def test_the_configuration_selector_is_on_the_stages_that_use_it(qtbot: QtBot, tmp_path: Path) -> None:
+    from discopop_library.ProjectManager.qt_gui.tabs import CONFIG_STAGES
+
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window.show()
+    titles_y = set()
+    for name in TAB_ORDER:
+        window.nav.select_stage(name)
+        qtbot.wait(1)
+        header = getattr(window.tab(name), "header")
+        if name in CONFIG_STAGES:
+            # the first content of the page, below its header
+            layout = window.tab(name).layout()
+            assert window.config_selector_stage() == name and window.config_list.isVisible()
+            assert layout is not None and layout.indexOf(window.config_list) == layout.indexOf(header) + 1
+        else:
+            assert window.config_selector_stage() == "" and not window.config_list.isVisible()
+        titles_y.add(header.title_label.mapTo(window, header.title_label.rect().topLeft()).y())
+    # the titles of all stages are at the same height
+    assert len(titles_y) == 1
+    # a page holding it that is replaced leaves it to the window
+    window.show_tab(TAB_EXECUTE)
+    window.add_tab(TAB_EXECUTE, Panel(window.arguments, window.project_state, window.status))
+    assert window.config_list.parentWidget() is not window.execute_panel
+
+
+def test_the_sidebar_shows_what_the_stages_have_done(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    assert window.nav.stage_state(TAB_PROFILING) == StageState.NOT_RUN
+    for name in ("Data.xml", "dynamic_dependencies.txt", "loop_counter_output.txt", "reduction.txt"):
+        (tmp_path / ".discopop" / "profiler").mkdir(exist_ok=True)
+        (tmp_path / ".discopop" / "profiler" / name).write_text("")
+    (tmp_path / ".discopop" / "FileMapping.txt").write_text("")
+    window.project_state.publish(ResultsChanged())
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.DONE, timeout=2000)
 
 
 def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
-    # nothing was profiled: the tabs that need profiling data are disabled, with a reason
-    for name in (TAB_PATTERN_DETECTION, TAB_AUTOTUNING):
-        index = window.tabs.indexOf(window.tab(name))
-        assert not window.tabs.isTabEnabled(index) and window.tabs.tabToolTip(index)
+    # nothing was profiled: the Autotuning and Pattern Detection stages stay reachable and explain on their page what
+    # is missing; the sidebar marks them locked, with the reason as detail and tooltip
+    assert window.is_tab_enabled(TAB_AUTOTUNING) and window.tab_tooltip(TAB_AUTOTUNING) == "needs profiling data"
+    assert window.nav.stage_state(TAB_AUTOTUNING) == StageState.LOCKED
+    assert window.autotuning_panel.prerequisites_banner.isVisibleTo(window.autotuning_panel)
+    assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
+    assert window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.LOCKED
     # the hotspot panel reads the timeouts of the Execute tab, the report writes into its console
     assert window.hotspot_panel._timeouts == window.execute_panel.timeouts  # type: ignore[attr-defined]
     window.report_panel._report_progress("from the report")
@@ -97,24 +178,55 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
     }
 
 
-def test_profiling_data_enables_the_pattern_detection_tab(qtbot: QtBot, tmp_path: Path) -> None:
+def test_profiling_data_unlocks_the_pattern_detection_stage(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
+    assert window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.LOCKED
     (tmp_path / ".discopop" / "profiler").mkdir()
+    for name in ("Data.xml", "dynamic_dependencies.txt", "loop_counter_output.txt", "reduction.txt"):
+        (tmp_path / ".discopop" / "profiler" / name).write_text("")
+    (tmp_path / ".discopop" / "FileMapping.txt").write_text("")
     window.project_state.publish(ResultsChanged())
-    assert window.tabs.isTabEnabled(window.tabs.indexOf(window.tab(TAB_PATTERN_DETECTION)))
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.NOT_RUN, timeout=2000)
+    assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
 
 
-def test_ctrl_s_saves_through_the_editor(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    saved: List[bool] = []
-    monkeypatch.setattr(EditorPanel, "save_shortcut", lambda _self: saved.append(True))
+def test_ctrl_s_saves_the_stage_in_front(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    saved: List[str] = []
+
+    def recorder(name: str) -> Callable[[object], bool]:
+        def save(_self: object) -> bool:
+            saved.append(name)
+            return True
+
+        return save
+
+    monkeypatch.setattr(EditorPanel, "save", recorder("editor"))
+    monkeypatch.setattr(SetupPanel, "save", recorder("setup"))
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     window.show()
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
-    qtbot.keyClick(window.tabs, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
-    assert saved == [True]
+    qtbot.keyClick(window.stack, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    window.show_tab(TAB_SETUP)
+    qtbot.keyClick(window.stack, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    window.show_tab(TAB_REPORT)
+    qtbot.keyClick(window.stack, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    assert saved == ["editor", "setup"]
+
+
+def test_execute_and_profiling_block_each_other(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window._run_state_changed(window.profiling_panel, True)
+    assert window.profiling_panel._blocked and window.report_panel is not None
+    window._run_state_changed(window.profiling_panel, False)
+    assert not window.profiling_panel._blocked
+    window._run_state_changed(window.execute_panel, True)
+    assert window.execute_panel._blocked and not window.execute_panel.run_button.isEnabled()
+    window._run_state_changed(window.execute_panel, False)
+    assert not window.execute_panel._blocked
 
 
 def test_a_fresh_project_opens_the_wizard_after_showing(
@@ -139,5 +251,5 @@ def test_the_report_follows_the_autotuner_and_waits_for_executions(qtbot: QtBot,
     assert refreshed == [True]
 
     window.report_panel.generate_report_button.setEnabled(True)
-    window.execute_panel._begin_run(window.execute_panel.run_button, "running", "running")
+    window.execute_panel._begin_run("running", "running")
     assert not window.report_panel.generate_report_button.isEnabled()

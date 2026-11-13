@@ -13,14 +13,17 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QColor
-from PySide6.QtWidgets import QDialog, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QListWidget, QListWidgetItem, QSplitter, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.suggestion_table import SuggestionTable
 from discopop_library.ProjectManager.services.patches import discover_patches
+from discopop_library.ProjectManager.services.suggestions import SuggestionInfo, load_suggestions
 
-# what an item of the tree stands for: a whole suggestion, or one patch file of it
-_ROLE_SUGGESTION = Qt.ItemDataRole.UserRole
-_ROLE_PATCH_PATH = Qt.ItemDataRole.UserRole + 1
+# what an item of the file list stands for: one patch file (no path: all patches of the suggestion)
+_ROLE_PATCH_PATH = Qt.ItemDataRole.UserRole
+_ALL_PATCHES = "All patches"
+_PLACEHOLDER = "Select a suggestion on the left to read its patch.\nSelect one of its files to edit it."
 
 
 def patch_display_name(patch_path: str) -> str:
@@ -37,10 +40,23 @@ def patch_display_name(patch_path: str) -> str:
     return os.path.basename(patch_path)
 
 
-class SuggestionBrowserDialog(QDialog):
-    """The suggestions as a tree (suggestion -> patch files) and the selected patch as a diff.
+def read_suggestion_patches(dot_dp_path: str, sid: str, filenames: List[str]) -> str:
+    """The patch files ``filenames`` of suggestion ``sid`` as one text (a file that cannot be read is named in it)."""
+    parts = []
+    for filename in filenames:
+        path = os.path.join(dot_dp_path, "patch_generator", sid, filename)
+        try:
+            with open(path, "r") as f:
+                parts.append(f.read())
+        except IOError as e:
+            parts.append(f"Error reading {filename}: {e}\n")
+    return "\n".join(parts)
 
-    Clicking a suggestion shows all its patches, read-only; clicking a file shows that patch, which can be edited and
+
+class SuggestionBrowserDialog(QDialog):
+    """The suggestions as a table, the patch files of the selected one below it and the patch as a diff.
+
+    Selecting a suggestion shows all its patches, read-only; selecting a file shows that patch, which can be edited and
     saved. The dialog is window-modal but not blocking: open it with ``show()``.
     """
 
@@ -54,58 +70,80 @@ class SuggestionBrowserDialog(QDialog):
         self._current_patch_path: Optional[str] = None
         self._content_on_load = ""
 
-        self.tree = QTreeWidget()
-        self.tree.setHeaderHidden(True)
-        self.tree.itemClicked.connect(self._on_item_clicked)
+        self.table = SuggestionTable(empty_text="No suggestions found.")
+        self.table.set_suggestions(load_suggestions(dot_dp_path))
+        self.table.current_changed.connect(self._on_suggestion_changed)
+        self.file_list = QListWidget()
+        self.file_list.setMaximumHeight(130)
+        self.file_list.currentItemChanged.connect(self._on_file_changed)
         self.save_button = widgets.primary_button("Save File", self.save_current_patch)
         self.save_button.setEnabled(False)
         self.editor = widgets.CodeView()
+        self.editor.setPlaceholderText(_PLACEHOLDER)
         self.editor.textChanged.connect(self._on_text_changed)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addWidget(widgets.heading_label(f"Suggestions ({len(self.patches)})"))
-        left_layout.addWidget(self.tree, 1)
-        if not self.patches:
-            left_layout.addWidget(widgets.caption_label("No suggestions found."))
+        left_layout.addWidget(self.table, 1)
+        left_layout.addWidget(widgets.heading_label("Patch files"))
+        left_layout.addWidget(self.file_list)
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addLayout(widgets.hbox(self.save_button, None))
         right_layout.addWidget(self.editor, 1)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setSizes([420, 880])
+        splitter.setSizes([560, 740])
         layout = QVBoxLayout(self)
         layout.addWidget(splitter)
-        self._fill_tree()
-
-    def _fill_tree(self) -> None:
-        for sid in self.patches:  # in numeric order
-            suggestion = QTreeWidgetItem([f"Suggestion {sid}"])
-            suggestion.setData(0, _ROLE_SUGGESTION, sid)
-            for filename in self.patches[sid]:
-                path = os.path.join(self.dot_dp_path, "patch_generator", sid, filename)
-                patch = QTreeWidgetItem([patch_display_name(path)])
-                patch.setData(0, _ROLE_PATCH_PATH, path)
-                patch.setForeground(0, QColor(widgets.LINK_FG))
-                suggestion.addChild(patch)
-            self.tree.addTopLevelItem(suggestion)
-            suggestion.setExpanded(True)
 
     def suggestion_ids(self) -> List[str]:
-        """The suggestions in the order the tree shows them."""
-        items = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
-        return [str(item.data(0, _ROLE_SUGGESTION)) for item in items if item is not None]
+        """The suggestions in the order the table shows them."""
+        return self.table.visible_ids()
 
-    # ── showing ──────────────────────────────────────────────────────────────
+    def _patch_path(self, sid: str, filename: str) -> str:
+        return os.path.join(self.dot_dp_path, "patch_generator", sid, filename)
 
-    def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
-        path = item.data(0, _ROLE_PATCH_PATH)
+    def _fill_file_list(self, sid: Optional[str]) -> None:
+        self.file_list.blockSignals(True)
+        self.file_list.clear()
+        if sid is not None and sid in self.patches:
+            self.file_list.addItem(QListWidgetItem(_ALL_PATCHES))
+            for filename in self.patches[sid]:
+                path = self._patch_path(sid, filename)
+                item = QListWidgetItem(patch_display_name(path))
+                item.setData(_ROLE_PATCH_PATH, path)
+                item.setToolTip(filename)
+                item.setForeground(QColor(widgets.LINK_FG))
+                self.file_list.addItem(item)
+            self.file_list.setCurrentRow(0)
+        self.file_list.blockSignals(False)
+
+    def _on_suggestion_changed(self, info: Optional[SuggestionInfo]) -> None:
+        if info is None:
+            self._keep_unsaved_changes()
+            self._fill_file_list(None)
+            self._current_patch_path = None
+            self._show("", editable=False)
+            return
+        self._fill_file_list(info.id)
+        self.show_suggestion(info.id)
+
+    def _on_file_changed(self, current: Optional[QListWidgetItem], _previous: Optional[QListWidgetItem]) -> None:
+        sid = self.table.current_suggestion()
+        if current is None or sid is None:
+            return
+        path = current.data(_ROLE_PATCH_PATH)
         if path is not None:
             self.show_patch(str(path))
         else:
-            self.show_suggestion(str(item.data(0, _ROLE_SUGGESTION)))
+            self.show_suggestion(sid.id)
+
+    # ── showing ──────────────────────────────────────────────────────────────
 
     def _keep_unsaved_changes(self) -> None:
         if self.is_modified() and dialogs.ask_yes_no(
@@ -116,16 +154,9 @@ class SuggestionBrowserDialog(QDialog):
     def show_suggestion(self, sid: str) -> None:
         """All patches of suggestion ``sid``, read-only."""
         self._keep_unsaved_changes()
-        parts = []
-        for filename in self.patches.get(sid, []):
-            path = os.path.join(self.dot_dp_path, "patch_generator", sid, filename)
-            try:
-                with open(path, "r") as f:
-                    parts.append(f.read())
-            except IOError as e:
-                parts.append(f"Error reading {filename}: {e}\n")
+        content = read_suggestion_patches(self.dot_dp_path, sid, self.patches.get(sid, []))
         self._current_patch_path = None
-        self._show("\n".join(parts), editable=False)
+        self._show(content, editable=False)
 
     def show_patch(self, patch_path: str) -> None:
         """One patch, editable."""

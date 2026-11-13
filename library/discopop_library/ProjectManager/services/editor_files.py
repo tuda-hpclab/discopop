@@ -6,7 +6,8 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""What the editors of the GUI (the Editor tab and the compilation editor) know about the files they edit.
+"""What the editors of the GUI (the Configuration Setup and Project Setup stages, in the Tk GUI the Editor tab and
+the compilation editor) know about the files they edit.
 
 The names and tooltips of the files, the placeholders shown instead of a file that does not exist, the formatting of
 JSON settings, the summary of the execution time setting, the output of the last recorded run and the test
@@ -21,7 +22,7 @@ from typing import Optional, Tuple
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import VALIDATION_COMPILE_SCRIPT_NAME
 
-# the shared files of the compilation editor, in the order of its tabs
+# the shared files of the Project Setup stage (the Tk compilation editor), in the order of its tabs
 COMPILATION_FILES = [
     "compile.sh",
     VALIDATION_COMPILE_SCRIPT_NAME,

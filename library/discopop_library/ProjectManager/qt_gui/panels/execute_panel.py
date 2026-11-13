@@ -23,13 +23,12 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPushButton,
     QRadioButton,
     QScrollArea,
     QSpinBox,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -56,10 +55,8 @@ from discopop_library.ProjectManager.services.execution_run import (
     SUGGESTIONS_MANUAL,
     SUGGESTIONS_NONE,
     ExecutionRequest,
-    PreparationRequest,
     execution_time_summary,
     run_execution,
-    run_preparation,
     suggestion_ids_to_apply,
 )
 from discopop_library.ProjectManager.services.jobs import (
@@ -98,28 +95,22 @@ _STATUS_COLORS = {
 }
 
 RUN_TEXT = "Run"
-RUNNING_TEXT = "⟳ Running..."
-PREPARE_TEXT = "Prepare Pattern Detection"
-PREPARING_TEXT = "⟳ Preparing..."
 _MAX_THREADS = 4096
 _MAX_SECONDS = 10_000_000
 _MAX_REPETITIONS = 1000
 _STATUS_RESET_MS = 3000
 
 
-def _row_label(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setMinimumWidth(140)
-    return label
-
-
 class ExecutePanel(Panel):
     """The Execute tab.
 
     ``tabs`` is offered for tab switches (the Execute tab does not need one at the moment). ``console`` shows the
-    output of a run; the Report panel writes the progress of its PDF report into it. ``timeouts()`` returns the
-    timeout settings for the Hotspot panel.
+    output of a run (shown in the output pane of the main window); the Report panel writes the progress of its PDF
+    report into it. ``timeouts()`` returns the timeout settings for the Hotspot panel. :meth:`set_blocked` keeps a run
+    from starting while the Profiling stage runs the configuration.
     """
+
+    output_title = "Execute"
 
     def __init__(
         self,
@@ -133,12 +124,14 @@ class ExecutePanel(Panel):
     ) -> None:
         super().__init__(arguments, project_state, status, parent)
         self.tabs = tabs
-        # told True when a run or preparation starts and False when it ended (the Report tab holds its report back)
+        # told True when a run starts and False when it ended (the Report tab holds its report back)
         self._run_state_changed = run_state_changed
+        self._blocked = False
         self._job: Optional[WorkRunner] = None
         self._browser: Optional[QWidget] = None
         self._autotuner_prefix_auto_value = ""
         self._publishing = False
+        self._run_failed = False
 
         cpu_count = os.cpu_count() or 4
         self._cpu_count = cpu_count
@@ -150,7 +143,13 @@ class ExecutePanel(Panel):
             check.setChecked(mode == "seq")
             check.setEnabled(False)
             self.mode_checks[mode] = check
-        modes_box = widgets.group_box("Execution Modes", widgets.vbox(*self.mode_checks.values()))
+        modes_grid = QGridLayout()
+        modes_grid.setContentsMargins(0, 0, 0, 0)
+        for index, check in enumerate(self.mode_checks.values()):
+            modes_grid.addWidget(check, index // 2, index % 2)
+        modes_grid.setColumnStretch(2, 1)
+        modes_section = widgets.FormSection("Modes")
+        modes_section.add_widget(modes_grid)
 
         # ── execution settings ───────────────────────────────────────────────
         self.thread_spin = QSpinBox()
@@ -163,46 +162,23 @@ class ExecutePanel(Panel):
         self.repetitions_spin.setValue(DEFAULT_MEASURED_REPETITIONS)
         # The setting itself lives in Editor -> execute.sh; it is mirrored here read-only, because the run is started
         # from this tab and this tab must say which of the two times it produces.
-        self.execution_time_summary_label = widgets.caption_label("")
+        self.execution_time_summary_label = QLabel("")
+        self.execution_time_summary_label.setWordWrap(True)
         self.label_prefix_edit = QLineEdit()
-        settings_layout = QGridLayout()
-        settings_layout.addWidget(_row_label(f"Thread Count: (1-{cpu_count})"), 0, 0)
-        settings_layout.addLayout(widgets.hbox(self.thread_spin, None), 0, 1)
-        settings_layout.addWidget(_row_label("Repetitions:"), 1, 0)
-        settings_layout.addLayout(
-            widgets.hbox(
-                self.repetitions_spin,
-                widgets.caption_label("(median of N is reported; 1 = measure once. seq/par only)"),
-                None,
-            ),
-            1,
-            1,
+        run_section = widgets.FormSection("Run")
+        run_section.add_row("Threads:", self.thread_spin, f"This machine has {cpu_count} CPUs.")
+        run_section.add_row(
+            "Repetitions:",
+            self.repetitions_spin,
+            "The median of N runs is reported; 1 = measure once. Only seq and par runs are repeated.",
         )
-        settings_layout.addWidget(_row_label("Execution time:"), 2, 0)
-        settings_layout.addWidget(self.execution_time_summary_label, 2, 1)
-        settings_layout.addWidget(_row_label("Label Prefix:"), 3, 0)
-        settings_layout.addWidget(self.label_prefix_edit, 3, 1)
-        settings_layout.setColumnStretch(1, 1)
-        settings_box = widgets.group_box("Execution Settings", settings_layout)
+        run_section.add_row("Execution time:", self.execution_time_summary_label)
+        run_section.add_row("Label prefix:", self.label_prefix_edit, stretch_field=True)
 
-        # ── timeouts ─────────────────────────────────────────────────────────
+        # ── timeouts, logging and behavior (advanced) ────────────────────────
         self.timeout_execution_spin = self._timeout_spin()
         self.timeout_compilation_spin = self._timeout_spin()
         self.timeout_validation_spin = self._timeout_spin()
-        timeout_layout = QGridLayout()
-        for row, (text, spin, hint) in enumerate(
-            (
-                ("Execution (s):", self.timeout_execution_spin, "(0 = disabled)"),
-                ("Compilation (s):", self.timeout_compilation_spin, "(0 = disabled)"),
-                ("Validation (s):", self.timeout_validation_spin, "(0 = disabled, validate.sh only)"),
-            )
-        ):
-            timeout_layout.addWidget(_row_label(text), row, 0)
-            timeout_layout.addLayout(widgets.hbox(spin, widgets.caption_label(hint), None), row, 1)
-        timeout_layout.setColumnStretch(1, 1)
-        timeout_box = widgets.group_box("Timeout Settings", timeout_layout)
-
-        # ── logging and behavior ─────────────────────────────────────────────
         self.log_level_combo = widgets.log_level_selector("WARNING")
         self.inplace_check = QCheckBox("Execute in-place (skip project copy)")
         self.inplace_check.setToolTip(
@@ -214,13 +190,15 @@ class ExecutePanel(Panel):
             "Warning: Enabling this may result in significant disk space usage\n"
             "as project copies are retained after execution."
         )
-        behavior_box = widgets.group_box(
-            "Logging & Behavior",
-            widgets.vbox(
-                widgets.hbox(_row_label("Log Level:"), self.log_level_combo, None),
-                self.inplace_check,
-                self.skip_cleanup_check,
-            ),
+        advanced = widgets.FormSection()
+        advanced.add_row("Execution timeout (s):", self.timeout_execution_spin, "0 = disabled")
+        advanced.add_row("Compilation timeout (s):", self.timeout_compilation_spin, "0 = disabled")
+        advanced.add_row("Validation timeout (s):", self.timeout_validation_spin, "0 = disabled; validate.sh only")
+        advanced.add_row("Log level:", self.log_level_combo)
+        advanced.add_widget(self.inplace_check)
+        advanced.add_widget(self.skip_cleanup_check)
+        self.advanced_section = widgets.CollapsibleSection(
+            "Advanced", advanced, summary="timeouts, log level, in-place, cleanup"
         )
 
         # ── apply suggestions ────────────────────────────────────────────────
@@ -238,71 +216,59 @@ class ExecutePanel(Panel):
         self.none_radio.setChecked(True)
         self.apply_suggestions_rb.setEnabled(False)
         self.apply_autotuner_suggestions_rb.setEnabled(False)
-        self.suggestions_count_label = widgets.caption_label("No suggestions available")
+        # the normal font size, as the same count on the Autotuning page
+        self.suggestions_count_label = QLabel("No suggestions available")
+        self.suggestions_count_label.setWordWrap(False)
         self.browse_edit_suggestions_button = widgets.create_button("Browse / Edit →", self._open_suggestion_browser)
         self.browse_edit_suggestions_button.setEnabled(False)
         self.execute_suggestion_selector = SuggestionSelector(
             self.arguments.dot_dp, "execute", on_change=self._update_suggestion_count
         )
         self.autotuner_suggestions_info_label = widgets.caption_label("No autotuner results available")
-        suggestions_layout = QVBoxLayout()
-        suggestions_layout.addWidget(self.none_radio)
-        suggestions_layout.addWidget(self.apply_suggestions_rb)
-        suggestions_layout.addLayout(
-            widgets.hbox(self.suggestions_count_label, self.browse_edit_suggestions_button, None, margins=0)
+        suggestions_section = widgets.FormSection("Apply suggestions")
+        suggestions_section.add_widget(self.none_radio)
+        suggestions_section.add_widget(self.apply_suggestions_rb)
+        suggestions_section.add_widget(
+            widgets.hbox(self.suggestions_count_label, None, self.browse_edit_suggestions_button, margins=0)
         )
-        suggestions_layout.addWidget(self.execute_suggestion_selector)
-        suggestions_layout.addSpacing(5)
-        suggestions_layout.addWidget(self.apply_autotuner_suggestions_rb)
-        suggestions_layout.addWidget(self.autotuner_suggestions_info_label)
-        suggestions_box = widgets.group_box("Apply Suggestions", suggestions_layout)
+        suggestions_section.add_widget(self.execute_suggestion_selector)
+        suggestions_section.add_widget(self.apply_autotuner_suggestions_rb)
+        suggestions_section.add_widget(self.autotuner_suggestions_info_label)
         self.suggestions_group.buttonToggled.connect(lambda _button, _checked: self._on_suggestions_mode_change())
 
-        # ── buttons ──────────────────────────────────────────────────────────
-        self.run_button = widgets.primary_button(RUN_TEXT, self._run_execution)
+        # ── actions in the header ────────────────────────────────────────────
+        self.run_button = widgets.RunStopButton(RUN_TEXT, self._run_execution, self._stop_execution)
         self.run_button.setEnabled(False)
-        self.stop_execution_button = widgets.danger_button("Stop", self._stop_execution)
-        self.stop_execution_button.setEnabled(False)
-        self.prepare_pattern_detection_button = widgets.create_button(
-            PREPARE_TEXT,
-            self._prepare_pattern_detection,
-            tooltip="Runs the selected configuration in 'dp' mode with 'inplace' enabled.",
+        self.header = widgets.PanelHeader(
+            "Execute",
+            "Build and run the selected configuration in the chosen modes and record the measurements.",
+            [self.run_button],
         )
-        self.prepare_pattern_detection_button.setEnabled(False)
 
-        # ── layout: settings (scrollable) with the buttons below, the output on the right ─────────────
+        # ── layout: the header, below it the settings column (scrollable, left-aligned) ─────────────
+        column = QWidget()
+        column_layout = QVBoxLayout(column)
+        column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.setSpacing(widgets.CARD_SPACING)
+        for section in (modes_section, run_section, suggestions_section, self.advanced_section):
+            column_layout.addWidget(section)
+        column_layout.addStretch(1)
         options = QWidget()
-        options_layout = QVBoxLayout(options)
-        for box in (modes_box, settings_box, timeout_box, behavior_box, suggestions_box):
-            options_layout.addWidget(box)
+        options_layout = QHBoxLayout(options)
+        options_layout.setContentsMargins(0, 0, 8, 0)
+        options_layout.addWidget(column, 100, Qt.AlignmentFlag.AlignTop)
         options_layout.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(options)
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(scroll, 1)
-        left_layout.addWidget(separator)
-        left_layout.addLayout(
-            widgets.hbox(self.run_button, self.stop_execution_button, self.prepare_pattern_detection_button, None)
-        )
 
-        self.console = widgets.OutputConsole()
-        output_box = widgets.group_box("Output", widgets.vbox(self.console))
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left)
-        splitter.addWidget(output_box)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([650, 650])
+        # the output is shown in the output pane of the main window
+        self.console = self.make_console()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addWidget(self.header)
+        layout.addWidget(scroll, 1)
 
         project_state.subscribe(ConfigChanged, lambda _event: self._on_config_changed())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self._update_modes())
@@ -321,6 +287,9 @@ class ExecutePanel(Panel):
         return spin
 
     # ── what the other panels read ───────────────────────────────────────────
+
+    def output_console(self) -> widgets.OutputConsole:
+        return self.console
 
     def timeouts(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         """The execution, compilation and validation timeouts in seconds; 0 is disabled.
@@ -381,7 +350,6 @@ class ExecutePanel(Panel):
                 check.setChecked(mode == "seq")
             if not self.is_running():
                 self.run_button.setEnabled(False)
-                self.prepare_pattern_detection_button.setEnabled(False)
             self.console.clear()
             return
         config_path = os.path.join(self.arguments.project_config_dir, config)
@@ -391,10 +359,15 @@ class ExecutePanel(Panel):
             self.mode_checks[mode].setEnabled(exists)
             if not exists:
                 self.mode_checks[mode].setChecked(False)
-        # a run in progress keeps both buttons off until it is finished
+        # a run in progress keeps the button off until it is finished; _end_run updates it
         if not self.is_running():
-            self.run_button.setEnabled(True)
-            self.prepare_pattern_detection_button.setEnabled(True)
+            self.run_button.setEnabled(not self._blocked)
+            self.run_button.setToolTip("The Profiling stage runs the configuration" if self._blocked else "")
+
+    def set_blocked(self, blocked: bool) -> None:
+        """The Profiling stage runs the configuration in place: no run meanwhile."""
+        self._blocked = blocked
+        self._update_modes()
 
     # ── the suggestions ──────────────────────────────────────────────────────
 
@@ -408,6 +381,8 @@ class ExecutePanel(Panel):
                 self.label_prefix_edit.setText("")
             self._autotuner_prefix_auto_value = ""
         self.execute_suggestion_selector.set_enabled(mode == SUGGESTIONS_MANUAL)
+        # only manually selected suggestions use it: hidden otherwise rather than a large disabled table
+        self.execute_suggestion_selector.setVisible(mode == SUGGESTIONS_MANUAL)
 
     def _update_suggestion_count(self) -> None:
         """The "N of M selected" label from the selector."""
@@ -433,6 +408,7 @@ class ExecutePanel(Panel):
         if total == 0 and self.suggestions_mode() == SUGGESTIONS_MANUAL:
             self.set_suggestions_mode(SUGGESTIONS_NONE)
         self.execute_suggestion_selector.set_enabled(total > 0 and self.suggestions_mode() == SUGGESTIONS_MANUAL)
+        self.execute_suggestion_selector.setVisible(self.suggestions_mode() == SUGGESTIONS_MANUAL)
 
         config = self.project_state.current_config or ""
         executed = autotuner_results_exist(self.arguments.dot_dp)
@@ -525,7 +501,7 @@ class ExecutePanel(Panel):
                 configuration,
             ),
         )
-        self._begin_run(self.run_button, RUNNING_TEXT, "⏳ Execution in progress...")
+        self._begin_run("Running", "⏳ Execution in progress...")
         restore_logging = widgets.redirect_logging_to_console(self.console, log_level)
         logging.getLogger("Execute").info(f"Starting execution of configuration: {configuration}")
         arguments = self.arguments
@@ -535,22 +511,28 @@ class ExecutePanel(Panel):
             lambda event: self._on_execution_event(event, restore_logging),
         )
 
-    def _begin_run(self, button: QPushButton, button_text: str, status_text: str) -> None:
-        """Disable the buttons, enable Stop, clear the output."""
-        self.stop_execution_button.setEnabled(True)
-        self.run_button.setEnabled(False)
-        self.prepare_pattern_detection_button.setEnabled(False)
-        button.setText(button_text)
+    def _begin_run(self, chip_text: str, status_text: str) -> None:
+        """Turn Run into Stop, clear the output and open the output pane."""
+        self._run_failed = False
+        self.run_button.setEnabled(False)  # remembered: "can a run be started" once this one ended
+        self.run_button.set_running(True)
+        self.header.chip.set_status(widgets.CHIP_BUSY, chip_text)
         self.status.set(status_text, widgets.STATUS_BUSY)
         self.console.clear()
+        self.output_requested.emit()
         if self._run_state_changed is not None:
             self._run_state_changed(True)
 
-    def _end_run(self) -> None:
+    def _end_run(self, stopped: bool = False) -> None:
+        """Back to Run; the chip tells how the run ended (stopped / failed / finished)."""
         self._job = None
-        self.run_button.setText(RUN_TEXT)
-        self.prepare_pattern_detection_button.setText(PREPARE_TEXT)
-        self.stop_execution_button.setEnabled(False)
+        self.run_button.set_running(False)
+        if stopped:
+            self.header.chip.set_status(widgets.CHIP_WARN, "Stopped")
+        elif self._run_failed:
+            self.header.chip.set_status(widgets.CHIP_ERROR, "Failed")
+        else:
+            self.header.chip.set_status(widgets.CHIP_OK, "Finished")
         self._update_modes()
         if self._run_state_changed is not None:
             self._run_state_changed(False)
@@ -560,6 +542,7 @@ class ExecutePanel(Panel):
         if isinstance(event, WorkOutput):
             self._append_output(event.text)
         elif isinstance(event, WorkStatus):
+            self._run_failed = self._run_failed or event.kind == StatusKind.FAIL
             if not self._stop_requested():
                 self.status.set(event.text, _STATUS_COLORS[event.kind])
         elif isinstance(event, WorkFinished):
@@ -570,9 +553,9 @@ class ExecutePanel(Panel):
                 self._append_output(f"\nError: {event.error}\n")
             else:
                 failures = event.result
-            self._finish_execution(failures)
+            self._finish_execution(failures, failed=event.error is not None)
 
-    def _finish_execution(self, application_failures: List[Tuple[str, Any]]) -> None:
+    def _finish_execution(self, application_failures: List[Tuple[str, Any]], failed: bool = False) -> None:
         if application_failures:
             modes_str = ", ".join(mode for mode, _result in application_failures)
             details = "\n\n".join(mode + ": " + result.summary() for mode, result in application_failures)
@@ -594,7 +577,9 @@ class ExecutePanel(Panel):
                 "parallel run without a speedup.",
             )
         self._append_output("\n=== Execution complete ===\n")
-        self._end_run()
+        stopped = self._stop_requested()
+        self._run_failed = self._run_failed or failed or bool(application_failures)
+        self._end_run(stopped=stopped)
         self.inplace_check.setChecked(False)
         if application_failures:
             self.status.set("⚠ Suggestion application failed", widgets.STATUS_FAIL)
@@ -602,60 +587,6 @@ class ExecutePanel(Panel):
             self.status.set("Ready", widgets.STATUS_IDLE)
         self.project_state.publish(ConfigurationsChanged())
         self.project_state.publish(ResultsChanged())
-
-    def _prepare_pattern_detection(self) -> None:
-        self._prepare_inplace_run(
-            mode="dp",
-            settings_filename="dp_settings.json",
-            button=self.prepare_pattern_detection_button,
-            button_label=PREPARE_TEXT,
-            status_noun="pattern detection",
-        )
-
-    def _prepare_inplace_run(
-        self, mode: str, settings_filename: str, button: QPushButton, button_label: str, status_noun: str
-    ) -> None:
-        """Compile and execute the selected configuration in ``mode`` with inplace execution."""
-        configuration = self.project_state.current_config
-        if not configuration:
-            dialogs.show_warning(self, "No Configuration Selected", "Please select a configuration first.")
-            return
-        request = PreparationRequest(
-            configuration=configuration,
-            mode=mode,
-            settings_filename=settings_filename,
-            status_noun=status_noun,
-            timeout_execution=self.timeout_execution_spin.value(),
-            timeout_compilation=self.timeout_compilation_spin.value(),
-            timeout_validation=self.timeout_validation_spin.value(),
-        )
-        self._begin_run(button, PREPARING_TEXT, f"⏳ Preparing {status_noun}...")
-        restore_logging = widgets.redirect_logging_to_console(self.console, "INFO")
-        arguments = self.arguments
-        failure_status = f"{status_noun.capitalize()} preparation failed"
-        logger = logging.getLogger(f"Prepare {status_noun.title()}")
-
-        def handle(event: WorkEvent) -> None:
-            if isinstance(event, WorkOutput):
-                self._append_output(event.text)
-            elif isinstance(event, WorkStatus):
-                self.status.set(event.text, _STATUS_COLORS[event.kind])
-            elif isinstance(event, WorkFinished):
-                job = self._job
-                restore_logging()
-                if event.error is not None:  # a crash of the work must not leave the buttons disabled
-                    logger.error("preparation failed: %s", event.error)
-                    self._append_output(f"\nError: {event.error}\n")
-                success = event.error is None and bool(event.result)
-                self._end_run()
-                button.setText(button_label)
-                if success or (job is not None and job.cancel_requested):
-                    self.status.set("Ready", widgets.STATUS_IDLE)
-                else:
-                    self.status.set(failure_status, widgets.STATUS_FAIL, reset_ms=_STATUS_RESET_MS)
-                self.project_state.publish(ResultsChanged())
-
-        self._job = start_work(self, lambda ctx: run_preparation(arguments, request, ctx), handle)
 
     def _stop_requested(self) -> bool:
         """Whether Stop was pressed; a progress status the work sends afterwards would hide "Stopping ..."."""
@@ -665,7 +596,7 @@ class ExecutePanel(Panel):
         job = self._job
         if job is not None:
             job.cancel()
-        self.stop_execution_button.setEnabled(False)
+        self.run_button.set_stopping()
         self.status.set("Stopping execution...", widgets.STATUS_STOP)
 
     def cancel_jobs(self) -> None:

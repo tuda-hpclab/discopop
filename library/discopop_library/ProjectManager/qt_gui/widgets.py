@@ -12,14 +12,24 @@ The counterpart of ``gui/widgets.py``: one place for colors, fonts, buttons, the
 editors and the thread selector, so components of the same kind look the same in every panel.
 """
 
+import functools
 import logging
-from typing import Callable, Dict, Iterable, Optional, Union
+import os
+import tempfile
+import time
 
-from PySide6.QtCore import QObject, QRect, QRegularExpression, Qt, Signal, Slot
+import shiboken6
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+
+from PySide6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QRegularExpression, QStandardPaths, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
     QRegularExpressionValidator,
     QSyntaxHighlighter,
     QTextCharFormat,
@@ -27,16 +37,25 @@ from PySide6.QtGui import (
     QTextDocument,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLayout,
+    QLayoutItem,
     QPlainTextEdit,
     QProxyStyle,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QStyle,
     QStyleOption,
+    QStyleOptionComboBox,
+    QStylePainter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -60,7 +79,10 @@ CONSOLE_FG = CATPPUCCIN_FG
 
 # --- semantic status colors (status line, result marks) ---
 STATUS_IDLE = "gray"
-STATUS_BUSY = "#1e66f5"
+# the color of hint texts in a style sheet (captions, empty views, idle status lines): the palette's placeholder
+# color, which the themes set dark enough to read on the window and on a card; labels set to STATUS_IDLE get it
+HINT_COLOR = "palette(placeholder-text)"
+STATUS_BUSY = "#2563eb"
 STATUS_OK = "#2e7d32"
 STATUS_FAIL = "#c62828"
 STATUS_STOP = "#e65100"
@@ -74,9 +96,15 @@ VARIANT_DEFAULT = "default"
 VARIANT_PRIMARY = "primary"
 VARIANT_SUCCESS = "success"
 VARIANT_DANGER = "danger"
+# a destructive action that is not the page's main one: red text and frame, filled red while hovered
+VARIANT_DANGER_OUTLINE = "dangerOutline"
+
+# the accent of the application: the primary buttons and, as the highlight of the Light and Dark themes, selections
+ACCENT = "#2563eb"
+ACCENT_HOVER = "#1d4ed8"
 
 _VARIANT_COLORS = {
-    VARIANT_PRIMARY: ("#1e66f5", "#1a57d1"),
+    VARIANT_PRIMARY: (ACCENT, ACCENT_HOVER),
     VARIANT_SUCCESS: ("#2e7d32", "#256628"),
     VARIANT_DANGER: ("#c62828", "#a52222"),
 }
@@ -97,14 +125,53 @@ CONSOLE_TAG_COLORS: Dict[str, str] = {
 }
 
 
-def _button_rules() -> str:
+# The style sheet names palette roles (``palette(button)``, ``palette(mid)``, ...) instead of fixed colors, so the
+# application follows the light or dark color scheme of the desktop; only the accent colors of the button variants
+# and the status chips are fixed (they carry white text and read on both).
+
+
+def button_colors(palette: QPalette) -> Tuple[QColor, QColor, QColor, QColor]:
+    """Background, border, hover and pressed color of a default button, derived from the window color.
+
+    The palette's own button color often equals the window color and its "mid" border is faint, which left a plain
+    button ("Help") barely visible; these stand out from the window, a card and the page of a tab in both themes.
+    """
+    window = palette.color(QPalette.ColorRole.Window)
+    if is_dark(palette):
+        return window.lighter(150), window.lighter(230), window.lighter(185), window.lighter(120)
+    return window.lighter(112), window.darker(145), window.darker(106), window.darker(115)
+
+
+def _button_rules(palette: Optional[QPalette] = None) -> str:
+    if palette is not None:
+        background, border, hover, pressed = (color.name() for color in button_colors(palette))
+        disabled_text = _secondary_text(palette)
+        flat_border = _mix(border_color(palette), palette.color(QPalette.ColorRole.Window), 0.85)
+        flat_text = accent_text_color(palette).name()
+    else:
+        background, border, hover, pressed = "palette(button)", "palette(mid)", "palette(midlight)", "palette(mid)"
+        disabled_text = "palette(mid)"
+        flat_border, flat_text = "palette(midlight)", "palette(link)"
     rules = [
-        # the default look: a light, framed button (a border radius without a border would draw a bare label)
-        "QPushButton { padding: 5px 14px; border-radius: 6px; border: 1px solid #b8b8b8;"
-        " background-color: #f4f4f4; }",
-        "QPushButton:hover { background-color: #e6e6e6; }",
-        "QPushButton:pressed { background-color: #d8d8d8; }",
-        "QPushButton:disabled { color: #9a9a9a; background-color: #ececec; border-color: #d0d0d0; }",
+        # the default look: a framed button that stands out from the window (a border radius without a border would
+        # draw a bare label)
+        f"QPushButton {{ padding: 5px 14px; border-radius: 6px; border: 1px solid {border};"
+        f" background-color: {background}; color: palette(button-text); }}",
+        f"QPushButton:hover {{ background-color: {hover}; }}",
+        f"QPushButton:pressed {{ background-color: {pressed}; }}",
+        # disabled: still a framed button (it says what could be done), with its text grayed out
+        f"QPushButton:disabled {{ color: {disabled_text}; border: 1px solid {border};"
+        " background-color: palette(window); }",
+        # a compact button: framed like the default one, with less padding, for slim bars (the output pane's Clear)
+        f"QPushButton#{COMPACT_NAME} {{ padding: 2px 10px; }}",
+        # a flat button: the "⋯" overflow menus, "Details", the toggles of collapsible sections; lighter than a
+        # framed button, but still recognizable as one: a faint frame and the text in the accent
+        f"QPushButton#flat, QToolButton#flat {{ border: 1px solid {flat_border}; border-radius: 6px;"
+        f" background: transparent; padding: 3px 8px; color: {flat_text}; }}",
+        "QPushButton#flat:hover, QToolButton#flat:hover { background-color: palette(midlight);"
+        f" border-color: {border}; }}",
+        f"QPushButton#flat:disabled, QToolButton#flat:disabled {{ color: {disabled_text}; }}",
+        "QToolButton#flat::menu-indicator { image: none; }",
     ]
     for variant, (color, hover) in _VARIANT_COLORS.items():
         rules.append(
@@ -112,24 +179,391 @@ def _button_rules() -> str:
             " font-weight: bold; }"
         )
         rules.append(f"QPushButton#{variant}:hover {{ background-color: {hover}; }}")
+        # disabled: the accent faded towards the window, so the primary action stays recognizable where it is
+        faded = _faded(QColor(color), palette)
         rules.append(
-            f"QPushButton#{variant}:disabled {{ background-color: #d0d0d0; color: #7a7a7a; border-color: #d0d0d0; }}"
+            f"QPushButton#{variant}:disabled {{ background-color: {faded}; color: {_faded_text(palette)};"
+            f" border: 1px solid {faded}; }}"
         )
+    danger_color = _VARIANT_COLORS[VARIANT_DANGER][0]
+    danger_text = "#ef6c6c" if palette is not None and is_dark(palette) else danger_color
+    rules += [
+        f"QPushButton#{VARIANT_DANGER_OUTLINE} {{ color: {danger_text}; border: 1px solid {danger_text}; }}",
+        f"QPushButton#{VARIANT_DANGER_OUTLINE}:hover, QPushButton#{VARIANT_DANGER_OUTLINE}:pressed"
+        f" {{ background-color: {danger_color}; border-color: {danger_color}; color: white; }}",
+        f"QPushButton#{VARIANT_DANGER_OUTLINE}:disabled {{ color: {disabled_text}; border: 1px solid {border};"
+        " background-color: palette(window); }",
+        # a card of destructive actions: framed in red
+        f"QFrame#{DANGER_ZONE_NAME} {{ border: 1px solid {danger_text}; border-radius: 10px; }}",
+        f"QLabel#{DANGER_TITLE_NAME} {{ color: {danger_text}; }}",
+    ]
     return "\n".join(rules)
 
 
-APP_STYLE_SHEET = _button_rules()
+def _mix(color: QColor, other: QColor, share: float) -> str:
+    """``share`` of ``color``, the rest of ``other``."""
+    return QColor(
+        round(color.red() * share + other.red() * (1 - share)),
+        round(color.green() * share + other.green() * (1 - share)),
+        round(color.blue() * share + other.blue() * (1 - share)),
+    ).name()
+
+
+def _faded(accent: QColor, palette: Optional[QPalette]) -> str:
+    """The accent of a disabled button: halfway to the window color (further on a dark window, on which a dark
+    accent still reads as active)."""
+    window = palette.color(QPalette.ColorRole.Window) if palette is not None else QColor("#efefef")
+    return _mix(accent, window, 0.3 if palette is not None and is_dark(palette) else 0.45)
+
+
+def _faded_text(palette: Optional[QPalette]) -> str:
+    """The text on a faded accent: white, a little transparent towards the accent."""
+    return "#f0f0f0" if palette is None or not is_dark(palette) else "#9a9a9a"
+
+
+def chrome_color(palette: QPalette) -> QColor:
+    """The background of the window's frame (sidebar, status line) and of the configuration selector: a shade darker
+    than the pages, so that the navigation and the page content read as separate areas, in a light and in a dark
+    palette."""
+    window = palette.color(QPalette.ColorRole.Window)
+    return window.darker(140) if is_dark(palette) else window.darker(112)
+
+
+def _chrome_rules(palette: Optional[QPalette]) -> str:
+    """The frame of the main window: sidebar and status line in the chrome color, with a line towards the page; the
+    configuration selector, content of the pages, a card as the other cards."""
+    background = chrome_color(palette).name() if palette is not None else "palette(window)"
+    card = surface_color(palette).name() if palette is not None else "palette(window)"
+    card_border = border_color(palette).name() if palette is not None else "palette(mid)"
+    selected = selection_color(palette).name() if palette is not None else "palette(highlight)"
+    selected_text = accent_text_color(palette).name() if palette is not None else "palette(highlighted-text)"
+    # an unselected configuration: a faint tile (the card color, halfway to the frame of the window) in a faint
+    # frame, so it reads as something to click; hovered, lighter than the card, in the frame of a button
+    if palette is not None:
+        surface = surface_color(palette)
+        tile = _mix(surface, chrome_color(palette), 0.5)
+        tile_border = _mix(border_color(palette), surface, 0.55)
+        hover_color = palette.color(QPalette.ColorRole.Button if is_dark(palette) else QPalette.ColorRole.Base)
+        hover, hover_border = hover_color.name(), border_color(palette).name()
+    else:
+        tile, tile_border, hover, hover_border = "transparent", "palette(midlight)", "palette(midlight)", "palette(mid)"
+    return "\n".join(
+        [
+            f"QWidget#{CONFIG_BAR_NAME} {{ background-color: {card}; border: 1px solid {card_border};"
+            " border-radius: 10px; }",
+            f"QFrame#{SIDEBAR_NAME} {{ background-color: {background}; border-right: 1px solid palette(mid); }}",
+            f"QStatusBar#{STATUS_BAR_NAME} {{ background-color: {background}; border-top: 1px solid palette(mid); }}",
+            # the configurations in the selector: the selected one in a light shade of the highlight color, as
+            # the selected stage of the sidebar; the others as plain text, shaded while hovered
+            # the selector of the configuration: tabs taller than the buttons of a page, and
+            # at least as wide as a short name, so that "A" and "B" are no narrower targets than "large_input"
+            f"QTabBar#{CONFIG_TABS_NAME}::tab {{ background-color: {tile}; border: 1px solid {tile_border};"
+            f" border-radius: 6px; padding: 7px 13px; margin: 2px 2px; min-width: {CONFIG_TAB_MIN_WIDTH}px;"
+            " color: palette(window-text); }",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:hover {{ background-color: {hover}; border-color: {hover_border}; }}",
+            f"QTabBar#{CONFIG_TABS_NAME}::tab:selected {{ background-color: {selected}; border-color: {selected};"
+            f" color: {selected_text}; }}",
+            # its scroll arrows (while the tabs do not fit) in the color of the card, covering the tabs below
+            f"QTabBar#{CONFIG_TABS_NAME} QToolButton {{ background-color: {card}; border: none;"
+            " border-radius: 4px; width: 18px; }",
+            f"QTabBar#{CONFIG_TABS_NAME} QToolButton:hover {{ background-color: palette(midlight); }}",
+            f"QLabel#{CAPTION_NAME} {{ color: {_secondary_text(palette)}; }}",
+        ]
+    )
+
+
+def _secondary_text(palette: Optional[QPalette]) -> str:
+    """A text color between the text and the window color: captions next to normal text."""
+    if palette is None:
+        return "gray"
+    text = palette.color(QPalette.ColorRole.WindowText)
+    window = palette.color(QPalette.ColorRole.Window)
+    mixed = QColor(
+        (text.red() * 3 + window.red() * 2) // 5,
+        (text.green() * 3 + window.green() * 2) // 5,
+        (text.blue() * 3 + window.blue() * 2) // 5,
+    )
+    return mixed.name()
+
+
+def card_color(palette: QPalette) -> QColor:
+    """The background of a card in a light palette: between the window and the input fields, so that the card stands
+    out from the page and its input fields from the card (no white areas on a gray page)."""
+    return QColor(_mix(palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Window), 0.55))
+
+
+def _component_rules(palette: Optional[QPalette] = None) -> str:
+    # a card: the framed section of a form (FormSection). Light, it is lifted towards the color of the input fields;
+    # dark, input fields and the indicators of check boxes are drawn in that color too and would vanish in it, so the
+    # card keeps the window color and only its frame sets it apart (as in a dialog)
+    if palette is None:
+        card_background = "palette(base)"
+    else:
+        card_background = "palette(window)" if is_dark(palette) else card_color(palette).name()
+    rules = [
+        f"QFrame#{CARD_NAME} {{ border: 1px solid palette(midlight); border-radius: 10px;"
+        f" background-color: {card_background}; }}",
+        # a divider: a hairline in the color of the frames (a QFrame line draws a dark, sunken one)
+        f"QFrame#{DIVIDER_NAME} {{ background-color: palette(midlight); border: none; min-height: 1px;"
+        " max-height: 1px; }",
+        f"QScrollArea#{CLEAR_SCROLL_NAME}, QScrollArea#{CLEAR_SCROLL_NAME} > QWidget > QWidget"
+        " { background: transparent; }",
+        # a status chip: a rounded, colored pill (StatusChip)
+        f"QLabel#{CHIP_NAME} {{ border-radius: 9px; padding: 2px 10px; font-weight: bold; }}",
+    ]
+    return "\n".join(rules)
+
+
+def surface_color(palette: QPalette) -> QColor:
+    """The background of a raised area (card, pane of a tab widget): see :func:`card_color`; dark, the window color."""
+    return QColor(palette.color(QPalette.ColorRole.Window)) if is_dark(palette) else card_color(palette)
+
+
+def border_color(palette: QPalette) -> QColor:
+    """The frame of cards, panes, tables and input fields: clearly apart from the window, not as dark as a text."""
+    text = palette.color(QPalette.ColorRole.WindowText)
+    return QColor(_mix(text, palette.color(QPalette.ColorRole.Window), 0.22 if is_dark(palette) else 0.2))
+
+
+def selection_color(palette: QPalette) -> QColor:
+    """The background of a selected row, tab or stage: the highlight color, light on the views (opaque, so that the
+    alternating rows of a table do not shine through)."""
+    return QColor(
+        _mix(
+            palette.color(QPalette.ColorRole.Highlight),
+            palette.color(QPalette.ColorRole.Base),
+            0.35 if is_dark(palette) else 0.16,
+        )
+    )
+
+
+def contrast_ratio(first: QColor, second: QColor) -> float:
+    """The WCAG contrast ratio of two colors (1 to 21)."""
+
+    def luminance(color: QColor) -> float:
+        def channel(value: float) -> float:
+            return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+        return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) + 0.0722 * channel(color.blueF())
+
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def accent_text_color(palette: QPalette) -> QColor:
+    """Text in the highlight color on a selection (:func:`selection_color`): darkened (lightened on a dark palette)
+    until it reads on it, whatever highlight a desktop palette brings (a light blue, a pastel)."""
+    color = QColor(palette.color(QPalette.ColorRole.Highlight))
+    background = selection_color(palette)
+    dark = is_dark(palette)
+    for _ in range(12):
+        if contrast_ratio(color, background) >= 4.5:
+            break
+        color = color.lighter(115) if dark else color.darker(118)
+    return color
+
+
+def mark_color(accent: QColor) -> QColor:
+    """A check mark or dot on a filled ``accent``: white, or a dark gray on a light accent."""
+    return QColor("white") if contrast_ratio(QColor("white"), accent) >= 3 else QColor("#1b1d21")
+
+
+_ARROW_PATHS = {"down": "M1 1l4 4 4-4", "up": "M1 5l4-4 4 4"}
+
+
+@functools.lru_cache(maxsize=1)
+def _cache_directory() -> str:
+    """Once per process: without a cache location, one temporary directory (not a new one per theme switch)."""
+    location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericCacheLocation)
+    return os.path.join(location or tempfile.mkdtemp(prefix="discopop_project_manager_"), "discopop_project_manager")
+
+
+def arrow_image(direction: str, color: str) -> str:
+    """The path of a small chevron (``direction`` "up" or "down") in ``color``, for the arrows of spin and combo boxes:
+    a style sheet draws them from an image only. Written once per color into the user's cache directory (generated,
+    not shipped; not into the shared temporary directory, where another user could put files first)."""
+    directory = os.path.join(_cache_directory(), "style")
+    path = os.path.join(directory, f"arrow_{direction}_{color.lstrip('#')}.svg")
+    if not os.path.exists(path):
+        os.makedirs(directory, exist_ok=True)
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6">'
+            f'<path d="{_ARROW_PATHS[direction]}" fill="none" stroke="{color}" stroke-width="1.5"'
+            ' stroke-linecap="round" stroke-linejoin="round"/></svg>'
+        )
+        # written aside and renamed, so that a second instance never reads a half written file
+        partial = f"{path}.{os.getpid()}"
+        with open(partial, "w") as file:
+            file.write(svg)
+        os.replace(partial, path)
+    return path.replace(os.sep, "/")
+
+
+def _arrow_rules(palette: QPalette) -> str:
+    text = palette.color(QPalette.ColorRole.WindowText)
+    window = palette.color(QPalette.ColorRole.Window)
+    try:
+        down = arrow_image("down", _mix(text, window, 0.7))
+        up = arrow_image("up", _mix(text, window, 0.7))
+    except OSError:
+        return ""  # no temporary directory: the style sheet's own (plain) arrows
+    hover = _mix(text, window, 0.1)
+    return "\n".join(
+        [
+            # the text field reaches up to the arrow (the text is at its right end, see _ComboTextAligner)
+            "QComboBox { padding-right: 2px; }",
+            "QComboBox::drop-down { border: none; width: 22px; }",
+            f"QComboBox::down-arrow {{ image: url('{down}'); width: 10px; height: 6px; }}",
+            "QAbstractSpinBox { padding-right: 18px; }",
+            "QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { border: none; width: 18px;"
+            " background: transparent; }",
+            "QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover"
+            f" {{ background-color: {hover}; border-radius: 3px; }}",
+            f"QAbstractSpinBox::up-arrow {{ image: url('{up}'); width: 9px; height: 5px; }}",
+            f"QAbstractSpinBox::down-arrow {{ image: url('{down}'); width: 9px; height: 5px; }}",
+        ]
+    )
+
+
+def _control_rules(palette: QPalette) -> str:
+    """The stock controls: tabs of a page as underlined titles above a framed pane, tables without a grid, thin
+    scroll bars without arrows, flat input fields. The check boxes and radio buttons are drawn by
+    :class:`TabTextRoomStyle` (a style sheet would need images)."""
+    dark = is_dark(palette)
+    surface = surface_color(palette).name()
+    border = border_color(palette).name()
+    secondary = _secondary_text(palette)
+    accent = palette.color(QPalette.ColorRole.Highlight).name()
+    selected = selection_color(palette).name()
+    window = palette.color(QPalette.ColorRole.Window)
+    hover = _mix(palette.color(QPalette.ColorRole.Highlight), palette.color(QPalette.ColorRole.Base), 0.08)
+    text = palette.color(QPalette.ColorRole.WindowText)
+    handle = _mix(text, window, 0.35 if dark else 0.3)
+    handle_hover = _mix(text, window, 0.55 if dark else 0.5)
+    disabled_background = window.name()
+    return "\n".join(
+        [
+            # tab widgets: the titles as text underlined in the accent when selected, the pane as a card
+            f"QTabWidget::pane {{ border: 1px solid {border}; border-radius: 10px; background-color: {surface};"
+            " top: -1px; }",
+            "QTabWidget::tab-bar { left: 10px; }",
+            "QTabWidget > QTabBar::tab { background: transparent; border: none; border-bottom: 2px solid transparent;"
+            f" padding: 6px 12px; margin-right: 2px; color: {secondary}; }}",
+            "QTabWidget > QTabBar::tab:hover { color: palette(window-text);" f" border-bottom: 2px solid {border}; }}",
+            "QTabWidget > QTabBar::tab:selected { color: palette(window-text);"
+            f" border-bottom: 2px solid {accent}; }}",
+            # the toolbar of a chart on the pane it lies on, without the frame and gradient of a tool bar
+            f"QToolBar#{CHART_TOOLBAR_NAME} {{ background-color: {surface}; border: none; spacing: 2px; }}",
+            # tables and trees: no grid (alternating rows separate them), a flat header, a light selection
+            f"QTableView, QTreeView {{ background-color: palette(base); border: 1px solid {border};"
+            " border-radius: 6px; gridline-color: transparent; alternate-background-color: palette(alternate-base);"
+            f" selection-background-color: {selected}; selection-color: palette(text); outline: 0; }}",
+            f"QTableView::item:hover, QTreeView::item:hover {{ background-color: {hover}; }}",
+            f"QTableView::item:selected, QTreeView::item:selected {{ background-color: {selected};"
+            " color: palette(text); }",
+            f"QHeaderView::section {{ background-color: palette(base); color: {secondary}; border: none;"
+            f" border-bottom: 1px solid {border}; padding: 5px 8px; font-weight: 600; }}",
+            "QHeaderView { background-color: transparent; border: none; }",
+            "QTableCornerButton::section { background-color: palette(base); border: none; }",
+            # scroll bars: a rounded handle on a transparent track, no arrows
+            "QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; border: none; }",
+            "QScrollBar:horizontal { background: transparent; height: 12px; margin: 2px; border: none; }",
+            f"QScrollBar::handle {{ background-color: {handle}; border-radius: 4px; }}",
+            f"QScrollBar::handle:hover, QScrollBar::handle:pressed {{ background-color: {handle_hover}; }}",
+            "QScrollBar::handle:vertical { min-height: 28px; }",
+            "QScrollBar::handle:horizontal { min-width: 28px; }",
+            "QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; background: none; }",
+            "QScrollBar::add-page, QScrollBar::sub-page { background: none; }",
+            # input fields: flat, rounded, framed in the accent while they have the focus
+            f"QLineEdit, QAbstractSpinBox, QComboBox {{ border: 1px solid {border}; border-radius: 6px;"
+            " padding: 2px 6px; background-color: palette(base); }",
+            f"QPlainTextEdit, QTextEdit {{ border: 1px solid {border}; border-radius: 6px;"
+            " background-color: palette(base); }",
+            "QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus"
+            f" {{ border: 1px solid {accent}; }}",
+            "QLineEdit:disabled, QAbstractSpinBox:disabled, QComboBox:disabled"
+            f" {{ background-color: {disabled_background}; color: {secondary}; }}",
+            f"QComboBox QAbstractItemView {{ border: 1px solid {border}; background-color: palette(base);"
+            f" selection-background-color: {selected}; selection-color: palette(text); outline: 0; }}",
+            _arrow_rules(palette),
+        ]
+    )
+
+
+# objectNames the style sheet selects on
+CARD_NAME = "card"
+DIVIDER_NAME = "divider"
+# the toolbar below a chart: matplotlib draws its icons light on a dark background, so it needs an opaque one
+CHART_TOOLBAR_NAME = "chartToolbar"
+# a scroll area showing the background of what it lies on (the side bar of the selection details)
+CLEAR_SCROLL_NAME = "clearScroll"
+CHIP_NAME = "chip"
+FLAT_NAME = "flat"
+COMPACT_NAME = "compact"
+BANNER_NAME = "warningBanner"
+DANGER_ZONE_NAME = "dangerZone"
+DANGER_TITLE_NAME = "dangerTitle"
+# the frame of the main window and the configuration selector (see _chrome_rules)
+CONFIG_BAR_NAME = "configBar"
+SIDEBAR_NAME = "appSidebar"
+STATUS_BAR_NAME = "appStatusBar"
+CONFIG_TABS_NAME = "configTabs"
+# the least width of the text of a configuration tab (its padding comes on top)
+CONFIG_TAB_MIN_WIDTH = 56
+CAPTION_NAME = "caption"
+
+APP_STYLE_SHEET = _button_rules() + "\n" + _component_rules()
+
+
+def app_style_sheet(palette: QPalette) -> str:
+    """The style sheet of the application for ``palette`` (light or dark, see :func:`is_dark`)."""
+    return "\n".join(
+        [_button_rules(palette), _component_rules(palette), _chrome_rules(palette), _control_rules(palette)]
+    )
+
+
+def is_dark(palette: QPalette) -> bool:
+    """Whether ``palette`` is a dark one: its window color is darker than its text."""
+    return (
+        palette.color(QPalette.ColorRole.Window).lightness() < palette.color(QPalette.ColorRole.WindowText).lightness()
+    )
+
 
 # how much taller than the font a tab title may draw (see TabTextRoomStyle)
 TAB_TEXT_EXTRA_PX = 2
 
 
+_INDICATORS = (
+    QStyle.PrimitiveElement.PE_IndicatorCheckBox,
+    QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck,
+    QStyle.PrimitiveElement.PE_IndicatorRadioButton,
+)
+
+
 class TabTextRoomStyle(QProxyStyle):
-    """The application style, with room for the underscores of tab titles.
+    """The application style, with room for the underscores of tab titles, and flat check boxes and radio buttons.
 
     Fusion clips a tab's title to the height of its font, and the underscore of some fonts (Ubuntu, the default on
     Ubuntu desktops) lies below that: "compile_validate.sh" read as "compile validate.sh".
+
+    The check boxes (also those in tables and trees) and radio buttons are drawn here rather than by the style sheet,
+    which can only draw a check mark from an image: a rounded frame, filled in the highlight color when checked.
     """
+
+    def drawPrimitive(  # noqa: N802 (Qt's name)
+        self,
+        element: QStyle.PrimitiveElement,
+        option: QStyleOption,
+        painter: QPainter,
+        widget: Optional[QWidget] = None,
+    ) -> None:
+        if element == QStyle.PrimitiveElement.PE_IndicatorTabClose:
+            draw_close_mark(painter, option)
+            return
+        if element not in _INDICATORS:
+            super().drawPrimitive(element, option, painter, widget)  # type: ignore[arg-type]
+            return
+        draw_indicator(painter, option, radio=element == QStyle.PrimitiveElement.PE_IndicatorRadioButton)
 
     def subElementRect(  # noqa: N802 (Qt's name)
         self, element: QStyle.SubElement, option: QStyleOption, widget: Optional[QWidget] = None
@@ -139,6 +573,154 @@ class TabTextRoomStyle(QProxyStyle):
         if element == QStyle.SubElement.SE_TabBarTabText:
             rect.adjust(0, -TAB_TEXT_EXTRA_PX, 0, TAB_TEXT_EXTRA_PX)
         return rect
+
+    def polish(self, target: Any) -> Any:
+        # every push and tool button shows a pointing hand (also those of matplotlib's toolbar and of dialogs);
+        # QStyle.polish is overloaded (widget, palette, application): pass every one on
+        if isinstance(target, (QPushButton, QToolButton)):
+            target.setCursor(Qt.CursorShape.PointingHandCursor)
+        if isinstance(target, QComboBox):
+            target.installEventFilter(_combo_text_aligner())
+        return super().polish(target)
+
+
+class _ComboTextAligner(QObject):
+    """Shows the text of every combo box at its right end, next to the arrow.
+
+    The style sheet's style draws the label of a combo box left-aligned, whatever its style. A combo box that is not
+    editable is painted here: the box as usual, the label into an edit field narrowed from the left to the width of
+    the text (so the colors, the font and the elision stay the style's); an editable one aligns its line edit.
+    """
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt's name)
+        # a combo box that paints itself (a subclass overriding paintEvent) is left alone, as is a right-to-left one
+        if (
+            not isinstance(watched, QComboBox)
+            or type(watched).paintEvent is not QComboBox.paintEvent
+            or watched.layoutDirection() == Qt.LayoutDirection.RightToLeft
+        ):
+            return False
+        if watched.isEditable():
+            line_edit = watched.lineEdit()
+            if line_edit is not None and event.type() in (QEvent.Type.Show, QEvent.Type.Paint):
+                line_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return False
+        if event.type() != QEvent.Type.Paint:
+            return False
+        painter = QStylePainter(watched)
+        option = QStyleOptionComboBox()
+        watched.initStyleOption(option)
+        if watched.currentIndex() < 0 and watched.placeholderText():
+            # (QComboBox.paintEvent fills in the placeholder itself, initStyleOption does not)
+            option.currentText = watched.placeholderText()
+            option.palette.setBrush(QPalette.ColorRole.ButtonText, option.palette.placeholderText())
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        style = watched.style()
+        field = style.subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, option, QStyle.SubControl.SC_ComboBoxEditField, watched
+        )
+        icon_width = option.iconSize.width() + 4 if not option.currentIcon.isNull() else 0
+        room = field.width() - watched.fontMetrics().horizontalAdvance(option.currentText) - icon_width - 4
+        if room > 0:
+            option.rect.setLeft(option.rect.left() + room)
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
+        painter.end()
+        return True
+
+
+_combo_aligner: Optional[_ComboTextAligner] = None
+
+
+def _combo_text_aligner() -> _ComboTextAligner:
+    """One filter for all combo boxes, a child of the application (a new one for a new application)."""
+    global _combo_aligner
+    app = QApplication.instance()
+    if _combo_aligner is None or not shiboken6.isValid(_combo_aligner) or _combo_aligner.parent() is not app:
+        _combo_aligner = _ComboTextAligner(app)
+    return _combo_aligner
+
+
+def draw_close_mark(painter: QPainter, option: QStyleOption) -> None:
+    """The close button of a tab: a small "×", on a rounded shade while hovered."""
+    palette: QPalette = option.palette  # type: ignore[attr-defined]
+    state = option.state  # type: ignore[attr-defined]
+    rect = QRectF(option.rect).adjusted(1, 1, -1, -1)  # type: ignore[attr-defined]
+    text = palette.color(QPalette.ColorRole.WindowText)
+    window = palette.color(QPalette.ColorRole.Window)
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if state & QStyle.StateFlag.State_MouseOver:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(_mix(text, window, 0.15)))
+            painter.drawRoundedRect(rect, 4, 4)
+        pen = QPen(QColor(_mix(text, window, 0.6)), 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        inset = rect.width() * 0.3
+        mark = rect.adjusted(inset, inset, -inset, -inset)
+        painter.drawLine(mark.topLeft(), mark.bottomRight())
+        painter.drawLine(mark.topRight(), mark.bottomLeft())
+    finally:
+        painter.restore()
+
+
+def draw_indicator(painter: QPainter, option: QStyleOption, *, radio: bool) -> None:
+    """A check box (check mark, or a dash when partially checked) or a radio button (a dot) in ``option.rect``."""
+    palette: QPalette = option.palette  # type: ignore[attr-defined]
+    state = option.state  # type: ignore[attr-defined]
+    enabled = bool(state & QStyle.StateFlag.State_Enabled)
+    checked = bool(state & QStyle.StateFlag.State_On)
+    partial = bool(state & QStyle.StateFlag.State_NoChange)
+    hovered = bool(state & QStyle.StateFlag.State_MouseOver) and enabled
+    full = QRectF(option.rect)  # type: ignore[attr-defined]
+    # inside the rectangle with its frame line (QRect.center() rounds down: a box centered on it lost half of its left
+    # frame line at the edge of the widget)
+    side = min(full.width(), full.height(), 16.0) - 2
+    box = QRectF(0, 0, side, side)
+    box.moveCenter(full.center())
+    # the application's highlight: in a table or a tree, the style sheet's selection color replaces the palette's
+    accent = QColor(QApplication.palette().color(QPalette.ColorRole.Highlight))
+    base = palette.color(QPalette.ColorRole.Base)
+    text = palette.color(QPalette.ColorRole.Text)
+    if not enabled:
+        accent = QColor(_mix(accent, base, 0.4))
+    frame = accent if hovered else QColor(_mix(text, base, 0.45 if enabled else 0.25))
+    filled = checked or partial
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(accent if filled else frame, 1.2))
+        painter.setBrush(accent if filled else base)
+        if radio:
+            painter.drawEllipse(box)
+        else:
+            painter.drawRoundedRect(box, 3.5, 3.5)
+        if not filled:
+            return
+        mark = mark_color(accent)
+        if radio:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(mark)
+            painter.drawEllipse(box.center(), side * 0.2, side * 0.2)
+            return
+        pen = QPen(mark, max(1.6, side / 8))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        left, top = box.left(), box.top()
+        if partial:
+            painter.drawLine(
+                QPointF(left + side * 0.27, box.center().y()), QPointF(left + side * 0.73, box.center().y())
+            )
+        else:
+            path = QPainterPath(QPointF(left + side * 0.24, top + side * 0.52))
+            path.lineTo(QPointF(left + side * 0.42, top + side * 0.70))
+            path.lineTo(QPointF(left + side * 0.76, top + side * 0.32))
+            painter.drawPath(path)
+    finally:
+        painter.restore()
 
 
 def monospace_font(point_size: int = 11) -> QFont:
@@ -150,13 +732,34 @@ def monospace_font(point_size: int = 11) -> QFont:
 # --- labels ---
 
 
+# how much larger than a :func:`heading_label` title the title of a page is (PanelHeader)
+PAGE_TITLE_EXTRA_PT = 3
+
+
 def heading_label(text: str, *, title: bool = False) -> QLabel:
-    """A bold section header (``title=True`` for the slightly larger panel title)."""
+    """A semibold section header (``title=True`` for the slightly larger panel title)."""
     label = QLabel(text)
     font = label.font()
-    font.setBold(True)
+    font.setWeight(QFont.Weight.DemiBold)
     font.setPointSize(font.pointSize() + (2 if title else 1))
     label.setFont(font)
+    return label
+
+
+def divider() -> QFrame:
+    """A horizontal hairline between a title and what it heads."""
+    line = QFrame()
+    line.setObjectName(DIVIDER_NAME)
+    return line
+
+
+def empty_state_label(text: str) -> QLabel:
+    """The text of an empty view (a table, a chart, a detail area) saying what to do: centered, gray, in the normal
+    font size, the same on every page."""
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setStyleSheet(f"color: {HINT_COLOR};")
     return label
 
 
@@ -167,7 +770,7 @@ def caption_label(text: str) -> QLabel:
     font = label.font()
     font.setPointSize(max(font.pointSize() - 1, 7))
     label.setFont(font)
-    label.setStyleSheet(f"color: {STATUS_IDLE};")
+    label.setStyleSheet(f"color: {HINT_COLOR};")
     return label
 
 
@@ -180,7 +783,8 @@ def error_label(text: str) -> QLabel:
 
 
 def set_label_color(label: QLabel, color: str) -> None:
-    label.setStyleSheet(f"color: {color};")
+    """``color`` as the text color of ``label``; :data:`STATUS_IDLE` is drawn in the hint color of the palette."""
+    label.setStyleSheet(f"color: {HINT_COLOR if color == STATUS_IDLE else color};")
 
 
 # --- buttons ---
@@ -213,6 +817,13 @@ def primary_button(text: str, on_click: Optional[Callable[[], None]] = None, **k
 def success_button(text: str, on_click: Optional[Callable[[], None]] = None, **kwargs: Optional[str]) -> QPushButton:
     """A button showing a completed state (green)."""
     return create_button(text, on_click, variant=VARIANT_SUCCESS, tooltip=kwargs.get("tooltip"))
+
+
+def danger_outline_button(
+    text: str, on_click: Optional[Callable[[], None]] = None, **kwargs: Optional[str]
+) -> QPushButton:
+    """A destructive action beside others: outlined in red (:data:`VARIANT_DANGER_OUTLINE`)."""
+    return create_button(text, on_click, variant=VARIANT_DANGER_OUTLINE, tooltip=kwargs.get("tooltip"))
 
 
 def danger_button(text: str, on_click: Optional[Callable[[], None]] = None, **kwargs: Optional[str]) -> QPushButton:
@@ -278,11 +889,16 @@ class OutputConsole(QPlainTextEdit):
     """The dark, read-only log / output console of the panels.
 
     ``append_text`` adds text as it comes (no newline is added), optionally colored by a tag of
-    :data:`CONSOLE_TAG_COLORS`. The view follows the end unless the user scrolled up to read.
+    :data:`CONSOLE_TAG_COLORS`. The view follows the end unless the user scrolled up to read. ``text_appended``
+    carries every appended piece (the output dock shows the last line of a collapsed console).
     """
+
+    text_appended = Signal(str)
+    cleared = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None, *, wrap: bool = True, editable: bool = False) -> None:
         super().__init__(parent)
+        self.setPlaceholderText("No output yet.")
         self.setReadOnly(not editable)
         self.setFont(monospace_font())
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth if wrap else QPlainTextEdit.LineWrapMode.NoWrap)
@@ -306,6 +922,11 @@ class OutputConsole(QPlainTextEdit):
         cursor.insertText(text, self._formats.get(tag or "", self._plain_format))
         if follow:
             scrollbar.setValue(scrollbar.maximum())
+        self.text_appended.emit(text)
+
+    def clear(self) -> None:
+        super().clear()
+        self.cleared.emit()
 
     def set_text(self, text: str) -> None:
         """Replace the whole content."""
@@ -490,6 +1111,483 @@ def log_level_selector(initial: str = "WARNING") -> QComboBox:
     combo.addItems(LOG_LEVEL_VALUES)
     combo.setCurrentText(initial)
     return combo
+
+
+# --- run / stop ---
+
+# clicks this soon after a RunStopButton switched between run and stop are ignored (the second click of a double click)
+SWITCH_GUARD_S = 0.5
+
+
+class RunStopButton(QPushButton):
+    """One button that starts a job and, while it runs, stops it (instead of a Run and a mostly disabled Stop).
+
+    Idle it shows ``run_text`` in the primary color and calls ``on_run``; after :meth:`set_running` (True) it shows
+    ``stop_text`` in the danger color, stays enabled and calls ``on_stop``.
+
+    ``setEnabled`` always means "can a run be started": while running it is only remembered (so code disabling all
+    controls during a job does not disable Stop) and applied when the run ends. :meth:`set_stop_enabled` (False)
+    while running means "cannot be stopped now" (a phase that must not be interrupted); :meth:`set_stopping` shows
+    that a stop was requested and blocks a second click.
+    """
+
+    def __init__(
+        self,
+        run_text: str,
+        on_run: Callable[[], None],
+        on_stop: Callable[[], None],
+        *,
+        stop_text: str = "■ Stop",
+        tooltip: Optional[str] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(run_text, parent)
+        self._run_text = run_text
+        self._stop_text = stop_text
+        self._on_run = on_run
+        self._on_stop = on_stop
+        self._running = False
+        self._can_run = True
+        self._switched_at = -SWITCH_GUARD_S
+        self.setObjectName(VARIANT_PRIMARY)
+        if tooltip:
+            self.setToolTip(tooltip)
+        self.clicked.connect(lambda _checked=False: self._clicked())
+
+    def _clicked(self) -> None:
+        # the second click of a double click lands on the button that has just switched: it must neither stop the
+        # job it started nor start one right after a stop
+        if time.monotonic() - self._switched_at < SWITCH_GUARD_S:
+            return
+        if self._running:
+            self._on_stop()
+        else:
+            self._on_run()
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802 (Qt's name)
+        self._can_run = enabled
+        if not self._running:
+            super().setEnabled(enabled)
+
+    def can_run(self) -> bool:
+        return self._can_run
+
+    def set_running(self, running: bool, *, enabled_after: Optional[bool] = None) -> None:
+        """Switch between the run and the stop look.
+
+        ``enabled_after``: whether Run is offered once it ended; by default what ``setEnabled`` said last.
+        """
+        if running != self._running:
+            self._switched_at = time.monotonic()
+        self._running = running
+        if enabled_after is not None:
+            self._can_run = enabled_after
+        self.setText(self._stop_text if running else self._run_text)
+        set_button_variant(self, VARIANT_DANGER if running else VARIANT_PRIMARY)
+        super().setEnabled(True if running else self._can_run)
+
+    def set_stopping(self, text: str = "Stopping…") -> None:
+        """A stop was requested: say so and ignore further clicks until :meth:`set_running` (False)."""
+        if self._running:
+            self.setText(text)
+            super().setEnabled(False)
+
+    def set_run_text(self, text: str) -> None:
+        """Change the idle text (e.g. "Run Analysis" -> "Re-run Analysis")."""
+        self._run_text = text
+        if not self._running:
+            self.setText(text)
+
+    def set_stop_enabled(self, enabled: bool) -> None:
+        if self._running:
+            super().setEnabled(enabled)
+
+
+# --- forms ---
+
+
+class FormSection(QFrame):
+    """A titled card holding a form: label | field rows, a hint below its field instead of beside it.
+
+    ``add_row`` puts a plain, right-aligned label and the field side by side and an optional gray hint in the next
+    line below the field; ``add_widget`` adds a full-width row (a check box, a list). The same look in every panel.
+    """
+
+    def __init__(self, title: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName(CARD_NAME)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 10, 14, 12)
+        outer.setSpacing(8)
+        self.title_label: Optional[QLabel] = None
+        if title:
+            self.title_label = heading_label(title)
+            outer.addWidget(self.title_label)
+        self.form = QFormLayout()
+        self.form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.form.setHorizontalSpacing(12)
+        self.form.setVerticalSpacing(8)
+        outer.addLayout(self.form)
+
+    def add_row(
+        self,
+        label: str,
+        field: Union[QWidget, QLayout],
+        hint: str = "",
+        *,
+        stretch_field: bool = False,
+    ) -> Optional[QLabel]:
+        """A ``label: field`` row; ``hint`` goes into a caption under the field. Returns the hint label (or None).
+
+        A narrow field (spin box, combo box) keeps its natural width unless ``stretch_field``.
+        """
+        if isinstance(field, QWidget) and not stretch_field:
+            field = hbox(field, None)
+        hint_label: Optional[QLabel] = None
+        if hint:
+            hint_label = caption_label(hint)
+            column = QVBoxLayout()
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(2)
+            if isinstance(field, QLayout):
+                column.addLayout(field)
+            else:
+                column.addWidget(field)
+            column.addWidget(hint_label)
+            self.form.addRow(label, column)
+        elif isinstance(field, QLayout):
+            self.form.addRow(label, field)
+        else:
+            self.form.addRow(label, field)
+        return hint_label
+
+    def set_row_visible(self, field: Union[QWidget, QLayout], visible: bool) -> None:
+        """Show or hide the row holding ``field`` (as passed to :meth:`add_row` / :meth:`add_widget`)."""
+        for row in range(self.form.rowCount()):
+            for role in (QFormLayout.ItemRole.FieldRole, QFormLayout.ItemRole.SpanningRole):
+                item = self.form.itemAt(row, role)
+                if item is not None and _layout_item_holds(item, field):
+                    self.form.setRowVisible(row, visible)
+                    return
+
+    def add_widget(self, widget: Union[QWidget, QLayout], hint: str = "") -> Optional[QLabel]:
+        """A full-width row; ``hint`` goes into a caption below it."""
+        if isinstance(widget, QLayout):
+            self.form.addRow(widget)
+        else:
+            self.form.addRow(widget)
+        if hint:
+            hint_label = caption_label(hint)
+            self.form.addRow(hint_label)
+            return hint_label
+        return None
+
+
+def _layout_item_holds(item: QLayoutItem, field: Union[QWidget, QLayout]) -> bool:
+    """Whether ``item`` is ``field`` or a layout containing it (add_row wraps fields into layouts)."""
+    if item.widget() is field or item.layout() is field:
+        return True
+    layout = item.layout()
+    if layout is None:
+        return False
+    for index in range(layout.count()):
+        child = layout.itemAt(index)
+        if child is not None and _layout_item_holds(child, field):
+            return True
+    return False
+
+
+class CollapsibleSection(QWidget):
+    """A "▸ title" toggle that shows / hides its content; for advanced settings that are rarely changed."""
+
+    expanded_changed = Signal(bool)
+
+    def __init__(
+        self,
+        title: str,
+        content: QWidget,
+        *,
+        expanded: bool = False,
+        summary: str = "",
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self._title = title
+        # what is inside, shown while collapsed ("timeouts, log level"), so the settings can be found
+        self._summary = summary
+        self.content = content
+        self.toggle = QToolButton()
+        self.toggle.setObjectName(FLAT_NAME)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.toggle.setCheckable(True)
+        self.toggle.toggled.connect(self.set_expanded)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(content)
+        self._expanded = not expanded  # so the first set_expanded applies the state
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        if self.toggle.isChecked() != expanded:
+            self.toggle.setChecked(expanded)  # re-enters through toggled
+            return
+        changed = expanded != self._expanded
+        self._expanded = expanded
+        text = ("▾ " if expanded else "▸ ") + self._title
+        if self._summary and not expanded:
+            text += f" — {self._summary}"
+        self.toggle.setText(text)
+        self.content.setVisible(expanded)
+        if changed:
+            self.expanded_changed.emit(expanded)
+
+    def is_expanded(self) -> bool:
+        return self.toggle.isChecked()
+
+
+# --- status chips ---
+
+CHIP_OK = "ok"
+CHIP_WARN = "warn"
+CHIP_ERROR = "error"
+CHIP_BUSY = "busy"
+CHIP_IDLE = "idle"
+
+CHIP_COLORS: Dict[str, str] = {
+    CHIP_OK: STATUS_OK,
+    CHIP_WARN: STATUS_STOP,
+    CHIP_ERROR: STATUS_FAIL,
+    CHIP_BUSY: STATUS_BUSY,
+    CHIP_IDLE: "#7a7a7a",
+}
+
+
+class WarningBanner(QFrame):
+    """A tinted warning box across the page: a bold title, the explanation and the actions that resolve it.
+
+    For a stage whose prerequisites are not met: it opens, and says on the page what is missing and where to get it
+    (instead of a disabled entry whose reason is only a tooltip).
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName(BANNER_NAME)
+        color = QColor(CHIP_COLORS[CHIP_WARN])
+        rgb = f"{color.red()}, {color.green()}, {color.blue()}"
+        self.setStyleSheet(
+            f"QFrame#{BANNER_NAME} {{ background-color: rgba({rgb}, 30); border: 1px solid rgba({rgb}, 140);"
+            " border-radius: 10px; }"
+        )
+        self.title_label = heading_label("")
+        set_label_color(self.title_label, color.name())
+        self.text_label = QLabel("")
+        self.text_label.setWordWrap(True)
+        self.actions_layout = hbox(margins=0)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(6)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.text_label)
+        layout.addLayout(self.actions_layout)
+        self.actions_layout.addStretch(1)
+
+    def set_message(self, title: str, text: str) -> None:
+        self.title_label.setText("⚠ " + title)
+        self.text_label.setText(text)
+
+    def add_action(self, button: QWidget) -> None:
+        """A button below the text, left-aligned (before the stretch)."""
+        self.actions_layout.insertWidget(self.actions_layout.count() - 1, button)
+
+    def title(self) -> str:
+        return self.title_label.text()
+
+    def text(self) -> str:
+        return self.text_label.text()
+
+
+class StatusChip(QWidget):
+    """A one-line colored status pill; the long explanation is behind a "Details" toggle, not on the page.
+
+    ``set_status(CHIP_WARN, "Build stale", "Sources changed since ...")``; without a detail the toggle is hidden.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.chip = QLabel()
+        self.chip.setObjectName(CHIP_NAME)
+        self.details_button = QToolButton()
+        self.details_button.setObjectName(FLAT_NAME)
+        self.details_button.setCheckable(True)
+        self.detail_label = caption_label("")
+        self.detail_label.setVisible(False)
+        self.details_button.toggled.connect(self._on_details_toggled)
+        self._on_details_toggled(False)
+        # The row keeps its height when the chip is empty or has no "Details": every page header is equally tall, so
+        # the content of all stages starts at the same height and does not jump when a stage's status appears.
+        self.row = QWidget()
+        self.row.setLayout(hbox(self.chip, self.details_button, None, margins=0))
+        # the style sheet (padding of the pill) decides the heights: polish before asking
+        self.chip.ensurePolished()
+        self.details_button.ensurePolished()
+        row_height = max(self.chip.sizeHint().height(), self.details_button.sizeHint().height())
+        self.row.setFixedHeight(row_height)
+        self.chip.setFixedHeight(row_height)
+        self.details_button.setFixedHeight(row_height)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self.row)
+        layout.addWidget(self.detail_label)
+        self.level = CHIP_IDLE
+        self.set_status(CHIP_IDLE, "")
+
+    def set_status(self, level: str, text: str, detail: str = "") -> None:
+        self.level = level
+        self.chip.setText(text)
+        self.chip.setVisible(bool(text))
+        color = QColor(CHIP_COLORS.get(level, CHIP_COLORS[CHIP_IDLE]))
+        # a tint of the color behind text in the color: reads on light and dark windows, and is quieter than a
+        # solid fill, which made a warning louder than the primary action
+        self.chip.setStyleSheet(
+            f"color: {color.name()}; background-color: rgba({color.red()}, {color.green()}, {color.blue()}, 38);"
+            f" border: 1px solid rgba({color.red()}, {color.green()}, {color.blue()}, 90);"
+        )
+        self.chip.setToolTip(detail)
+        self.detail_label.setText(detail)
+        self.details_button.setVisible(bool(detail))
+        if not detail:
+            self.details_button.setChecked(False)
+
+    def _on_details_toggled(self, shown: bool) -> None:
+        # the chevron of the collapsible sections: it opens and closes something
+        self.details_button.setText(("▾ " if shown else "▸ ") + "Details")
+        self.detail_label.setVisible(shown)
+
+    def text(self) -> str:
+        return self.chip.text()
+
+    def detail(self) -> str:
+        return self.detail_label.text()
+
+
+# --- panel header ---
+
+# the margins of every panel's page (the main window applies them), so that the stages line up
+PAGE_MARGINS = (16, 12, 16, 8)
+
+
+class PanelHeader(QWidget):
+    """The top row of a panel: title and one-line description on the left, a status chip below them, and the
+    panel's actions on the right (the primary one -- usually a :class:`RunStopButton` -- last, at the right edge of
+    the page, as the content below).
+
+    The primary action sits in the same place in every panel and stays visible while the settings below scroll.
+    """
+
+    def __init__(
+        self,
+        title: str,
+        description: str = "",
+        actions: Iterable[QWidget] = (),
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.title_label = heading_label(title, title=True)
+        # the page title: the largest text of the page, above its description
+        title_font = self.title_label.font()
+        title_font.setPointSize(title_font.pointSize() + PAGE_TITLE_EXTRA_PT)
+        self.title_label.setFont(title_font)
+        self.description_label = caption_label(description)
+        self.description_label.setVisible(bool(description))
+        self.chip = StatusChip()
+        self.actions_layout = hbox()
+        for action in actions:
+            self.add_action(action)
+        text_column = vbox(self.title_label, self.description_label, self.chip, spacing=4)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 8)
+        layout.setSpacing(12)
+        layout.addLayout(text_column, 1)
+        layout.addLayout(self.actions_layout, 0)
+        self.actions_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+    def add_action(self, widget: QWidget, index: int = -1) -> None:
+        """Add an action at the right end (``index`` -1), or at ``index`` (0: the left end)."""
+        self.actions_layout.insertWidget(index, widget, 0, Qt.AlignmentFlag.AlignTop)
+
+
+# the gap between the settings column of a page and its main content
+SETTINGS_GAP = 12
+# the room between the cards of a settings column and its scroll bar (or where the scroll bar would be)
+_SETTINGS_SCROLL_ROOM = 8
+# the vertical space between the cards of a page
+CARD_SPACING = 8
+
+
+class SettingsSplitter(QSplitter):
+    """The settings of a stage in a column at the left, its results (the main content) at the right.
+
+    The column scrolls when it is taller than the page, and can be hidden with :attr:`toggle_button` (for the
+    panel's header), so that the results take the whole width. The same layout on every stage with settings: the
+    same gap, the same room for the scroll bar.
+    """
+
+    def __init__(self, settings: QWidget, main: QWidget, width: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        settings_layout = settings.layout()
+        if settings_layout is not None:
+            settings_layout.setSpacing(CARD_SPACING)
+        holder = QWidget()
+        self._holder_layout = QVBoxLayout(holder)
+        self._holder_layout.addWidget(settings)
+        self._holder_layout.addStretch(1)
+        self.settings_area = QScrollArea()
+        self.settings_area.setObjectName(CLEAR_SCROLL_NAME)
+        self.settings_area.setWidgetResizable(True)
+        self.settings_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.settings_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_area.setMinimumWidth(width)
+        self.settings_area.setWidget(holder)
+        # the cards end at the same place with and without a scroll bar: its width is kept free while it is hidden
+        scroll_bar = self.settings_area.verticalScrollBar()
+        scroll_bar.rangeChanged.connect(lambda _minimum, maximum: self._reserve_scroll_bar(maximum > 0))
+        self._reserve_scroll_bar(False)
+        self.addWidget(self.settings_area)
+        self.addWidget(main)
+        self.setStretchFactor(0, 0)
+        self.setStretchFactor(1, 1)
+        self.setSizes([width, 10_000])
+        self.setChildrenCollapsible(False)
+        self.setHandleWidth(SETTINGS_GAP)
+        self.toggle_button = QToolButton()
+        self.toggle_button.setObjectName(FLAT_NAME)
+        self.toggle_button.clicked.connect(lambda: self.set_settings_visible(not self.settings_visible()))
+        self._update_toggle()
+
+    def _reserve_scroll_bar(self, shown: bool) -> None:
+        bar_width = 0 if shown else self.settings_area.verticalScrollBar().sizeHint().width()
+        self._holder_layout.setContentsMargins(0, 0, _SETTINGS_SCROLL_ROOM + bar_width, 0)
+
+    def settings_visible(self) -> bool:
+        return not self.settings_area.isHidden()
+
+    def set_settings_visible(self, visible: bool) -> None:
+        self.settings_area.setVisible(visible)
+        self._update_toggle()
+
+    def _update_toggle(self) -> None:
+        visible = self.settings_visible()
+        self.toggle_button.setText("◂ Hide Settings" if visible else "▸ Show Settings")
+        self.toggle_button.setToolTip(
+            "Hide the settings: the results take the whole width" if visible else "Show the settings again"
+        )
 
 
 def align_top(widget: QWidget) -> QWidget:

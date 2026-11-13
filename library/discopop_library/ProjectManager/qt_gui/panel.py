@@ -15,9 +15,11 @@ callbacks the main window passes in, never through attributes of the main window
 
 from typing import Optional, Protocol
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.qt_gui.widgets import OutputConsole
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services.project_state import ProjectState
 
@@ -40,6 +42,17 @@ class TabHost(Protocol):
 
 
 class Panel(QWidget):
+    """A panel of the main window.
+
+    A panel with output creates its :class:`OutputConsole` with :meth:`make_console` (a hidden child it does not lay
+    out) and returns it from :meth:`output_console`; the main window shows it in the output dock below the panels (under
+    :attr:`output_title`). A panel emits :attr:`output_requested` when it starts a job, so the dock opens on its
+    console.
+    """
+
+    output_title = ""
+    output_requested = Signal()
+
     def __init__(
         self,
         arguments: ProjectManagerArguments,
@@ -51,6 +64,19 @@ class Panel(QWidget):
         self.arguments = arguments
         self.project_state = project_state
         self.status = status
+
+    def make_console(self) -> OutputConsole:
+        """A console for the output pane: a hidden child until the main window moves it into the pane.
+
+        Hidden, so that it is not drawn over the panel's widgets when there is no main window (unit tests).
+        """
+        console = OutputConsole(self)
+        console.hide()
+        return console
+
+    def output_console(self) -> Optional[OutputConsole]:
+        """The console of this panel for the output dock, or None if it has none."""
+        return None
 
     def cancel_jobs(self) -> None:
         """Stop the background jobs of this panel; called when the window closes."""

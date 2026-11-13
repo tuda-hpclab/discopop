@@ -22,12 +22,11 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QFrame,
     QHeaderView,
     QLabel,
-    QScrollArea,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -72,8 +71,10 @@ from discopop_library.ProjectManager.services.requests import PatchRepairRequest
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 
 RUN_TEXT = "Run Patch Repair"
-RUNNING_TEXT = "⟳ Running..."
-_SETTINGS_WIDTH = 650
+_SETTINGS_WIDTH = 480
+DESCRIPTION = "An LLM agent repairs suggestions whose patches do not build or validate."
+NOT_RUN_TEXT = "Not run yet"
+NO_RESULTS_TEXT = "No repair run yet."
 
 _TONE_COLORS = {
     patch_repair_view.TONE_IDLE: widgets.STATUS_IDLE,
@@ -81,6 +82,13 @@ _TONE_COLORS = {
     patch_repair_view.TONE_OK: widgets.STATUS_OK,
     patch_repair_view.TONE_FAIL: widgets.STATUS_FAIL,
     patch_repair_view.TONE_STOP: widgets.STATUS_STOP,
+}
+_CHIP_LEVELS = {
+    patch_repair_view.TONE_IDLE: widgets.CHIP_IDLE,
+    patch_repair_view.TONE_BUSY: widgets.CHIP_BUSY,
+    patch_repair_view.TONE_OK: widgets.CHIP_OK,
+    patch_repair_view.TONE_FAIL: widgets.CHIP_ERROR,
+    patch_repair_view.TONE_STOP: widgets.CHIP_WARN,
 }
 _COLUMNS = ("Suggestion", "Hotspot", "Status", "Files", "Attempts", "First error")
 
@@ -92,6 +100,8 @@ class PatchRepairPanel(Panel):
     and publishes ``AutotuningChanged`` and ``ResultsChanged`` after a run that ended without an error: a repaired
     patch changes what the tuner and the report show.
     """
+
+    output_title = "Patch Repair"
 
     def __init__(
         self,
@@ -107,48 +117,30 @@ class PatchRepairPanel(Panel):
         # results.json as it currently stands, keyed by suggestion id (as a string)
         self._records: Dict[str, Dict[str, Any]] = {}
 
-        self.console = widgets.OutputConsole()
+        self.console = self.make_console()
+        self.run_button = widgets.RunStopButton(RUN_TEXT, self._run, self._stop)
+        self.run_button.setEnabled(False)
+        self.header = widgets.PanelHeader("Patch Repair", DESCRIPTION, [self.run_button])
+        self.header.chip.set_status(widgets.CHIP_IDLE, NOT_RUN_TEXT)
+        self.selector = SuggestionSelector(arguments.dot_dp, "patch_repair_scope")
         self._build_settings()
         self._build_agent_settings()
-        self.selector = SuggestionSelector(arguments.dot_dp, "patch_repair_scope")
-        self.run_button = widgets.primary_button(RUN_TEXT, self._run)
-        self.run_button.setEnabled(False)
-        self.stop_button = widgets.danger_button("Stop", self._stop)
-        self.stop_button.setEnabled(False)
-        self.summary_label = widgets.caption_label("(not run yet)")
+        self._build_scope()
+        self._build_advanced()
 
-        scope_layout = QVBoxLayout()
-        scope_layout.addWidget(widgets.caption_label("Suggestions to consider (the hotspot filter applies on top):"))
-        scope_layout.addWidget(self.selector)
         column = QWidget()
         column_layout = QVBoxLayout(column)
+        column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.addWidget(self._settings_box)
         column_layout.addWidget(self._agent_box)
-        column_layout.addWidget(widgets.group_box("Suggestion Scope", scope_layout))
-        column_layout.addStretch(1)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(column)
-
-        outcome_layout = QVBoxLayout()
-        outcome_layout.addWidget(self.summary_label)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(scroll, 1)
-        left_layout.addLayout(widgets.hbox(self.run_button, self.stop_button, None, margins=5))
-        left_layout.addWidget(widgets.group_box("Outcome", outcome_layout))
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left)
-        splitter.addWidget(self._build_results())
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_SETTINGS_WIDTH, 700])
+        column_layout.addWidget(self._scope_box)
+        column_layout.addWidget(self._advanced)
+        self.splitter = widgets.SettingsSplitter(column, self._build_results(), _SETTINGS_WIDTH)
+        self.header.add_action(self.splitter.toggle_button, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addWidget(self.header)
+        layout.addWidget(self.splitter, 1)
 
         project_state.subscribe(ConfigChanged, lambda _event: self._update_ui())
         project_state.subscribe(PatternsChanged, lambda _event: self._update_ui())
@@ -162,7 +154,6 @@ class PatchRepairPanel(Panel):
     # ── construction ────────────────────────────────────────────────────────
 
     def _build_settings(self) -> None:
-        self.config_label = widgets.caption_label("(none selected)")
         # NO is unchecked by default: a cold suggestion contributes negligibly to the runtime, so repairing it spends
         # agent tokens and build time on code that will never be worth parallelizing.
         default_types = [t.strip() for t in DEFAULT_HOTSPOT_TYPES.split(",")]
@@ -174,25 +165,19 @@ class PatchRepairPanel(Panel):
         self.log_level_combo = widgets.log_level_selector("INFO")
         self.dry_run_check = QCheckBox("Dry run (do not modify the patches)")
 
-        layout = QVBoxLayout()
-        layout.addLayout(widgets.hbox(widgets.heading_label("Configuration:"), self.config_label, None))
-        layout.addWidget(widgets.heading_label("Hotspot Types:"))
-        layout.addLayout(widgets.hbox(*self.hotspot_checks.values(), None, spacing=30))
-        layout.addWidget(
-            widgets.caption_label(
-                "NO suggestions are skipped by default to save time and agent cost. "
-                "Without hotspot results every suggestion counts as YES."
-            )
+        section = widgets.FormSection("Settings")
+        section.add_row(
+            "Hotspot types:",
+            widgets.hbox(*self.hotspot_checks.values(), None, spacing=20),
+            "NO suggestions are skipped by default to save time and agent cost. "
+            "Without hotspot results every suggestion counts as YES.",
         )
-        layout.addLayout(widgets.hbox(QLabel("Log Level:"), self.log_level_combo, None))
-        layout.addWidget(self.dry_run_check)
-        dry_run_caption = widgets.caption_label(
+        section.add_widget(
+            self.dry_run_check,
             "A repair is still built to check it, so a patch file is written and put back; "
-            "it ends the run exactly as it started."
+            "it ends the run exactly as it started.",
         )
-        dry_run_caption.setContentsMargins(20, 0, 0, 0)
-        layout.addWidget(dry_run_caption)
-        self._settings_box = widgets.group_box("Settings", layout)
+        self._settings_box = section
 
     def _build_agent_settings(self) -> None:
         # built from the registry, so a newly added agent reaches the GUI without a change here
@@ -202,7 +187,6 @@ class PatchRepairPanel(Panel):
         self.backend_combo.addItems(backends)
         self.backend_combo.setCurrentText(installed or (backends[0] if backends else ""))
         self.backend_combo.currentTextChanged.connect(lambda _text: self._on_backend_changed())
-        self.backend_hint = widgets.caption_label("")
         # Editable, not read-only: a backend's model list depends on which providers are authenticated and is not
         # always exhaustive, so a model missing from it must still be typeable.
         self.model_combo = QComboBox()
@@ -220,27 +204,47 @@ class PatchRepairPanel(Panel):
         self.retries_spin.setValue(2)
         self.prompts_spin.valueChanged.connect(lambda _value: self._update_budget())
         self.retries_spin.valueChanged.connect(lambda _value: self._update_budget())
-        self.budget_label = widgets.caption_label("")
 
-        layout = QVBoxLayout()
-        layout.addLayout(widgets.hbox(QLabel("Backend:"), self.backend_combo, None))
-        layout.addWidget(self.backend_hint)
-        model_row = widgets.hbox(QLabel("Model:"), self.model_combo)
-        model_row.setStretch(1, 1)
-        layout.addLayout(model_row)
-        layout.addWidget(widgets.caption_label("Leave empty to use the backend's own default model."))
-        layout.addLayout(widgets.hbox(QLabel("Agent timeout (s):"), self.timeout_spin, None))
-        layout.addLayout(
-            widgets.hbox(QLabel("Prompts:"), self.prompts_spin, 15, QLabel("Retries:"), self.retries_spin, None)
+        section = widgets.FormSection("LLM Agent")
+        backend_hint = section.add_row("Backend:", self.backend_combo, " ")
+        assert backend_hint is not None
+        self.backend_hint = backend_hint
+        section.add_row("Model:", self.model_combo, "Empty: the backend's default model.", stretch_field=True)
+        self._agent_box = section
+
+    def _build_scope(self) -> None:
+        section = widgets.FormSection("Suggestion Scope")
+        section.add_widget(widgets.caption_label("Suggestions to consider (the hotspot filter applies on top):"))
+        section.add_widget(self.selector)
+        self._scope_box = section
+
+    def _build_advanced(self) -> None:
+        section = widgets.FormSection()
+        section.add_row("Agent timeout (s):", self.timeout_spin)
+        budget_hint = section.add_row(
+            "Prompts / retries:",
+            widgets.hbox(
+                self.prompts_spin,
+                widgets.caption_label("prompts"),
+                12,
+                self.retries_spin,
+                widgets.caption_label("retries"),
+                None,
+            ),
+            " ",
         )
-        layout.addWidget(self.budget_label)
-        layout.addWidget(
+        assert budget_hint is not None
+        self.budget_label = budget_hint
+        section.add_widget(
             widgets.caption_label(
                 "A prompt is an independent attempt with a fresh context; a retry is a "
                 "follow-up turn in the same conversation, told what was wrong."
             )
         )
-        self._agent_box = widgets.group_box("LLM Agent", layout)
+        section.add_row("Log level:", self.log_level_combo)
+        self._advanced = widgets.CollapsibleSection(
+            "Advanced", section, summary="agent timeout, prompts, retries, log level"
+        )
 
     def _build_results(self) -> QTabWidget:
         notebook = QTabWidget()
@@ -259,7 +263,12 @@ class PatchRepairPanel(Panel):
         # text is in the console and in results.json rather than only here
         header.setStretchLastSection(True)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
-        notebook.addTab(self.table, "📋 Results")
+        # an empty table says what to do instead of showing bare column headers
+        self.empty_label = widgets.empty_state_label(NO_RESULTS_TEXT)
+        self.results_stack = QStackedWidget()
+        self.results_stack.addWidget(self.empty_label)
+        self.results_stack.addWidget(self.table)
+        notebook.addTab(self.results_stack, "Results")
 
         self.file_combo = QComboBox()
         self.file_combo.setMinimumContentsLength(30)
@@ -287,10 +296,11 @@ class PatchRepairPanel(Panel):
         diff_layout = QVBoxLayout(diff_tab)
         diff_layout.addLayout(widgets.hbox(QLabel("File:"), self.file_combo, self.diff_source_label, None))
         diff_layout.addWidget(panes, 1)
-        notebook.addTab(diff_tab, "🔀 Patch")
-
-        notebook.addTab(self.console, "🖥 Console")
+        notebook.addTab(diff_tab, "Patch")
         return notebook
+
+    def output_console(self) -> widgets.OutputConsole:
+        return self.console
 
     # ── state ───────────────────────────────────────────────────────────────
 
@@ -343,18 +353,8 @@ class PatchRepairPanel(Panel):
         self.budget_label.setText(patch_repair_view.budget_text(self.prompts_spin.value(), self.retries_spin.value()))
         widgets.set_label_color(self.budget_label, widgets.STATUS_IDLE)
 
-    def _update_config_display(self) -> None:
-        config = self.project_state.current_config
-        if config:
-            self.config_label.setText(config)
-            self.config_label.setStyleSheet("")
-        else:
-            self.config_label.setText("(none selected)")
-            widgets.set_label_color(self.config_label, widgets.STATUS_IDLE)
-
     def _update_ui(self) -> None:
         """Enable the run button only once there are patches to repair."""
-        self._update_config_display()
         if self.running:
             return
         self.run_button.setEnabled(self._prerequisites_met())
@@ -364,9 +364,13 @@ class PatchRepairPanel(Panel):
         """Patches must exist: without them there is nothing to build and nothing to fix."""
         return has_patches(self.arguments.dot_dp) and bool(self.project_state.current_config)
 
-    def _set_summary(self, text: str, color: str) -> None:
-        self.summary_label.setText(text)
-        widgets.set_label_color(self.summary_label, color)
+    def _set_summary(self, text: str, tone: str) -> None:
+        """Show the outcome in the header chip: the first sentence as the chip, the rest behind "Details"."""
+        first, _separator, rest = text.partition(". ")
+        if rest:
+            self.header.chip.set_status(_CHIP_LEVELS[tone], first, rest)
+        else:
+            self.header.chip.set_status(_CHIP_LEVELS[tone], text)
 
     # ── running ─────────────────────────────────────────────────────────────
 
@@ -379,14 +383,14 @@ class PatchRepairPanel(Panel):
             return
 
         self.running = True
-        self.run_button.setEnabled(False)
-        self.run_button.setText(RUNNING_TEXT)
-        self.stop_button.setEnabled(True)
+        self.run_button.set_running(True)
+        self.output_requested.emit()
         self.status.set("⏳ Patch repair in progress...", widgets.STATUS_BUSY)
 
         self.console.clear()
         self._records = {}
         self._refresh_table()
+        self.header.chip.set_status(widgets.CHIP_BUSY, "Starting…")
 
         # the job's thread must not read widgets or selectors
         request = self._snapshot_request()
@@ -476,12 +480,12 @@ class PatchRepairPanel(Panel):
             self._records[str(event.get("suggestion_id"))] = dict(event)
             self._refresh_table()
         for text, tone in patch_repair_view.progress_summary(event):
-            self._set_summary(text, _TONE_COLORS[tone])
+            self._set_summary(text, tone)
 
     def _stop(self) -> None:
         if self._job is not None:
             self._job.cancel()
-        self.stop_button.setEnabled(False)
+        self.run_button.set_stopping()
         self.status.set("Stopping patch repair...", widgets.STATUS_STOP)
 
     def _on_complete(self, error: bool = False, stopped: bool = False) -> None:
@@ -489,16 +493,18 @@ class PatchRepairPanel(Panel):
         # results.json is the authoritative record: rebuild from it so the table is complete even if a live event
         # was missed
         self._load_results_from_file()
-        self.run_button.setEnabled(True)
-        self.run_button.setText(RUN_TEXT)
-        self.stop_button.setEnabled(False)
+        self.run_button.set_running(False, enabled_after=True)
 
         if error:
+            self.header.chip.set_status(widgets.CHIP_ERROR, "Failed", "See the output pane for the error.")
             self.status.set("Patch repair failed", widgets.STATUS_FAIL, reset_ms=4000)
             return
         if stopped:
+            self.header.chip.set_status(widgets.CHIP_WARN, "Stopped")
             self.status.set("Patch repair stopped", widgets.STATUS_IDLE, reset_ms=4000)
             return
+        if self.header.chip.level == widgets.CHIP_BUSY:  # no "done" event arrived
+            self.header.chip.set_status(widgets.CHIP_OK, "Completed")
 
         repaired = sum(1 for r in self._records.values() if r.get("status") == "repaired")
         if repaired:
@@ -542,6 +548,7 @@ class PatchRepairPanel(Panel):
         try:
             self.table.clearSelection()
             self.table.setRowCount(len(rows))
+            self.results_stack.setCurrentWidget(self.table if rows else self.empty_label)
             for index, row in enumerate(rows):
                 color = QColor(_TONE_COLORS[row.tone])
                 for column, value in enumerate(row.cells()):

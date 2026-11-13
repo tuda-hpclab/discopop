@@ -14,6 +14,7 @@ from unittest import mock
 
 import pytest
 from pytestqt.qtbot import QtBot
+from PySide6.QtWidgets import QFormLayout
 
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.qt_gui import main_window, suggestion_browser, widgets
@@ -92,18 +93,22 @@ def run_with(panel: PatternDetectionPanel, qtbot: QtBot, code: str) -> List[Expl
     return requests
 
 
-def test_without_profiling_data_the_tab_is_disabled_and_says_why(panel: PatternDetectionPanel) -> None:
-    enabled, tooltip = tab_state(panel)
-    assert not enabled and not panel.run_button.isEnabled()
-    assert "Prerequisites not met:" in tooltip and "Data.xml" in tooltip and "FileMapping.txt" in tooltip
-    assert not panel.stop_button.isEnabled() and not panel.browse_button.isEnabled()
-    assert not panel.vscode_button.isEnabled() and panel.no_suggestions_label.isHidden()
+def test_without_profiling_data_the_panel_says_why_and_leads_to_execute(panel: PatternDetectionPanel) -> None:
+    assert tab_state(panel) == (True, "")  # the tab stays reachable, it explains itself
+    assert not panel.run_button.isEnabled() and not panel.vscode_button.isEnabled()
+    assert panel.results_stack.currentIndex() == 1
+    assert panel.locked_title.text() == "Needs profiling data"
+    assert "Data.xml" in panel.locked_reason.text() and "FileMapping.txt" in panel.locked_reason.text()
+    assert panel.header.chip.text() == "Not run yet"
+    panel.goto_profiling_button.click()
+    assert isinstance(panel.tabs, FakeTabs) and panel.tabs.shown == [main_window.TAB_PROFILING]
 
 
 def test_profiling_data_enables_run_and_tab(panel: PatternDetectionPanel) -> None:
     profile(panel)
     panel.project_state.publish(ResultsChanged())
     assert panel.run_button.isEnabled() and tab_state(panel) == (True, "")
+    assert panel.results_stack.currentIndex() == 0
 
 
 def test_the_hotspot_hint_follows_the_hotspot_results(panel: PatternDetectionPanel) -> None:
@@ -163,14 +168,14 @@ def test_a_run_shows_the_output_and_publishes_patterns_changed(qtbot: QtBot, pan
     panel.project_state.subscribe(PatternsChanged, published.append)
     with mock.patch.object(pattern_detection_panel, "explorer_command", lambda *_a, **_k: program("print('found')")):
         panel.run_button.click()
-        assert panel.explorer_running and not panel.run_button.isEnabled()
-        assert panel.run_button.text() == "⟳ Running..." and panel.stop_button.isEnabled()
+        assert panel.explorer_running and panel.run_button.is_running() and panel.run_button.isEnabled()
+        assert panel.run_button.text() == "■ Stop" and panel.header.chip.text() == "Running..."
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
     text = panel.console.text()
     assert "  Patterns: reduction,doall\n" in text and "  Dependency data: default\n" in text
     assert "found" in text and "Pattern detection completed." in text
     assert panel.run_button.isEnabled() and panel.run_button.text() == "Run Pattern Detection"
-    assert not panel.stop_button.isEnabled()
+    assert not panel.run_button.is_running()
     assert panel.status.text() == "Pattern detection completed successfully"
     assert len(published) == 1
 
@@ -185,7 +190,7 @@ def test_a_second_start_while_running_is_refused(
         panel.run_button.click()
         panel.run_pattern_detection()
         assert dialog_answers.titles("show_error") == ["Already Running"]
-        panel.stop_button.click()
+        panel.run_button.click()  # while running, the button is Stop
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
 
 
@@ -196,8 +201,9 @@ def test_stop_ends_the_run(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
     ):
         panel.run_button.click()
         qtbot.waitUntil(lambda: panel._explorer_job is not None)
-        panel.stop_button.click()
-        assert not panel.stop_button.isEnabled() and panel.status.text() == "Stopping pattern detection..."
+        panel.run_button.click()
+        assert not panel.run_button.isEnabled() and panel.run_button.text() == "Stopping…"
+        assert panel.status.text() == "Stopping pattern detection..."
         assert panel.status.color == widgets.STATUS_STOP
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
     # a stop is not a failure
@@ -234,9 +240,9 @@ def test_a_visualized_run_is_a_job_with_a_working_stop_button(qtbot: QtBot, pane
         mock.patch.object(pattern_detection_panel, "explorer_command", command),
     ):
         panel.run_button.click()
-        assert panel.stop_button.isEnabled()
+        assert panel.run_button.is_running()
         qtbot.waitUntil(lambda: panel._explorer_job is not None)
-        panel.stop_button.click()
+        panel.run_button.click()
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
     assert requests[0].visualize and "Graph visualization: enabled" in panel.console.text()
 
@@ -253,25 +259,125 @@ def test_a_visualized_run_without_the_gui_package_does_not_start(
     assert not panel.explorer_running and panel.run_button.isEnabled()
 
 
-def test_the_no_suggestions_label_follows_the_result(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
+def write_suggestions(panel: PatternDetectionPanel, ids: List[str]) -> Path:
+    dot_dp = Path(panel.arguments.dot_dp)
+    (dot_dp / "explorer").mkdir(exist_ok=True)
+    entries = [
+        {
+            "pattern_id": int(sid),
+            "start_line": f"1:{10 + int(sid)}",
+            "end_line": f"1:{12 + int(sid)}",
+            "pragma": "#pragma omp parallel for",
+            "private": ["i"],
+            "affected_functions": ["1:3:work"],
+        }
+        for sid in ids
+    ]
+    (dot_dp / "explorer" / "patterns.json").write_text(json.dumps({"patterns": {"do_all": entries}}))
+    (dot_dp / "FileMapping.txt").write_text("1\t/src/main.c\n")
+    for sid in ids:
+        patch_dir = dot_dp / "patch_generator" / sid
+        patch_dir.mkdir(parents=True, exist_ok=True)
+        (patch_dir / "a.patch").write_text(f"--- a/main.c\n+++ b/main.c\n@@ -1 +1 @@\n+#pragma omp for {sid}\n")
+    return dot_dp
+
+
+def test_the_empty_states_follow_the_result(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
     profile(panel)
+    assert panel.table.empty_label.text().startswith("No suggestions yet")
     explorer_dir = Path(panel.arguments.dot_dp, "explorer")
     explorer_dir.mkdir()
     panel.refresh()
-    assert not panel.no_suggestions_label.isHidden()
+    assert panel.table.empty_label.text() == "No patterns found."
+    assert panel.header.chip.text() == "No suggestions found"
     (explorer_dir / "patterns.json").write_text(json.dumps({"patterns": {"do_all": [{"id": 1}]}}))
     panel.refresh()
-    assert panel.no_suggestions_label.isHidden()
+    assert panel.table.empty_label.text().startswith("No suggestions yet")
 
 
-def test_suggestions_enable_browse_and_vscode(panel: PatternDetectionPanel) -> None:
-    patch_dir = Path(panel.arguments.dot_dp, "patch_generator", "1")
-    patch_dir.mkdir(parents=True)
-    (patch_dir / "a.patch").write_text("")
+def test_suggestions_fill_the_table_the_chip_and_the_vscode_action(panel: PatternDetectionPanel) -> None:
+    profile(panel)
+    write_suggestions(panel, ["2", "10"])
     panel.project_state.publish(PatternsChanged())
-    assert panel.browse_button.isEnabled() and panel.vscode_button.isEnabled()
+    assert [info.id for info in panel.table.suggestions()] == ["2", "10"]
+    assert panel.header.chip.text() == "2 suggestions" and panel.vscode_button.isEnabled()
+    assert not panel.open_vscode_button.isEnabled() and panel.detail_stack.currentWidget() is panel.detail_placeholder
+
+
+def test_selecting_a_suggestion_shows_its_details_and_patch(panel: PatternDetectionPanel) -> None:
+    profile(panel)
+    write_suggestions(panel, ["2", "10"])
+    panel.refresh()
+    assert panel.table.select_id("10")
+    assert panel.detail_title.text() == "Suggestion 10" and panel.open_vscode_button.isEnabled()
+    assert panel.detail_stack.currentWidget() is panel.detail_body
+    assert "+#pragma omp for 10" in panel.patch_view.toPlainText()
+    labels = []
+    for row in range(3):
+        item = panel.detail_form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+        widget = item.widget() if item is not None else None
+        labels.append(widget.property("text") if widget is not None else "")
+    assert labels == ["Pattern:", "File:", "Lines:"]
+
+
+def test_a_refresh_keeps_the_selected_suggestion(panel: PatternDetectionPanel) -> None:
+    profile(panel)
+    write_suggestions(panel, ["2", "10"])
+    panel.refresh()
+    panel.table.select_id("10")
+    panel.refresh()
+    current = panel.table.current_suggestion()
+    assert current is not None and current.id == "10"
+
+
+def test_the_open_button_opens_the_source_at_the_suggestion(panel: PatternDetectionPanel) -> None:
+    profile(panel)
+    write_suggestions(panel, ["2"])
+    panel.refresh()
+    panel.table.select_id("2")
+    with (
+        mock.patch.object(pattern_detection_panel, "find_code_executable", lambda: "code"),
+        mock.patch.object(pattern_detection_panel, "open_file_at") as opened,
+    ):
+        panel.open_vscode_button.click()
+    opened.assert_called_once_with("code", "/src/main.c", 12)
+
+
+def test_new_results_after_a_run_are_shown(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
+    profile(panel)
+    with mock.patch.object(pattern_detection_panel, "explorer_command", lambda *_a, **_k: program("print('x')")):
+        panel.run_button.click()
+        write_suggestions(panel, ["1"])
+        qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
+    assert [info.id for info in panel.table.suggestions()] == ["1"]
+
+
+def test_the_chip_reports_profiling_data_newer_than_the_results(panel: PatternDetectionPanel) -> None:
+    import os
+
+    profile(panel)
+    write_suggestions(panel, ["1"])
+    result = Path(panel.arguments.dot_dp, "explorer", "patterns.json")
+    os.utime(result, (1_000_000, 1_000_000))
+    panel.refresh()
+    assert panel.header.chip.text() == "Profiling data newer than the results"
+    os.utime(result, None)
+    panel.refresh()
+    assert panel.header.chip.text() == "1 suggestion"
+
+
+def test_the_console_belongs_to_the_output_pane(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
+    assert panel.output_console() is panel.console and panel.output_title == "Patterns"
+    profile(panel)
+    requested: List[bool] = []
+    panel.output_requested.connect(lambda: requested.append(True))
+    run_with(panel, qtbot, "print('x')")
+    assert requested == [True]
+
+
+def test_the_browser_can_still_be_opened(panel: PatternDetectionPanel) -> None:
     with mock.patch.object(suggestion_browser, "open_suggestion_browser") as opened:
-        panel.browse_button.click()
+        panel.open_suggestion_browser()
     assert opened.call_args.args == (panel, panel.arguments.dot_dp)
 
 

@@ -15,18 +15,14 @@ import os
 import queue
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QFrame,
     QLabel,
     QRadioButton,
-    QScrollArea,
     QSpinBox,
-    QSplitter,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -42,7 +38,7 @@ from discopop_library.ProjectManager.plots.data import parse_progress_jsonl, spl
 from discopop_library.ProjectManager.plots.hotspot_data import hotspots_available_for_explorer
 from discopop_library.ProjectManager.qt_gui import chart_embedding, dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
-from discopop_library.ProjectManager.qt_gui.tabs import TAB_AUTOTUNING
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_AUTOTUNING, TAB_PATTERN_DETECTION, TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.suggestion_browser import open_suggestion_browser
@@ -52,7 +48,6 @@ from discopop_library.ProjectManager.services.autotuner_results import (
     read_autotuner_applied_suggestions,
 )
 from discopop_library.ProjectManager.services.commands import autotuner_command
-from discopop_library.ProjectManager.services.explorer_state import explorer_prerequisites_met
 from discopop_library.ProjectManager.services.jobs import (
     CancelPolicy,
     JobEvent,
@@ -62,7 +57,7 @@ from discopop_library.ProjectManager.services.jobs import (
     JobRunner,
     JobSpec,
 )
-from discopop_library.ProjectManager.services.patches import has_patches, sort_suggestion_ids
+from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
     AutotuningFinished,
@@ -74,8 +69,25 @@ from discopop_library.ProjectManager.services.project_state import (
 )
 from discopop_library.ProjectManager.services.requests import AutotunerRequest
 from discopop_library.ProjectManager.services.text import clean_ansi_output
+from discopop_library.ProjectManager.services.workflow_status import (
+    MISSING_PROFILING_DATA,
+    MISSING_SUGGESTIONS,
+    autotuning_missing,
+)
 
-TAB_DISABLED_TOOLTIP = "Prerequisites not met:\nPattern Detection needs to be executed first."
+# what the page says while a prerequisite of the autotuner is missing: title, explanation
+PREREQUISITE_TEXTS: Dict[str, Tuple[str, str]] = {
+    MISSING_PROFILING_DATA: (
+        "Prerequisites not met: no profiling data",
+        "The autotuner measures combinations of the parallelization suggestions, which the pattern detection finds "
+        "in the profiling data. Profile the configuration in the Profiling stage, then run the pattern detection.",
+    ),
+    MISSING_SUGGESTIONS: (
+        "Prerequisites not met: no parallelization suggestions",
+        "The autotuner measures combinations of the parallelization suggestions. Run the pattern detection first; "
+        "if it found no suggestions, there is nothing to tune.",
+    ),
+}
 
 SEARCH_MODE = "search"
 EVALUATE_MODE = "evaluate"
@@ -92,25 +104,32 @@ ALGORITHM_OPTIONS: List[Tuple[str, str]] = [
 # the deterministic search: repeating a tuning run reproduces its decisions, which the randomized evolutionary
 # search cannot promise
 DEFAULT_ALGORITHM = "Hotspot-guided region descent"
-HOTSPOT_TYPES = ("yes", "no", "maybe")
+HOTSPOT_TYPES = ("yes", "maybe", "no")
+DESCRIPTION = "Searches for the fastest combination of suggestions by measuring them."
+NO_PLOT_TEXT = "Run the autotuner to see its progress here."
+WAITING_PLOT_TEXT = "Waiting for the first measurement…"
+# above this many ids the header chip names their number; the ids are behind its "Details"
+_MAX_CHIP_IDS = 6
 
 _MAX_REPETITIONS = 1000
-_OPTIONS_MIN_WIDTH = 650
+_OPTIONS_MIN_WIDTH = 480
 
 
 def _set_state_text(label: QLabel, text: str, active: bool) -> None:
     """Show ``text`` in the normal text color when ``active``, else grayed out."""
     label.setText(text)
-    label.setStyleSheet("" if active else f"color: {widgets.STATUS_IDLE};")
+    label.setStyleSheet("" if active else f"color: {widgets.HINT_COLOR};")
 
 
 class AutotuningPanel(Panel):
     """The Autotuning tab.
 
-    ``tabs`` is the main window: the panel enables and disables its own tab (``TAB_AUTOTUNING``) there, depending
-    on whether parallelization suggestions and profiling data exist (``update_tab_state``; the window calls it once
-    after it put the panel into its tab, the panel itself whenever the prerequisites may have changed).
+    ``tabs`` is the main window. The stage is always reachable; while profiling data or parallelization suggestions
+    are missing, a warning on the page says which and where to get it, and Run is unavailable (``update_tab_state``;
+    the window calls it after events that can change the prerequisites, the panel itself as well).
     """
+
+    output_title = "Autotuning"
 
     def __init__(
         self,
@@ -127,24 +146,34 @@ class AutotuningPanel(Panel):
         self._reported_not_applied = 0
         self.progress_model = ProgressModel()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_left_side())
-        splitter.addWidget(self._build_right_side())
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_OPTIONS_MIN_WIDTH, 900])
+        self.console = self.make_console()
+        self.run_button = widgets.RunStopButton("Run Autotuning", self.run, self.stop)
+        self.header = widgets.PanelHeader("Autotuning", DESCRIPTION, [self.run_button])
+        self.prerequisites_banner = widgets.WarningBanner()
+        self.goto_profiling_button = widgets.primary_button(
+            "Go to Profiling", lambda: self._tabs.show_tab(TAB_PROFILING)
+        )
+        self.goto_pattern_detection_button = widgets.primary_button(
+            "Go to Pattern Detection", lambda: self._tabs.show_tab(TAB_PATTERN_DETECTION)
+        )
+        self.prerequisites_banner.add_action(self.goto_profiling_button)
+        self.prerequisites_banner.add_action(self.goto_pattern_detection_button)
+        self.prerequisites_banner.setVisible(False)
+
+        self.splitter = widgets.SettingsSplitter(self._build_left_side(), self._build_right_side(), _OPTIONS_MIN_WIDTH)
+        self.header.add_action(self.splitter.toggle_button, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addWidget(self.header)
+        layout.addWidget(self.prerequisites_banner)
+        layout.addWidget(self.splitter, 1)
 
         self._update_mode_widgets()
         self._update_algorithm_hint()
-        self._update_config_display()
         self._update_ui()
         # show the last run (if any) so the plot is not empty on open
         self._load_progress_from_file()
 
-        project_state.subscribe(ConfigChanged, lambda _event: self._update_config_display())
         project_state.subscribe(ConfigChanged, lambda _event: self._refresh_suggestions_display())
         project_state.subscribe(PatternsChanged, lambda _event: self._update_ui())
         project_state.subscribe(HotspotsChanged, lambda _event: self._update_ui())
@@ -155,38 +184,19 @@ class AutotuningPanel(Panel):
     # ── building ─────────────────────────────────────────────────────────────
 
     def _build_left_side(self) -> QWidget:
-        # the options scroll; the Run / Stop buttons and the overview of the selected suggestions stay below
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         options = QWidget()
         options_layout = QVBoxLayout(options)
+        options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.addWidget(self._build_settings())
         options_layout.addWidget(self._build_selection())
-        options_layout.addStretch(1)
-        scroll.setWidget(options)
-
-        self.run_button = widgets.primary_button("Run Autotuning", self.run)
-        self.stop_button = widgets.danger_button("Stop", self.stop)
-        self.stop_button.setEnabled(False)
-        self.suggestions_label = widgets.caption_label("(none)")
-        self.suggestions_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-
-        side = QWidget()
-        side.setMinimumWidth(_OPTIONS_MIN_WIDTH)
-        layout = QVBoxLayout(side)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll, 1)
-        layout.addLayout(widgets.hbox(self.run_button, self.stop_button, None, margins=5))
-        layout.addWidget(widgets.group_box("Selected Suggestion IDs", widgets.vbox(self.suggestions_label)))
-        return side
+        options_layout.addWidget(self._build_advanced())
+        return options
 
     def _build_settings(self) -> QWidget:
-        self.config_label = widgets.caption_label("(none selected)")
-
         self.threads = widgets.ThreadSelector()
         # Kept apart from the count used for the measured runs (Execute tab): the search performs one program
-        # execution per candidate, so repeating every one of them multiplies the tuning time.
+        # execution per candidate, so repeating every one of them multiplies the tuning time. It changes the
+        # results, so it stays visible rather than under "Advanced".
         self.repetitions = QSpinBox()
         self.repetitions.setRange(1, _MAX_REPETITIONS)
         self.repetitions.setValue(DEFAULT_TUNING_REPETITIONS)
@@ -202,39 +212,31 @@ class AutotuningPanel(Panel):
         self.algorithm_combo.addItems([description for _value, description in ALGORITHM_OPTIONS])
         self.algorithm_combo.setCurrentText(DEFAULT_ALGORITHM)
         self.algorithm_combo.currentTextChanged.connect(lambda _text: self._update_algorithm_hint())
+
+        section = widgets.FormSection("Settings")
         # the default algorithm stops immediately when no hotspot detection results exist, so say that here rather
         # than letting the run fail for a reason that is only visible in the console output
-        self.algorithm_hint = widgets.caption_label("")
+        algorithm_hint = section.add_row("Algorithm:", self.algorithm_combo, " ", stretch_field=True)
+        assert algorithm_hint is not None
+        self.algorithm_hint = algorithm_hint
+        section.add_row("Threads:", self.threads, "auto = CPU count / 2; custom counts can be typed.")
+        section.add_row(
+            "Repetitions:",
+            self.repetitions,
+            "Runs per candidate; the median decides its rank. Above 1 multiplies the tuning time.",
+        )
+        section.add_row(
+            "Hotspot types:",
+            widgets.hbox(*self.hotspot_type_checks.values(), None, spacing=20),
+            "Only suggestions of these hotspot classes are considered.",
+        )
+        return section
 
+    def _build_advanced(self) -> QWidget:
         self.log_level = widgets.log_level_selector("WARNING")
-
-        layout = QVBoxLayout()
-        layout.addLayout(widgets.hbox(widgets.heading_label("Configuration:"), self.config_label, None))
-        layout.addLayout(
-            widgets.hbox(
-                QLabel("Threads:"),
-                self.threads,
-                widgets.caption_label("(auto = CPU count / 2; custom counts can be typed)"),
-                None,
-            )
-        )
-        layout.addLayout(
-            widgets.hbox(
-                QLabel("Repetitions:"),
-                self.repetitions,
-                widgets.caption_label(
-                    "(runs per candidate; the median decides its rank. Above 1 multiplies the tuning time)"
-                ),
-                None,
-            )
-        )
-        layout.addWidget(widgets.heading_label("Hotspot Types:"))
-        layout.addLayout(widgets.hbox(*self.hotspot_type_checks.values(), None, margins=0, spacing=30))
-        layout.addWidget(widgets.heading_label("Algorithm:"))
-        layout.addWidget(self.algorithm_combo)
-        layout.addWidget(self.algorithm_hint)
-        layout.addLayout(widgets.hbox(QLabel("Log Level:"), self.log_level, None))
-        return widgets.group_box("Settings", layout)
+        section = widgets.FormSection()
+        section.add_row("Log level:", self.log_level)
+        return widgets.CollapsibleSection("Advanced", section, summary="log level")
 
     def _build_selection(self) -> QWidget:
         # pick between searching for the best combination (algorithm + restricted search space) and evaluating one
@@ -257,7 +259,7 @@ class AutotuningPanel(Panel):
         )
         self.search_space_container = QWidget()
         search_layout = QVBoxLayout(self.search_space_container)
-        search_layout.setContentsMargins(20, 3, 0, 0)
+        search_layout.setContentsMargins(0, 0, 0, 0)
         search_layout.addWidget(widgets.caption_label("Suggestions the algorithm may explore:"))
         search_layout.addWidget(self.search_space_selector)
 
@@ -266,21 +268,21 @@ class AutotuningPanel(Panel):
         )
         self.evaluate_container = QWidget()
         evaluate_layout = QVBoxLayout(self.evaluate_container)
-        evaluate_layout.setContentsMargins(20, 3, 0, 0)
+        evaluate_layout.setContentsMargins(0, 0, 0, 0)
         evaluate_layout.addWidget(widgets.caption_label("Suggestions to apply together and compare to the baseline:"))
         evaluate_layout.addWidget(self.evaluate_selector)
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.search_mode_radio)
-        layout.addWidget(self.evaluate_mode_radio)
-        layout.addLayout(widgets.hbox(20, self.suggestions_count_label, self.browse_button, None))
-        layout.addWidget(self.search_space_container)
-        layout.addWidget(self.evaluate_container)
-        return widgets.group_box("Suggestion Selection", layout)
+        section = widgets.FormSection("Suggestion Selection")
+        section.add_widget(self.search_mode_radio)
+        section.add_widget(self.evaluate_mode_radio)
+        section.add_widget(widgets.hbox(self.suggestions_count_label, self.browse_button, None))
+        section.add_widget(self.search_space_container)
+        section.add_widget(self.evaluate_container)
+        return section
 
     def _build_right_side(self) -> QWidget:
-        # a live search plot (default) and the raw console: the plot refreshes from the autotuner's @@AT_PROGRESS
-        # stream, the console keeps the human-readable log
+        # the live search plot, refreshed from the autotuner's @@AT_PROGRESS stream (the human-readable log is in the
+        # output pane)
         self.tile_values: List[QLabel] = []
         tiles = widgets.hbox(margins=2)
         # placeholder tiles; the values come from an empty model, so they read "—"
@@ -297,18 +299,21 @@ class AutotuningPanel(Panel):
         self.warning_label.hide()
 
         canvas_widget, self.figure, self.canvas, _toolbar = chart_embedding.create_canvas()
+        # before the first event there is nothing to plot: a caption says what to do
+        self.plot_empty_label = widgets.empty_state_label(NO_PLOT_TEXT)
+        self.plot_stack = QStackedWidget()
+        self.plot_stack.addWidget(self.plot_empty_label)
+        self.plot_stack.addWidget(canvas_widget)
+
         plot_tab = QWidget()
         plot_layout = QVBoxLayout(plot_tab)
         plot_layout.addLayout(tiles)
         plot_layout.addWidget(self.warning_label)
-        plot_layout.addWidget(canvas_widget, 1)
+        plot_layout.addWidget(self.plot_stack, 1)
+        return plot_tab
 
-        self.console = widgets.OutputConsole()
-
-        self.right_tabs = QTabWidget()
-        self.right_tabs.addTab(plot_tab, "📈 Live Plot")
-        self.right_tabs.addTab(self.console, "🖥 Console")
-        return self.right_tabs
+    def output_console(self) -> widgets.OutputConsole:
+        return self.console
 
     # ── the options ──────────────────────────────────────────────────────────
 
@@ -326,10 +331,9 @@ class AutotuningPanel(Panel):
             self.algorithm_hint.setText("Ranks hot code regions by their measured runtime. Reproducible across runs.")
             widgets.set_label_color(self.algorithm_hint, widgets.STATUS_IDLE)
         else:
-            self.algorithm_hint.setText(
-                "No hotspot detection results found - run Hotspot Detection first, or pick another algorithm."
-            )
+            self.algorithm_hint.setText("No hotspot results: run Hotspot Detection first, or pick another algorithm.")
             widgets.set_label_color(self.algorithm_hint, widgets.STATUS_FAIL)
+        self.algorithm_hint.setVisible(bool(self.algorithm_hint.text()))
 
     def mode(self) -> str:
         return SEARCH_MODE if self.search_mode_radio.isChecked() else EVALUATE_MODE
@@ -364,21 +368,25 @@ class AutotuningPanel(Panel):
     def _open_suggestion_browser(self) -> None:
         open_suggestion_browser(self, self.arguments.dot_dp)
 
-    def _update_config_display(self) -> None:
-        current = self.project_state.current_config
-        _set_state_text(self.config_label, current or "(none selected)", bool(current))
-
     def _update_ui(self) -> None:
-        # a running tuning keeps its Run button disabled, whatever changed meanwhile
-        self.run_button.setEnabled(not self.running)
         self._refresh_suggestions_display()
         self.update_tab_state()
 
     def update_tab_state(self) -> None:
-        """Enable the Autotuning tab when profiling data and parallelization suggestions exist."""
-        dot_dp = self.arguments.dot_dp
-        ready = explorer_prerequisites_met(dot_dp) and has_patches(dot_dp)
-        self._tabs.set_tab_enabled(TAB_AUTOTUNING, ready, "" if ready else TAB_DISABLED_TOOLTIP)
+        """Show what the autotuner is missing on the page; Run is available when nothing is.
+
+        The stage stays reachable: the sidebar shows it locked with the reason, the page says what to do.
+        """
+        missing = autotuning_missing(self.arguments.dot_dp)
+        self.prerequisites_banner.setVisible(missing is not None)
+        if missing is not None:
+            self.prerequisites_banner.set_message(*PREREQUISITE_TEXTS[missing])
+        self.goto_profiling_button.setVisible(missing == MISSING_PROFILING_DATA)
+        self.goto_pattern_detection_button.setVisible(missing == MISSING_SUGGESTIONS)
+        # a running tuning keeps showing Stop and Run unavailable; _on_complete decides again at its end
+        self.run_button.setEnabled(missing is None and not self.running)
+        self.run_button.setToolTip("" if missing is None else PREREQUISITE_TEXTS[missing][0])
+        self._tabs.set_tab_enabled(TAB_AUTOTUNING, True, "")
 
     def _refresh_suggestions_display(self) -> None:
         """Re-read the suggestions and the autotuner's results into the selectors and the overview."""
@@ -387,24 +395,33 @@ class AutotuningPanel(Panel):
         self.browse_button.setEnabled(len(self.search_space_selector.get_available_ids()) > 0)
         self._update_suggestion_count()
 
+        if self.running:
+            return  # the chip shows the run
         autotuner_executed = autotuner_results_exist(self.arguments.dot_dp)
         suggested_ids: List[str] = []
         if autotuner_executed:
             config_key = self.project_state.current_config or ""
             suggested_ids = sort_suggestion_ids(read_autotuner_applied_suggestions(self.arguments.dot_dp, config_key))
 
+        # what the box "Selected Suggestion IDs" showed: the combination the last run chose
+        chip = self.header.chip
         if suggested_ids:
-            _set_state_text(self.suggestions_label, ", ".join(suggested_ids), True)
+            joined = ", ".join(suggested_ids)
+            if len(suggested_ids) > _MAX_CHIP_IDS:
+                chip.set_status(widgets.CHIP_OK, f"Best combination: {len(suggested_ids)} suggestions", joined)
+            else:
+                chip.set_status(widgets.CHIP_OK, "Best combination: " + joined, joined)
         elif autotuner_executed:
-            _set_state_text(self.suggestions_label, "No suggestions selected", False)
+            chip.set_status(widgets.CHIP_IDLE, "No suggestions selected")
         else:
-            _set_state_text(self.suggestions_label, "Autotuner not yet executed", False)
+            chip.set_status(widgets.CHIP_IDLE, "Autotuner not yet executed")
 
     # ── the live plot ────────────────────────────────────────────────────────
 
     def _on_progress(self, event: Dict[str, Any]) -> None:
         """Ingest one progress event and refresh the live plot."""
         self.progress_model.ingest(event)
+        self._show_plot_or_caption(WAITING_PLOT_TEXT)
         self._announce_not_applied(event)
         self._redraw_plot()
         self._update_tiles()
@@ -428,6 +445,14 @@ class AutotuningPanel(Panel):
             + (", ".join(str(s) for s in suggestions) if suggestions else "(unknown)")
             + " - configuration skipped, not measured.\n"
         )
+
+    def _show_plot_or_caption(self, text: str) -> None:
+        """Show the plot once the model has events; otherwise the caption ``text``."""
+        if self.progress_model.measurements or self.progress_model.generations:
+            self.plot_stack.setCurrentIndex(1)
+        else:
+            self.plot_empty_label.setText(text)
+            self.plot_stack.setCurrentIndex(0)
 
     def _redraw_plot(self) -> None:
         autotuning_chart.render(self.figure, self.progress_model)
@@ -461,6 +486,7 @@ class AutotuningPanel(Panel):
         if not events:
             return
         self.progress_model = ProgressModel.from_events(events)
+        self._show_plot_or_caption(NO_PLOT_TEXT)
         self._redraw_plot()
         self._update_tiles()
 
@@ -473,17 +499,22 @@ class AutotuningPanel(Panel):
         if not self.project_state.current_config:
             dialogs.show_error(self, "No Configuration Selected", "Please select a configuration first.")
             return
+        missing = autotuning_missing(self.arguments.dot_dp)
+        if missing is not None:
+            dialogs.show_error(self, "Prerequisites Not Met", "\n\n".join(PREREQUISITE_TEXTS[missing]))
+            return
 
         self.running = True
-        self.run_button.setEnabled(False)
-        self.run_button.setText("⟳ Running...")
-        self.stop_button.setEnabled(True)
+        self.run_button.set_running(True)
+        self.output_requested.emit()
         self.status.set("⏳ Autotuning in progress...", widgets.STATUS_BUSY)
+        self.header.chip.set_status(widgets.CHIP_BUSY, "Tuning…")
         self.console.set_text("")
 
         # start a fresh live plot for this run
         self.progress_model = ProgressModel()
         self._reported_not_applied = 0
+        self._show_plot_or_caption(WAITING_PLOT_TEXT)
         self._redraw_plot()
         self._update_tiles()
 
@@ -606,10 +637,10 @@ class AutotuningPanel(Panel):
         # progress.jsonl is the authoritative record of the finished run: rebuild the plot from it, so the final view
         # is complete even if a live event was lost
         self._load_progress_from_file()
+        self._show_plot_or_caption(NO_PLOT_TEXT)
 
-        self.run_button.setEnabled(True)
-        self.run_button.setText("Run Autotuning")
-        self.stop_button.setEnabled(False)
+        self.run_button.set_running(False, enabled_after=autotuning_missing(self.arguments.dot_dp) is None)
+        self._refresh_suggestions_display()
 
         if stopped:
             self.project_state.publish(AutotuningFinished())
@@ -627,11 +658,14 @@ class AutotuningPanel(Panel):
                 self.status.set("Autotuning completed successfully", widgets.STATUS_OK, reset_ms=6000)
         else:
             self.status.set("Autotuning failed", widgets.STATUS_FAIL, reset_ms=3000)
+            self.header.chip.set_status(
+                widgets.CHIP_ERROR, "Autotuning failed", "See the Autotuning tab of the output pane for the details."
+            )
 
     def stop(self) -> None:
         if self._job is not None:
             self._job.cancel()
-        self.stop_button.setEnabled(False)
+        self.run_button.set_stopping()
         self.project_state.publish(ResultsChanged())
         self.status.set("Stopping autotuning...", widgets.STATUS_STOP)
 

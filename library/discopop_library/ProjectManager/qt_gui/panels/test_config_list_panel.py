@@ -14,7 +14,7 @@ from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
-from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_REPORT
+from discopop_library.ProjectManager.qt_gui.main_window import TAB_EDITOR, TAB_EXECUTE, TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
@@ -46,7 +46,6 @@ class Env:
         self.tabs = tabs
         self.events = events
         self.allow_leave = True
-        self.editor_opened = 0
 
 
 @pytest.fixture
@@ -66,12 +65,7 @@ def env(qtbot: QtBot, tmp_path: Path) -> Env:
     def leave() -> bool:
         return holder[0].allow_leave
 
-    def open_editor() -> None:
-        holder[0].editor_opened += 1
-
-    panel = ConfigListPanel(
-        arguments, state, status, confirm_leave_config=leave, open_compilation_editor=open_editor, tabs=tabs
-    )
+    panel = ConfigListPanel(arguments, state, status, confirm_leave_config=leave, tabs=tabs)
     qtbot.addWidget(panel)
     holder.append(Env(panel, tabs, events))
     events.clear()
@@ -79,7 +73,8 @@ def env(qtbot: QtBot, tmp_path: Path) -> Env:
 
 
 def click_row(env: Env, row: int) -> None:
-    env.panel.list.setCurrentRow(row)
+    """Click the tab of the configuration in ``row``."""
+    env.panel.tab_bar.setCurrentIndex(row)
 
 
 def test_the_list_shows_the_sorted_configurations_and_selects_the_first(qtbot: QtBot, tmp_path: Path) -> None:
@@ -91,21 +86,90 @@ def test_the_list_shows_the_sorted_configurations_and_selects_the_first(qtbot: Q
     state.subscribe(ConfigChanged, lambda e: seen.append(e.configuration))
     status = StatusLine()
     qtbot.addWidget(status)
-    panel = ConfigListPanel(arguments, state, status, lambda: True, lambda: None, FakeTabs())
+    panel = ConfigListPanel(arguments, state, status, lambda: True, FakeTabs())
     qtbot.addWidget(panel)
     assert panel.names() == ["a", "b"] and state.current_config == "a" and seen == ["a"]
-    assert panel.new_button.text() == "+ New" and panel.edit_compilation_button.text() == "Edit Compilation"
+    assert panel.tab_bar.currentIndex() == 0 and panel.caption_label.text() == "EXECUTION CONFIGURATION"
 
 
-def test_selecting_publishes_and_leaves_execute_and_report(env: Env) -> None:
+def test_the_menu_names_the_selected_configuration(env: Env) -> None:
+    assert env.panel.menu_actions() == [
+        "New Configuration…",
+        "New with Wizard…",
+        "",
+        "Copy “a”…",
+        "Rename “a”…",
+        "Delete “a”…",
+        "",
+    ]
+    click_row(env, 1)
+    assert env.panel.menu_actions()[3:6] == ["Copy “b”…", "Rename “b”…", "Delete “b”…"]
+
+
+def test_entries_added_behind_the_menu_stay_when_it_changes(env: Env) -> None:
+    env.panel.menu().addAction("Theme")
+    click_row(env, 1)
+    env.panel.refresh()
+    assert env.panel.menu_actions()[3:] == ["Copy “b”…", "Rename “b”…", "Delete “b”…", "", "Theme"]
+
+
+def test_the_tab_menu_works_on_its_configuration(env: Env, dialog_answers: DialogRecorder) -> None:
+    menu = env.panel.tab_menu("b")
+    assert [action.text() for action in menu.actions()] == ["Copy “b”…", "Rename “b”…", "Delete “b”…"]
+    dialog_answers.answer("ask_string", "z")
+    menu.actions()[1].trigger()
+    assert env.panel.names() == ["a", "z"] and env.panel.selected() == "z"
+    menu.deleteLater()
+
+
+def test_the_tab_menu_does_nothing_when_leaving_is_refused(env: Env) -> None:
+    env.allow_leave = False
+    menu = env.panel.tab_menu("b")
+    menu.actions()[2].trigger()
+    assert env.panel.names() == ["a", "b"] and env.panel.selected() == "a"
+    menu.deleteLater()
+
+
+def test_the_wheel_scrolls_the_tabs_instead_of_switching(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    arguments = make_arguments(tmp_path / "project")
+    for index in range(20):
+        Path(arguments.project_config_dir, f"configuration_{index:02}").mkdir()
+    status = StatusLine()
+    qtbot.addWidget(status)
+    panel = ConfigListPanel(arguments, ProjectState(), status, lambda: True, FakeTabs())
+    qtbot.addWidget(panel)
+    panel.resize(400, 40)
+    panel.show()
+    qtbot.waitExposed(panel)
+    right = panel.tab_bar.scroll_button(Qt.ArrowType.RightArrow)
+    assert right is not None and right.isVisible()
+    first_x = panel.tab_bar.tabRect(0).x()
+    event = QWheelEvent(
+        QPointF(10, 10),
+        QPointF(10, 10),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(panel.tab_bar, event)
+    assert panel.tab_bar.currentIndex() == 0 and panel.selected() == "configuration_00"
+    assert panel.tab_bar.tabRect(0).x() < first_x
+
+
+def test_selecting_publishes_and_keeps_the_stage(env: Env) -> None:
+    # the selector is on the stages that work on the selection: Execute stays in front
     env.tabs.current = TAB_EXECUTE
     click_row(env, 1)
     assert env.panel.project_state.current_config == "b"
     assert env.events == [ConfigChanged("b")]
-    assert env.tabs.shown == [TAB_EDITOR]
-    env.tabs.current = TAB_REPORT
-    click_row(env, 0)
-    assert env.tabs.shown == [TAB_EDITOR, TAB_EDITOR]
+    assert env.tabs.shown == []
 
 
 def test_selecting_while_the_editor_is_in_front_keeps_the_tab(env: Env) -> None:
@@ -117,19 +181,21 @@ def test_the_selection_stays_when_leaving_is_refused(env: Env) -> None:
     env.allow_leave = False
     click_row(env, 1)
     assert env.panel.project_state.current_config == "a" and env.events == []
-    assert env.panel.list.currentRow() == 0 and [i.text() for i in env.panel.list.selectedItems()] == ["a"]
+    assert env.panel.selected() == "a" and env.panel.tab_bar.currentIndex() == 0
 
 
-def test_edit_compilation_button(env: Env) -> None:
-    env.panel.edit_compilation_button.click()
-    assert env.editor_opened == 1
+def test_select_asks_like_the_user(env: Env) -> None:
+    assert env.panel.select("b") and env.panel.project_state.current_config == "b"
+    env.allow_leave = False
+    assert not env.panel.select("a") and env.panel.tab_bar.currentIndex() == 1
+    assert not env.panel.select("missing") and env.panel.selected() == "b"
 
 
 def test_new_config_creates_and_selects_it(env: Env, dialog_answers: DialogRecorder) -> None:
     dialog_answers.answer("ask_string", " c ")
     env.panel.new_button.click()
     assert env.panel.names() == ["a", "b", "c"] and env.panel.project_state.current_config == "c"
-    assert env.panel.list.currentRow() == 2
+    assert env.panel.selected() == "c" and env.panel.tab_bar.currentIndex() == 2
     assert ConfigurationsChanged() in env.events and ConfigChanged("c") in env.events
     assert env.panel.status.text() == "Created configuration 'c'" and env.panel.status.color == widgets.STATUS_OK
     assert Path(env.panel.config_dir, "c", "execute.sh").exists()
@@ -166,7 +232,7 @@ def test_rename_config(env: Env, dialog_answers: DialogRecorder) -> None:
     dialog_answers.answer("ask_string", "z")
     env.panel.rename_config()
     assert env.panel.names() == ["b", "z"] and env.panel.project_state.current_config == "z"
-    assert env.panel.list.currentRow() == 1 and ConfigChanged("z") in env.events
+    assert env.panel.tab_bar.currentIndex() == 1 and ConfigChanged("z") in env.events
     assert env.panel.status.text() == "Renamed configuration to 'z'"
 
 
@@ -192,6 +258,9 @@ def test_deleting_the_last_configuration_tells_the_panels(env: Env, dialog_answe
     env.panel.delete_config()
     env.panel.delete_config()
     assert env.panel.names() == [] and env.panel.project_state.current_config is None
+    assert env.panel.tab_bar.isHidden() and not env.panel.empty_label.isHidden()
+    assert env.panel.menu_actions()[3:6] == ["Copy…", "Rename…", "Delete…"]
+    assert not any(action.isEnabled() for action in env.panel.menu().actions()[3:6])
     assert env.events[-1] == ConfigChanged(None)
 
 
@@ -225,24 +294,13 @@ def test_configurations_changed_refreshes(env: Env) -> None:
     assert env.panel.names() == ["a", "b", "c"] and env.panel.project_state.current_config == "a"
 
 
-def test_the_context_menu_offers_copy_rename_delete(env: Env, dialog_answers: DialogRecorder) -> None:
-    menu = env.panel.context_menu()
-    texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-    assert texts == ["Copy", "Rename", "Delete"]
+def test_the_menu_actions_work_on_the_selected_configuration(env: Env, dialog_answers: DialogRecorder) -> None:
     dialog_answers.answer("ask_yes_no", True)
-    menu.actions()[3].trigger()
+    env.panel.trigger("Delete “a”…")
     assert env.panel.names() == ["b"]
-
-
-def test_right_click_selects_the_item_under_the_cursor(env: Env) -> None:
-    env.panel.show()
-    item = env.panel.list.item(1)
-    assert item is not None
-    position = env.panel.list.visualItemRect(item).center()
-    env.panel._on_right_click(position)
-    assert env.panel.project_state.current_config == "b"
-    assert env.panel._menu is not None
-    env.panel._menu.close()
+    dialog_answers.answer("ask_string", "b2")
+    env.panel.trigger("Copy “b”…")
+    assert env.panel.names() == ["b", "b2"]
 
 
 def test_the_wizard_opens_for_a_project_without_a_real_configuration(env: Env, dialog_answers: DialogRecorder) -> None:
@@ -270,5 +328,10 @@ def test_a_finished_wizard_selects_its_configuration_and_shows_execute(env: Env)
     wizard.next()
     wizard.accept()
     assert env.panel.names() == ["a", "b", "wiz"] and env.panel.project_state.current_config == "wiz"
-    assert env.tabs.shown == [TAB_EXECUTE] and ConfigChanged("wiz") in env.events
+    assert env.tabs.shown == [TAB_PROFILING] and ConfigChanged("wiz") in env.events
     assert env.panel._wizard is None
+
+
+def test_the_tabs_are_labeled_as_the_execution_configuration(env: Env) -> None:
+    assert env.panel.caption_label.text() == "EXECUTION CONFIGURATION"
+    assert env.panel.names() == ["a", "b"]

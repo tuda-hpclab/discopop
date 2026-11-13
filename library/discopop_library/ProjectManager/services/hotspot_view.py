@@ -11,6 +11,7 @@
 The panels (Tk and Qt) only put these into their widgets.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Collection, Dict, List, Optional, Sequence, Tuple
 
@@ -52,6 +53,29 @@ RUN_COLUMNS: Tuple[Tuple[str, int], ...] = (
     ("Status", 90),
     ("Regions", 80),
 )
+
+# Column headers of the regions table in the Qt panel: the same columns as REGION_COLUMNS (which name the sort keys),
+# with the unit moved into the cells (see format_duration).
+REGION_HEADERS: Tuple[str, ...] = (
+    "Hotness",
+    "Kind",
+    "Location",
+    "Name",
+    "Avg",
+    "Share",
+    "Min",
+    "Max",
+    "Ratio",
+    "Runs",
+)
+# the columns holding numbers: shown right-aligned
+REGION_NUMERIC_COLUMNS: Tuple[int, ...] = (4, 5, 6, 7, 8, 9)
+
+NO_REGIONS_TEXT = "No measurement yet \u2014 press Run Measurement."
+NO_ANALYSIS_TEXT = (
+    "Runs are recorded, but there is no analysis yet \u2014 use \u201cRe-run Analysis\u201d in the \u22ef menu."
+)
+NO_RUNS_TEXT = "No runs recorded yet \u2014 press Run Measurement."
 
 DETAIL_PLACEHOLDER = "Click a code region in a\nchart or the table to see\nits details here."
 
@@ -214,3 +238,105 @@ def measurement_summary(
         has_regions=bool(regions),
         warnings=warnings,
     )
+
+
+def _significant(value: float, digits: int = 3) -> str:
+    """``value`` (> 0) with ``digits`` significant digits, in plain notation."""
+    decimals = max(0, digits - 1 - math.floor(math.log10(value)))
+    return f"{round(value, decimals):.{decimals}f}"
+
+
+def format_duration(seconds: Optional[float]) -> str:
+    """A time with 3 significant digits and a unit ("609 \u00b5s", "12.3 ms", "1.20 s"); "\u2014" if missing."""
+    if seconds is None or math.isnan(seconds) or math.isinf(seconds):
+        return "\u2014"
+    if seconds <= 0:
+        return "0 s"
+    if seconds < 1e-3:
+        return f"{_significant(seconds * 1e6)} \u00b5s"
+    if seconds < 1:
+        return f"{_significant(seconds * 1e3)} ms"
+    return f"{_significant(seconds)} s"
+
+
+def region_cells(region: HotspotRegion) -> Tuple[str, ...]:
+    """The cells of a row of the Qt regions table (:data:`REGION_HEADERS`): readable times, "\u2014" for missing."""
+    return (
+        f"\u25cf {region.hotness}",
+        region.key.kind,
+        region.key.location,
+        hotspot_charts.region_display_name(region) if region.key.name else "\u2014",
+        format_duration(region.avg),
+        f"{region.share * 100:.3g} %",
+        format_duration(region.minimum if region.runtimes else None),
+        format_duration(region.maximum if region.runtimes else None),
+        f"{region.ratio:.3f}",
+        str(len(region.runtimes)),
+    )
+
+
+# Levels of a MeasurementStatus; the same strings as the status chip levels of the Qt panels.
+LEVEL_OK = "ok"
+LEVEL_WARN = "warn"
+LEVEL_IDLE = "idle"
+
+
+@dataclass(frozen=True)
+class MeasurementStatus:
+    """The state of the measurements as one short status plus its explanation and a line of facts.
+
+    ``text`` is the short status ("Up to date"), ``detail`` the long explanation (may be empty), ``facts`` a compact
+    line such as "Accumulated runs: 1 \u00b7 Code regions: 3 (YES 2 / MAYBE 1 / NO 0)".
+    """
+
+    level: str
+    text: str
+    detail: str
+    facts: str
+
+
+def measurement_status(
+    build_state: str, build_detail: str, runs: Sequence[MeasurementRun], regions: Sequence[HotspotRegion]
+) -> MeasurementStatus:
+    external = sum(1 for run in runs if run.is_external)
+    runs_text = f"Accumulated runs: {len(runs)}" + (f" ({external} external)" if external else "")
+    if regions:
+        counts = hotness_counts(regions)
+        regions_text = (
+            f"Code regions: {len(regions)} "
+            f"(YES {counts[HOTNESS_YES]} / MAYBE {counts[HOTNESS_MAYBE]} / NO {counts[HOTNESS_NO]})"
+        )
+    else:
+        regions_text = "Code regions: no analysis results yet"
+    facts = f"{runs_text} \u00b7 {regions_text}"
+
+    one_run = (
+        "Only one run accumulated: every ratio is 0.5, so hotness reduces to \u2018above-average runtime\u2019. "
+        "Measure another configuration to fix this."
+    )
+    if build_state == BUILD_MISMATCH:
+        detail = build_detail
+        if runs:
+            detail += (
+                f" The {len(runs)} recorded run(s) are kept, but regions that moved are matched by source line and may "
+                "no longer line up. Use \u2018Clear Measurements\u2019 to start over if the sources changed "
+                "substantially."
+            )
+        if len(runs) == 1:
+            detail += "\n" + one_run
+        return MeasurementStatus(LEVEL_WARN, "Build stale \u2014 will be recompiled", detail, facts)
+    if len(runs) == 1:
+        return MeasurementStatus(LEVEL_WARN, "Only one run", one_run, facts)
+    if not runs:
+        detail = "" if build_state == BUILD_CURRENT else _BUILD_NOTES[build_state]
+        return MeasurementStatus(LEVEL_IDLE, "No measurement yet", detail, facts)
+    if build_state == BUILD_CURRENT:
+        return MeasurementStatus(LEVEL_OK, "Up to date", "", facts)
+    return MeasurementStatus(LEVEL_IDLE, "Will be instrumented", _BUILD_NOTES[build_state], facts)
+
+
+_BUILD_NOTES = {
+    BUILD_NONE: "There is no instrumented build yet; the next measurement compiles it.",
+    BUILD_STALE: "This configuration will be instrumented separately; its runs are combined with the others by source "
+    "location.",
+}

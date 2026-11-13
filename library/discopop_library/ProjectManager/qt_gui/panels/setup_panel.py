@@ -6,18 +6,19 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The compilation editor window ("Edit Compilation"): the shared compile.sh, the shared validation build script and
-the settings files, with Test Compilation and Derive.
+"""The Setup stage: how the project is built. The shared compile.sh, the shared validation build script and the
+settings files, with Test Compilation and Derive.
 
-Ported from ``gui/mixins/compilation_editor.py``. A window of its own next to the main window, shown with ``show()``.
+Ported from the compilation editor window (``gui/mixins/compilation_editor.py`` in the Tk GUI); here it is a stage of
+the sidebar, above Configure, and the output of a test compilation goes to the output pane.
 """
 
+import copy
 import os
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
-from PySide6.QtWidgets import QDialog, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QShowEvent
+from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import (
@@ -28,7 +29,9 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
+from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
+from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
 from discopop_library.ProjectManager.services.editor_files import (
     COMPILATION_FILES,
     DERIVE_TOOLTIP_SUFFIX,
@@ -41,61 +44,60 @@ from discopop_library.ProjectManager.services.editor_files import (
     run_test_compilation,
 )
 from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
-from discopop_library.ProjectManager.services.project_state import ConfigurationsChanged, ProjectState
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningChanged,
+    ConfigurationsChanged,
+    HotspotsChanged,
+    PatternsChanged,
+    ProjectState,
+    ResultsChanged,
+)
+from discopop_library.ProjectManager.utilities.reset import reset_project
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 
 DERIVE_DISABLED_TOOLTIP = "Save all changes before deriving settings"
 TEST_BUTTON_TEXT = "Test Compilation"
 
 
-class CompilationTestResult(QDialog):
-    """The output of a test compilation (non-modal; the window owning it deletes it)."""
-
-    def __init__(self, output: str, return_code: int, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Compilation Test Result")
-        self.resize(700, 500)
-        self.setMinimumSize(400, 300)
-        self.status_label = widgets.heading_label("✓ Success" if return_code == 0 else "✗ Failed")
-        widgets.set_label_color(self.status_label, widgets.STATUS_OK if return_code == 0 else widgets.STATUS_FAIL)
-        self.console = widgets.OutputConsole()
-        self.console.set_text(output)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.console, 1)
-        layout.addLayout(widgets.hbox(None, widgets.create_button("Close", self._close), None))
-
-    def _close(self) -> None:
-        self.close()
+RESET_RESULTS_TEXT = "Reset Execution Results…"
+RESET_PROJECT_TEXT = "Reset Project…"
+RESET_RESULTS_HINT = (
+    "<b>Reset execution results</b> deletes the measured runs of all configurations and the reports."
+    " Everything else stays."
+)
+RESET_PROJECT_HINT = (
+    "<b>Reset project</b> deletes everything in .discopop except the configurations, compile.sh and the settings:"
+    " profiling data, suggestions, hotspot measurements, autotuning results, measured runs and reports."
+)
 
 
-class CompilationEditor(QWidget):
-    """The compilation editor window.
+class SetupPanel(Panel):
+    """The files of the project's configuration directory shared by all configurations.
 
-    It edits the files of the project's configuration directory shared by all configurations. Saving, deriving
-    settings and changing the shared validation build script publish ``ConfigurationsChanged``: they change what
-    the configurations can execute. Closing the window drops unsaved changes (as the Tk window does).
+    Saving, deriving settings and changing the shared validation build script publish ``ConfigurationsChanged``: they
+    change what the configurations can execute. Files without unsaved changes are read again when the stage is shown
+    and on ``ConfigurationsChanged`` (the wizard writes them, too). ``tabs`` is the main window: unsaved changes show as
+    "Setup *" in the sidebar.
     """
+
+    output_title = "Setup"
 
     def __init__(
         self,
         arguments: ProjectManagerArguments,
         project_state: ProjectState,
         status: StatusLine,
+        tabs: TabHost,
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent)
-        self.arguments = arguments
-        self.project_state = project_state
-        self.status = status
-        self.setWindowFlag(Qt.WindowType.Window)
-        self.setWindowTitle("Compilation Editor")
-        self.resize(1050, 700)
-        self.setMinimumSize(800, 500)
+        super().__init__(arguments, project_state, status, parent)
+        self.tabs = tabs
         self.editors: Dict[str, widgets.ScriptEditor] = {}
         self.tab_index: Dict[str, int] = {}
-        self._results: List[CompilationTestResult] = []
         self._testing = False
+        # the chip of the last test compilation, shown while nothing is unsaved
+        self._test_chip: Tuple[str, str, str] = (widgets.CHIP_IDLE, "", "")
+        self.console = self.make_console()
 
         self.notebook = QTabWidget()
         self.shared_validation_compile_button = widgets.create_button("Add", self._toggle_shared_validation_compile)
@@ -121,39 +123,112 @@ class CompilationEditor(QWidget):
         self.save_button = widgets.primary_button("Save (Ctrl+S)", self._save_clicked)
         self.test_compilation_button = widgets.create_button(TEST_BUTTON_TEXT, self.test_compilation)
         self.derive_button = widgets.create_button("Derive", self.derive_settings)
+        self.header = widgets.PanelHeader(
+            "Project Setup",
+            "How the project is built: compile.sh and the compiler settings, shared by all configurations.",
+            [self.derive_button, self.test_compilation_button, self.save_button],
+        )
         layout = QVBoxLayout(self)
+        layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
-        layout.addLayout(widgets.hbox(self.save_button, self.test_compilation_button, self.derive_button, None))
-        QShortcut(QKeySequence.StandardKey.Save, self, self._save_clicked)
+        layout.addWidget(self._danger_zone())
 
         self.load_files()
+        project_state.subscribe(ConfigurationsChanged, lambda _event: self.reload_unmodified())
 
-    # ── showing ─────────────────────────────────────────────────────────────
+    def _danger_zone(self) -> QFrame:
+        """The card of the resets: framed in red, each with what it deletes and what it keeps."""
+        self.reset_results_button = widgets.danger_outline_button(RESET_RESULTS_TEXT, self._confirm_reset_results)
+        self.reset_project_button = widgets.danger_outline_button(RESET_PROJECT_TEXT, self._confirm_reset_project)
+        card = QFrame()
+        card.setObjectName(widgets.DANGER_ZONE_NAME)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 10, 14, 12)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
+        title = widgets.heading_label("⚠ Danger zone")
+        title.setObjectName(widgets.DANGER_TITLE_NAME)
+        grid.addWidget(title, 0, 0, 1, 2)
+        for row, (button, text) in enumerate(
+            ((self.reset_results_button, RESET_RESULTS_HINT), (self.reset_project_button, RESET_PROJECT_HINT)), 1
+        ):
+            hint = QLabel(text)
+            hint.setWordWrap(True)
+            grid.addWidget(hint, row, 0)
+            grid.addWidget(button, row, 1)
+        grid.setColumnStretch(0, 1)
+        self.danger_zone = card
+        return card
 
-    def open(self) -> None:
-        """Show the window (reloading the files when it was closed), or bring it to the front if it is open."""
-        if not self.isVisible():
-            self.load_files()
-            parent = self.parentWidget()
-            top = parent.window() if parent is not None else None
-            if top is not None and top.isVisible():
-                self.move(top.geometry().center() - self.rect().center())
-        self.show()
-        self.raise_()
-        self.activateWindow()
+    def set_blocked(self, blocked: bool) -> None:
+        """No reset while a run writes into the project (the main window calls this)."""
+        for button in (self.reset_results_button, self.reset_project_button):
+            button.setEnabled(not blocked)
+            button.setToolTip("Not while a run is in progress." if blocked else "")
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt's name)
-        for result in self._results:
-            result.close()
-        super().closeEvent(event)
+    # ── resets ──────────────────────────────────────────────────────────────
 
-    def cancel_jobs(self) -> None:
-        """Nothing runs that outlives the window: the test compilation's thread only reports back to it."""
+    def _confirm_reset_results(self) -> None:
+        if dialogs.ask_yes_no(
+            self,
+            "Confirm Reset",
+            "Are you sure you want to reset execution results?\nThis will delete all execution data and reports.",
+        ):
+            self.reset(results_only=True)
+
+    def _confirm_reset_project(self) -> None:
+        if dialogs.ask_yes_no(
+            self,
+            "Confirm Reset",
+            "Are you sure you want to reset the entire project?\n"
+            "This will delete all data except the configuration files.",
+        ):
+            self.reset(results_only=False)
+
+    def reset(self, *, results_only: bool) -> None:
+        arguments = copy.copy(self.arguments)
+        arguments.reset = not results_only
+        arguments.reset_execution_results = results_only
+        what = "Execution results" if results_only else "Project"
+        try:
+            reset_project(arguments)
+        except Exception as e:
+            self.status.set(f"Error resetting {what.lower()}: {e}", widgets.STATUS_FAIL)
+            return
+        self.status.set(f"{what} reset successfully", widgets.STATUS_OK)
+        self.project_state.publish(ResultsChanged())
+        if not results_only:
+            # the profiling data, the suggestions, the hotspots and the autotuner's results are gone too
+            for event in (PatternsChanged(), HotspotsChanged(), AutotuningChanged()):
+                self.project_state.publish(event)
+
+    def output_console(self) -> widgets.OutputConsole:
+        return self.console
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt's name)
+        # the files may have been changed outside the GUI meanwhile
+        self.reload_unmodified()
+        super().showEvent(event)
 
     # ── loading ─────────────────────────────────────────────────────────────
 
     def _path(self, name: str) -> str:
         return os.path.join(self.arguments.project_config_dir, name)
+
+    def _disk_content(self, name: str) -> Tuple[str, bool]:
+        """What the editor of ``name`` shows for the file on disk, and whether it is read-only (absent optional
+        file: saving must not create it from the placeholder text)."""
+        path = self._path(name)
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    content = f.read()
+                return (format_json_content(content) if name.endswith(".json") else content), False
+            except Exception as e:
+                return f"Error loading file: {e}", False
+        if name in OPTIONAL_FILES:
+            return OPTIONAL_FILE_PLACEHOLDERS[name], True
+        return f"File not found: {path}", False
 
     def load_files(self) -> None:
         """Show the files from disk, dropping unsaved changes; derived settings that do not exist stay disabled."""
@@ -162,23 +237,23 @@ class CompilationEditor(QWidget):
         self._update_shared_validation_button()
         self._update_tabs()
 
+    def reload_unmodified(self) -> None:
+        """Read the files again whose editors hold no unsaved changes; an unchanged file keeps its cursor."""
+        for name, editor in self.editors.items():
+            if editor.document().isModified():
+                continue
+            text, read_only = self._disk_content(name)
+            if text != editor.text() or read_only != editor.isReadOnly():
+                self._load_file(name)
+        self._update_shared_validation_button()
+        self._update_tabs()
+
     def _load_file(self, name: str) -> None:
         editor = self.editors[name]
+        text, read_only = self._disk_content(name)
         editor.setReadOnly(False)
-        path = self._path(name)
-        if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    content = f.read()
-                editor.set_text(format_json_content(content) if name.endswith(".json") else content)
-            except Exception as e:
-                editor.set_text(f"Error loading file: {e}")
-        elif name in OPTIONAL_FILES:
-            # Absent by default: keep the editor read-only so saving cannot create the file from placeholder text.
-            editor.set_text(OPTIONAL_FILE_PLACEHOLDERS[name])
-            editor.setReadOnly(True)
-        else:
-            editor.set_text(f"File not found: {path}")
+        editor.set_text(text)
+        editor.setReadOnly(read_only)
 
     def _update_shared_validation_button(self) -> None:
         exists = os.path.exists(get_shared_validation_compile_script_path(self.arguments.project_config_dir))
@@ -196,7 +271,16 @@ class CompilationEditor(QWidget):
                 if not exists:
                     tooltip += DERIVE_TOOLTIP_SUFFIX
             self.notebook.setTabToolTip(index, tooltip)
+        unsaved = self.has_unsaved_changes()
+        self.tabs.set_tab_title(TAB_SETUP, f"{TAB_SETUP} *" if unsaved else TAB_SETUP)
+        self._update_chip()
         self._update_buttons()
+
+    def _update_chip(self) -> None:
+        if self.has_unsaved_changes():
+            self.header.chip.set_status(widgets.CHIP_WARN, "Unsaved changes", "Save with Ctrl+S.")
+        else:
+            self.header.chip.set_status(*self._test_chip)
 
     def has_unsaved_changes(self) -> bool:
         return any(editor.document().isModified() for editor in self.editors.values())
@@ -243,7 +327,8 @@ class CompilationEditor(QWidget):
             os.makedirs(comp_dir, exist_ok=True)
             write_script_file(script_path, seed_content)
             message = "Added shared compile_validate.sh"
-        # only this file is reloaded: the other tabs may hold unsaved changes
+        # only this file is reloaded: the other tabs may hold unsaved changes (this one cannot: without the file it is
+        # read-only, and a removed file has nothing left to keep)
         self._load_file(VALIDATION_COMPILE_SCRIPT_NAME)
         self._update_shared_validation_button()
         self._update_tabs()
@@ -289,7 +374,10 @@ class CompilationEditor(QWidget):
     # ── test compilation ────────────────────────────────────────────────────
 
     def test_compilation(self) -> None:
-        """Compile once with the shown compile.sh and seq_settings.json (saved first); no result is recorded."""
+        """Compile once with the shown compile.sh and seq_settings.json (saved first); no result is recorded.
+
+        The output goes to the output pane, the outcome to the chip of the header.
+        """
         if (
             self.editors["compile.sh"].document().isModified()
             or self.editors["seq_settings.json"].document().isModified()
@@ -305,6 +393,10 @@ class CompilationEditor(QWidget):
         self.test_compilation_button.setEnabled(False)
         self.test_compilation_button.setText("⟳ Testing...")
         self.status.set("Running compilation test...", widgets.STATUS_BUSY)
+        self._test_chip = (widgets.CHIP_BUSY, "Compiling…", "")
+        self._update_chip()
+        self.console.set_text("Running compilation test...\n")
+        self.output_requested.emit()
         arguments = self.arguments
 
         def compile_once(_ctx: WorkContext) -> Optional[Tuple[int, float, str, str]]:
@@ -314,33 +406,32 @@ class CompilationEditor(QWidget):
             if not isinstance(event, WorkFinished):
                 return
             result = event.result if event.error is None else None
-            if event.error is not None:
-                self.status.set(f"✗ Compilation test failed: {event.error}", widgets.STATUS_FAIL)
-            elif result is None:
-                self.status.set("✗ Compilation test failed: settings not found", widgets.STATUS_FAIL)
+            if event.error is not None or result is None:
+                reason = str(event.error) if event.error is not None else "settings not found"
+                self.status.set(f"✗ Compilation test failed: {reason}", widgets.STATUS_FAIL)
+                self.console.set_text(f"Compilation test failed: {reason}\n")
+                self._test_chip = (widgets.CHIP_ERROR, "Test compilation failed", reason)
             else:
                 return_code, elapsed, stdout, stderr = result
                 if return_code == 0:
                     self.status.set(f"✓ Compilation successful ({elapsed:.2f}s)", widgets.STATUS_OK)
+                    self._test_chip = (widgets.CHIP_OK, f"Compiles ({elapsed:.2f}s)", "")
                 else:
                     self.status.set(
                         f"✗ Compilation failed (exit code: {return_code}, {elapsed:.2f}s)", widgets.STATUS_FAIL
                     )
-                self._show_result(describe_compilation_test(return_code, elapsed, stdout, stderr), return_code)
+                    self._test_chip = (
+                        widgets.CHIP_ERROR,
+                        f"Compilation failed (exit code {return_code})",
+                        "The output is in the output pane below.",
+                    )
+                self.console.set_text(describe_compilation_test(return_code, elapsed, stdout, stderr))
             self._testing = False
             self.test_compilation_button.setText(TEST_BUTTON_TEXT)
+            self._update_chip()
             self._update_buttons()
 
         start_work(self, compile_once, handle)
-
-    def _show_result(self, output: str, return_code: int) -> None:
-        # the result windows closed meanwhile are deleted, the open ones stay until this window closes
-        for closed in [result for result in self._results if not result.isVisible()]:
-            self._results.remove(closed)
-            closed.deleteLater()
-        result = CompilationTestResult(output, return_code, self)
-        self._results.append(result)
-        result.show()
 
     # ── derive ──────────────────────────────────────────────────────────────
 

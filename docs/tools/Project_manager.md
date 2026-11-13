@@ -209,7 +209,7 @@ Note that the *role* of a script outranks how specific it is: a shared `compile_
 | `compile.sh`, `compile_validate.sh`, `foo/compile_validate.sh` | `compile.sh` | `foo/compile_validate.sh` |
 
 ### Editing configurations
-- **Graphically:** `discopop_gui` (or `discopop_project_manager --gui`). The configuration assistant creates a first configuration; afterwards the editor's sub-tabs manage `execute.sh`, `validate.sh` and the two override scripts, while the *Compilation Editor* manages the shared `compile.sh`, `compile_validate.sh` and the settings files. See [Graphical user interface](GUI.md).
+- **Graphically:** `discopop_gui` (or `discopop_project_manager --gui`). The configuration assistant creates a first configuration; afterwards the editor's sub-tabs manage `execute.sh`, `validate.sh` and the two override scripts, while the *Project Setup* stage (in the Tk GUI the *Compilation Editor*) manages the shared `compile.sh`, `compile_validate.sh` and the settings files. See [Graphical user interface](GUI.md).
 - **By hand:** create the files listed above and mark the scripts executable.
 - **Through an LLM agent:** the [DiscoPoP MCP server](MCP_server.md) exposes `set_compile_script` (with `purpose` selecting `compile.sh` or `compile_validate.sh`) and `create_execution_configuration` (which writes `execute.sh` and optionally `validate.sh` plus the override scripts).
 
