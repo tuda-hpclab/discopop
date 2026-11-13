@@ -122,7 +122,7 @@ std::unique_ptr<HotspotRelevance> HotspotRelevance::FromEnvironment(const Static
 
   // a function is a seed if it contains a hot loop and/or is hot itself, depending on DP_CALLPATH_SEEDS
   const char* seeds_value = std::getenv("DP_CALLPATH_SEEDS");
-  const std::string seeds = seeds_value != nullptr ? Lowercase(seeds_value) : "loops";
+  const std::string seeds = seeds_value != nullptr ? Lowercase(seeds_value) : "both";
   const bool seed_by_loops = seeds == "loops" || seeds == "both";
   const bool seed_by_functions = seeds == "functions" || seeds == "both";
   std::unordered_set<std::string> functions_with_hot_loops;
@@ -134,6 +134,17 @@ std::unique_ptr<HotspotRelevance> HotspotRelevance::FromEnvironment(const Static
       }
     }
   }
+
+  // functions with calls or loops of their own. A hot function without either has no structure of its own to
+  // parallelize (hot recursion, a loop, or calls are what make a function a target), but all paths to it would
+  // stay, so it is no seed unless DP_CALLPATH_KEEP_HOT_LEAVES is set.
+  std::unordered_set<std::string> functions_with_structure;
+  for (const auto& pair : calltree.function_map) {
+    if (!pair.second->successors.empty()) {
+      functions_with_structure.insert(FunctionNameOfNode(pair.second));
+    }
+  }
+  const bool keep_hot_leaves = std::getenv("DP_CALLPATH_KEEP_HOT_LEAVES") != nullptr;
 
   std::unique_ptr<HotspotRelevance> result(new HotspotRelevance());
   const char* depth_value = std::getenv("DP_CALLPATH_HOT_DEPTH");
@@ -150,7 +161,8 @@ std::unique_ptr<HotspotRelevance> HotspotRelevance::FromEnvironment(const Static
     const std::string name = FunctionNameOfNode(node);
     const bool classified = classified_functions.count(name) != 0;
     const bool seed = (seed_by_loops && functions_with_hot_loops.count(name) != 0) ||
-                      (seed_by_functions && hot_functions.count(name) != 0) ||
+                      (seed_by_functions && hot_functions.count(name) != 0 &&
+                       (keep_hot_leaves || functions_with_structure.count(name) != 0)) ||
                       (!classified && functions_with_hot_loops.count(name) == 0 && keep_unclassified);
     if (seed) {
       result->hot_.insert(node);
