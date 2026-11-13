@@ -10,8 +10,10 @@
  *
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <stack>
 #include <string>
 #include <thread>
@@ -20,6 +22,7 @@
 #include <vector>
 
 #include "DiscoPoP.hpp"
+#include "static_analysis/hotspot_relevance.hpp"
 
 namespace static_callpaths {
 
@@ -34,7 +37,7 @@ using InstructionId = std::int32_t;
 void ProcessEnumeratePathsStack(
     std::atomic<uint16_t>* active_threads, StaticCallPathTree* call_path_tree,
     std::stack<std::tuple<StaticCallPathTreeNode*, InstructionId, StaticCallPathTreeNode*>>* new_stack,
-    std::mutex* new_stack_mtx) {
+    std::mutex* new_stack_mtx, const HotspotRelevance* relevance) {
   bool initial_iteration = true;
   std::vector<StaticCallPathTreeNode*> nodes_added_by_thread;
   while (active_threads->load() != 0) {
@@ -99,8 +102,19 @@ void ProcessEnumeratePathsStack(
             new_current_path->RegisterTransition(trigger_instruction_id, cycle_it->second->path_id);
             continue;
           }
+          // fold calls into functions that cannot lead to a hot function into the caller's state, unless the path
+          // is still close to a hot function (the callee then runs in the caller's state at runtime)
+          std::int32_t hot_budget = 0;
+          if (relevance != nullptr) {
+            const std::int32_t own_budget = relevance->HotBudget(succ);
+            hot_budget = own_budget >= 0 ? own_budget : std::max(0, new_current_path->hot_budget - 1);
+            if (!relevance->IsRelevant(succ) && new_current_path->hot_budget <= 0) {
+              continue;
+            }
+          }
           // new stack element
           auto new_path = new_current_path->GetOrRegisterSuccessor(succ);
+          new_path->hot_budget = hot_budget;
           nodes_added_by_thread.push_back(new_path);
           new_elements_buffer.push_back(std::make_tuple(new_current_path, trigger_instruction_id, new_path));
         }
@@ -141,8 +155,13 @@ StaticCallPathTree* EnumeratePaths(
 
   // path id 0 is reserved for debugging and initialization purposes
   // select entry nodes
+  const std::unique_ptr<HotspotRelevance> relevance = HotspotRelevance::FromEnvironment(calltree);
   std::vector<StaticCalltreeNode*> entry_nodes;
   for (auto pair : calltree.function_map) {
+    // functions that cannot lead to a hot function are not entered at their root state either (main always is)
+    if (relevance != nullptr && pair.first != "main" && !relevance->IsRelevant(pair.second)) {
+      continue;
+    }
     // functions without callers in this module, including those with loops (whose loop iteration
     // states lead back to the function node). They can be called from other modules, indirectly,
     // or by library code, and are entered at their root state then (see save_function_entries).
@@ -161,6 +180,9 @@ StaticCallPathTree* EnumeratePaths(
   for (auto node_ptr : entry_nodes) {
     // new stack
     auto new_node = call_path_tree->root->GetOrRegisterSuccessor(node_ptr);
+    if (relevance != nullptr) {
+      new_node->hot_budget = std::max(0, relevance->HotBudget(node_ptr));
+    }
     new_stack.push(std::make_tuple(call_path_tree->root, 0, new_node));
     call_path_tree->RegisterNodeInAllNodes(new_node);
   }
@@ -175,8 +197,8 @@ StaticCallPathTree* EnumeratePaths(
 
   std::vector<std::thread> workers;
   for (unsigned int i = 0; i < worker_count; ++i) {
-    workers.push_back(
-        std::thread(ProcessEnumeratePathsStack, &active_threads, call_path_tree, &new_stack, &new_stack_mtx));
+    workers.push_back(std::thread(ProcessEnumeratePathsStack, &active_threads, call_path_tree, &new_stack,
+                                  &new_stack_mtx, relevance.get()));
   }
 
   // join workers, wait for enumeration to be finished
@@ -184,6 +206,9 @@ StaticCallPathTree* EnumeratePaths(
     worker.join();
   }
 
+  if (relevance != nullptr) {
+    std::cout << "Enumerated " << call_path_tree->all_nodes.size() << " call path states with hotspot pruning\n";
+  }
   return call_path_tree;
 }
 

@@ -77,6 +77,7 @@ add_library(DiscoPoP_PassObjects OBJECT
         static_analysis/instruction_id_assignment.cpp
         static_analysis/calltree_construction.cpp
         static_analysis/path_enumeration.cpp
+        static_analysis/hotspot_relevance.cpp
         static_analysis/StaticCalltree.cpp
         static_analysis/StaticCallPathTree.cpp
 

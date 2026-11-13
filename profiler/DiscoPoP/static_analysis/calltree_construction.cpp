@@ -445,6 +445,9 @@ StaticCalltree BuildStaticCalltree(Module& m, const std::map<std::int32_t, LoopI
         pet_node_id = identity->second.pet_node_id;
         start_location = identity->second.start_location;
       }
+      if (start_location != "-") {
+        calltree.loop_locations_by_function[f.getName().str()].push_back(start_location);
+      }
       loopstate_positions_file << f.getName().str() << " " << position << " " << loop_id << " " << pet_node_id << " "
                                << start_location << "\n";
     }
