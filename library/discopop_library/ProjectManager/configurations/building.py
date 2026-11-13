@@ -217,6 +217,7 @@ def ensure_build(
             thread_count,
             timeout,
             process_started_callback=process_started_callback,
+            result_annotations={"build_id": key.build_id},
         )
         if compile_result is None or compile_result[0] != 0:
             _discard_tree(arguments, tree)

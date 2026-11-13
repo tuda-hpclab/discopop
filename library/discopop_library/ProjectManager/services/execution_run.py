@@ -26,7 +26,8 @@ from discopop_library.ProjectManager.configurations.building import (
     build_lock,
     ensure_build,
 )
-from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, invalidate_build
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
+from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
@@ -164,7 +165,7 @@ def run_execution(
     compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
 
     def execute_and_validate(
-        project_copy_path: str, settings_path: str, mode: str, key: Optional[BuildKey] = None
+        project_copy_path: str, settings_path: str, mode: str, build: Optional[BuildRecord] = None
     ) -> bool:
         """Run execute.sh (and validate.sh) in the compiled tree; False if the user stopped the run before it."""
         if ctx.cancel_event.is_set():
@@ -173,21 +174,38 @@ def run_execution(
 
         ctx.status("⏳ Executing...", StatusKind.BUSY)
         ctx.output("Executing...\n")
-        execute_result = execute_configuration(
-            args_copy,
-            project_copy_path,
-            config_path,
-            settings_path,
-            os.path.join(config_path, "execute.sh"),
-            1 if mode == "seq" else thread_count,
-            args_copy.timeout_execution,
-            process_started_callback=ctx.register_process,
-            execution_time_regex=execution_time_regex,
-            # Which modes are repeated is decided in one place, shared with
-            # the command line, so the two cannot drift apart.
-            repetitions=repetitions_for_mode(mode, args_copy.execution_repetitions),
-            should_abort=ctx.cancel_event.is_set,
-        )
+        repetitions = repetitions_for_mode(mode, args_copy.execution_repetitions)
+        if build is None:
+            # in place: the project root is compiled and executed, no build is involved
+            execute_result = execute_configuration(
+                args_copy,
+                project_copy_path,
+                config_path,
+                settings_path,
+                os.path.join(config_path, "execute.sh"),
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_execution,
+                process_started_callback=ctx.register_process,
+                execution_time_regex=execution_time_regex,
+                # Which modes are repeated is decided in one place, shared with
+                # the command line, so the two cannot drift apart.
+                repetitions=repetitions,
+                should_abort=ctx.cancel_event.is_set,
+            )
+        else:
+            execute_result, _run = execute_in_build(
+                args_copy,
+                build,
+                config_path,
+                settings_path,
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_execution,
+                execution_time_regex,
+                repetitions,
+                process_started_callback=ctx.register_process,
+                should_abort=ctx.cancel_event.is_set,
+                on_run=lambda run: ctx.output(f"Run {run.run_id}: results in {run.dot_discopop}\n"),
+            )
         ctx.clear_process()
 
         if execute_result is None or execute_result[0] != 0:
@@ -227,9 +245,11 @@ def run_execution(
             )
             ctx.clear_process()
 
-            if validation.compile_required and key is not None:
+            if validation.compile_required and build is not None:
                 # the validation build overwrote the build of the tree: the next run has to compile again
-                invalidate_build(args_copy.project_dir, key)
+                invalidate_build(
+                    args_copy.project_dir, BuildKey(build.configuration, build.mode, tuple(build.suggestions))
+                )
             if validation.compile_required:
                 if validation.compile_successful:
                     assert validation.compile_result is not None
@@ -377,7 +397,7 @@ def run_execution(
                         ctx.output(f"stderr: {stderr}\n")
                 if request.build_only:
                     continue
-                if not execute_and_validate(build.tree, settings_path, mode, key):
+                if not execute_and_validate(build.tree, settings_path, mode, build.record):
                     break
         except BuildLockAborted:
             ctx.output("Execution stopped by user.\n")

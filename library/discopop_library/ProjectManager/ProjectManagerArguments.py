@@ -68,6 +68,11 @@ class ProjectManagerArguments(GeneralArguments):
     # List the builds of the project / delete the given ones (comma separated ids, "all" for every build) and stop.
     list_builds: bool = False
     delete_builds: Optional[str] = None
+    # List the runs of the builds / delete the given ones (comma separated ids, "all") / put one into the project's
+    # .discopop (an id, "latest" for the latest successful dp run) and stop.
+    list_runs: bool = False
+    delete_runs: Optional[str] = None
+    activate_run: Optional[str] = None
     # derived values
     dot_dp: str = ""
     project_dir: str = ""

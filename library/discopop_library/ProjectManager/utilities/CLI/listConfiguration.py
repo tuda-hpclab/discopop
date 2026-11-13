@@ -19,7 +19,8 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
 from discopop_library.ProjectManager.configurations.building import BuildResult, build_lock, ensure_build
-from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, invalidate_build
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
+from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
     resolve_requested_suggestions,
@@ -344,7 +345,7 @@ def __run_mode(
             if build.result == BuildResult.UNAVAILABLE:
                 print("ERROR: " + build.message)
             outcome.compile_successful = build.usable
-            if build.tree is not None and build.usable and not arguments.build_only:
+            if build.tree is not None and build.record is not None and build.usable and not arguments.build_only:
                 _execute_and_validate(
                     arguments,
                     build.tree,
@@ -354,7 +355,7 @@ def __run_mode(
                     thread_count,
                     execution_time_regex,
                     outcome,
-                    key,
+                    build.record,
                 )
         return outcome
 
@@ -374,21 +375,38 @@ def _execute_and_validate(
     thread_count: int,
     execution_time_regex: Optional[str],
     outcome: _ModeOutcome,
-    key: Optional[BuildKey] = None,
+    build: Optional[BuildRecord] = None,
 ) -> None:
-    """Run execute.sh of ``config`` in the compiled ``project_path`` and, for seq and par, validate its output."""
-    ret = execute_configuration(
-        arguments,
-        project_path,
-        config,
-        shared_settings,
-        os.path.join(config, "execute.sh"),
-        thread_count,
-        arguments.timeout_execution,
-        execution_time_regex=execution_time_regex,
-        # only seq and par are repeated; dp and hd are profiling runs
-        repetitions=repetitions_for_mode(mode, arguments.execution_repetitions),
-    )
+    """Run execute.sh of ``config`` in the compiled ``project_path`` and, for seq and par, validate its output.
+
+    ``build`` is the build ``project_path`` belongs to, None for the project root (``--inplace``)."""
+    repetitions = repetitions_for_mode(mode, arguments.execution_repetitions)
+    if build is None:
+        ret = execute_configuration(
+            arguments,
+            project_path,
+            config,
+            shared_settings,
+            os.path.join(config, "execute.sh"),
+            thread_count,
+            arguments.timeout_execution,
+            execution_time_regex=execution_time_regex,
+            # only seq and par are repeated; dp and hd are profiling runs
+            repetitions=repetitions,
+        )
+    else:
+        ret, run = execute_in_build(
+            arguments,
+            build,
+            config,
+            shared_settings,
+            thread_count,
+            arguments.timeout_execution,
+            execution_time_regex,
+            repetitions,
+        )
+        if run is not None:
+            print("Run " + run.run_id + ": results in " + run.dot_discopop)
     outcome.execute_successful = ret is not None and ret[0] == 0
 
     # optional output validation (auto-run when validate.sh exists);
@@ -403,9 +421,9 @@ def _execute_and_validate(
             timeout_compilation=arguments.timeout_compilation,
             timeout_validation=arguments.timeout_validation,
         )
-        if validation.compile_required and key is not None:
+        if validation.compile_required and build is not None:
             # the validation build overwrote the build of the tree: the next run has to compile again
-            invalidate_build(arguments.project_dir, key)
+            invalidate_build(arguments.project_dir, BuildKey(build.configuration, build.mode, tuple(build.suggestions)))
         outcome.validate_compile_successful = not validation.compile_required or validation.compile_successful
         outcome.validate_successful = validation.verdict(outcome.execute_successful)
 

@@ -86,6 +86,16 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("--delete-builds", nargs="?", const="all", default=None, metavar="IDS", help="Delete the "
     "builds with the given comma separated ids (see --list-builds), or all builds if no ids are given. Builds are "
     "never deleted otherwise. If set, nothing else will be done.")
+    parser.add_argument("--list-runs", action="store_true", help="List the profiling runs (dp, hd) of the builds. Each "
+    "run keeps its results in a directory of its own, so that runs with other inputs do not overwrite them. If set, "
+    "nothing else will be done.")
+    parser.add_argument("--delete-runs", nargs="?", const="all", default=None, metavar="IDS", help="Delete the runs "
+    "with the given comma separated ids (see --list-runs), or all runs if no ids are given. Runs are never deleted "
+    "otherwise. If set, nothing else will be done.")
+    parser.add_argument("--activate-run", nargs="?", const="latest", default=None, metavar="ID", help="Put the "
+    "results of a dp run into the .discopop directory of the project, where the explorer reads them (paths of the "
+    "build tree become paths of the project). Without an id, the latest successful dp run is used. If set, nothing "
+    "else will be done.")
     parser.add_argument("--report", action="store_true", help="Generate and a report of the stored execution results.")
     parser.add_argument("--show-report", action="store_true", help="Show the generated report of the stored execution "
     "results.")
@@ -194,6 +204,9 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         build_only=arguments.build_only,
         list_builds=arguments.list_builds,
         delete_builds=arguments.delete_builds,
+        list_runs=arguments.list_runs,
+        delete_runs=arguments.delete_runs,
+        activate_run=arguments.activate_run,
     )
 
 
