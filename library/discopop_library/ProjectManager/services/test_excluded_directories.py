@@ -61,6 +61,11 @@ def test_environment_value_keeps_entries_of_the_settings() -> None:
     assert ed.environment_value([], "") == ""
 
 
+def test_environment_value_below_a_root() -> None:
+    assert ed.environment_value(["build/_deps", "third_party"], root="/run") == "/run/build/_deps:/run/third_party"
+    assert ed.environment_value(["build/_deps"], "/opt/x:/run/build/_deps", root="/run") == "/opt/x:/run/build/_deps"
+
+
 def test_save_and_load(tmp_path: Path) -> None:
     project_dir = tmp_path / ".discopop" / "project"
     assert ed.load_excluded_directories(str(project_dir)) == []

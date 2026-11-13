@@ -80,10 +80,10 @@ def _load_file_mapping(path: str) -> tuple[frozenset[str], int]:
     return frozenset(files), count
 
 
-def _excluded_directories(entries: str, roots: tuple[str, ...]) -> tuple[str, ...]:
-    """The directories of a ``:`` separated list, absolute or relative to the project root, in every spelling (each
-    root, with and without symbolic links resolved), with a trailing ``/`` (so ``_deps`` does not exclude ``_deps2``).
-    """
+def _directories(entries: str, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """The directories of a ``:`` separated list (``DP_PROJECT_EXCLUDE_DIRS`` or ``DP_PROJECT_INCLUDE_DIRS``), absolute
+    or relative to the project root, in every spelling (each root, with and without symbolic links resolved), with a
+    trailing ``/`` (so ``_deps`` does not exclude ``_deps2``)."""
     directories: list[str] = []
     for entry in entries.split(":"):
         if not entry:
@@ -109,6 +109,10 @@ class _Policy:
     LLVM pass uses as well: separated by ``:``, absolute or relative to the project root) are never kept, with or
     without a file mapping.
 
+    Without a file mapping, the declarations below the project root or below one of the included directories
+    (``DP_PROJECT_INCLUDE_DIRS``, read like ``DP_PROJECT_EXCLUDE_DIRS``: project code outside the root) are kept; an
+    excluded directory wins, also below an included one. This is the rule of ``dputil::IsInProjectRoot`` of the pass.
+
     Type nodes (``ElaboratedType``, ``TemplateSpecializationType``, ...) have no location and are never queried: the
     explorer reads types from the ``type`` of the declarations and expressions. Template metaprogramming makes them
     huge (single type aliases of many GB).
@@ -120,13 +124,19 @@ class _Policy:
         file_mapping: Optional[str] = None,
         prune_types: bool = True,
         excluded_dirs: str = "",
+        included_dirs: str = "",
     ) -> None:
         self.project_root = project_root if project_root.endswith("/") else project_root + "/"
         # a checkout reached through a symbolic link (/home/... -> /mnt/storage/...) is named either way, depending on
         # who resolved what: compare with both forms
         self.project_root_real = os.path.join(os.path.realpath(project_root), "")
         self.excluded_dirs = excluded_dirs
-        self.excluded = _excluded_directories(excluded_dirs, (self.project_root, self.project_root_real))
+        roots = (self.project_root, self.project_root_real)
+        self.excluded = _directories(excluded_dirs, roots)
+        self.included_dirs = included_dirs
+        # the project directory and the included directories (further roots; relative entries are relative to the
+        # project directory)
+        self.roots = tuple(dict.fromkeys(roots + _directories(included_dirs, roots)))
         self.file_mapping = file_mapping
         self.mapped, self.mapped_files = _load_file_mapping(file_mapping) if file_mapping else (frozenset(), 0)
         self.prune_types = prune_types
@@ -167,8 +177,7 @@ class _Policy:
         # an absolute -I are covered by the project_root prefix check.
         if not file_.startswith("/"):
             return True
-        roots = (self.project_root, self.project_root_real)
-        return file_.startswith(roots) or os.path.realpath(file_).startswith(roots)
+        return file_.startswith(self.roots) or os.path.realpath(file_).startswith(self.roots)
 
     def keeps(self, file_: Optional[str], kind: Optional[str]) -> bool:
         if self.prune_types and isinstance(kind, str) and kind.endswith("Type"):
@@ -287,6 +296,8 @@ class _Status:
             )
         else:
             selection = f"no file mapping given, keeping the declarations below {policy.project_root}"
+        if policy.included_dirs and not policy.mapped:
+            selection += f" and below the included directories {policy.included_dirs}"
         if policy.excluded_dirs:
             selection += f", without the excluded directories {policy.excluded_dirs}"
         self._say(selection + ("; type nodes are dropped" if policy.prune_types else "; type nodes are kept"))
@@ -517,6 +528,7 @@ def filter_ast_dump(
     file_mapping: Optional[str] = None,
     prune_types: bool = True,
     excluded_dirs: str = "",
+    included_dirs: str = "",
 ) -> str:
     """Prune one or more concatenated top-level JSON objects given as a string (see ``filter_ast_stream``).
 
@@ -524,7 +536,9 @@ def filter_ast_dump(
     into the same file (one clang invocation per source file, appended).
     """
     out = io.StringIO()
-    filter_ast_stream(io.StringIO(text), out, _Policy(project_root, file_mapping, prune_types, excluded_dirs))
+    filter_ast_stream(
+        io.StringIO(text), out, _Policy(project_root, file_mapping, prune_types, excluded_dirs, included_dirs)
+    )
     return out.getvalue()
 
 
@@ -536,9 +550,12 @@ def main() -> None:
 
     # DP_AST_QUIET=1 silences the status messages (they go to stderr: stdout is the pruned AST)
     log = None if os.environ.get("DP_AST_QUIET") else sys.stderr
-    # the directories the LLVM pass does not count as part of the project either
+    # the directories the LLVM pass does not (excluded) or does (included, outside the root) count as project code
     excluded_dirs = os.environ.get("DP_PROJECT_EXCLUDE_DIRS", "")
-    policy = _Policy(args[0], args[1] if len(args) == 2 else None, excluded_dirs=excluded_dirs)
+    included_dirs = os.environ.get("DP_PROJECT_INCLUDE_DIRS", "")
+    policy = _Policy(
+        args[0], args[1] if len(args) == 2 else None, excluded_dirs=excluded_dirs, included_dirs=included_dirs
+    )
     filter_ast_stream(sys.stdin, sys.stdout, policy, log)
 
 

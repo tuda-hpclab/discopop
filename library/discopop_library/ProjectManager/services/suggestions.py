@@ -27,6 +27,7 @@ from discopop_library.HostpotLoader.HotspotLoaderArguments import HotspotLoaderA
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
 from discopop_library.HostpotLoader.utilities import get_patterns_by_hotspot_type
+from discopop_library.PatchApplicator.outside_project import find_outside_project_targets
 from discopop_library.ProjectManager.plots import demangle
 from discopop_library.ProjectManager.services.patches import PATCH_GENERATOR_DIRECTORY, discover_suggestion_ids
 
@@ -56,6 +57,8 @@ class SuggestionInfo:
     function: str = ""
     hotness: str = ""  # "YES" / "MAYBE" / "NO", "" if unknown
     variables: Tuple[Tuple[str, str], ...] = ()  # (label, value) of the data sharing clauses that are not empty
+    # the files the patches modify that lie outside the project; they are only applied on explicit request
+    outside_files: Tuple[str, ...] = ()
 
     @property
     def location(self) -> str:
@@ -276,6 +279,7 @@ def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
     file_mapping = _read_file_mapping(dot_dp)
     entries = {suggestion_id: patterns[suggestion_id][1] for suggestion_id in ids if suggestion_id in patterns}
     hotness = _hotness_by_suggestion(dot_dp, entries)
+    outside = find_outside_project_targets(dot_dp, ids)
 
     raw_functions = {suggestion_id: _function_name(entry) for suggestion_id, entry in entries.items()}
     demangle.prefetch(name for name in raw_functions.values() if name)
@@ -283,7 +287,7 @@ def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
     infos: List[SuggestionInfo] = []
     for suggestion_id in ids:
         if suggestion_id not in patterns:
-            infos.append(SuggestionInfo(id=suggestion_id))
+            infos.append(SuggestionInfo(id=suggestion_id, outside_files=tuple(outside.get(suggestion_id, ()))))
             continue
         pattern_type, entry = patterns[suggestion_id]
         file_id, start_line = _split_location(entry.get("start_line"))
@@ -313,6 +317,7 @@ def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
                 function=demangle.demangle(function) if function else "",
                 hotness=hotness.get(suggestion_id, ""),
                 variables=variables,
+                outside_files=tuple(outside.get(suggestion_id, ())),
             )
         )
     return infos
@@ -331,4 +336,13 @@ def suggestion_detail_fields(info: SuggestionInfo) -> List[Tuple[str, str]]:
     ]
     fields.extend((label, value) for label, value in optional if value)
     fields.extend(info.variables)
+    if info.outside_files:
+        fields.append(("Outside the project", outside_files_note(info)))
     return fields
+
+
+def outside_files_note(info: SuggestionInfo) -> str:
+    """The note of a suggestion that patches files outside the project (empty for all others)."""
+    if not info.outside_files:
+        return ""
+    return "targets files outside the project: " + ", ".join(info.outside_files)

@@ -13,9 +13,15 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
+from discopop_library.ProjectManager.configurations.project_environment import (
+    ProjectDirectories,
+    record_instrumented_directories,
+)
+from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services.workflow_status import (
+    OTHER_DIRECTORIES,
     forget_build_states,
     STAGE_AUTOTUNING,
     STAGE_EDITOR,
@@ -218,3 +224,21 @@ def test_the_build_state_is_reused_for_a_while(tmp_path: Path, monkeypatch: pyte
     workflow_status.forget_build_states()
     workflow_status._build_state(arguments, "a")
     assert calls == ["a", "a"]
+
+
+def exclude(arguments: ProjectManagerArguments, directory: str) -> None:
+    save_excluded_directories(arguments.project_dir, [directory])
+
+
+def test_data_instrumented_with_other_directories_is_stale(tmp_path: Path) -> None:
+    arguments = make_arguments(tmp_path)
+    profile(arguments.dot_dp)
+    touch(hotspot_data.hotspots_json_path(arguments.dot_dp), "{}")
+    record_instrumented_directories(arguments.dot_dp, "dp", ProjectDirectories(excluded=("src",)))
+    record_instrumented_directories(arguments.dot_dp, "hd", ProjectDirectories(excluded=("src",)))
+    exclude(arguments, "src")
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.DONE, "profiled")
+    assert statuses(arguments)[STAGE_HOTSPOT].state == StageState.DONE
+    exclude(arguments, "lib")
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.STALE, OTHER_DIRECTORIES)
+    assert statuses(arguments)[STAGE_HOTSPOT] == StageStatus(StageState.STALE, OTHER_DIRECTORIES)

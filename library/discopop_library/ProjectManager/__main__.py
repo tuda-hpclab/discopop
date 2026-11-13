@@ -62,7 +62,11 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("-a", "--apply-suggestions", help="Comma separated list of suggestions ids to be applied "
     "before the specified execution. Use the keyword 'auto' to load the configuration determined by the autotuner (if "
     "multiple configurations exist, union will be considered). Use the keyword 'prm' to load the configuration "
-    "determined by the parallel region merger.")
+    "determined by the parallel region merger. Suggestions that patch files outside of the project are refused "
+    "unless --allow-patching-outside-project is given; 'auto' and 'prm' never include them.")
+    parser.add_argument("--allow-patching-outside-project", action="store_true", help="Allow --apply-suggestions to "
+    "apply suggestions that patch files outside of the project (shared sources). Such files are modified in place, "
+    "may be used by other projects, and are restored after each run.")
     parser.add_argument('-l', '--list', action="store_true", help="Show a list of available configurations. If set, "
     "nothing else will be done.")
     parser.add_argument("-i", "--inplace", action="store_true", help="Prevents the creation of project copies when "
@@ -100,6 +104,15 @@ def _build_parser() -> ArgumentParser:
                         "for. Overrides the per configuration setting stored in execution_time.json; pass an empty "
                         "string to disable the search even where a configuration enables it. If omitted, each "
                         "configuration's own setting applies.")
+
+    parser.add_argument("--project-include-dirs", default=None,
+                        help="Directories outside the project root whose code is project code as well (absolute, "
+                        "separated by ':'), for this invocation; overrides the stored list "
+                        "(.discopop/project/included_directories.json). An empty string includes none.")
+    parser.add_argument("--project-exclude-dirs", default=None,
+                        help="Directories below the project root whose code is no project code (relative to the "
+                        "project root, separated by ':', e.g. build/_deps), for this invocation; overrides the stored "
+                        "list (.discopop/project/excluded_directories.json). An empty string excludes none.")
 
     parser.add_argument("--log", type=str, default="WARNING", help="Specify log level: DEBUG, INFO, WARNING, ERROR, "
     "CRITICAL")
@@ -142,6 +155,7 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         show_report=arguments.show_report,
         initialize_directory=arguments.init,
         apply_suggestions=arguments.apply_suggestions,
+        allow_patching_outside_project=arguments.allow_patching_outside_project,
         reset=arguments.reset,
         reset_execution_results=arguments.reset_execution_results,
         gui=arguments.gui,
@@ -154,6 +168,8 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         execution_time_regex=arguments.execution_time_regex,
         execution_repetitions=arguments.execution_repetitions,
         gui_toolkit=arguments.gui_toolkit,
+        project_include_dirs=arguments.project_include_dirs,
+        project_exclude_dirs=arguments.project_exclude_dirs,
     )
 
 

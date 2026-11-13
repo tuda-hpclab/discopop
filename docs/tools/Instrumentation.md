@@ -17,9 +17,9 @@ The wrappers build the instrumented version of your sequential program. They cal
 
 1. selects the compiler: the first of `clang-22`, `clang-21`, `clang-20` and `clang-19` found on the `PATH` (with the matching `clang++-<N>` for C++), otherwise a plain `clang` / `clang++`; on macOS also the Homebrew `llvm@<N>` installations. The wrapper stops with an error if no clang 19 to 22 is found;
 2. runs the compiler with your `<arguments>` and the additional flags `-g -O0 -fno-discard-value-names -fPIC`, loads the pass (`-fpass-plugin`), and links `libDiscoPoP_RT.a` and `pthread`. Optimization is therefore always off;
-3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below the project root) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
+3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below `DP_PROJECT_ROOT_DIR`, or below the directory holding `.discopop` if it is not set) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
 
-The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default `.discopop` in the current directory. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
+The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default `.discopop` in the current directory. The pass warns if `DOT_DISCOPOP` is not set or relative: a build that compiles in several directories then spreads its data over several `.discopop` directories that do not fit together. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
 
 {: .note }
 The profiler must be installed without `-e` (`pip install ./profiler`): the wrappers locate the pass and the runtime relative to their own location, and refuse to run from the source tree.
@@ -32,7 +32,7 @@ discopop_cxx example.cpp -o a.out
 ./a.out
 ```
 
-The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. Run the program from the project directory, or set `DOT_DISCOPOP` so that it finds the `.discopop` directory. Afterwards, continue with the [Explorer](Explorer.md).
+The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. Run the program from the project directory, or set `DOT_DISCOPOP` so that it finds the `.discopop` directory; if it cannot create its results there, the program stops at its start with an error and exit code 1. Afterwards, continue with the [Explorer](Explorer.md).
 
 ### Makefile projects
 Pass the wrappers as compilers:
@@ -72,6 +72,7 @@ The explorer reads `ast_dump.json`, but only the nodes of the files in `FileMapp
 
 - `DP_AST_NO_PLUGIN=1` uses the filtered dump even if the plugin exists.
 - The declarations of the excluded directories (`DP_PROJECT_EXCLUDE_DIRS`, see [Environment variables](../setup/environment_variables.md)) are left out by both, also before a `FileMapping.txt` exists. A dependency fetched below the project directory (`build/_deps`) should be excluded: otherwise it is project code, instrumented and kept in the AST.
+- The directories of `DP_PROJECT_INCLUDE_DIRS` (project code outside of `DP_PROJECT_ROOT_DIR`) count as project code there as well: before a `FileMapping.txt` exists their declarations are kept like those below the project directory, and the pass instruments and maps their files.
 - `filter_ast_dump.py` reports on stderr which files it keeps, how it is doing (every 10 s on long runs) and, when done, how much it read, wrote and dropped, so each translation unit adds two lines to the build log; `DP_AST_QUIET=1` silences them.
 - `-DDP_AST_EXPORT=OFF` (or `REQUIRED`) at build time never builds the plugin (or fails if it cannot be built). With pip, pass it as `CMAKE_ARGS=-DDP_AST_EXPORT=OFF pip install ./profiler`.
 - The packages of [apt.llvm.org](https://apt.llvm.org) install Clang's CMake files with `clang-<version>`, but the libraries and headers they refer to only with `libclang-<version>-dev`. Without the latter, the build reports the missing files and leaves the plugin out.

@@ -26,6 +26,24 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     TIME_SOURCE_WALL_CLOCK,
     extract_execution_time,
 )
+from discopop_library.ProjectManager.configurations.instrumentation_checks import (
+    DP_SETTINGS,
+    HD_SETTINGS,
+    CheckResult,
+    Snapshot,
+    check_build,
+    check_profiling_run,
+    take_snapshot,
+)
+from discopop_library.ProjectManager.configurations.project_environment import (
+    DOT_DISCOPOP_VARIABLE,
+    ProjectDirectories,
+    build_environment,
+    describe_project_variables,
+    ignored_settings_warning,
+    project_directories_of,
+    record_instrumented_directories,
+)
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -33,11 +51,6 @@ from discopop_library.ProjectManager.configurations.repetitions import (
     TIME_AGGREGATE_NOT_MEASURED,
     select_representative,
     validate_repetitions,
-)
-from discopop_library.ProjectManager.services.excluded_directories import (
-    ENVIRONMENT_VARIABLE as EXCLUDE_DIRECTORIES_VARIABLE,
-    environment_value,
-    load_excluded_directories,
 )
 
 PATH = str
@@ -210,6 +223,36 @@ def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) 
     return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
 
 
+def project_directories_of_arguments(arguments: ProjectManagerArguments) -> ProjectDirectories:
+    """The project directories of the runs of ``arguments``: the stored ones, each list replaced by the one given on
+    the command line (``--project-include-dirs`` / ``--project-exclude-dirs``)."""
+    return project_directories_of(
+        arguments.project_dir, arguments.project_root, arguments.project_include_dirs, arguments.project_exclude_dirs
+    )
+
+
+# The settings files of the instrumented modes, and the modes' names.
+_INSTRUMENTED_MODES = {DP_SETTINGS: "dp", HD_SETTINGS: "hd"}
+
+# What makes a script that succeeded fail its instrumentation checks.
+INSTRUMENTATION_CHECK_FAILED_RETURN_CODE = 1
+
+
+def _apply_instrumentation_checks(outcome: _RunOutcome, checks: CheckResult) -> _RunOutcome:
+    """``outcome`` with the messages of ``checks`` appended to its stderr; a failed check fails it."""
+    messages = checks.messages()
+    if not messages:
+        return outcome
+    for message in messages:
+        logger.warning(message)
+    stderr = outcome.stderr + ("\n" if outcome.stderr and not outcome.stderr.endswith("\n") else "")
+    stderr += "\n".join("DiscoPoP " + message for message in messages) + "\n"
+    returncode = outcome.returncode
+    if checks.errors and returncode == 0:
+        returncode = INSTRUMENTATION_CHECK_FAILED_RETURN_CODE
+    return outcome._replace(stderr=stderr, returncode=returncode)
+
+
 def execute_configuration(
     arguments: ProjectManagerArguments,
     project_copy_root_path: PATH,
@@ -296,18 +339,11 @@ def execute_configuration(
     # The process-wide working directory is deliberately left alone: this function runs in
     # worker threads, and os.chdir would change the directory of every other thread.
     # The script is started with cwd=project_copy_root_path instead (see _run_once).
-    my_env: Dict[str, str] = os.environ.copy()
-    for key in settings:
-        my_env[key] = settings[key]
-    my_env["DP_PROJECT_ROOT_DIR"] = project_copy_root_path
-    # the directories of the project that are no project code (Setup stage), relative to the project directory, so
-    # they hold for the copy as well; entries set in the settings are kept
-    excluded_directories = load_excluded_directories(arguments.project_dir)
-    if excluded_directories:
-        my_env[EXCLUDE_DIRECTORIES_VARIABLE] = environment_value(
-            excluded_directories, my_env.get(EXCLUDE_DIRECTORIES_VARIABLE, "")
-        )
-    my_env["DOT_DISCOPOP"] = project_copy_dp_path
+    # what is project code (the included and excluded directories of the Project Setup stage): the excluded ones
+    # become absolute paths in the copy; entries set in the settings are kept
+    project_directories = project_directories_of_arguments(arguments)
+    my_env: Dict[str, str] = build_environment(os.environ, settings, project_directories, project_copy_root_path)
+    logger.info(describe_project_variables(my_env))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
 
     # Ensure the PATH includes the directory where discopop tools are found
@@ -333,6 +369,12 @@ def execute_configuration(
     # for key in my_env:
     #    print("--> ", key, " : ", my_env[key])
 
+    # Only the instrumented modes are checked; the others need no marker in .discopop.
+    snapshot = (
+        take_snapshot(my_env[DOT_DISCOPOP_VARIABLE])
+        if settings_name in _INSTRUMENTED_MODES
+        else Snapshot(started=time.time())
+    )
     outcomes: List[_RunOutcome] = []
     for repetition in range(repetitions):
         if repetitions > 1:
@@ -412,6 +454,29 @@ def execute_configuration(
             + ")"
         )
 
+    # An instrumented build or run can succeed without producing what DiscoPoP needs; see instrumentation_checks.
+    checks = CheckResult()
+    if representative.returncode == 0 and not representative.timeout_expired:
+        if script_name.startswith("compile"):
+            checks = check_build(
+                snapshot,
+                settings_name,
+                project_copy_root_path,
+                my_env[DOT_DISCOPOP_VARIABLE],
+                project_directories.included,
+            )
+            mode = _INSTRUMENTED_MODES.get(settings_name)
+            if mode is not None and not checks.errors:
+                record_instrumented_directories(my_env[DOT_DISCOPOP_VARIABLE], mode, project_directories)
+        elif script_name == "execute.sh":
+            checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
+    warning = ignored_settings_warning(settings, settings_name)
+    if warning is not None:
+        checks.warnings.append(warning)
+    representative = _apply_instrumentation_checks(representative, checks)
+    if checks.errors and time_aggregate != TIME_AGGREGATE_FAILED_RUN:
+        time_aggregate = TIME_AGGREGATE_FAILED_RUN
+
     if not store_result:
         return (
             representative.returncode,
@@ -446,6 +511,12 @@ def execute_configuration(
             # recorded but excluded from the choice above.
             "repetition_time_sources": [outcome.time_source for outcome in outcomes],
             "time_aggregate": time_aggregate,
+            # what was project code in this run (included directories absolute, excluded ones relative to the
+            # project root)
+            "project_directories": {
+                "included": list(project_directories.included),
+                "excluded": list(project_directories.excluded),
+            },
         },
     )
     if measurement is not None:

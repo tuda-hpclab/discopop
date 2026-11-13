@@ -52,7 +52,7 @@ TOOL = Tool(
         "may become impractically slow under instrumentation. "
         "\n\n"
         "The execute.sh script is executed from the project root with the same environment "
-        "variables as compile.sh: $CC, $CXX, $CFLAGS, $CXXFLAGS, $DP_PROJECT_ROOT_DIR, "
+        "variables as compile.sh: $CC, $CXX, $CFLAGS, $CXXFLAGS, $DP_PROJECT_ROOT_DIR (project root), "
         "$DOT_DISCOPOP, $OMP_NUM_THREADS. The script must exit 0 on success. "
         "\n\n"
         "Examples for script_body:\n"

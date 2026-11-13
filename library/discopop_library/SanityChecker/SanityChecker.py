@@ -18,6 +18,10 @@ from discopop_library.SanityChecker.ArgumentClasses import SanityCheckerArgument
 from discopop_library.SanityChecker.Classes.CodeConfiguration import CodeConfiguration
 from discopop_library.SanityChecker.Classes.ExecutionResult import ExecutionResult
 from discopop_library.SanityChecker.Types import PATTERN_TAG, RETURN_CODE, SUGGESTION_ID, TSAN_CODE, VALIDATION_CODE
+from discopop_library.PatchApplicator.outside_project import (
+    find_outside_project_targets,
+    log_skipped_outside_suggestions,
+)
 from discopop_library.HostpotLoader.HotspotLoaderArguments import HotspotLoaderArguments
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
 from discopop_library.result_classes.DetectionResult import DetectionResult
@@ -85,6 +89,11 @@ def run(arguments: SanityCheckerArguments) -> None:
     filtered_suggestion_ids: List[int] = []
     for hotspot_class in arguments.suggestion_classes:
         filtered_suggestion_ids += patterns_by_hotspot_type[hotspot_class]
+
+    # suggestions that patch files outside the project cannot be checked in isolated copies: skipped, and logged
+    outside_project = find_outside_project_targets(arguments.dot_dp_path, filtered_suggestion_ids)
+    log_skipped_outside_suggestions(logger, "Sanity checker", outside_project)
+    filtered_suggestion_ids = [pid for pid in filtered_suggestion_ids if str(pid) not in outside_project]
 
     # check every filtered suggestion for sanity
     logger.debug("suggestions: " + str(filtered_suggestion_ids))

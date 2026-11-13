@@ -73,6 +73,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
     HotspotsChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
 )
 from discopop_library.ProjectManager.services.vscode import (
@@ -214,6 +215,7 @@ class HotspotPanel(Panel):
 
         project_state.subscribe(ConfigChanged, lambda _event: self.refresh_configurations())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh_configurations())
+        project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.update_ui())
         # open with the quadrant chart shown, mirroring the Report tab opening on a trade-off scatter
         self.add_plot("quadrant")
         self.notebook.setCurrentIndex(0)
@@ -693,6 +695,7 @@ class HotspotPanel(Panel):
         state, detail = self.session.build_state(current_config)
         status = hotspot_view.measurement_status(state, detail, self.runs, self.regions)
         self.facts_label.setText(status.facts)
+        stale = hotspot_view.stale_hotspot_data_message(self.arguments)
         running_item = self.queue.running() if self.queue is not None else None
         if self.running and running_item is not None and self.queue is not None:
             position = self.queue.position(running_item.name)
@@ -701,6 +704,8 @@ class HotspotPanel(Panel):
             )
         elif self.running:
             self.header.chip.set_status(widgets.CHIP_BUSY, "Measurement running")
+        elif stale is not None:
+            self.header.chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
         elif not current_config:
             self.header.chip.set_status(
                 widgets.CHIP_IDLE,
