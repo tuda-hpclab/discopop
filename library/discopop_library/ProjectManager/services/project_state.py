@@ -47,6 +47,11 @@ class HotspotsChanged:
 
 
 @dataclass(frozen=True)
+class ProjectDirectoriesChanged:
+    """The included or excluded directories of the project (what is project code) were saved."""
+
+
+@dataclass(frozen=True)
 class AutotuningChanged:
     """The autotuner's suggestions, or what it can work on, changed."""
 

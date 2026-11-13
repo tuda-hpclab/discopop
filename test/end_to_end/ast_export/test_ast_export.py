@@ -244,6 +244,68 @@ def test_plugin_leaves_out_excluded_directories_without_file_mapping(tmp_path: P
     assert {node[3] for node in _graph_nodes(raw)} == {"main.cpp"}
 
 
+def _plugin_nodes(directory: Path, arguments: list[str], raw: Path, extra_flags: Optional[list[str]] = None) -> Any:
+    plugin = _plugins(_libs_dir())[0]
+    result = subprocess.run(
+        [_clangpp(plugin), "-std=c++17", "main.cpp", "-fsyntax-only", *(extra_flags or []), "-Xclang", "-load"]
+        + ["-Xclang", str(plugin), "-Xclang", "-add-plugin", "-Xclang", "dp-ast-export"]
+        + [part for argument in arguments for part in ("-Xclang", "-plugin-arg-dp-ast-export", "-Xclang", argument)],
+        cwd=directory,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return {node[3] for node in _graph_nodes(raw)}
+
+
+@pytest.fixture()
+def project_with_outside_dependency(tmp_path: Path) -> tuple[Path, Path]:
+    """The test program with util.hpp moved into a directory outside of the project (found through -I)."""
+    project = tmp_path / "project"
+    shutil.copytree(SRC_DIR, project)
+    outside = tmp_path / "outside" / "deps"
+    outside.mkdir(parents=True)
+    (project / "util.hpp").rename(outside / "util.hpp")
+    return project, outside
+
+
+@pytest.mark.parametrize("exclude", ["", "deps"])
+def test_plugin_selects_included_directories_without_file_mapping(
+    tmp_path: Path, project_with_outside_dependency: tuple[Path, Path], exclude: str
+) -> None:
+    project, outside = project_with_outside_dependency
+    flags = [f"-I{outside}"]
+    raw = tmp_path / "raw.json"
+    # outside of the project, so no project code without the inclusion
+    assert _plugin_nodes(project, [f"root={project}", f"out={raw}"], raw, flags) == {"main.cpp"}
+    raw.unlink()
+    arguments = [f"root={project}", f"include=unrelated::{outside}", f"exclude={exclude}", f"out={raw}"]
+    nodes = _plugin_nodes(project, arguments, raw, flags)
+    assert nodes == {"main.cpp", "util.hpp"}
+    raw.unlink()
+    # an excluded directory below an included one wins
+    arguments = [f"root={project}", f"include={outside.parent}", f"exclude={outside}", f"out={raw}"]
+    assert _plugin_nodes(project, arguments, raw, flags) == {"main.cpp"}
+
+
+def test_wrapper_passes_the_included_directories(
+    tmp_path: Path, project_with_outside_dependency: tuple[Path, Path]
+) -> None:
+    """DP_PROJECT_INCLUDE_DIRS: the pass maps the outside header, and the AST (plugin and filtered dump) has it."""
+    project, outside = project_with_outside_dependency
+    main = project / "main.cpp"
+    main.write_text(main.read_text().replace('#include "util.hpp"', f'#include "{outside / "util.hpp"}"'))
+    for variant, env in (("plugin", {}), ("dump", {"DP_AST_NO_PLUGIN": "1"})):
+        directory = tmp_path / variant
+        shutil.copytree(project, directory)
+        result = _compile(_libs_dir(), directory, {**env, "DP_PROJECT_INCLUDE_DIRS": str(outside)})
+        assert result.returncode == 0, result.stdout + result.stderr
+        mapping = (directory / ".discopop" / "FileMapping.txt").read_text()
+        assert "main.cpp" in mapping and "util.hpp" in mapping, (variant, mapping)
+        nodes = _graph_nodes(directory / ".discopop" / "profiler" / "ast_dump.json")
+        assert {node[3] for node in nodes} == {"main.cpp", "util.hpp"}, variant
+
+
 def test_unwritable_output_fails_the_compilation(work_dir: Path) -> None:
     """clang's exit code has to tell the wrapper that there is no output to filter."""
     plugin = _plugins(_libs_dir())[0]

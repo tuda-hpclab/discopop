@@ -78,12 +78,40 @@ Every script is executed with the project root as its working directory, so rela
 |---|---|
 | `$CC`, `$CXX` | compiler executables, taken from the settings file of the active mode |
 | `$CFLAGS`, `$CXXFLAGS` | compiler flags, likewise from the settings file |
-| `$DP_PROJECT_ROOT_DIR` | absolute path of the (possibly copied) project root |
-| `$DP_PROJECT_EXCLUDE_DIRS` | the excluded directories of the project (`.discopop/project/excluded_directories.json`, edited in the *Project Setup* stage of the GUI), relative to the project root and separated by `:`, after the entries a settings file may set; only set if there are any |
+| `$DP_PROJECT_ROOT_DIR` | absolute path of the (possibly copied) project root; use it to refer to the project, e.g. `cmake -S "$DP_PROJECT_ROOT_DIR" -B build` |
 | `$DOT_DISCOPOP` | absolute path of the `.discopop` directory inside that root |
+| `$DP_PROJECT_EXCLUDE_DIRS` | the [excluded directories](#project-directories) as absolute paths inside that root, separated by `:`, after the entries a settings file may set; only set if there are any |
+| `$DP_PROJECT_INCLUDE_DIRS` | the [included directories](#project-directories) outside the project, absolute, separated by `:`, after the entries a settings file may set; only set if there are any |
 | `$OMP_NUM_THREADS` | thread count of the current run |
 
 Build scripts must use `$CC` / `$CXX` and `$CFLAGS` / `$CXXFLAGS` rather than hard-coded compiler names. The same script is reused for sequential builds, DiscoPoP instrumentation, hotspot detection and parallel builds; only the settings file changes between them. A bare `clang` / `clang++` in the settings is replaced by the highest installed `clang-<N>` / `clang++-<N>` if no unversioned compiler is on the `PATH`.
+
+### Project directories
+The profiler and the hotspot detection instrument the functions defined in the project, i.e. below the project root (`DP_PROJECT_ROOT_DIR`). Two lists change what counts as project code:
+
+- **Excluded directories** below the project root are no project code, e.g. the dependencies a CMake build fetches into `build/_deps`, or third-party libraries the project brings along. Leaving them out shortens the instrumented build and, considerably, the profiling run: on Kripke (RAJA, CHAI and Umpire below `tpl/`), instrumenting only `src/` cut the profiling run from 14 s to under one second, with a quarter of the dependencies to analyze. A directory excludes everything below it.
+- **Included directories** outside the project root are project code as well, e.g. sources shared between projects. They are not copied for the runs of a configuration: every copy compiles the same files. Parallelization suggestions for them are therefore never applied automatically, see [Suggestions that patch files outside of the project](#suggestions-that-patch-files-outside-of-the-project).
+
+Both are stored in `.discopop/project/` (kept by `--reset`): `excluded_directories.json` with paths relative to the project root, `included_directories.json` with absolute paths:
+
+```json
+{"excluded_directories": ["build/_deps", "third_party"]}
+```
+
+Edit them in the GUI (*Project Setup* stage: a folder tree with check boxes for the excluded directories, a list for the included ones), with the MCP server (`set_compile_script`), or in the files; `--project-exclude-dirs` / `--project-include-dirs` replace a list for one invocation. The project manager passes them to every build as `DP_PROJECT_EXCLUDE_DIRS` (absolute paths in the copy of the project the run works in) and `DP_PROJECT_INCLUDE_DIRS`, see [Environment variables](../setup/environment_variables.md). Paths are compared as given and with symbolic links resolved.
+
+Every instrumented build records the lists it was built with in `.discopop/instrumented_project_directories.json`; if they change afterwards, the GUI marks the profiling and hotspot data stale.
+
+`DP_PROJECT_ROOT_DIR` and `DOT_DISCOPOP` are set by the project manager for every run and cannot be set in a settings file: a value found there is ignored with a warning, and the command line removes it from the settings files. A `project_environment.json` of an earlier development version (a single "instrumentation scope") is no longer read; the command line says so.
+
+### Checks of instrumented builds and runs
+An instrumented build only produces consistent data if every compiler call gets the same absolute `DOT_DISCOPOP`. Without it, the compiler wrappers fall back to a `.discopop` directory in the current directory, so a build that compiles in several directories (every CMake build) spreads its data over several of them, with file and instruction numbers that do not fit together; the instrumented program then reports success while writing its results nowhere. Therefore, in the `dp` and `hd` modes:
+
+- a build fails if DiscoPoP data was written into a `.discopop` directory below the project other than `$DOT_DISCOPOP` (the build lost the variable on the way to a compiler, e.g. because it resets the environment or runs a compiler other than `$CC` / `$CXX`)
+- a build warns if `FileMapping.txt` names no file in the project or an included directory (nothing will be profiled)
+- a profiling run (`execute.sh`) fails if it did not write `profiler/dynamic_dependencies.txt` (`dp`) or a `hotspot_detection/private/hotspot_result_*.txt` (`hd`)
+
+The messages are appended to the stderr output of the script.
 
 ### Execution modes
 A run selects one of four modes, each backed by its own settings file:
@@ -230,6 +258,9 @@ discopop_project_manager -xf                            # every configuration, a
 - `-l` lists the configurations and does nothing else.
 - `-a <ids>` applies the comma separated suggestion ids before the execution. `-a auto` uses the suggestions selected by the autotuner (`auto_tuner/results.json`; the union if several configurations exist), `-a prm` those of the parallel region merger. Suggestions are applied in the project copy only; your sources stay untouched.
 
+### Suggestions that patch files outside of the project
+A project copy isolates only the files below the project directory. A suggestion whose patch targets a file outside of it (a shared source directory) would modify the original, which other projects may use. The project manager therefore skips such suggestions in the `auto` and `prm` selections (and logs which and why) and refuses them in `--apply-suggestions` (the run is skipped like any failed application) unless `--allow-patching-outside-project` is given. If it is given, the files are patched in place and **restored after each run** by rolling the suggestions back, also when the run fails or is stopped, and also with `--skip-cleanup`; because the rollback is per suggestion, the files of such a suggestion inside the copy are restored as well. Do not run several project manager instances that patch the same shared files at the same time.
+
 ### Project copies
 Unless `-i/--inplace` is given, every run happens in a copy of the project, created next to it and named `<configuration>_<settings file>_<project directory>`, for example `tiny_dp_settings.json_my_project`. The copy includes your `.discopop` directory. It is deleted after the run unless `--skip-cleanup` is given. Without `-i`, the profiling data of a `dp` run is therefore deleted with the copy. To keep it for the [Explorer](Explorer.md), either run in place:
 
@@ -256,7 +287,8 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `--gui-toolkit {tk,qt}` | `qt` | The toolkit of the `--gui` window: the Qt (PySide6) version or the old Tk version. |
 | `-x`, `--execute LIST` | `tiny` | Comma separated `<configuration>[:<mode>][:<threads>]`. |
 | `-xf`, `--execute-full` | | Execute all configurations. |
-| `-a`, `--apply-suggestions IDS` | | Suggestion ids to apply before the execution, or `auto` / `prm`. |
+| `-a`, `--apply-suggestions IDS` | | Suggestion ids to apply before the execution, or `auto` / `prm`. Suggestions that patch files outside of the project are refused unless `--allow-patching-outside-project` is given; `auto` / `prm` never include them. |
+| `--allow-patching-outside-project` | off | Allow `--apply-suggestions` to apply suggestions that patch files outside of the project (shared sources). |
 | `-l`, `--list` | | List the configurations; nothing else is done. |
 | `-i`, `--inplace` | off | Execute in the project root instead of a copy. |
 | `--skip-cleanup` | off | Keep the project copies (may need much disk space). |
@@ -270,6 +302,8 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `-tov`, `--timeout-validation` | 3600 | Timeout of each validation in seconds; 0 disables it. |
 | `-xr`, `--execution-repetitions N` | 3 | Repetitions of `execute.sh` in `seq` and `par`; the median is reported. |
 | `-etr`, `--execution-time-regex [RE]` | per configuration | Read the time from the output. Without a value: the `<DP_EXEC_TIME>` tag; `''` disables the search. |
+| `--project-exclude-dirs DIRS` | `excluded_directories.json` | [Excluded directories](#project-directories) for this invocation, relative to the project root, separated by `:`; `''` excludes none. |
+| `--project-include-dirs DIRS` | `included_directories.json` | [Included directories](#project-directories) outside the project for this invocation, absolute, separated by `:`; `''` includes none. |
 | `-v`, `--verbose` | off | Verbose output. |
 | `--log LEVEL` | `WARNING` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
 | `--write-log` | off | Write a log file. |

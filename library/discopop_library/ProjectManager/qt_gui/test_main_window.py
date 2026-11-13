@@ -15,6 +15,10 @@ from pytestqt.qtbot import QtBot
 
 from PySide6.QtCore import Qt
 
+from discopop_library.ProjectManager.configurations.project_environment import (
+    ProjectDirectories,
+    record_instrumented_directories,
+)
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.main_window import (
     TAB_AUTOTUNING,
@@ -148,6 +152,26 @@ def test_the_sidebar_shows_what_the_stages_have_done(qtbot: QtBot, tmp_path: Pat
     (tmp_path / ".discopop" / "FileMapping.txt").write_text("")
     window.project_state.publish(ResultsChanged())
     qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.DONE, timeout=2000)
+
+
+def test_changed_project_directories_mark_the_profiling_data_stale(
+    qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder
+) -> None:
+    window = MainWindow(make_arguments(tmp_path / "project"))
+    qtbot.addWidget(window)
+    dot_dp = tmp_path / "project" / ".discopop"
+    (dot_dp / "profiler").mkdir(parents=True, exist_ok=True)
+    for name in ("Data.xml", "dynamic_dependencies.txt", "loop_counter_output.txt", "reduction.txt"):
+        (dot_dp / "profiler" / name).write_text("")
+    (dot_dp / "FileMapping.txt").write_text("")
+    record_instrumented_directories(str(dot_dp), "dp", ProjectDirectories())
+    window.project_state.publish(ResultsChanged())
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.DONE, timeout=2000)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    dialog_answers.answer("ask_directory", str(shared))
+    window.setup_panel.included_directories.add_button.click()
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PROFILING) == StageState.STALE, timeout=2000)
 
 
 def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:

@@ -77,6 +77,8 @@ def test_normal_entries(tmp_path: Path) -> None:
         function="main",
         hotness="",
         variables=(("Private", "i"), ("Shared", "a, b")),
+        # the project of this fixture is the parent of tmp_path, /src/ lies outside of it
+        outside_files=("/src/example.cpp",),
     )
     assert first.location == "example.cpp:20"
     assert second.pattern_type == "reduction"
@@ -120,7 +122,7 @@ def test_patch_dir_without_pattern_and_pattern_without_patch_dir(tmp_path: Path)
     infos = load_suggestions(dot_dp)
     assert [info.id for info in infos] == ["0", "7"]
     assert infos[0].pattern_type == "doall"
-    assert infos[1] == SuggestionInfo(id="7")
+    assert infos[1] == SuggestionInfo(id="7", outside_files=("/src/example.cpp",))
 
 
 def test_unknown_file_id_and_malformed_location(tmp_path: Path) -> None:
@@ -216,3 +218,19 @@ def test_the_cache_does_not_hand_out_its_own_list(tmp_path: Path) -> None:
     dot_dp = _project(tmp_path, {"do_all": [_entry(0, "1:20", "1:22")]}, ["0"])
     load_suggestions(dot_dp).clear()
     assert len(load_suggestions(dot_dp)) == 1
+
+
+def test_suggestions_with_targets_outside_the_project_are_marked(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    dot = project / ".discopop"
+    dot.mkdir(parents=True)
+    dot_dp = _project(dot, {"do_all": [_entry(0, "1:20", "1:22"), _entry(1, "2:5", "2:6")]}, ["0", "1"])
+    # suggestion 0 lies in the project, suggestion 1 in a directory outside of it (its patch is named after file 1,
+    # so the file mapping of this project is rewritten)
+    (dot / "FileMapping.txt").write_text(f"1\t{project}/a.cpp\n2\t{tmp_path}/shared/b.cpp\n")
+    (dot / "patch_generator" / "1" / "1.patch").unlink()
+    (dot / "patch_generator" / "1" / "2.patch").write_text("")
+    inside, outside = load_suggestions(dot_dp)
+    assert inside.outside_files == () and outside.outside_files == (f"{tmp_path}/shared/b.cpp",)
+    assert "Outside the project" not in dict(suggestion_detail_fields(inside))
+    assert "outside the project" in dict(suggestion_detail_fields(outside))["Outside the project"]

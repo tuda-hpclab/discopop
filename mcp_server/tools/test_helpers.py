@@ -238,3 +238,22 @@ def test_warning_fields_leave_out_errors_cap_and_count() -> None:
     assert fields["warnings"][:5] == [f"a.c:{n}: warning: w{n}" for n in range(5)]
     assert fields["warnings"][5] == "3 more warnings."
     assert len(fields["warnings"]) == MAX_WARNINGS + 1
+
+
+def test_newest_source_mtime_counts_the_project_directories(tmp_path: Path) -> None:
+    source = tmp_path / "main.cpp"
+    source.write_text("int main() { return 0; }\n")
+    os.utime(source, (1000.0, 1000.0))
+    assert ToolContext.newest_source_mtime(str(tmp_path)) == 1000.0
+
+    for name, mtime in (("excluded_directories.json", 2000.0), ("included_directories.json", 3000.0)):
+        listed = tmp_path / ".discopop" / "project" / name
+        listed.parent.mkdir(parents=True, exist_ok=True)
+        listed.write_text("{}")
+        os.utime(listed, (mtime, mtime))
+        # a changed list makes results older than it stale, like a changed source
+        assert ToolContext.newest_source_mtime(str(tmp_path)) == mtime
+    # older lists do not hide a newer source
+    for name in ("excluded_directories.json", "included_directories.json"):
+        os.utime(tmp_path / ".discopop" / "project" / name, (500.0, 500.0))
+    assert ToolContext.newest_source_mtime(str(tmp_path)) == 1000.0

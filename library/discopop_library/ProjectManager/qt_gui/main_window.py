@@ -73,6 +73,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -227,6 +228,7 @@ class MainWindow(QMainWindow):
             HotspotsChanged,
             AutotuningChanged,
             AutotuningFinished,
+            ProjectDirectoriesChanged,
         ):
             state.subscribe(event_type, lambda _event: self._status_timer.start())
         # a measurement or a run can rebuild what the hotspot stage compares with the sources

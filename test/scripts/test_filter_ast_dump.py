@@ -498,3 +498,91 @@ def test_command_line_reads_the_excluded_directories_of_the_pass(tmp_path: Any) 
     assert result.returncode == 0, result.stderr
     assert [n["name"] for n in json.loads(result.stdout)["inner"]] == ["own", "dep2", "inherited"]
     assert "without the excluded directories build/_deps" in result.stderr
+
+
+def _included_tu(project: Any, outside: Any) -> dict[str, Any]:
+    return {
+        "id": "0x1",
+        "kind": "TranslationUnitDecl",
+        "loc": {},
+        "inner": [
+            {"kind": "FunctionDecl", "name": "own", "loc": {"file": str(project / "main.cpp"), "line": 1}},
+            {"kind": "FunctionDecl", "name": "vendored", "loc": {"file": str(outside / "lib/v.hpp"), "line": 1}},
+            {
+                "kind": "FunctionDecl",
+                "name": "vendored_dep",
+                "loc": {"file": str(outside / "lib/_deps/d.hpp"), "line": 1},
+            },
+            {"kind": "FunctionDecl", "name": "other", "loc": {"file": str(outside / "lib2/o.hpp"), "line": 1}},
+            {"kind": "FunctionDecl", "name": "system", "loc": {"file": "/usr/include/stdio.h", "line": 1}},
+        ],
+    }
+
+
+@pytest.mark.parametrize("entry", ["{outside}/lib", "{outside}/lib/", "../storage/outside/lib", "{link}/lib"])
+def test_included_directories(tmp_path: Any, entry: str) -> None:
+    project = tmp_path / "project"
+    outside = tmp_path / "storage" / "outside"
+    project.mkdir()
+    (outside / "lib" / "_deps").mkdir(parents=True)
+    link = tmp_path / "link_to_outside"
+    link.symlink_to(outside)
+    included = "unrelated::" + entry.format(outside=outside, link=link)
+    tu = json.dumps(_included_tu(project, outside))
+    # "lib" must not include its namesake prefix "lib2"; an excluded directory below an included one is left out
+    out = json.loads(fad.filter_ast_dump(tu, str(project), included_dirs=included))
+    assert [n["name"] for n in out["inner"]] == ["own", "vendored", "vendored_dep"]
+    excluded = str(outside / "lib" / "_deps")
+    out = json.loads(fad.filter_ast_dump(tu, str(project), included_dirs=included, excluded_dirs=excluded))
+    assert [n["name"] for n in out["inner"]] == ["own", "vendored"]
+    # without the variable the directory is no project code
+    out = json.loads(fad.filter_ast_dump(tu, str(project)))
+    assert [n["name"] for n in out["inner"]] == ["own"]
+
+
+def test_relative_exclusion_is_relative_to_the_project_not_to_an_included_directory(tmp_path: Any) -> None:
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    (outside / "lib" / "_deps").mkdir(parents=True)
+    tu = json.dumps(_included_tu(project, outside))
+    out = json.loads(
+        fad.filter_ast_dump(tu, str(project), included_dirs=str(outside / "lib"), excluded_dirs="lib/_deps")
+    )
+    assert [n["name"] for n in out["inner"]] == ["own", "vendored", "vendored_dep"]
+
+
+def test_included_directories_do_not_widen_a_file_mapping(tmp_path: Any) -> None:
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    (outside / "lib").mkdir(parents=True)
+    mapping = _mapping(tmp_path, str(project / "main.cpp"))
+    out = json.loads(
+        fad.filter_ast_dump(
+            json.dumps(_included_tu(project, outside)), str(project), mapping, included_dirs=str(outside / "lib")
+        )
+    )
+    assert [n["name"] for n in out["inner"]] == ["own"]
+
+
+def test_command_line_reads_the_included_directories_of_the_pass(tmp_path: Any) -> None:
+    import subprocess
+    import sys
+
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    (outside / "lib").mkdir(parents=True)
+    env = {k: v for k, v in os.environ.items() if k != "DP_AST_QUIET"}
+    env["DP_PROJECT_INCLUDE_DIRS"] = str(outside / "lib")
+    result = subprocess.run(
+        [sys.executable, _SCRIPT, str(project)],
+        input=json.dumps(_included_tu(project, outside)),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert [n["name"] for n in json.loads(result.stdout)["inner"]] == ["own", "vendored", "vendored_dep"]
+    assert "below the included directories" in result.stderr

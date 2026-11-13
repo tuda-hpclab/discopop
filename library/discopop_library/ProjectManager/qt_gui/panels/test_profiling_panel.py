@@ -16,13 +16,23 @@ from unittest import mock
 import pytest
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.configurations.project_environment import (
+    ProjectDirectories,
+    record_instrumented_directories,
+)
+from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services import execution_run
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, ProjectState, ResultsChanged
+from discopop_library.ProjectManager.services.project_state import (
+    ConfigChanged,
+    ProjectDirectoriesChanged,
+    ProjectState,
+    ResultsChanged,
+)
 
 ExecuteResult = Optional[Tuple[int, float, str, str]]
 
@@ -176,3 +186,17 @@ def test_profiling_can_be_stopped(qtbot: QtBot, panel: ProfilingPanel) -> None:
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
     assert "preparation stopped by user" in panel.console.text() and panel.header.chip.text() == "Stopped"
     assert panel.status.text() == "Ready"
+
+
+def test_data_profiled_with_other_directories_is_warned_about(panel: ProfilingPanel) -> None:
+    select(panel)
+    record_instrumented_directories(panel.arguments.dot_dp, "dp", ProjectDirectories(excluded=("src",)))
+    save_excluded_directories(panel.arguments.project_dir, ["src"])
+    panel.project_state.publish(ProjectDirectoriesChanged())
+    assert panel.header.chip.text() == ""
+    save_excluded_directories(panel.arguments.project_dir, ["lib"])
+    panel.project_state.publish(ProjectDirectoriesChanged())
+    chip = panel.header.chip
+    assert chip.level == widgets.CHIP_WARN and chip.text() == "Project directories changed"
+    assert "src" in chip.detail() and "lib" in chip.detail()
+    assert panel.run_button.isEnabled()  # profiling again is the fix

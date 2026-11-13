@@ -16,6 +16,7 @@ from discopop_library.ProjectManager.utilities.CLI.listConfiguration import (
     show_configurations_with_execution,
     show_configurations_without_execution,
 )
+from discopop_library.ProjectManager.configurations.project_environment import migrate_settings_files
 from discopop_library.ProjectManager.utilities.deriveSettingsFiles import derive_settings_files
 from discopop_library.ProjectManager.utilities.initializeDirectories import initialize_directories
 from discopop_library.ProjectManager.utilities.initializeFiles import initialize_configuration_files
@@ -38,6 +39,10 @@ def run(arguments: ProjectManagerArguments) -> None:
         initialize_configuration_files(arguments)
         if not arguments.gui:
             return
+
+    if os.path.isdir(arguments.project_config_dir):
+        for message in migrate_settings_files(arguments.project_config_dir):
+            print("NOTE: " + message)
 
     if arguments.gui:
         # Checked before the project is touched and before the GUI is imported:

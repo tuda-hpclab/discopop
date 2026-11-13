@@ -22,6 +22,9 @@ class PatchApplicatorArguments(GeneralArguments):
     clear: bool
     load: bool
     list: bool
+    # Patching files outside of the project (see outside_project.py) is refused unless this is set; only a manual
+    # application may set it.
+    allow_outside_project: bool = False
 
     def __post_init__(self) -> None:
         self.__validate()

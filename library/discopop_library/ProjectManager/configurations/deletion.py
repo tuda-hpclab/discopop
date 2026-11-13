@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 
+from discopop_library.ProjectManager.configurations.copying import restore_outside_patches
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 
 PATH = str
@@ -22,5 +23,7 @@ def delete_configuration(arguments: ProjectManagerArguments, project_copy_root_p
         return
     if arguments.project_root == project_copy_root_path:
         return
+    # files outside the project, which the copy does not isolate, are restored while the patches are still there
+    restore_outside_patches(project_copy_root_path)
     shutil.rmtree(project_copy_root_path)
     logger.debug("removed project copy: " + project_copy_root_path)

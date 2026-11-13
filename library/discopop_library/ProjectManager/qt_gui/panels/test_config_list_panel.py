@@ -322,7 +322,7 @@ def test_a_finished_wizard_selects_its_configuration_and_shows_execute(env: Env)
     env.panel.maybe_open_wizard(False)
     wizard = env.panel._wizard
     assert wizard is not None
-    for _ in range(6):
+    for _ in range(7):
         wizard.next()
     wizard.config_name_entry.setText("wiz")
     wizard.next()

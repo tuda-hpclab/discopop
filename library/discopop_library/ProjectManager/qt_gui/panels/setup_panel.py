@@ -7,7 +7,8 @@
 # directory for details.
 
 """The Setup stage: how the project is built. The shared compile.sh, the shared validation build script and the
-settings files, with Test Compilation and Derive.
+settings files, with Test Compilation and Derive; what is project code: the included directories outside the project
+and the excluded directories inside it.
 
 Ported from the compilation editor window (``gui/mixins/compilation_editor.py`` in the Tk GUI); here it is a stage of
 the sidebar, above Configure, and the output of a test compilation goes to the output pane.
@@ -18,7 +19,7 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtGui import QShowEvent
-from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import (
@@ -29,6 +30,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
+from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -50,6 +52,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
+    ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
@@ -65,6 +68,12 @@ EXCLUDED_DIRECTORIES_HINT = (
     "Checked directories are no project code, e.g. dependencies fetched into the build directory (build/_deps):"
     " they are neither instrumented nor part of the file mapping and the AST. Saved at once; takes effect with the"
     " next build."
+)
+INCLUDED_DIRECTORIES_TITLE = "Included directories outside the project"
+INCLUDED_DIRECTORIES_HINT = (
+    "Their code is project code as well, e.g. sources shared between projects: instrumented and part of the file"
+    " mapping and the AST. They are not copied for the runs of a configuration, so suggestions for them are only"
+    " applied on request. Saved at once; takes effect with the next build."
 )
 
 RESET_RESULTS_TEXT = "Reset Execution Results…"
@@ -133,7 +142,7 @@ class SetupPanel(Panel):
         self.derive_button = widgets.create_button("Derive", self.derive_settings)
         self.header = widgets.PanelHeader(
             "Project Setup",
-            "How the project is built: compile.sh and the compiler settings, shared by all configurations.",
+            "Shared by all configurations: how the project is built and what is project code.",
             [self.derive_button, self.test_compilation_button, self.save_button],
         )
         self.excluded_directories = ExcludedDirectoriesTree(arguments.project_root, arguments.project_dir)
@@ -142,11 +151,22 @@ class SetupPanel(Panel):
         self.excluded_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         excluded_section = widgets.FormSection(EXCLUDED_DIRECTORIES_TITLE)
         excluded_section.add_widget(self.excluded_directories, EXCLUDED_DIRECTORIES_HINT)
+        self.included_directories = IncludedDirectoriesList(arguments.project_root, arguments.project_dir)
+        self.included_directories.setMinimumHeight(140)
+        self.included_directories.changed.connect(self._on_included_directories_changed)
+        self.included_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
+        included_section = widgets.FormSection(INCLUDED_DIRECTORIES_TITLE)
+        included_section.add_widget(self.included_directories, INCLUDED_DIRECTORIES_HINT)
+        # what is project code: the project directory without the excluded directories, plus the included ones
+        project_code = QHBoxLayout()
+        project_code.setContentsMargins(0, 0, 0, 0)
+        project_code.addWidget(excluded_section, 3)
+        project_code.addWidget(included_section, 2)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
-        layout.addWidget(excluded_section)
+        layout.addLayout(project_code)
         layout.addWidget(self._danger_zone())
 
         self.load_files()
@@ -224,6 +244,14 @@ class SetupPanel(Panel):
         )
         # they change what the builds of every configuration instrument
         self.project_state.publish(ConfigurationsChanged())
+        self.project_state.publish(ProjectDirectoriesChanged())
+
+    def _on_included_directories_changed(self, included: List[str]) -> None:
+        self.status.set(
+            "Included directories: " + (", ".join(included) if included else "none"), widgets.STATUS_OK, reset_ms=3000
+        )
+        self.project_state.publish(ConfigurationsChanged())
+        self.project_state.publish(ProjectDirectoriesChanged())
 
     def output_console(self) -> widgets.OutputConsole:
         return self.console
@@ -232,6 +260,7 @@ class SetupPanel(Panel):
         # the files may have been changed outside the GUI meanwhile, and a build may have created directories
         self.reload_unmodified()
         self.excluded_directories.reload()
+        self.included_directories.reload()
         super().showEvent(event)
 
     # ── loading ─────────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from discopop_library.ProjectManager.configurations.project_environment import load_project_directories
 from mcp_server.tools.gather_data import count_suggestions, next_step_hint
 from mcp_server.tools.helpers import (
     ToolContext,
@@ -116,6 +117,11 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         if result["initialized"]:
             result["compile_script_configured"] = compile_script_configured(configs_dir)
             result["configurations"] = names
+            directories = load_project_directories(str(configs_dir.parent))
+            result["project_directories"] = {
+                "included": list(directories.included),
+                "excluded": list(directories.excluded),
+            }
 
         # Results prepared outside of the server (or by an earlier session) are usable without any setup.
         source_mtime = ToolContext.newest_source_mtime(project_path)

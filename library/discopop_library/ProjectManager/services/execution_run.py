@@ -25,6 +25,7 @@ from discopop_library.ProjectManager.configurations.copying import (
     copy_configuration,
     get_application_result,
     patch_applicator_dir_of,
+    restore_outside_patches,
 )
 from discopop_library.ProjectManager.configurations.deletion import delete_configuration
 from discopop_library.ProjectManager.configurations.execution import execute_configuration, record_skipped_execution
@@ -61,6 +62,9 @@ class ExecutionRequest:
     repetitions: int
     log_level: str
     suggestion_ids: Tuple[str, ...]
+    # the user confirmed that suggestions patching files outside the project may be applied (and are restored
+    # after the run); see services/outside_patches.py
+    allow_patching_outside_project: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,7 @@ def run_execution(
     args_copy.execution_repetitions = request.repetitions
     args_copy.log_level = request.log_level
     args_copy.apply_suggestions = ",".join(request.suggestion_ids) if request.suggestion_ids else None
+    args_copy.allow_patching_outside_project = request.allow_patching_outside_project
 
     # modes whose run was skipped because their patches could not be applied
     application_failures: List[Tuple[str, Any]] = []
@@ -201,6 +206,11 @@ def run_execution(
                 except Exception as e:
                     ctx.output(f"Error recording skipped run: {e}\n")
                 application_failures.append((mode, application_result))
+                # some of the requested suggestions may have patched files outside the project
+                try:
+                    restore_outside_patches(project_copy_path)
+                except Exception as e:
+                    ctx.output(f"Error restoring files outside the project: {e}\n")
                 if not skip_cleanup:
                     try:
                         delete_configuration(args_copy, project_copy_path)
@@ -208,131 +218,141 @@ def run_execution(
                         pass
                 continue
 
-        ctx.status("⏳ Compiling...", StatusKind.BUSY)
-        ctx.output("Compiling...\n")
-        compile_result = execute_configuration(
-            args_copy,
-            project_copy_path,
-            config_path,
-            settings_path,
-            compile_sh,
-            1 if mode == "seq" else thread_count,
-            args_copy.timeout_compilation,
-            process_started_callback=ctx.register_process,
-        )
-        ctx.clear_process()
+        # The copy isolates only the files below the project root: suggestions the user allowed to patch files outside
+        # the project modified those in place, so they are rolled back whatever happens to the run (failure, stop,
+        # skip_cleanup) -- the next mode's copy would otherwise find them patched already.
+        try:
+            ctx.status("⏳ Compiling...", StatusKind.BUSY)
+            ctx.output("Compiling...\n")
+            compile_result = execute_configuration(
+                args_copy,
+                project_copy_path,
+                config_path,
+                settings_path,
+                compile_sh,
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_compilation,
+                process_started_callback=ctx.register_process,
+            )
+            ctx.clear_process()
 
-        if compile_result is None or compile_result[0] != 0:
-            ret_code = compile_result[0] if compile_result else "None"
-            ctx.output(f"Compilation failed (return code: {ret_code})\n")
-            if not inplace and not skip_cleanup:
-                try:
-                    delete_configuration(args_copy, project_copy_path)
-                except Exception:
-                    pass
-            continue
+            if compile_result is None or compile_result[0] != 0:
+                ret_code = compile_result[0] if compile_result else "None"
+                ctx.output(f"Compilation failed (return code: {ret_code})\n")
+                if not inplace and not skip_cleanup:
+                    try:
+                        delete_configuration(args_copy, project_copy_path)
+                    except Exception:
+                        pass
+                continue
 
-        ret_code, elapsed, stdout, stderr = compile_result
-        ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-        if stdout:
-            ctx.output(f"stdout: {stdout}\n")
-        if stderr:
-            ctx.output(f"stderr: {stderr}\n")
-
-        if ctx.cancel_event.is_set():
-            ctx.output("Execution stopped by user.\n")
-            break
-
-        ctx.status("⏳ Executing...", StatusKind.BUSY)
-        ctx.output("Executing...\n")
-        execute_result = execute_configuration(
-            args_copy,
-            project_copy_path,
-            config_path,
-            settings_path,
-            os.path.join(config_path, "execute.sh"),
-            1 if mode == "seq" else thread_count,
-            args_copy.timeout_execution,
-            process_started_callback=ctx.register_process,
-            execution_time_regex=execution_time_regex,
-            # Which modes are repeated is decided in one place, shared with
-            # the command line, so the two cannot drift apart.
-            repetitions=repetitions_for_mode(mode, args_copy.execution_repetitions),
-            should_abort=ctx.cancel_event.is_set,
-        )
-        ctx.clear_process()
-
-        if execute_result is None or execute_result[0] != 0:
-            ret_code = execute_result[0] if execute_result else "None"
-            ctx.output(f"Execution failed (return code: {ret_code})\n")
-        else:
-            ret_code, elapsed, stdout, stderr = execute_result
-            described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
-            ctx.output(f"Execution succeeded ({described})\n")
+            ret_code, elapsed, stdout, stderr = compile_result
+            ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
             if stdout:
                 ctx.output(f"stdout: {stdout}\n")
             if stderr:
                 ctx.output(f"stderr: {stderr}\n")
 
-            # optional output validation (auto-run when validate.sh exists),
-            # applied only to the "real" runs (seq/par) — matching the CLI.
-            if mode in ("seq", "par") and has_validate_script(config_path):
+            if ctx.cancel_event.is_set():
+                ctx.output("Execution stopped by user.\n")
+                break
 
-                def report_step(status: str, message: str) -> None:
-                    ctx.status(status, StatusKind.BUSY)
-                    ctx.output(message)
+            ctx.status("⏳ Executing...", StatusKind.BUSY)
+            ctx.output("Executing...\n")
+            execute_result = execute_configuration(
+                args_copy,
+                project_copy_path,
+                config_path,
+                settings_path,
+                os.path.join(config_path, "execute.sh"),
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_execution,
+                process_started_callback=ctx.register_process,
+                execution_time_regex=execution_time_regex,
+                # Which modes are repeated is decided in one place, shared with
+                # the command line, so the two cannot drift apart.
+                repetitions=repetitions_for_mode(mode, args_copy.execution_repetitions),
+                should_abort=ctx.cancel_event.is_set,
+            )
+            ctx.clear_process()
 
-                validation = run_validation_phase(
-                    args_copy,
-                    project_copy_path,
-                    config_path,
-                    settings_path,
-                    1 if mode == "seq" else thread_count,
-                    timeout_compilation=args_copy.timeout_compilation,
-                    timeout_validation=args_copy.timeout_validation,
-                    process_started_callback=ctx.register_process,
-                    on_compile_start=lambda _script: report_step(
-                        "⏳ Compiling for validation...", "Compiling for validation...\n"
-                    ),
-                    on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
-                    should_abort=ctx.cancel_event.is_set,
-                )
-                ctx.clear_process()
+            if execute_result is None or execute_result[0] != 0:
+                ret_code = execute_result[0] if execute_result else "None"
+                ctx.output(f"Execution failed (return code: {ret_code})\n")
+            else:
+                ret_code, elapsed, stdout, stderr = execute_result
+                described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
+                ctx.output(f"Execution succeeded ({described})\n")
+                if stdout:
+                    ctx.output(f"stdout: {stdout}\n")
+                if stderr:
+                    ctx.output(f"stderr: {stderr}\n")
 
-                if validation.compile_required:
-                    if validation.compile_successful:
-                        assert validation.compile_result is not None
-                        _, c_elapsed, c_stdout, c_stderr = validation.compile_result
-                        ctx.output(f"Validation build succeeded ({c_elapsed:.2f}s)\n")
-                        if c_stdout:
-                            ctx.output(f"stdout: {c_stdout}\n")
-                        if c_stderr:
-                            ctx.output(f"stderr: {c_stderr}\n")
+                # optional output validation (auto-run when validate.sh exists),
+                # applied only to the "real" runs (seq/par) — matching the CLI.
+                if mode in ("seq", "par") and has_validate_script(config_path):
+
+                    def report_step(status: str, message: str) -> None:
+                        ctx.status(status, StatusKind.BUSY)
+                        ctx.output(message)
+
+                    validation = run_validation_phase(
+                        args_copy,
+                        project_copy_path,
+                        config_path,
+                        settings_path,
+                        1 if mode == "seq" else thread_count,
+                        timeout_compilation=args_copy.timeout_compilation,
+                        timeout_validation=args_copy.timeout_validation,
+                        process_started_callback=ctx.register_process,
+                        on_compile_start=lambda _script: report_step(
+                            "⏳ Compiling for validation...", "Compiling for validation...\n"
+                        ),
+                        on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
+                        should_abort=ctx.cancel_event.is_set,
+                    )
+                    ctx.clear_process()
+
+                    if validation.compile_required:
+                        if validation.compile_successful:
+                            assert validation.compile_result is not None
+                            _, c_elapsed, c_stdout, c_stderr = validation.compile_result
+                            ctx.output(f"Validation build succeeded ({c_elapsed:.2f}s)\n")
+                            if c_stdout:
+                                ctx.output(f"stdout: {c_stdout}\n")
+                            if c_stderr:
+                                ctx.output(f"stderr: {c_stderr}\n")
+                        else:
+                            c_rc = validation.compile_result[0] if validation.compile_result else "None"
+                            ctx.output(f"Validation build FAILED (return code: {c_rc})\n")
+
+                    if validation.aborted:
+                        ctx.output("Execution stopped by user.\n")
+                    elif validation.compile_required and not validation.compile_successful:
+                        ctx.output("Validation skipped: its build failed.\n")
+                    elif not validation.validate_successful:
+                        v_rc = validation.validate_result[0] if validation.validate_result else "None"
+                        ctx.output(f"Validation FAILED (return code: {v_rc})\n")
                     else:
-                        c_rc = validation.compile_result[0] if validation.compile_result else "None"
-                        ctx.output(f"Validation build FAILED (return code: {c_rc})\n")
+                        assert validation.validate_result is not None
+                        _, v_elapsed, v_stdout, v_stderr = validation.validate_result
+                        ctx.output(f"Validation succeeded ({v_elapsed:.2f}s)\n")
+                        if v_stdout:
+                            ctx.output(f"stdout: {v_stdout}\n")
+                        if v_stderr:
+                            ctx.output(f"stderr: {v_stderr}\n")
 
-                if validation.aborted:
-                    ctx.output("Execution stopped by user.\n")
-                elif validation.compile_required and not validation.compile_successful:
-                    ctx.output("Validation skipped: its build failed.\n")
-                elif not validation.validate_successful:
-                    v_rc = validation.validate_result[0] if validation.validate_result else "None"
-                    ctx.output(f"Validation FAILED (return code: {v_rc})\n")
-                else:
-                    assert validation.validate_result is not None
-                    _, v_elapsed, v_stdout, v_stderr = validation.validate_result
-                    ctx.output(f"Validation succeeded ({v_elapsed:.2f}s)\n")
-                    if v_stdout:
-                        ctx.output(f"stdout: {v_stdout}\n")
-                    if v_stderr:
-                        ctx.output(f"stderr: {v_stderr}\n")
-
-        if not inplace and not skip_cleanup:
-            try:
-                delete_configuration(args_copy, project_copy_path)
-            except Exception:
-                pass
+            if not inplace and not skip_cleanup:
+                try:
+                    delete_configuration(args_copy, project_copy_path)
+                except Exception:
+                    pass
+        finally:
+            if not inplace:
+                try:
+                    restore_outside_patches(project_copy_path)
+                except Exception as e:
+                    ctx.output(f"Error restoring files outside the project: {e}\n")
 
     return application_failures
 

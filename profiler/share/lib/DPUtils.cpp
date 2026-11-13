@@ -90,11 +90,13 @@ std::vector<std::string> Spellings(const std::string& path) {
   return spellings;
 }
 
-// DP_PROJECT_ROOT_DIR and DP_PROJECT_EXCLUDE_DIRS, prepared for the checks of IsInProjectRoot.
+// DP_PROJECT_ROOT_DIR, DP_PROJECT_INCLUDE_DIRS and DP_PROJECT_EXCLUDE_DIRS, prepared for the checks of IsInProjectRoot.
 struct ProjectDirectories {
   std::string root_variable;
+  std::string include_variable;
   std::string exclude_variable;
-  // both with a trailing '/', so that "src" does not take in "src2" and "_deps" does not exclude "_deps2"
+  // the project root and the included directories (project code outside the root), and the excluded directories, all
+  // with a trailing '/', so that "src" does not take in "src2" and "_deps" does not exclude "_deps2"
   std::vector<std::string> roots;
   std::vector<std::string> excluded;
 };
@@ -106,23 +108,42 @@ void Prepare(ProjectDirectories& directories) {
   for (const std::string& spelling : Spellings(directories.root_variable)) {
     directories.roots.push_back(WithTrailingSlash(spelling));
   }
-  directories.excluded.clear();
-  std::stringstream entries(directories.exclude_variable);
-  std::string entry;
-  while (std::getline(entries, entry, ':')) {
-    if (entry.empty()) {
-      continue;
-    }
-    // relative entries name directories below the project root (in each of its spellings)
+  // relative entries of both lists are taken relative to the project root, in each of its spellings
+  const std::vector<std::string> project_roots = directories.roots;
+  const auto candidates_of = [&project_roots](const std::string& entry) {
     std::vector<std::string> candidates;
     if (entry.front() == '/') {
       candidates.push_back(entry);
     } else {
-      for (const std::string& root : directories.roots) {
+      for (const std::string& root : project_roots) {
         candidates.push_back(root + entry);
       }
     }
-    for (const std::string& candidate : candidates) {
+    return candidates;
+  };
+  // the included directories are further roots
+  std::stringstream included(directories.include_variable);
+  std::string entry;
+  while (std::getline(included, entry, ':')) {
+    if (entry.empty()) {
+      continue;
+    }
+    for (const std::string& candidate : candidates_of(entry)) {
+      for (const std::string& spelling : Spellings(candidate)) {
+        const std::string directory = WithTrailingSlash(spelling);
+        if (std::find(directories.roots.begin(), directories.roots.end(), directory) == directories.roots.end()) {
+          directories.roots.push_back(directory);
+        }
+      }
+    }
+  }
+  directories.excluded.clear();
+  std::stringstream entries(directories.exclude_variable);
+  while (std::getline(entries, entry, ':')) {
+    if (entry.empty()) {
+      continue;
+    }
+    for (const std::string& candidate : candidates_of(entry)) {
       for (const std::string& spelling : Spellings(candidate)) {
         const std::string directory = WithTrailingSlash(spelling);
         if (std::find(directories.excluded.begin(), directories.excluded.end(), directory) ==
@@ -142,10 +163,13 @@ bool IsInProjectRoot(const std::string& path) {
   static ProjectDirectories& directories = *new ProjectDirectories();
   static bool prepared = false;
   const std::string root_variable(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  const std::string include_variable(dputil::GetEnvOrDefault("DP_PROJECT_INCLUDE_DIRS", ""));
   const std::string exclude_variable(dputil::GetEnvOrDefault("DP_PROJECT_EXCLUDE_DIRS", ""));
-  if (!prepared || root_variable != directories.root_variable || exclude_variable != directories.exclude_variable) {
+  if (!prepared || root_variable != directories.root_variable || include_variable != directories.include_variable ||
+      exclude_variable != directories.exclude_variable) {
     prepared = true;
     directories.root_variable = root_variable;
+    directories.include_variable = include_variable;
     directories.exclude_variable = exclude_variable;
     Prepare(directories);
   }

@@ -39,8 +39,8 @@ def _project_printing_the_variable(tmp_path: Path, settings_value: str = "") -> 
     "stored, settings_value, expected",
     [
         ([], "", "[]"),
-        (["build/_deps", "third_party"], "", "[build/_deps:third_party]"),
-        (["build/_deps"], "/opt/vendor", "[/opt/vendor:build/_deps]"),
+        (["build/_deps", "third_party"], "", "[{copy}/build/_deps:{copy}/third_party]"),
+        (["build/_deps"], "/opt/vendor", "[/opt/vendor:{copy}/build/_deps]"),
         ([], "/opt/vendor", "[/opt/vendor]"),
     ],
 )
@@ -54,6 +54,5 @@ def test_build_environment(
         save_excluded_directories(arguments.project_dir, stored)
     copy_root = tmp_path / "copy"
     shutil.copytree(project_root, copy_root)
-    assert _run_in_copy(arguments, copy_root) == expected
-    # relative entries hold for the copy: the pass resolves them against DP_PROJECT_ROOT_DIR, the copy
-    assert os.path.isdir(copy_root)
+    # absolute paths in the copy, so the variable does not depend on how a tool resolves relative entries
+    assert _run_in_copy(arguments, copy_root) == expected.format(copy=os.path.abspath(copy_root))
