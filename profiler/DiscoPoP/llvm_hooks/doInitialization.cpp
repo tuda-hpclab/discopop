@@ -28,6 +28,17 @@ bool DiscoPoP::DoInitialization(Module& m) {
 
   // prepare environment variables
   const char* tmp = std::getenv("DOT_DISCOPOP");
+  if (tmp == nullptr || tmp[0] != '/') {
+    // A relative directory is resolved against the directory of each compiler call: a build that compiles in
+    // several directories (every CMake build) spreads its data over several .discopop directories whose file
+    // and instruction ids do not fit together, and the program does not find them when it is started elsewhere.
+    std::cerr << "\nWARNING: DOT_DISCOPOP is " << (tmp == nullptr ? "not set" : "relative (" + std::string(tmp) + ")")
+              << ", so DiscoPoP writes to .discopop below the current directory\n"
+              << "         (" << std::filesystem::current_path().string() << ").\n"
+              << "         Set it to the same absolute path for every compiler call of the build and for the\n"
+              << "         instrumented program.\n"
+              << "         https://tuda-hpclab.github.io/discopop/setup/environment_variables/\n\n";
+  }
   if (tmp == nullptr) {
     // DOT_DISCOPOP needs to be initialized
     setenv("DOT_DISCOPOP", ".discopop", 1);

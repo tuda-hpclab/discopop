@@ -47,13 +47,15 @@ class PatchApplicationResult:
     failed: List[str] = field(default_factory=list)
     # requested, but no patch has been generated for the id
     unknown: List[str] = field(default_factory=list)
+    # requested, but patching files outside the project, which was not allowed; nothing was patched
+    refused: List[str] = field(default_factory=list)
     # requested and already present in applied_suggestions.json
     already_applied: List[str] = field(default_factory=list)
 
     @property
     def unapplied(self) -> List[str]:
-        """Requested suggestions that are *not* in the code: failed plus unknown."""
-        return self.failed + self.unknown
+        """Requested suggestions that are *not* in the code: failed, unknown plus refused."""
+        return self.failed + self.unknown + self.refused
 
     @property
     def unapplied_ids(self) -> List[int]:
@@ -110,6 +112,12 @@ class PatchApplicationResult:
             parts.append("Patch rejected for: " + ", ".join(self.failed) + ".")
         if self.unknown:
             parts.append("No patch generated for: " + ", ".join(self.unknown) + ".")
+        if self.refused:
+            parts.append(
+                "Refused, they patch files outside the project: "
+                + ", ".join(self.refused)
+                + " (nothing was patched; allow with --allow-outside-project)."
+            )
         if self.nothing_in_code:
             parts.append("The code is UNMODIFIED.")
         return " ".join(parts)
@@ -120,6 +128,7 @@ class PatchApplicationResult:
             "applied": list(self.applied),
             "failed": list(self.failed),
             "unknown": list(self.unknown),
+            "refused": list(self.refused),
             "already_applied": list(self.already_applied),
         }
 
@@ -130,6 +139,7 @@ class PatchApplicationResult:
             applied=[str(s) for s in data.get("applied", [])],
             failed=[str(s) for s in data.get("failed", [])],
             unknown=[str(s) for s in data.get("unknown", [])],
+            refused=[str(s) for s in data.get("refused", [])],
             already_applied=[str(s) for s in data.get("already_applied", [])],
         )
 

@@ -52,7 +52,7 @@ The window has a workflow sidebar, the stage that is selected and an output pane
   - **Pipeline**: *Hotspots*, *Profiling*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*.
   - **Results**: *Report*.
 
-  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", or "profiling data newer than the results"); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). Locked stages can still be opened: *Pattern Detection* explains what is missing and offers **Go to Profiling**; *Autotuning* shows a warning with the missing prerequisite (profiling data or parallelization suggestions) and a button to the stage that creates it, and **Run Autotuning** is unavailable until then.
+  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", "profiling data newer than the results", or "project directories changed" after the [excluded or included directories](Project_manager.md#project-directories) changed); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). Locked stages can still be opened: *Pattern Detection* explains what is missing and offers **Go to Profiling**; *Autotuning* shows a warning with the missing prerequisite (profiling data or parallelization suggestions) and a button to the stage that creates it, and **Run Autotuning** is unavailable until then.
 - **Stage** (right): the stage that is selected.
 - **Output pane** (bottom): the output of all jobs, see [Output pane](#output-pane).
 
@@ -68,29 +68,31 @@ The output of all jobs is shown in one pane below the stages, with one tab per s
 ## Configuration assistant (wizard)
 ![First page of the configuration assistant](../assets/screenshots/gui_wizard.svg)
 
-When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has eight steps:
+When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has nine steps (eight in the Tk version, which has no step for the project directories):
 
 1. **Welcome**
 2. **Write Permissions Check**: the project is copied to a sibling directory for every run. Without write access to the parent directory, only in-place execution is possible.
-3. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
-4. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
-5. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
-6. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
-7. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
-8. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
+3. **Project Directories**: what is project code, with the same folder tree of excluded directories and list of included directories as the *Project Setup* stage; see [Project directories](Project_manager.md#project-directories). Exclude third-party code bundled with the project, include sources outside of it. Every change is saved at once.
+4. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
+5. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
+6. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
+7. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
+8. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
+9. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
 
 After **Finish**, the new configuration is selected and the *Profiling* stage, the first one of the pipeline, opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
 
 ## Project Setup
 ![Project Setup stage with the shared compile.sh](../assets/screenshots/gui_setup.svg)
 
-The *Project Setup* stage edits the files shared by all configurations, each in its own tab: `compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`. Unsaved changes mark the stage "Project Setup *" in the sidebar.
+The *Project Setup* stage edits what all configurations share: the files, each in its own tab (`compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`), and what is project code, in two cards below them (the excluded directories and the included directories outside the project). Unsaved changes mark the stage "Project Setup *" in the sidebar.
 
 - **Save (Ctrl+S)** writes the files.
 - **Test Compilation** (on the `compile.sh` tab) builds the project with the current script and settings, without recording a result. The output appears in the output pane, the outcome in the status chip.
 - **Derive** (on the `seq_settings.json` tab) creates `dp_settings.json`, `hd_settings.json` and `par_settings.json` from `seq_settings.json`: `discopop_cc`/`discopop_cxx` for `dp`, `discopop_hotspot_cc`/`discopop_hotspot_cxx` and `-fopenmp` for `hd`, `-fopenmp` for `par`.
 - The shared `compile_validate.sh` is optional (**Add** / **Remove**).
-- **Excluded directories** below the files shows the folders of the project as a tree (the subfolders of a folder are read when you open it; `.discopop` and `.git` are not shown). Check a folder that is no project code, e.g. the dependencies a CMake build fetches into `build/_deps`: it is neither instrumented nor part of `FileMapping.txt` and the AST, and neither is anything below it. The subfolders of a checked folder are shown checked and cannot be changed on their own. A toggle is saved at once, in `.discopop/project/excluded_directories.json` (kept by **Reset Project…**), and takes effect with the next build of a configuration; profile again afterwards. The project manager passes the list to every build as `DP_PROJECT_EXCLUDE_DIRS` (see [Environment variables](../setup/environment_variables.md)). The folders are read again when the stage is shown, so a build directory created meanwhile appears.
+- **Excluded directories**, below the files on the left, shows the folders of the project as a tree (the subfolders of a folder are read when you open it; `.discopop` and `.git` are not shown). Check a folder that is no project code, e.g. the dependencies a CMake build fetches into `build/_deps`: it is neither instrumented nor part of `FileMapping.txt` and the AST, and neither is anything below it. The subfolders of a checked folder are shown checked and cannot be changed on their own. A toggle is saved at once, in `.discopop/project/excluded_directories.json` (kept by **Reset Project…**), and takes effect with the next build of a configuration; profile again afterwards. The project manager passes the list to every build as `DP_PROJECT_EXCLUDE_DIRS` (see [Environment variables](../setup/environment_variables.md)). The folders are read again when the stage is shown, so a build directory created meanwhile appears.
+- **Included directories outside the project** (Qt version only), at the right of the excluded directories: directories outside the project whose code is project code as well, e.g. sources shared between projects. **Add…** picks one (a directory inside the project is refused, its code is project code anyway), **Remove** drops the selected one. Every change is saved at once, in `.discopop/project/included_directories.json`, and passed to every build as `DP_PROJECT_INCLUDE_DIRS`. These directories are not copied for the runs of a configuration, so their suggestions are only applied after a separate confirmation (see *Execute*).
 - The **Danger zone** below the files, framed in red, holds the resets, as red-outlined buttons. Both ask for confirmation and are disabled while a run is in progress:
   - **Reset Execution Results…** deletes the measured runs of all configurations and the reports.
   - **Reset Project…** deletes everything below `.discopop` except the configurations, `compile.sh` and the settings: profiling data, suggestions, hotspot measurements, autotuning results, measured runs and reports.
@@ -164,6 +166,8 @@ The settings are cards:
 
 The stage shows its results itself. The table lists the suggestions with ID, type, location, function, hotness and pragma; a filter line and a type filter narrow the rows, and the columns can be sorted. For the selected suggestion, the details and the patch are shown below the table, the patch as a colored diff; **Open in VSCode** opens the source file at the loop of the suggestion. The chip shows the number of suggestions, or that none were found. The patch files are in `.discopop/patch_generator/`.
 
+If the profiling data was instrumented with other [project directories](Project_manager.md#project-directories) than the current ones, the chip says *Project directories changed* (Qt version); run the *Profiling* stage again to update the data. The chips of the *Profiling* and *Hotspots* stages do the same (the latter for the `hd` data), and the sidebar marks both stages stale.
+
 Results are the files described in [Explorer](Explorer.md): `explorer/patterns.json` and the patches in `patch_generator/`.
 
 ## Patch Repair
@@ -202,6 +206,9 @@ The profiling data for the pattern detection is created by the [Profiling](#prof
 
 {: .warning }
 In-place execution together with applied suggestions modifies your project directory. The GUI asks for confirmation.
+
+{: .warning }
+Manually selected suggestions that patch files **outside of the project** (shared sources) need a confirmation of their own when **Run** is pressed: the dialog lists the files, which are modified in place, may be used by other projects and are restored after the run (also when it fails or is stopped). **No** cancels the run. The autotuner's selection never includes such suggestions. The suggestion tables mark them in the tooltip and in the details (*Outside the project*). The Tk version has no such dialog and refuses them.
 
 Results are stored in `.discopop/project/execution_results.json`.
 

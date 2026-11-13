@@ -20,6 +20,7 @@ from discopop_library.PatchApplicator.PatchApplicationResult import clear_applic
 from discopop_library.ProjectManager.configurations.copying import (
     copy_configuration,
     get_application_result,
+    restore_outside_patches,
     patch_applicator_dir_of,
 )
 from discopop_library.ProjectManager.configurations.deletion import delete_configuration
@@ -217,6 +218,9 @@ def show_configurations_with_execution(
                     execution_time_regex=execution_time_regex,
                 )
                 dp_execute_successful = ret is not None and ret[0] == 0
+            if not arguments.execute_inplace:
+                # files outside the project are restored even if the copy is kept
+                restore_outside_patches(dp_project_path)
             if not (arguments.skip_cleanup or arguments.execute_inplace):
                 delete_configuration(arguments, dp_project_path)
         # --> hd
@@ -265,6 +269,9 @@ def show_configurations_with_execution(
                     execution_time_regex=execution_time_regex,
                 )
                 hd_execute_successful = ret is not None and ret[0] == 0
+            if not arguments.execute_inplace:
+                # files outside the project are restored even if the copy is kept
+                restore_outside_patches(hd_project_path)
             if not (arguments.skip_cleanup or arguments.execute_inplace):
                 delete_configuration(arguments, hd_project_path)
         # --> seq
@@ -330,6 +337,9 @@ def show_configurations_with_execution(
                         not seq_validation.compile_required or seq_validation.compile_successful
                     )
                     seq_validate_successful = seq_validation.verdict(seq_execute_successful)
+            if not arguments.execute_inplace:
+                # files outside the project are restored even if the copy is kept
+                restore_outside_patches(seq_project_path)
             if not (arguments.skip_cleanup or arguments.execute_inplace):
                 delete_configuration(arguments, seq_project_path)
         # --> par
@@ -395,6 +405,9 @@ def show_configurations_with_execution(
                         not par_validation.compile_required or par_validation.compile_successful
                     )
                     par_validate_successful = par_validation.verdict(par_execute_successful)
+            if not arguments.execute_inplace:
+                # files outside the project are restored even if the copy is kept
+                restore_outside_patches(par_project_path)
             if not (arguments.skip_cleanup or arguments.execute_inplace):
                 delete_configuration(arguments, par_project_path)
 

@@ -54,6 +54,7 @@ discopop_patch_applicator -C       # reset again
 | `-C`, `--clear` | off | Reset the code to its original state by rolling back all applied suggestions. The list of applied suggestions is saved for `-L`; an older save is overwritten. |
 | `-L`, `--load` | off | Apply the suggestions saved by the last `-C`. |
 | `-l`, `--list` | off | Print the applied suggestions. Nothing else is done. |
+| `--allow-outside-project` | off | Allow `-a` to apply suggestions that patch files outside of the project (see below). |
 | `-v`, `--verbose` | off | Enable verbose output. |
 | `--log` | `WARNING` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
 | `--write-log` | off | Write a log file. |
@@ -61,6 +62,9 @@ discopop_patch_applicator -C       # reset again
 Only one action is executed per call, in the order `-a`, `-r`, `-C`, `-L`, `-l`.
 
 Rolling back or clearing only works while the patched files still match the patches. If you edited a patched file by hand, the rollback fails.
+
+## Files outside of the project
+The project of a `.discopop` directory is the directory that contains it. A suggestion can patch files outside of it, for example shared sources the profiler instrumented; their paths in `FileMapping.txt` stay absolute. Applying such a suggestion modifies the original file, which other projects may use, and nothing rolls it back. `-a` therefore **refuses** these suggestions (the refusal is listed in the result and the exit code like a failed application; nothing is patched for them) unless `--allow-outside-project` is given. A target counts as inside the project if it lies below the project directory, compared as given or with symbolic links resolved. The [autotuner](Autotuner.md), the sanity checker, the patch repair and the `auto` / `prm` selections of the [project manager](Project_manager.md) never consider such suggestions; only a manual application can apply them.
 
 ## Use from other tools
 - The [autotuner](Autotuner.md) and the [project manager](Project_manager.md) apply suggestions in a copy of the project.

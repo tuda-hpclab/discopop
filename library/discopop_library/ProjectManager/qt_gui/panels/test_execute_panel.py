@@ -492,3 +492,72 @@ def test_the_console_goes_to_the_output_pane_and_a_run_requests_it(qtbot: QtBot,
 def test_the_advanced_settings_are_collapsed(panel: ExecutePanel) -> None:
     assert not panel.advanced_section.is_expanded()
     assert panel.header.title_label.text() == "Execute"
+
+
+def add_outside_patch(panel: ExecutePanel, suggestion_id: str, tmp_path: Path) -> None:
+    """A suggestion whose patch targets a file outside the project (the project is ``tmp_path``)."""
+    add_patches(panel, suggestion_id)
+    patches = Path(panel.arguments.dot_dp, "patch_generator", suggestion_id)
+    (patches / "p.patch").unlink()
+    (patches / "2.patch").write_text("diff")
+    (Path(panel.arguments.dot_dp) / "FileMapping.txt").write_text(
+        f"1\t{tmp_path}/a.c\n2\t{tmp_path.parent}/shared_outside/a.c\n"
+    )
+
+
+def start_manual_run(qtbot: QtBot, panel: ExecutePanel, ids: List[str]) -> List[Any]:
+    select(panel)
+    panel.project_state.publish(PatternsChanged())
+    panel.set_suggestions_mode("manual")
+    panel.execute_suggestion_selector.set_selected_ids(ids)
+    seen: List[Any] = []
+    with mock.patch.object(execute_panel_module, "run_execution", recording_run(seen)):
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+    return seen
+
+
+def test_suggestions_outside_the_project_need_a_confirmation_of_their_own(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder, tmp_path: Path
+) -> None:
+    add_patches(panel, "1")
+    add_outside_patch(panel, "2", tmp_path)
+    dialog_answers.answer("ask_yes_no", True)
+    seen = start_manual_run(qtbot, panel, ["1", "2"])
+    assert dialog_answers.titles("ask_yes_no") == ["Files outside the project"]
+    message = dialog_answers.messages("ask_yes_no")[0]
+    assert "shared_outside/a.c" in message and "modified in place" in message and "restored" in message
+    assert seen[0].suggestion_ids == ("1", "2") and seen[0].allow_patching_outside_project is True
+
+
+def test_declining_the_confirmation_cancels_the_run(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder, tmp_path: Path
+) -> None:
+    add_outside_patch(panel, "2", tmp_path)
+    dialog_answers.answer("ask_yes_no", False)
+    seen = start_manual_run(qtbot, panel, ["2"])
+    assert seen == [] and not panel.is_running()
+    assert dialog_answers.titles("ask_yes_no") == ["Files outside the project"]
+
+
+def test_nothing_outside_the_project_means_no_confirmation(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder
+) -> None:
+    add_patches(panel, "1")
+    seen = start_manual_run(qtbot, panel, ["1"])
+    assert dialog_answers.titles("ask_yes_no") == []
+    assert seen[0].allow_patching_outside_project is False
+
+
+def test_the_autotuner_selection_never_carries_the_permission(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder
+) -> None:
+    select(panel)
+    write_autotuner_results(panel, ["3"])
+    panel.project_state.publish(AutotuningFinished())
+    panel.set_suggestions_mode("autotuner")
+    seen: List[Any] = []
+    with mock.patch.object(execute_panel_module, "run_execution", recording_run(seen)):
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+    assert dialog_answers.titles("ask_yes_no") == [] and seen[0].allow_patching_outside_project is False

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 from unittest import mock
 
-from mcp_server.tools import get_project_status
+from mcp_server.tools import get_project_status, set_compile_script
 from mcp_server.tools.helpers import COMPILE_SCRIPT_PLACEHOLDER_MARKER, ToolContext
 
 # Analysis outputs are dated this far before the sources (or after them), so the
@@ -158,6 +158,26 @@ class TestGetProjectStatus(unittest.TestCase):
         self.assertIn("boom", data["message"])
         missing = json.loads(get_project_status.handle({"project_path": "/does/not/exist"}, self.ctx)[0].text)
         self.assertEqual(missing["status"], "error")
+
+    def test_an_uninitialized_project_reports_no_project_directories(self) -> None:
+        self.assertNotIn("project_directories", self.__handle())
+
+    def test_no_project_directories_by_default(self) -> None:
+        self.__set_up()
+        self.assertEqual(self.__handle()["project_directories"], {"included": [], "excluded": []})
+
+    def test_the_project_directories_set_by_set_compile_script_are_reported(self) -> None:
+        self.__set_up()
+        (Path(self.project_path) / "src").mkdir()
+        set_compile_script.handle(
+            {
+                "project_path": self.project_path,
+                "script_body": "$CXX $CXXFLAGS main.cpp\n",
+                "excluded_directories": ["src"],
+            },
+            self.ctx,
+        )
+        self.assertEqual(self.__handle()["project_directories"], {"included": [], "excluded": ["src"]})
 
 
 if __name__ == "__main__":

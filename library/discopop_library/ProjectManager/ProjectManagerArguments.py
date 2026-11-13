@@ -52,6 +52,14 @@ class ProjectManagerArguments(GeneralArguments):
     # Which toolkit draws the window of --gui: "qt" (PySide6, the default) or "tk" (the original GUI).
     # Both use the same services.
     gui_toolkit: str = "qt"
+    # Override the stored included / excluded directories (what is project code besides the project root) for this
+    # invocation, ':' separated; None leaves the stored list alone. See
+    # discopop_library.ProjectManager.configurations.project_environment.
+    project_include_dirs: Optional[str] = None
+    project_exclude_dirs: Optional[str] = None
+    # Allows --apply-suggestions to patch files outside of the project (shared sources, see
+    # discopop_library.PatchApplicator.outside_project); refused by default. Never honoured for "auto" / "prm".
+    allow_patching_outside_project: bool = False
     # derived values
     dot_dp: str = ""
     project_dir: str = ""

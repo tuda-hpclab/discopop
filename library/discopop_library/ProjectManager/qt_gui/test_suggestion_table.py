@@ -103,3 +103,16 @@ def test_selector_filters_do_not_change_the_selection(qtbot: QtBot, tmp_path) ->
     assert selector.table.visible_ids() == ["2"] and selector.get_selected_ids() == ["1", "2"]
     selector.toggle_button.click()
     assert selector.get_selected_ids() == [] and selector.table.visible_ids() == ["2"]
+
+
+def test_a_suggestion_outside_the_project_says_so_in_its_tooltip(qtbot: QtBot) -> None:
+    table = SuggestionTable()
+    qtbot.addWidget(table)
+    outside = SuggestionInfo(
+        "7", "doall", "a.c", "/shared/a.c", 5, 6, "#pragma omp parallel for", "f", "YES", (), ("/shared/a.c",)
+    )
+    table.set_suggestions([INFOS[1], outside])
+    rows = column(table, 0)
+    tip = table.proxy.index(rows.index("7"), 1).data(Qt.ItemDataRole.ToolTipRole)
+    assert "outside the project: /shared/a.c" in tip
+    assert "outside" not in table.proxy.index(rows.index("2"), 1).data(Qt.ItemDataRole.ToolTipRole)
