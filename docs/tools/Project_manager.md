@@ -90,7 +90,7 @@ Build scripts must use `$CC` / `$CXX` and `$CFLAGS` / `$CXXFLAGS` rather than ha
 The profiler and the hotspot detection instrument the functions defined in the project, i.e. below the project root (`DP_PROJECT_ROOT_DIR`). Two lists change what counts as project code:
 
 - **Excluded directories** below the project root are no project code, e.g. the dependencies a CMake build fetches into `build/_deps`, or third-party libraries the project brings along. Leaving them out shortens the instrumented build and, considerably, the profiling run: on Kripke (RAJA, CHAI and Umpire below `tpl/`), instrumenting only `src/` cut the profiling run from 14 s to under one second, with a quarter of the dependencies to analyze. A directory excludes everything below it.
-- **Included directories** outside the project root are project code as well, e.g. sources shared between projects. They are not copied for the runs of a configuration: every copy compiles the same files. Parallelization suggestions for them are therefore never applied automatically, see [Suggestions for files outside the project](#suggestions-for-files-outside-the-project).
+- **Included directories** outside the project root are project code as well, e.g. sources shared between projects. They are not copied for the runs of a configuration: every copy compiles the same files. Parallelization suggestions for them are therefore never applied automatically, see [Suggestions that patch files outside of the project](#suggestions-that-patch-files-outside-of-the-project).
 
 Both are stored in `.discopop/project/` (kept by `--reset`): `excluded_directories.json` with paths relative to the project root, `included_directories.json` with absolute paths:
 

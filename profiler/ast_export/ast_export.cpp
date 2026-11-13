@@ -17,6 +17,7 @@
 //       -Xclang -add-plugin -Xclang dp-ast-export \
 //       -Xclang -plugin-arg-dp-ast-export -Xclang filemap=<FileMapping.txt> \
 //       -Xclang -plugin-arg-dp-ast-export -Xclang root=<project directory> \
+//       -Xclang -plugin-arg-dp-ast-export -Xclang include=<DP_PROJECT_INCLUDE_DIRS> \
 //       -Xclang -plugin-arg-dp-ast-export -Xclang exclude=<DP_PROJECT_EXCLUDE_DIRS> \
 //       -Xclang -plugin-arg-dp-ast-export -Xclang out=<file the JSON is appended to>
 //
@@ -28,10 +29,11 @@
 // carry nothing but type trees) are left out, and so is every implicit declaration (clang's builtin typedefs, the
 // using directive of an unnamed namespace). The documentation comments of declarations are not written either.
 //
-// Without files in FileMapping.txt (not written yet), the declarations located below `root` are selected, which is
-// the rule filter_ast_dump.py falls back to as well. Declarations in the directories of `exclude` (the value of
-// DP_PROJECT_EXCLUDE_DIRS, which the pass honors as well: separated by ':', absolute or relative to `root`) are never
-// selected.
+// Without files in FileMapping.txt (not written yet), the declarations located below `root` or below one of the
+// directories of `include` (the value of DP_PROJECT_INCLUDE_DIRS: project code outside the root) are selected, which
+// is the rule filter_ast_dump.py falls back to as well. Declarations in the directories of `exclude` (the value of
+// DP_PROJECT_EXCLUDE_DIRS) are never selected, also below an included directory. Both lists are separated by ':',
+// their entries absolute or relative to `root`, as the pass (dputil::IsInProjectRoot) reads them.
 
 #include <algorithm>
 #include <cstddef>
@@ -83,7 +85,8 @@ std::set<std::string> LoadFileMapping(const std::string& path) {
 
 class ExportConsumer : public clang::ASTConsumer {
  public:
-  ExportConsumer(std::set<std::string> mapped, std::string root, const std::string& excluded_dirs, std::string out)
+  ExportConsumer(std::set<std::string> mapped, std::string root, const std::string& included_dirs,
+                 const std::string& excluded_dirs, std::string out)
       : mapped_(std::move(mapped)), root_(std::move(root)), out_path_(std::move(out)) {
     // the project directory as given and with symbolic links resolved: a checkout reached through a symbolic link
     // (/home/... -> /mnt/storage/...) is named either way, depending on who resolved what
@@ -96,7 +99,10 @@ class ExportConsumer : public clang::ASTConsumer {
         *root_form += '/';
       }
     }
+    // relative entries of both lists are relative to the project directory, so the included directories are added
+    // to the roots only after the excluded ones are prepared
     PrepareExcluded(excluded_dirs);
+    PrepareIncluded(included_dirs);
   }
 
   void HandleTranslationUnit(clang::ASTContext& ctx) override {
@@ -182,9 +188,11 @@ class ExportConsumer : public clang::ASTConsumer {
     }
   }
 
-  // DP_PROJECT_EXCLUDE_DIRS: directories separated by ':', absolute or relative to the project directory (or, without
-  // one, to the working directory), in each spelling, with a trailing '/' (so that "_deps" does not exclude "_deps2")
-  void PrepareExcluded(const std::string& entries) {
+  // DP_PROJECT_EXCLUDE_DIRS / DP_PROJECT_INCLUDE_DIRS: directories separated by ':', absolute or relative to the
+  // project directory (or, without one, to the working directory), in each spelling, with a trailing '/' (so that
+  // "_deps" does not exclude "_deps2"); `add` is called with each of them
+  template <typename Add>
+  void ForEachDirectory(const std::string& entries, Add add) {
     std::vector<std::string> bases;
     for (const std::string& root : {root_, root_real_}) {
       if (!root.empty()) {
@@ -219,12 +227,35 @@ class ExportConsumer : public clang::ASTConsumer {
       for (const std::string& candidate : candidates) {
         llvm::SmallString<256> normalized(candidate);
         llvm::sys::path::remove_dots(normalized, /*remove_dot_dot=*/true);
-        AddExcluded(std::string(normalized));
+        add(std::string(normalized));
         llvm::SmallString<256> real;
         if (!llvm::sys::fs::real_path(candidate, real)) {
-          AddExcluded(std::string(real));
+          add(std::string(real));
         }
       }
+    }
+  }
+
+  void PrepareExcluded(const std::string& entries) {
+    ForEachDirectory(entries, [this](std::string directory) { AddExcluded(std::move(directory)); });
+  }
+
+  // the included directories are further project roots
+  void PrepareIncluded(const std::string& entries) {
+    ForEachDirectory(entries, [this](std::string directory) { AddIncluded(std::move(directory)); });
+  }
+
+  static std::string AsDirectory(std::string directory) {
+    while (directory.size() > 1 && directory.back() == '/') {
+      directory.pop_back();
+    }
+    return directory == "/" ? directory : directory + '/';
+  }
+
+  void AddIncluded(std::string directory) {
+    directory = AsDirectory(std::move(directory));
+    if (std::find(included_.begin(), included_.end(), directory) == included_.end()) {
+      included_.push_back(directory);
     }
   }
 
@@ -244,12 +275,15 @@ class ExportConsumer : public clang::ASTConsumer {
   }
 
   bool BelowRoot(llvm::StringRef path) const {
-    return (!root_.empty() && path.starts_with(root_)) || (!root_real_.empty() && path.starts_with(root_real_));
+    return (!root_.empty() && path.starts_with(root_)) || (!root_real_.empty() && path.starts_with(root_real_)) ||
+           std::any_of(included_.begin(), included_.end(),
+                       [&path](const std::string& directory) { return path.starts_with(directory); });
   }
 
   std::set<std::string> mapped_;
   std::string root_;
   std::string root_real_;
+  std::vector<std::string> included_;
   std::vector<std::string> excluded_;
   std::string out_path_;
   // the selection per file, by the hash of its FileID (the files of a translation unit are few, its locations many)
@@ -271,13 +305,16 @@ class ExportAction : public clang::PluginASTAction {
           << out_ << error.message();
       return nullptr;
     }
-    return std::make_unique<ExportConsumer>(LoadFileMapping(file_mapping_), root_, excluded_dirs_, out_);
+    return std::make_unique<ExportConsumer>(LoadFileMapping(file_mapping_), root_, included_dirs_, excluded_dirs_,
+                                            out_);
   }
 
   bool ParseArgs(const clang::CompilerInstance& /*compiler*/, const std::vector<std::string>& args) override {
     for (const std::string& arg : args) {
       if (arg.rfind("filemap=", 0) == 0) {
         file_mapping_ = arg.substr(8);
+      } else if (arg.rfind("include=", 0) == 0) {
+        included_dirs_ = arg.substr(8);
       } else if (arg.rfind("exclude=", 0) == 0) {
         excluded_dirs_ = arg.substr(8);
       } else if (arg.rfind("root=", 0) == 0) {
@@ -300,6 +337,7 @@ class ExportAction : public clang::PluginASTAction {
 
  private:
   std::string file_mapping_;
+  std::string included_dirs_;
   std::string excluded_dirs_;
   std::string root_;
   std::string out_;

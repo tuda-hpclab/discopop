@@ -134,12 +134,15 @@ inline bool FileExists(const std::string& filename) {
   return true;
 }
 
-// Whether path lies in the project, i.e. contains DP_PROJECT_ROOT_DIR ("/" if unset) followed by a '/' (so that
-// "src" does not take in "src2"), as given or with its symbolic links resolved, but none of the directories of
-// DP_PROJECT_EXCLUDE_DIRS (separated by ':', absolute or relative to the project root, e.g.
-// "build/_deps:third_party"), also in both spellings. A checkout reached through a symbolic link
-// (/home/<user>/git -> /mnt/storage/...) is named either way, depending on whether $PWD or realpath()/getcwd()
-// produced the path. Excluded files are neither instrumented nor mapped.
+// Whether path lies in the project: it contains DP_PROJECT_ROOT_DIR ("/" if unset) or one of the directories of
+// DP_PROJECT_INCLUDE_DIRS (project code outside the root) followed by a '/' (so that "src" does not take in "src2"),
+// as given or with its symbolic links resolved, but none of the directories of DP_PROJECT_EXCLUDE_DIRS, also in both
+// spellings. Both lists are separated by ':', their entries are absolute or relative to the project root, e.g.
+// "build/_deps:third_party"; an excluded directory may lie below an included one. A checkout reached through a
+// symbolic link (/home/<user>/git -> /mnt/storage/...) is named either way, depending on whether $PWD or
+// realpath()/getcwd() produced the path. Excluded files are neither instrumented nor mapped. The hotspot detection
+// pass (hotspot_detection/HotspotDetection) and the AST export (ast_export.cpp, filter_ast_dump.py) implement the same
+// rule and must agree.
 bool IsInProjectRoot(const std::string& path);
 
 int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);
