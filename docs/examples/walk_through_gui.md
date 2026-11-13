@@ -68,12 +68,12 @@ Open the stage **Execute** (the last one of the pipeline).
 | Modes | "Sequential (seq)", "DiscoPoP Instrumented (dp)", "Hotspot Detection (hd)", "Parallel (par)". A mode is selectable once its settings file, the compile script and `execute.sh` exist. |
 | Run | "Threads", "Repetitions" (the median is reported; only seq and par are repeated), "Label prefix" |
 | Apply suggestions | "None (apply no suggestions)", "Apply manually selected suggestions" (select ids, "Browse / Edit →" opens the patches), "Apply autotuner-selected suggestions" |
-| Advanced (collapsed) | "Execution timeout (s)", "Compilation timeout (s)", "Validation timeout (s)"; 3600 by default, 0 disables. "Log level"; "Execute in-place (skip project copy)"; "Skip cleanup (keep project copies)" |
+| Advanced (collapsed) | "Execution timeout (s)", "Compilation timeout (s)", "Validation timeout (s)"; 3600 by default, 0 disables. "Log level"; "Execute in-place (no build is kept)"; "Keep the copies of failed builds"; "Build" (compile if there is no current build / always compile / never compile) and "Only compile, do not run" |
 
 It measures the configuration, with or without the suggestions found by the later steps. Measure the original program first: select `seq`, `dp`, `hd` and `par` and click "Run". The output pane shows the compilations and runs; the button turns into "■ Stop" while the run lasts, and cancels it.
 
 ## Step 5: Profiling
-Open the stage **Profiling** and click "Profile for Pattern Detection". It compiles and runs the configuration in `dp` mode in place, which creates the profiling data that the Pattern Detection stage needs (runs of the `dp` mode in a project copy delete their profiling data with the copy). The card "Profiling data" shows when the last profiling run happened; "Advanced" holds the timeouts. The button turns into "■ Stop" while the run lasts; Profiling and Execute do not run at the same time.
+Open the stage **Profiling** and click "Profile for Pattern Detection". It compiles the configuration in `dp` mode in a *build* (a copy of the project that is kept and reused by later profiling runs as long as nothing changed, so a long compilation is not repeated), runs it in a run directory of its own and puts the result into `.discopop/profiler` of the project, which creates the profiling data that the Pattern Detection stage needs. The card "Builds and runs" lists the builds and runs, checks whether a build is still current, uses another run for the pattern detection and deletes builds and runs; nothing is deleted automatically. The card "Profiling data" shows when the last profiling run happened; "Advanced" holds the timeouts. The button turns into "■ Stop" while the run lasts; Profiling and Execute do not run at the same time.
 
 ## Step 6: Report
 The stage **Report** shows all stored measurements.

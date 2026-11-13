@@ -69,7 +69,7 @@ discopop_project_manager -x tiny:seq:1,tiny:par:2 -xr 5 -lp first
 Only the `seq` and `par` runs are repeated (default: 3 repetitions); the `dp` and `hd` runs and all compilations run once. Each result is stored as an entry of a list per configuration, script and settings file.
 
 ## 3. Keep the profiling data
-Pattern detection needs the data of a `dp` run. A run without `-i` happens in a *build*, a copy of the project that is kept and reused by later runs as long as nothing changed (`--list-builds` shows them, `--delete-builds` removes them). The data lands in the `.discopop` directory of the build. To get it into the project, where the explorer reads it, run in the project directory:
+Pattern detection needs the data of a `dp` run. A run without `-i` happens in a *build*, a copy of the project that is kept and reused by later runs as long as nothing changed (`--list-builds` shows them, `--delete-builds` removes them). The results of the run land in a run directory of its own (`--list-runs`); `--activate-run` puts the latest successful `dp` run into the `.discopop` directory of the project, where the explorer reads it. Alternatively, run in the project directory:
 
 ```bash
 # run in the project directory; data lands in ./.discopop/profiler
@@ -77,6 +77,8 @@ discopop_project_manager -x tiny:dp:4,tiny:hd:4 -i
 # or run in a build (<project folder>_discopop_builds/<config>_<mode>, next to the project)
 discopop_project_manager -x tiny:dp:2
 discopop_project_manager --list-builds
+discopop_project_manager --list-runs
+discopop_project_manager --activate-run
 ```
 
 `-i` also leaves the built program (`prog`) in the project root. The hotspot data of the `hd` run lands in `.discopop/hotspot_detection`.

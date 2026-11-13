@@ -268,6 +268,8 @@ Unless `-i/--inplace` is given, a configuration is run in a *build*: a copy of t
 - A build is *current* as long as the files of the project (path, size and modification time of every file outside `.discopop` and `.git`), the compile script, the settings file of the mode, the included and excluded project directories, the generated patches (for builds with suggestions) and the installed profiler are unchanged. A run compiles only if there is no current build (`--rebuild` compiles in any case). The thread count is no part of it. A build whose suggestions patch files outside of the project is never reused.
 - `--reuse-build` never compiles and fails if there is no current build; `--build-only` compiles and does not execute. Both and `--rebuild` are available in the GUI as well.
 - `--list-builds` shows the builds, their size and whether they are current; `--delete-builds [ids]` deletes the given builds (all without ids). **Builds are never deleted automatically** and may need much disk space, in particular when many sets of suggestions are applied.
+- Every `dp` or `hd` run of a build writes its results into a *run directory* of its own, `<project directory>_discopop_builds/<build id>.runs/<run id>`, that is prepared from the static data of the build and used as `DOT_DISCOPOP` of `execute.sh`. Runs of one build with other inputs therefore never overwrite each other, and they survive building again. The measurements in `execution_results.json` carry the `build_id` and `run_id`.
+- `--list-runs` shows the runs. `--activate-run [id]` puts a run (without an id: the latest successful `dp` run) into the `.discopop` directory of the project, where the explorer reads it: the data of the same kind that was there is replaced, the paths of the build tree become paths of the project, and `.discopop/active_run.json` names the run. A run of a build with applied suggestions cannot be activated (its line numbers differ from your sources). `--delete-runs [ids]` deletes runs (all without ids). **Runs are never deleted automatically.**
 - `--skip-cleanup` only keeps the copy of a build that failed (the tree of a successful build is always kept).
 
 With `-i`, the configuration is compiled and executed in the project root, no build is kept or reused, and the profiling data of `dp` and `hd` runs is written to `.discopop/profiler` and `.discopop/hotspot_detection` of the project, which is where the [Explorer](Explorer.md) reads it:
@@ -303,6 +305,9 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `--build-only` | off | Compile only, do not execute. |
 | `--list-builds` | | List the builds; nothing else is done. |
 | `--delete-builds [IDS]` | | Delete the builds with the given ids, all without ids; nothing else is done. |
+| `--list-runs` | | List the profiling runs of the builds; nothing else is done. |
+| `--activate-run [ID]` | | Put the run (default: the latest successful `dp` run) into the project's `.discopop`; nothing else is done. |
+| `--delete-runs [IDS]` | | Delete the runs with the given ids, all without ids; nothing else is done. |
 | `--report` | | Generate the report from the stored results. |
 | `--show-report` | | Only has an effect together with `--report`, where it opens the PDF with `xdg-open`. Alone it does not show a report. |
 | `-r`, `--reset` | | Delete everything in `.discopop` except `project/`; implies `-rx`. |
