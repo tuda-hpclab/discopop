@@ -371,22 +371,47 @@ namespace
     return directories;
   }
 
+  // The directories of the three variables, prepared again only when one of them changes: resolving them takes
+  // file system calls, and the check runs for every function of a module.
+  struct ProjectDirectories
+  {
+    std::string variables;
+    bool prepared = false;
+    std::vector<std::string> roots;
+    std::vector<std::string> excluded;
+  };
+
+  std::string environmentValue(const char *variable)
+  {
+    const char *value = getenv(variable);
+    return value == nullptr ? std::string() : std::string(value);
+  }
+
   bool isInProjectRoot(const std::string &path)
   {
+    static ProjectDirectories directories;
     const char *rootVariable = getenv("DP_PROJECT_ROOT_DIR");
-    std::vector<std::string> roots = projectDirectorySpellings(rootVariable == nullptr ? "/" : rootVariable);
-    std::vector<std::string> projectRoots = roots;
-    for (const std::string &included : projectDirectoryList("DP_PROJECT_INCLUDE_DIRS", projectRoots))
+    const std::string root = rootVariable == nullptr ? "/" : rootVariable;
+    const std::string variables = root + '\n' + environmentValue("DP_PROJECT_INCLUDE_DIRS") + '\n' +
+                                  environmentValue("DP_PROJECT_EXCLUDE_DIRS");
+    if (!directories.prepared || variables != directories.variables)
     {
-      if (std::find(roots.begin(), roots.end(), included) == roots.end())
+      directories.prepared = true;
+      directories.variables = variables;
+      directories.roots = projectDirectorySpellings(root);
+      const std::vector<std::string> projectRoots = directories.roots;
+      for (const std::string &included : projectDirectoryList("DP_PROJECT_INCLUDE_DIRS", projectRoots))
       {
-        roots.push_back(included);
+        if (std::find(directories.roots.begin(), directories.roots.end(), included) == directories.roots.end())
+        {
+          directories.roots.push_back(included);
+        }
       }
+      directories.excluded = projectDirectoryList("DP_PROJECT_EXCLUDE_DIRS", projectRoots);
     }
-    std::vector<std::string> excluded = projectDirectoryList("DP_PROJECT_EXCLUDE_DIRS", projectRoots);
     auto contains = [&path](const std::string &part) { return path.find(part) != std::string::npos; };
-    return std::any_of(roots.begin(), roots.end(), contains) &&
-           std::none_of(excluded.begin(), excluded.end(), contains);
+    return std::any_of(directories.roots.begin(), directories.roots.end(), contains) &&
+           std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
   }
 } // namespace
 
