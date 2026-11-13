@@ -7,6 +7,7 @@
 # directory for details.
 
 import os
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 import logging
@@ -122,23 +123,6 @@ def show_configurations_with_execution(
     table = [["Configuration", "Overview", "(C) Autotuner"]]
     # execute configurations and collect compatibility information
     for config in configurations:
-        # declare values
-        dp_settings_exist = False
-        dp_compile_successful = False
-        dp_execute_successful = False
-        hd_settings_exist = False
-        hd_compile_successful = False
-        hd_execute_successful = False
-        seq_settings_exist = False
-        seq_compile_successful = False
-        seq_execute_successful = False
-        seq_validate_compile_successful = False
-        seq_validate_successful = False
-        par_settings_exist = False
-        par_compile_successful = False
-        par_execute_successful = False
-        par_validate_compile_successful = False
-        par_validate_successful = False
         # validate.sh is an optional, per-config script that re-runs the code and
         # validates its output, separated from the timed execute.sh run. It is only
         # applied to the "real" runs (seq/par); dp/hd are profiling modes where
@@ -167,249 +151,38 @@ def show_configurations_with_execution(
 
         # collect overview information
         compile_sh = resolve_compile_script_path(arguments.project_config_dir, os.path.basename(config))
-        shared_dp_settings = os.path.join(arguments.project_config_dir, "dp_settings.json")
-        shared_hd_settings = os.path.join(arguments.project_config_dir, "hd_settings.json")
-        shared_seq_settings = os.path.join(arguments.project_config_dir, "seq_settings.json")
-        shared_par_settings = os.path.join(arguments.project_config_dir, "par_settings.json")
-
-        # --> dp
-        dp_settings_exist = os.path.exists(shared_dp_settings)
-        if __is_selected(config_restrictions, config, "dp"):
-            dp_project_path = (
-                arguments.project_root
-                if arguments.execute_inplace
-                else copy_configuration(arguments, config, shared_dp_settings)
-            )
-
-            # A failed patch application leaves the copy holding the original code;
-            # compiling and measuring it would misreport it as a parallel run.
-            dp_application_failed = __handle_application_failure(
-                arguments,
-                dp_project_path,
-                config,
-                shared_dp_settings,
-                os.path.join(config, "execute.sh"),
-                __get_thread_count(config, "dp", config_thread_counts),
-            )
-            ret = (
-                None
-                if dp_application_failed
-                else execute_configuration(
+        outcomes: Dict[str, _ModeOutcome] = dict()
+        for mode in _RUN_ORDER:
+            shared_settings = os.path.join(arguments.project_config_dir, mode + "_settings.json")
+            if __is_selected(config_restrictions, config, mode):
+                outcomes[mode] = __run_mode(
                     arguments,
-                    dp_project_path,
                     config,
-                    shared_dp_settings,
+                    mode,
+                    shared_settings,
                     compile_sh,
-                    __get_thread_count(config, "dp", config_thread_counts),
-                    arguments.timeout_compilation,
+                    __get_thread_count(config, mode, config_thread_counts),
+                    execution_time_regex,
                 )
-            )
-            dp_compile_successful = ret is not None and ret[0] == 0
-
-            if dp_compile_successful:
-                ret = execute_configuration(
-                    arguments,
-                    dp_project_path,
-                    config,
-                    shared_dp_settings,
-                    os.path.join(config, "execute.sh"),
-                    __get_thread_count(config, "dp", config_thread_counts),
-                    arguments.timeout_execution,
-                    execution_time_regex=execution_time_regex,
-                )
-                dp_execute_successful = ret is not None and ret[0] == 0
-            if not arguments.execute_inplace:
-                # files outside the project are restored even if the copy is kept
-                restore_outside_patches(dp_project_path)
-            if not (arguments.skip_cleanup or arguments.execute_inplace):
-                delete_configuration(arguments, dp_project_path)
-        # --> hd
-        hd_settings_exist = os.path.exists(shared_hd_settings)
-        if __is_selected(config_restrictions, config, "hd"):
-            hd_project_path = (
-                arguments.project_root
-                if arguments.execute_inplace
-                else copy_configuration(arguments, config, shared_hd_settings)
-            )
-
-            # A failed patch application leaves the copy holding the original code;
-            # compiling and measuring it would misreport it as a parallel run.
-            hd_application_failed = __handle_application_failure(
-                arguments,
-                hd_project_path,
-                config,
-                shared_hd_settings,
-                os.path.join(config, "execute.sh"),
-                __get_thread_count(config, "hd", config_thread_counts),
-            )
-            ret = (
-                None
-                if hd_application_failed
-                else execute_configuration(
-                    arguments,
-                    hd_project_path,
-                    config,
-                    shared_hd_settings,
-                    compile_sh,
-                    __get_thread_count(config, "hd", config_thread_counts),
-                    arguments.timeout_compilation,
-                )
-            )
-            hd_compile_successful = ret is not None and ret[0] == 0
-
-            if hd_compile_successful:
-                ret = execute_configuration(
-                    arguments,
-                    hd_project_path,
-                    config,
-                    shared_hd_settings,
-                    os.path.join(config, "execute.sh"),
-                    __get_thread_count(config, "hd", config_thread_counts),
-                    arguments.timeout_execution,
-                    execution_time_regex=execution_time_regex,
-                )
-                hd_execute_successful = ret is not None and ret[0] == 0
-            if not arguments.execute_inplace:
-                # files outside the project are restored even if the copy is kept
-                restore_outside_patches(hd_project_path)
-            if not (arguments.skip_cleanup or arguments.execute_inplace):
-                delete_configuration(arguments, hd_project_path)
-        # --> seq
-        seq_settings_exist = os.path.exists(shared_seq_settings)
-        if __is_selected(config_restrictions, config, "seq"):
-            seq_project_path = (
-                arguments.project_root
-                if arguments.execute_inplace
-                else copy_configuration(arguments, config, shared_seq_settings)
-            )
-            # A failed patch application leaves the copy holding the original code;
-            # compiling and measuring it would misreport it as a parallel run.
-            seq_application_failed = __handle_application_failure(
-                arguments,
-                seq_project_path,
-                config,
-                shared_seq_settings,
-                os.path.join(config, "execute.sh"),
-                __get_thread_count(config, "seq", config_thread_counts),
-            )
-            ret = (
-                None
-                if seq_application_failed
-                else execute_configuration(
-                    arguments,
-                    seq_project_path,
-                    config,
-                    shared_seq_settings,
-                    compile_sh,
-                    __get_thread_count(config, "seq", config_thread_counts),
-                    arguments.timeout_compilation,
-                )
-            )
-            seq_compile_successful = ret is not None and ret[0] == 0
-
-            if seq_compile_successful:
-                ret = execute_configuration(
-                    arguments,
-                    seq_project_path,
-                    config,
-                    shared_seq_settings,
-                    os.path.join(config, "execute.sh"),
-                    __get_thread_count(config, "seq", config_thread_counts),
-                    arguments.timeout_execution,
-                    execution_time_regex=execution_time_regex,
-                    repetitions=repetitions_for_mode("seq", arguments.execution_repetitions),
-                )
-                seq_execute_successful = ret is not None and ret[0] == 0
-
-                # optional output validation (auto-run when validate.sh exists);
-                # no validate.sh => execute.sh alone decides correctness
-                if seq_execute_successful:
-                    seq_validation = run_validation_phase(
-                        arguments,
-                        seq_project_path,
-                        config,
-                        shared_seq_settings,
-                        __get_thread_count(config, "seq", config_thread_counts),
-                        timeout_compilation=arguments.timeout_compilation,
-                        timeout_validation=arguments.timeout_validation,
-                    )
-                    seq_validate_compile_successful = (
-                        not seq_validation.compile_required or seq_validation.compile_successful
-                    )
-                    seq_validate_successful = seq_validation.verdict(seq_execute_successful)
-            if not arguments.execute_inplace:
-                # files outside the project are restored even if the copy is kept
-                restore_outside_patches(seq_project_path)
-            if not (arguments.skip_cleanup or arguments.execute_inplace):
-                delete_configuration(arguments, seq_project_path)
-        # --> par
-        par_settings_exist = os.path.exists(shared_par_settings)
-        if __is_selected(config_restrictions, config, "par"):
-            par_project_path = (
-                arguments.project_root
-                if arguments.execute_inplace
-                else copy_configuration(arguments, config, shared_par_settings)
-            )
-            # A failed patch application leaves the copy holding the original code;
-            # compiling and measuring it would misreport it as a parallel run.
-            par_application_failed = __handle_application_failure(
-                arguments,
-                par_project_path,
-                config,
-                shared_par_settings,
-                os.path.join(config, "execute.sh"),
-                __get_thread_count(config, "par", config_thread_counts),
-            )
-            ret = (
-                None
-                if par_application_failed
-                else execute_configuration(
-                    arguments,
-                    par_project_path,
-                    config,
-                    shared_par_settings,
-                    compile_sh,
-                    __get_thread_count(config, "par", config_thread_counts),
-                    arguments.timeout_compilation,
-                )
-            )
-            par_compile_successful = ret is not None and ret[0] == 0
-
-            if par_compile_successful:
-                ret = execute_configuration(
-                    arguments,
-                    par_project_path,
-                    config,
-                    shared_par_settings,
-                    os.path.join(config, "execute.sh"),
-                    __get_thread_count(config, "par", config_thread_counts),
-                    arguments.timeout_execution,
-                    execution_time_regex=execution_time_regex,
-                    repetitions=repetitions_for_mode("par", arguments.execution_repetitions),
-                )
-                par_execute_successful = ret is not None and ret[0] == 0
-
-                # optional output validation (auto-run when validate.sh exists);
-                # no validate.sh => execute.sh alone decides correctness
-                if par_execute_successful:
-                    par_validation = run_validation_phase(
-                        arguments,
-                        par_project_path,
-                        config,
-                        shared_par_settings,
-                        __get_thread_count(config, "par", config_thread_counts),
-                        timeout_compilation=arguments.timeout_compilation,
-                        timeout_validation=arguments.timeout_validation,
-                    )
-                    par_validate_compile_successful = (
-                        not par_validation.compile_required or par_validation.compile_successful
-                    )
-                    par_validate_successful = par_validation.verdict(par_execute_successful)
-            if not arguments.execute_inplace:
-                # files outside the project are restored even if the copy is kept
-                restore_outside_patches(par_project_path)
-            if not (arguments.skip_cleanup or arguments.execute_inplace):
-                delete_configuration(arguments, par_project_path)
+            else:
+                # not run, but whether the settings exist is reported nonetheless
+                outcomes[mode] = _ModeOutcome(settings_exist=os.path.exists(shared_settings))
+        dp_settings_exist = outcomes["dp"].settings_exist
+        dp_compile_successful = outcomes["dp"].compile_successful
+        dp_execute_successful = outcomes["dp"].execute_successful
+        hd_settings_exist = outcomes["hd"].settings_exist
+        hd_compile_successful = outcomes["hd"].compile_successful
+        hd_execute_successful = outcomes["hd"].execute_successful
+        seq_settings_exist = outcomes["seq"].settings_exist
+        seq_compile_successful = outcomes["seq"].compile_successful
+        seq_execute_successful = outcomes["seq"].execute_successful
+        seq_validate_compile_successful = outcomes["seq"].validate_compile_successful
+        seq_validate_successful = outcomes["seq"].validate_successful
+        par_settings_exist = outcomes["par"].settings_exist
+        par_compile_successful = outcomes["par"].compile_successful
+        par_execute_successful = outcomes["par"].execute_successful
+        par_validate_compile_successful = outcomes["par"].validate_compile_successful
+        par_validate_successful = outcomes["par"].validate_successful
 
         # collect information: autotuner
         if config not in compatibility:
@@ -503,6 +276,96 @@ def show_configurations_with_execution(
     # display
     print(__get_legend())
     print(tabulate(table, tablefmt="grid"))
+
+
+@dataclass
+class _ModeOutcome:
+    """What the run of one mode of a configuration achieved; everything but the settings is False if it did not run."""
+
+    settings_exist: bool = False
+    compile_successful: bool = False
+    execute_successful: bool = False
+    validate_compile_successful: bool = False
+    validate_successful: bool = False
+
+
+# the order the modes are run in (the profiling modes first)
+_RUN_ORDER = ("dp", "hd", "seq", "par")
+
+# the modes whose execute.sh is a measurement, and which a validate.sh is applied to
+_VALIDATED_MODES = ("seq", "par")
+
+
+def __run_mode(
+    arguments: ProjectManagerArguments,
+    config: str,
+    mode: str,
+    shared_settings: str,
+    compile_sh: str,
+    thread_count: int,
+    execution_time_regex: Optional[str],
+) -> _ModeOutcome:
+    """Compile and execute ``config`` in ``mode`` (copy, compile, execute, validate, clean up)."""
+    outcome = _ModeOutcome(settings_exist=os.path.exists(shared_settings))
+    project_path = (
+        arguments.project_root if arguments.execute_inplace else copy_configuration(arguments, config, shared_settings)
+    )
+
+    # A failed patch application leaves the copy holding the original code;
+    # compiling and measuring it would misreport it as a parallel run.
+    application_failed = __handle_application_failure(
+        arguments, project_path, config, shared_settings, os.path.join(config, "execute.sh"), thread_count
+    )
+    ret = (
+        None
+        if application_failed
+        else execute_configuration(
+            arguments,
+            project_path,
+            config,
+            shared_settings,
+            compile_sh,
+            thread_count,
+            arguments.timeout_compilation,
+        )
+    )
+    outcome.compile_successful = ret is not None and ret[0] == 0
+
+    if outcome.compile_successful:
+        ret = execute_configuration(
+            arguments,
+            project_path,
+            config,
+            shared_settings,
+            os.path.join(config, "execute.sh"),
+            thread_count,
+            arguments.timeout_execution,
+            execution_time_regex=execution_time_regex,
+            # only seq and par are repeated; dp and hd are profiling runs
+            repetitions=repetitions_for_mode(mode, arguments.execution_repetitions),
+        )
+        outcome.execute_successful = ret is not None and ret[0] == 0
+
+        # optional output validation (auto-run when validate.sh exists);
+        # no validate.sh => execute.sh alone decides correctness
+        if mode in _VALIDATED_MODES and outcome.execute_successful:
+            validation = run_validation_phase(
+                arguments,
+                project_path,
+                config,
+                shared_settings,
+                thread_count,
+                timeout_compilation=arguments.timeout_compilation,
+                timeout_validation=arguments.timeout_validation,
+            )
+            outcome.validate_compile_successful = not validation.compile_required or validation.compile_successful
+            outcome.validate_successful = validation.verdict(outcome.execute_successful)
+    if not arguments.execute_inplace:
+        # files outside the project are restored even if the copy is kept
+        restore_outside_patches(project_path)
+    if not (arguments.skip_cleanup or arguments.execute_inplace):
+        delete_configuration(arguments, project_path)
+    return outcome
 
 
 def __is_selected(config_restrictions: Dict[NAME, List[str]], config: str, mode: str) -> bool:
