@@ -295,6 +295,103 @@ long int UID = 0;
 
 namespace
 {
+  // Whether path lies in the project. This package cannot link the profiler's DPUtils, so the rule of
+  // dputil::IsInProjectRoot (profiler/share/lib/DPUtils.cpp) is repeated here and the two must agree: the path
+  // contains DP_PROJECT_ROOT_DIR or one of the directories of DP_PROJECT_INCLUDE_DIRS (project code outside the
+  // root), each followed by a '/' and as given or with its symbolic links resolved, but none of the directories of
+  // DP_PROJECT_EXCLUDE_DIRS (same spellings). Both lists are separated by ':', entries are absolute or relative to
+  // DP_PROJECT_ROOT_DIR.
+  std::vector<std::string> projectDirectorySpellings(const std::string &directory)
+  {
+    std::vector<std::string> spellings;
+    auto add = [&spellings](std::string spelling) {
+      while (spelling.size() > 1 && spelling.back() == '/')
+      {
+        spelling.pop_back();
+      }
+      if (spelling.empty())
+      {
+        return;
+      }
+      spelling = spelling == "/" ? spelling : spelling + "/";
+      if (std::find(spellings.begin(), spellings.end(), spelling) == spellings.end())
+      {
+        spellings.push_back(spelling);
+      }
+    };
+    add(directory);
+    std::error_code ec;
+    std::filesystem::path real = std::filesystem::canonical(directory, ec);
+    if (!ec)
+    {
+      add(real.string());
+    }
+    return spellings;
+  }
+
+  std::vector<std::string> projectDirectoryList(const char *variable, const std::vector<std::string> &roots)
+  {
+    std::vector<std::string> directories;
+    const char *value = getenv(variable);
+    if (value == nullptr)
+    {
+      return directories;
+    }
+    std::stringstream entries(value);
+    std::string entry;
+    while (std::getline(entries, entry, ':'))
+    {
+      if (entry.empty())
+      {
+        continue;
+      }
+      std::vector<std::string> candidates;
+      if (entry.front() == '/')
+      {
+        candidates.push_back(entry);
+      }
+      else
+      {
+        for (const std::string &root : roots)
+        {
+          candidates.push_back(root + entry);
+        }
+      }
+      for (const std::string &candidate : candidates)
+      {
+        for (const std::string &spelling : projectDirectorySpellings(candidate))
+        {
+          if (std::find(directories.begin(), directories.end(), spelling) == directories.end())
+          {
+            directories.push_back(spelling);
+          }
+        }
+      }
+    }
+    return directories;
+  }
+
+  bool isInProjectRoot(const std::string &path)
+  {
+    const char *rootVariable = getenv("DP_PROJECT_ROOT_DIR");
+    std::vector<std::string> roots = projectDirectorySpellings(rootVariable == nullptr ? "/" : rootVariable);
+    std::vector<std::string> projectRoots = roots;
+    for (const std::string &included : projectDirectoryList("DP_PROJECT_INCLUDE_DIRS", projectRoots))
+    {
+      if (std::find(roots.begin(), roots.end(), included) == roots.end())
+      {
+        roots.push_back(included);
+      }
+    }
+    std::vector<std::string> excluded = projectDirectoryList("DP_PROJECT_EXCLUDE_DIRS", projectRoots);
+    auto contains = [&path](const std::string &part) { return path.find(part) != std::string::npos; };
+    return std::any_of(roots.begin(), roots.end(), contains) &&
+           std::none_of(excluded.begin(), excluded.end(), contains);
+  }
+} // namespace
+
+namespace
+{
 
   class HotspotPass // : public FunctionPass
   {
@@ -392,7 +489,6 @@ namespace
 
       // avoid instrumenting functions which are defined outside the scope of the
       // project
-      std::string dp_project_dir(getenv("DP_PROJECT_ROOT_DIR"));
       SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
       F.getAllMetadata(MDs);
       bool funcDefinedInProject = false;
@@ -405,7 +501,7 @@ namespace
               fullFileName += "/";
             }
             fullFileName += subProgram->getFilename().str();
-            if (fullFileName.find(dp_project_dir) != string::npos) // function defined inside project
+            if (isInProjectRoot(fullFileName)) // function defined inside project
             {
               funcDefinedInProject = true;
             }
