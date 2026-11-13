@@ -207,6 +207,9 @@ The profiling data for the pattern detection is created by the [Profiling](#prof
 {: .warning }
 In-place execution together with applied suggestions modifies your project directory. The GUI asks for confirmation.
 
+{: .warning }
+Manually selected suggestions that patch files **outside of the project** (shared sources) need a confirmation of their own when **Run** is pressed: the dialog lists the files, which are modified in place, may be used by other projects and are restored after the run (also when it fails or is stopped). **No** cancels the run. The autotuner's selection never includes such suggestions. The suggestion tables mark them in the tooltip and in the details (*Outside the project*). The Tk version has no such dialog and refuses them.
+
 Results are stored in `.discopop/project/execution_results.json`.
 
 ## Report

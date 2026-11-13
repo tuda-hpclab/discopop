@@ -258,6 +258,9 @@ discopop_project_manager -xf                            # every configuration, a
 - `-l` lists the configurations and does nothing else.
 - `-a <ids>` applies the comma separated suggestion ids before the execution. `-a auto` uses the suggestions selected by the autotuner (`auto_tuner/results.json`; the union if several configurations exist), `-a prm` those of the parallel region merger. Suggestions are applied in the project copy only; your sources stay untouched.
 
+### Suggestions that patch files outside of the project
+A project copy isolates only the files below the project directory. A suggestion whose patch targets a file outside of it (a shared source directory) would modify the original, which other projects may use. The project manager therefore skips such suggestions in the `auto` and `prm` selections (and logs which and why) and refuses them in `--apply-suggestions` (the run is skipped like any failed application) unless `--allow-patching-outside-project` is given. If it is given, the files are patched in place and **restored after each run** by rolling the suggestions back, also when the run fails or is stopped, and also with `--skip-cleanup`; because the rollback is per suggestion, the files of such a suggestion inside the copy are restored as well. Do not run several project manager instances that patch the same shared files at the same time.
+
 ### Project copies
 Unless `-i/--inplace` is given, every run happens in a copy of the project, created next to it and named `<configuration>_<settings file>_<project directory>`, for example `tiny_dp_settings.json_my_project`. The copy includes your `.discopop` directory. It is deleted after the run unless `--skip-cleanup` is given. Without `-i`, the profiling data of a `dp` run is therefore deleted with the copy. To keep it for the [Explorer](Explorer.md), either run in place:
 
@@ -284,7 +287,8 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `--gui-toolkit {tk,qt}` | `qt` | The toolkit of the `--gui` window: the Qt (PySide6) version or the old Tk version. |
 | `-x`, `--execute LIST` | `tiny` | Comma separated `<configuration>[:<mode>][:<threads>]`. |
 | `-xf`, `--execute-full` | | Execute all configurations. |
-| `-a`, `--apply-suggestions IDS` | | Suggestion ids to apply before the execution, or `auto` / `prm`. |
+| `-a`, `--apply-suggestions IDS` | | Suggestion ids to apply before the execution, or `auto` / `prm`. Suggestions that patch files outside of the project are refused unless `--allow-patching-outside-project` is given; `auto` / `prm` never include them. |
+| `--allow-patching-outside-project` | off | Allow `--apply-suggestions` to apply suggestions that patch files outside of the project (shared sources). |
 | `-l`, `--list` | | List the configurations; nothing else is done. |
 | `-i`, `--inplace` | off | Execute in the project root instead of a copy. |
 | `--skip-cleanup` | off | Keep the project copies (may need much disk space). |

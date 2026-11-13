@@ -68,6 +68,11 @@ from discopop_library.ProjectManager.services.jobs import (
     WorkStatus,
 )
 from discopop_library.ProjectManager.services.modes import EXECUTION_MODES, available_modes
+from discopop_library.ProjectManager.services.outside_patches import (
+    CONFIRMATION_TITLE,
+    confirmation_text,
+    outside_project_suggestions,
+)
 from discopop_library.ProjectManager.services.patches import sort_suggestion_ids
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
@@ -481,6 +486,22 @@ class ExecutePanel(Panel):
             ):
                 return
 
+        # Files outside the project are not isolated by the project copy: applying such suggestions needs a
+        # confirmation of its own, whatever else was confirmed above.
+        suggestion_ids = suggestion_ids_to_apply(
+            suggestions_mode,
+            self.execute_suggestion_selector.get_selected_ids(),
+            self.arguments.dot_dp,
+            configuration,
+        )
+        allow_outside = False
+        if suggestions_mode == SUGGESTIONS_MANUAL and not inplace:
+            outside = outside_project_suggestions(self.arguments.dot_dp, suggestion_ids)
+            if outside:
+                if not dialogs.ask_yes_no(self, CONFIRMATION_TITLE, confirmation_text(outside)):
+                    return
+                allow_outside = True
+
         log_level = self.log_level_combo.currentText()
         request = ExecutionRequest(
             configuration=configuration,
@@ -494,12 +515,8 @@ class ExecutePanel(Panel):
             timeout_validation=self.timeout_validation_spin.value(),
             repetitions=self.repetitions_spin.value(),
             log_level=log_level,
-            suggestion_ids=suggestion_ids_to_apply(
-                suggestions_mode,
-                self.execute_suggestion_selector.get_selected_ids(),
-                self.arguments.dot_dp,
-                configuration,
-            ),
+            suggestion_ids=suggestion_ids,
+            allow_patching_outside_project=allow_outside,
         )
         self._begin_run("Running", "⏳ Execution in progress...")
         restore_logging = widgets.redirect_logging_to_console(self.console, log_level)

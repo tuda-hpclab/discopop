@@ -62,7 +62,11 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("-a", "--apply-suggestions", help="Comma separated list of suggestions ids to be applied "
     "before the specified execution. Use the keyword 'auto' to load the configuration determined by the autotuner (if "
     "multiple configurations exist, union will be considered). Use the keyword 'prm' to load the configuration "
-    "determined by the parallel region merger.")
+    "determined by the parallel region merger. Suggestions that patch files outside of the project are refused "
+    "unless --allow-patching-outside-project is given; 'auto' and 'prm' never include them.")
+    parser.add_argument("--allow-patching-outside-project", action="store_true", help="Allow --apply-suggestions to "
+    "apply suggestions that patch files outside of the project (shared sources). Such files are modified in place, "
+    "may be used by other projects, and are restored after each run.")
     parser.add_argument('-l', '--list', action="store_true", help="Show a list of available configurations. If set, "
     "nothing else will be done.")
     parser.add_argument("-i", "--inplace", action="store_true", help="Prevents the creation of project copies when "
@@ -151,6 +155,7 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         show_report=arguments.show_report,
         initialize_directory=arguments.init,
         apply_suggestions=arguments.apply_suggestions,
+        allow_patching_outside_project=arguments.allow_patching_outside_project,
         reset=arguments.reset,
         reset_execution_results=arguments.reset_execution_results,
         gui=arguments.gui,
