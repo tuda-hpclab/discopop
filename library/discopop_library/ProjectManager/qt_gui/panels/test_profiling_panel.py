@@ -110,6 +110,7 @@ def test_blocked_while_execute_runs(panel: ProfilingPanel) -> None:
 
 
 def test_profiling_runs_dp_in_place(qtbot: QtBot, panel: ProfilingPanel) -> None:
+    panel.build_options.in_place_check.setChecked(True)
     select(panel)
     results: List[ExecuteResult] = [(0, 0.5, "", ""), (0, 1.0, "", "")]
     published: List[str] = []
@@ -156,6 +157,7 @@ def test_the_timeouts_reach_the_work(qtbot: QtBot, panel: ProfilingPanel) -> Non
 
 
 def test_a_failing_profiling_run_is_reported(qtbot: QtBot, panel: ProfilingPanel) -> None:
+    panel.build_options.in_place_check.setChecked(True)
     select(panel)
     with mock.patch.object(execution_run, "execute_configuration", lambda *a, **k: (1, 0.1, "", "")):
         panel.run_button.click()
@@ -168,6 +170,7 @@ def test_a_failing_profiling_run_is_reported(qtbot: QtBot, panel: ProfilingPanel
 
 
 def test_profiling_can_be_stopped(qtbot: QtBot, panel: ProfilingPanel) -> None:
+    panel.build_options.in_place_check.setChecked(True)
     select(panel)
     started = threading.Event()
     release = threading.Event()
@@ -200,3 +203,25 @@ def test_data_profiled_with_other_directories_is_warned_about(panel: ProfilingPa
     assert chip.level == widgets.CHIP_WARN and chip.text() == "Project directories changed"
     assert "src" in chip.detail() and "lib" in chip.detail()
     assert panel.run_button.isEnabled()  # profiling again is the fix
+
+
+def test_the_build_options_reach_the_work(qtbot: QtBot, panel: ProfilingPanel) -> None:
+    select(panel)
+    seen: List[Any] = []
+
+    def run(_arguments: Any, request: Any, _ctx: Any) -> bool:
+        seen.append(request)
+        return True
+
+    with mock.patch("discopop_library.ProjectManager.qt_gui.panels.profiling_panel.run_preparation", run):
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+        # the default: compile if there is no current build, in a build
+        assert (seen[0].build_policy, seen[0].build_only, seen[0].inplace) == ("auto", False, False)
+        panel.build_options.policy_combo.setCurrentIndex(1)
+        panel.build_options.build_only_check.setChecked(True)
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+        assert (seen[1].build_policy, seen[1].build_only, seen[1].inplace) == ("rebuild", True, False)
+        panel.build_options.in_place_check.setChecked(True)
+        assert not panel.build_options.policy_combo.isEnabled()

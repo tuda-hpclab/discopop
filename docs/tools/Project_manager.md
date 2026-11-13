@@ -261,19 +261,27 @@ discopop_project_manager -xf                            # every configuration, a
 ### Suggestions that patch files outside of the project
 A project copy isolates only the files below the project directory. A suggestion whose patch targets a file outside of it (a shared source directory) would modify the original, which other projects may use. The project manager therefore skips such suggestions in the `auto` and `prm` selections (and logs which and why) and refuses them in `--apply-suggestions` (the run is skipped like any failed application) unless `--allow-patching-outside-project` is given. If it is given, the files are patched in place and **restored after each run** by rolling the suggestions back, also when the run fails or is stopped, and also with `--skip-cleanup`; because the rollback is per suggestion, the files of such a suggestion inside the copy are restored as well. Do not run several project manager instances that patch the same shared files at the same time.
 
-### Project copies
-Unless `-i/--inplace` is given, every run happens in a copy of the project, created next to it and named `<configuration>_<settings file>_<project directory>`, for example `tiny_dp_settings.json_my_project`. The copy includes your `.discopop` directory. It is deleted after the run unless `--skip-cleanup` is given. Without `-i`, the profiling data of a `dp` run is therefore deleted with the copy. To keep it for the [Explorer](Explorer.md), either run in place:
+### Builds
+Unless `-i/--inplace` is given, a configuration is run in a *build*: a copy of the project (with the requested suggestions applied) that is compiled once and then **kept**, so that further runs execute in it instead of compiling again. This matters for large codes: running another input or thread count, or profiling again, does not repeat a long build.
+
+- A build exists per configuration, mode and set of applied suggestions. Its tree lies next to the project in `<project directory>_discopop_builds/<configuration>_<mode>[_s<hash of the suggestions>]`, its manifest in `.discopop/project/builds/`. The tree includes the `.discopop` directory of the project at the time of the build, and the profiling data of `dp` and `hd` runs is written there.
+- A build is *current* as long as the files of the project (path, size and modification time of every file outside `.discopop` and `.git`), the compile script, the settings file of the mode, the included and excluded project directories, the generated patches (for builds with suggestions) and the installed profiler are unchanged. A run compiles only if there is no current build (`--rebuild` compiles in any case). The thread count is no part of it. A build whose suggestions patch files outside of the project is never reused.
+- `--reuse-build` never compiles and fails if there is no current build; `--build-only` compiles and does not execute. Both and `--rebuild` are available in the GUI as well.
+- `--list-builds` shows the builds, their size and whether they are current; `--delete-builds [ids]` deletes the given builds (all without ids). **Builds are never deleted automatically** and may need much disk space, in particular when many sets of suggestions are applied.
+- Every `dp` or `hd` run of a build writes its results into a *run directory* of its own, `<project directory>_discopop_builds/<build id>.runs/<run id>`, that is prepared from the static data of the build and used as `DOT_DISCOPOP` of `execute.sh`. Runs of one build with other inputs therefore never overwrite each other, and they survive building again. The measurements in `execution_results.json` carry the `build_id` and `run_id`.
+- `--list-runs` shows the runs. `--activate-run [id]` puts a run (without an id: the latest successful `dp` run) into the `.discopop` directory of the project, where the explorer reads it: the data of the same kind that was there is replaced, the paths of the build tree become paths of the project, and `.discopop/active_run.json` names the run. A run of a build with applied suggestions cannot be activated (its line numbers differ from your sources). `--delete-runs [ids]` deletes runs (all without ids). **Runs are never deleted automatically.**
+- `--skip-cleanup` only keeps the copy of a build that failed (the tree of a successful build is always kept).
+
+With `-i`, the configuration is compiled and executed in the project root, no build is kept or reused, and the profiling data of `dp` and `hd` runs is written to `.discopop/profiler` and `.discopop/hotspot_detection` of the project, which is where the [Explorer](Explorer.md) reads it:
 
 ```bash
 discopop_project_manager -x tiny:dp:4,tiny:hd:4 -i
 ```
 
-which writes `.discopop/profiler` and `.discopop/hotspot_detection` into the project (and leaves the built program there), or keep the copy with `--skip-cleanup` and run the Explorer inside the `.discopop` directory of the copy.
-
 ## Output
 - `.discopop/project/execution_results.json`: the results of every script run, structured as `{configuration: {script: {settings file: [entry, ...]}}}`, for example `["tiny"]["execute.sh"]["seq_settings.json"]`. The key is the name of the settings file, not the mode. An entry holds, among others, `code`, `time`, `wall_clock_time`, `time_source`, `thread_count`, `label`, `applied_suggestions`, `requested_suggestions`, `failed_suggestions`, `repetitions`, `repetition_times` and `time_aggregate`. A new run replaces an entry with the same suggestions, thread count and label.
 - `.discopop/project/reports/<timestamp>/`, created by `--report`: `report.csv`, `speedups.pdf`, `efficiency.pdf`, `execution_time.pdf`, `execution_time_full.pdf` and `full_report.pdf`. The console shows the table as well. Speedup is relative to the `seq` run of the same script.
-- Profiling data of `dp` and `hd` runs below `.discopop/profiler` and `.discopop/hotspot_detection` of the project (with `-i`) or of the copy.
+- Profiling data of `dp` and `hd` runs below `.discopop/profiler` and `.discopop/hotspot_detection` of the project (with `-i`) or of the build tree.
 
 The project manager does not run the Explorer. After a `dp` run, run `discopop_explorer` inside `.discopop` (see [Explorer](Explorer.md)); the GUI and the MCP server do this step for you.
 
@@ -291,7 +299,15 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `--allow-patching-outside-project` | off | Allow `--apply-suggestions` to apply suggestions that patch files outside of the project (shared sources). |
 | `-l`, `--list` | | List the configurations; nothing else is done. |
 | `-i`, `--inplace` | off | Execute in the project root instead of a copy. |
-| `--skip-cleanup` | off | Keep the project copies (may need much disk space). |
+| `--skip-cleanup` | off | Keep the copy of a failed build. |
+| `--rebuild` | off | Compile even if a current build exists. |
+| `--reuse-build` | off | Never compile; run in the existing current build (not with `-i`). |
+| `--build-only` | off | Compile only, do not execute. |
+| `--list-builds` | | List the builds; nothing else is done. |
+| `--delete-builds [IDS]` | | Delete the builds with the given ids, all without ids; nothing else is done. |
+| `--list-runs` | | List the profiling runs of the builds; nothing else is done. |
+| `--activate-run [ID]` | | Put the run (default: the latest successful `dp` run) into the project's `.discopop`; nothing else is done. |
+| `--delete-runs [IDS]` | | Delete the runs with the given ids, all without ids; nothing else is done. |
 | `--report` | | Generate the report from the stored results. |
 | `--show-report` | | Only has an effect together with `--report`, where it opens the PDF with `xdg-open`. Alone it does not show a report. |
 | `-r`, `--reset` | | Delete everything in `.discopop` except `project/`; implies `-rx`. |

@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.PatchApplicator.PatchApplicationResult import (
     PatchApplicationResult,
@@ -44,12 +44,65 @@ def get_application_result(project_copy_path: PATH) -> Optional[PatchApplication
     return read_application_result(patch_applicator_dir_of(project_copy_path))
 
 
+def resolve_requested_suggestions(
+    arguments: ProjectManagerArguments, dp_folder_path: PATH, log_skipped: bool = True
+) -> List[str]:
+    """The ids of the suggestions a run applies: the list of ``--apply-suggestions``, or the selection of the
+    autotuner ("auto") or the parallel region merger ("prm") stored in ``dp_folder_path``.
+
+    ``log_skipped`` logs the suggestions that an automatic selection leaves out because they patch files outside of
+    the project.
+    """
+    suggestions: List[str] = []
+    if arguments.apply_suggestions is None:
+        return suggestions
+    if arguments.apply_suggestions == "auto":
+        auto_tuner_results_path = os.path.join(dp_folder_path, "auto_tuner", "results.json")
+        if os.path.exists(auto_tuner_results_path):
+            with open(auto_tuner_results_path, "r") as f:
+                auto_tuner_results = json.load(f)
+            for configuration in auto_tuner_results:
+                for sugg in auto_tuner_results[configuration]["applied_suggestions"]:
+                    if sugg not in suggestions:
+                        suggestions.append(sugg)
+    elif arguments.apply_suggestions == "prm":
+        prm_results_path = os.path.join(dp_folder_path, "parallel_region_merger", "results.json")
+        if os.path.exists(prm_results_path):
+            with open(prm_results_path, "r") as f:
+                prm_results = json.load(f)
+            for configuration in prm_results:
+                for sugg in prm_results[configuration]["applied_suggestions"]:
+                    if sugg not in suggestions:
+                        suggestions.append(sugg)
+    else:
+        suggestions = arguments.apply_suggestions.split(",")
+
+    # Suggestions that patch files outside the project are never part of an automatic selection ("auto", "prm"):
+    # the copy does not isolate those files. An explicit list reaches the patch applicator, which refuses them
+    # unless the caller allowed it (a visible failure of the run, see PatchApplicationResult.refused).
+    if arguments.apply_suggestions in ("auto", "prm"):
+        suggestions, outside = split_by_outside_project(dp_folder_path, suggestions)
+        if log_skipped:
+            log_skipped_outside_suggestions(logger, "Project manager (" + arguments.apply_suggestions + ")", outside)
+
+    return suggestions
+
+
 def copy_configuration(
     arguments: ProjectManagerArguments,
     config_path: PATH,
     settings_path: PATH,
     configuration_id: Optional[int] = None,
+    destination: Optional[PATH] = None,
+    leave_out_of_dot_discopop: Sequence[str] = (),
 ) -> PATH:
+    """Copy the project for one run (or one build) of a configuration and apply the requested suggestions.
+
+    ``destination`` is the directory of the copy; by default it is named after the configuration and the settings
+    file and lies next to the project root. An existing directory of that name is replaced.
+    ``leave_out_of_dot_discopop`` names directories of the project's ``.discopop`` that are not copied (the data of
+    earlier profiling runs, which a build must not start with).
+    """
 
     config_name = os.path.basename(config_path)
     settings_name = os.path.basename(settings_path)
@@ -59,9 +112,19 @@ def copy_configuration(
     if configuration_id is not None:
         project_copy_folder_name += "_" + str(configuration_id)
     project_copy_path = os.path.join(Path(arguments.project_root).parent.absolute(), project_copy_folder_name)
+    if destination is not None:
+        project_copy_path = os.path.abspath(destination)
+        os.makedirs(os.path.dirname(project_copy_path), exist_ok=True)
     if os.path.exists(project_copy_path):
         shutil.rmtree(project_copy_path)
-    shutil.copytree(arguments.project_root, project_copy_path)
+    ignore = None
+    if leave_out_of_dot_discopop:
+        left_out = os.path.join(os.path.abspath(arguments.project_root), ".discopop")
+
+        def ignore(directory: str, names: List[str]) -> List[str]:  # type: ignore[misc]
+            return list(leave_out_of_dot_discopop) if os.path.abspath(directory) == left_out else []
+
+    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore)
     # correct paths in Filemapping.txt
     fmap_path = os.path.join(project_copy_path, ".discopop", "FileMapping.txt")
     if os.path.exists(fmap_path):
@@ -85,35 +148,8 @@ def copy_configuration(
 
     # apply the specified parallelization suggestions if requested
     if arguments.apply_suggestions is not None:
-        suggestions: List[str] = []
         dp_folder_path = os.path.join(project_copy_path, ".discopop")
-        if arguments.apply_suggestions == "auto":
-            auto_tuner_results_path = os.path.join(dp_folder_path, "auto_tuner", "results.json")
-            if os.path.exists(auto_tuner_results_path):
-                with open(auto_tuner_results_path, "r") as f:
-                    auto_tuner_results = json.load(f)
-                for configuration in auto_tuner_results:
-                    for sugg in auto_tuner_results[configuration]["applied_suggestions"]:
-                        if sugg not in suggestions:
-                            suggestions.append(sugg)
-        elif arguments.apply_suggestions == "prm":
-            prm_results_path = os.path.join(dp_folder_path, "parallel_region_merger", "results.json")
-            if os.path.exists(prm_results_path):
-                with open(prm_results_path, "r") as f:
-                    prm_results = json.load(f)
-                for configuration in prm_results:
-                    for sugg in prm_results[configuration]["applied_suggestions"]:
-                        if sugg not in suggestions:
-                            suggestions.append(sugg)
-        else:
-            suggestions = arguments.apply_suggestions.split(",")
-
-        # Suggestions that patch files outside the project are never part of an automatic selection ("auto", "prm"):
-        # the copy does not isolate those files. An explicit list reaches the patch applicator, which refuses them
-        # unless the caller allowed it (a visible failure of the run, see PatchApplicationResult.refused).
-        if arguments.apply_suggestions in ("auto", "prm"):
-            suggestions, outside = split_by_outside_project(dp_folder_path, suggestions)
-            log_skipped_outside_suggestions(logger, "Project manager (" + arguments.apply_suggestions + ")", outside)
+        suggestions = resolve_requested_suggestions(arguments, dp_folder_path)
 
         pa_args = PatchApplicatorArguments(
             verbose=False,

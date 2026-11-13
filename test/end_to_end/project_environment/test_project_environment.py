@@ -132,8 +132,9 @@ def test_an_excluded_directory_is_left_out(tmp_path: pathlib.Path) -> None:
 
 def test_command_line_exclusion_applies_to_the_copy_of_the_project(tmp_path: pathlib.Path) -> None:
     root = _project(tmp_path)
-    process = _run_project_manager(root, "-x", "tiny:dp", "--skip-cleanup", "--project-exclude-dirs", "third_party")
-    copies = [path for path in tmp_path.iterdir() if path.name.startswith("tiny_dp_settings.json_proj")]
+    process = _run_project_manager(root, "-x", "tiny:dp", "--project-exclude-dirs", "third_party")
+    # the copy is the build of the configuration and mode, which is kept
+    copies = [path for path in (tmp_path / "proj_discopop_builds").iterdir() if path.name == "tiny_dp"]
     assert len(copies) == 1, _output(process)
     mapping = _file_mapping(copies[0] / ".discopop")
     assert mapping and all(str(copies[0] / "src") + "/" in line for line in mapping), mapping

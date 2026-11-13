@@ -70,9 +70,32 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument('-l', '--list', action="store_true", help="Show a list of available configurations. If set, "
     "nothing else will be done.")
     parser.add_argument("-i", "--inplace", action="store_true", help="Prevents the creation of project copies when "
-    "code configurations are executed. Instead, executes the configuration in the project root folder.")
-    parser.add_argument("--skip-cleanup", action="store_true", help="Prevents the deletion of created project copies. "
-    "May requires high amount of disk space.")
+    "code configurations are executed. Instead, compiles and executes the configuration in the project root folder "
+    "(no build is kept or reused).")
+    parser.add_argument("--skip-cleanup", action="store_true", help="Keep the project copies of builds that "
+    "failed (the copies of successful builds are always kept, see --list-builds and --delete-builds). May require a "
+    "high amount of disk space.")
+    parser.add_argument("--rebuild", action="store_true", help="Compile even if a current build of the configuration "
+    "and mode exists. By default, a build is reused as long as the sources, the compile script, the settings of the "
+    "mode and the project directories are unchanged (see --list-builds).")
+    parser.add_argument("--reuse-build", action="store_true", help="Never compile: run in the existing build of the "
+    "configuration and mode. A missing or outdated build is an error. Not available with --inplace.")
+    parser.add_argument("--build-only", action="store_true", help="Compile only, do not execute the configurations.")
+    parser.add_argument("--list-builds", action="store_true", help="List the builds of the project (kept project "
+    "copies that runs execute in) and whether they are current. If set, nothing else will be done.")
+    parser.add_argument("--delete-builds", nargs="?", const="all", default=None, metavar="IDS", help="Delete the "
+    "builds with the given comma separated ids (see --list-builds), or all builds if no ids are given. Builds are "
+    "never deleted otherwise. If set, nothing else will be done.")
+    parser.add_argument("--list-runs", action="store_true", help="List the profiling runs (dp, hd) of the builds. Each "
+    "run keeps its results in a directory of its own, so that runs with other inputs do not overwrite them. If set, "
+    "nothing else will be done.")
+    parser.add_argument("--delete-runs", nargs="?", const="all", default=None, metavar="IDS", help="Delete the runs "
+    "with the given comma separated ids (see --list-runs), or all runs if no ids are given. Runs are never deleted "
+    "otherwise. If set, nothing else will be done.")
+    parser.add_argument("--activate-run", nargs="?", const="latest", default=None, metavar="ID", help="Put the "
+    "results of a dp run into the .discopop directory of the project, where the explorer reads them (paths of the "
+    "build tree become paths of the project). Without an id, the latest successful dp run is used. If set, nothing "
+    "else will be done.")
     parser.add_argument("--report", action="store_true", help="Generate and a report of the stored execution results.")
     parser.add_argument("--show-report", action="store_true", help="Show the generated report of the stored execution "
     "results.")
@@ -144,6 +167,13 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         print("ERROR: --execution-repetitions: " + repetitions_error)
         sys.exit(1)
 
+    if arguments.rebuild and arguments.reuse_build:
+        print("ERROR: --rebuild and --reuse-build exclude each other")
+        sys.exit(1)
+    if arguments.reuse_build and arguments.inplace:
+        print("ERROR: --reuse-build needs a build of its own and cannot be combined with --inplace")
+        sys.exit(1)
+
     return ProjectManagerArguments(
         project_root=arguments.project,
         full_execute=arguments.execute_full,
@@ -170,6 +200,13 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         gui_toolkit=arguments.gui_toolkit,
         project_include_dirs=arguments.project_include_dirs,
         project_exclude_dirs=arguments.project_exclude_dirs,
+        build_policy="rebuild" if arguments.rebuild else "reuse" if arguments.reuse_build else "auto",
+        build_only=arguments.build_only,
+        list_builds=arguments.list_builds,
+        delete_builds=arguments.delete_builds,
+        list_runs=arguments.list_runs,
+        delete_runs=arguments.delete_runs,
+        activate_run=arguments.activate_run,
     )
 
 
