@@ -16,16 +16,20 @@ The tree is filled lazily: a directory's subdirectories are read when it is expa
 costs nothing until it is opened.
 """
 
+import os
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QPalette
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QWidget
+from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
+from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.services.excluded_directories import (
     excluding_directory,
     is_symbolic_link,
+    listed_children,
     load_excluded_directories,
+    relative_entry,
     save_excluded_directories,
     subdirectories,
     toggle,
@@ -35,6 +39,9 @@ PATH_ROLE = Qt.ItemDataRole.UserRole
 # the child of a directory whose subdirectories were not read yet (so that it shows an expand arrow)
 _PLACEHOLDER = "…"
 EXCLUDED_TOOLTIP = "Excluded: neither instrumented nor part of the file mapping and the AST"
+MISSING_TOOLTIP_SUFFIX = " (the directory does not exist (yet))"
+ADD_PATH_TEXT = "Add path…"
+REMOVE_TEXT = "Remove"
 INCLUDED_TOOLTIP = "Check to exclude this directory and everything below it from the instrumentation"
 
 
@@ -76,7 +83,7 @@ class ExcludedDirectoriesTree(QTreeWidget):
         try:
             self.clear()
             self._items.clear()
-            for path in subdirectories(self.project_root):
+            for path in self._children():
                 self.addTopLevelItem(self._new_item(path))
         finally:
             self._updating = False
@@ -102,13 +109,19 @@ class ExcludedDirectoriesTree(QTreeWidget):
                 item.setExpanded(True)
         return item
 
+    def _children(self, relative: str = "") -> List[str]:
+        """The existing subdirectories of ``relative`` and the ones on the way to a hand-written entry."""
+        paths = subdirectories(self.project_root, relative)
+        extra = [path for path in listed_children(self.excluded, relative) if path not in paths]
+        return sorted([*paths, *extra], key=lambda path: (path.rsplit("/", 1)[-1].lower(), path.rsplit("/", 1)[-1]))
+
     def _new_item(self, path: str) -> QTreeWidgetItem:
         item = QTreeWidgetItem([path.rsplit("/", 1)[-1]])
         item.setData(0, PATH_ROLE, path)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(0, Qt.CheckState.Unchecked)
         # a symbolic link is shown (it can be excluded) but not entered: links can form cycles
-        if not is_symbolic_link(self.project_root, path) and subdirectories(self.project_root, path):
+        if not is_symbolic_link(self.project_root, path) and self._children(path):
             item.addChild(QTreeWidgetItem([_PLACEHOLDER]))
         self._items[path] = item
         return item
@@ -121,7 +134,7 @@ class ExcludedDirectoriesTree(QTreeWidget):
         self._updating = True
         try:
             item.takeChild(0)
-            for path in subdirectories(self.project_root, item.data(0, PATH_ROLE)):
+            for path in self._children(item.data(0, PATH_ROLE)):
                 item.addChild(self._new_item(path))
         finally:
             self._updating = False
@@ -153,6 +166,11 @@ class ExcludedDirectoriesTree(QTreeWidget):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                     item.setToolTip(0, _inherited_tooltip(directory))
                     item.setForeground(0, faded)
+                if not os.path.isdir(os.path.join(self.project_root, path)):
+                    item.setToolTip(0, item.toolTip(0) + MISSING_TOOLTIP_SUFFIX)
+                font = item.font(0)
+                font.setItalic(not os.path.isdir(os.path.join(self.project_root, path)))
+                item.setFont(0, font)
         finally:
             self._updating = False
 
@@ -160,6 +178,68 @@ class ExcludedDirectoriesTree(QTreeWidget):
         """Exclude or include ``path`` as a click on its check box would (for the tests and keyboard users)."""
         if (excluding_directory(self.excluded, path) is not None) != excluded:
             self._toggle(path)
+
+    def add_path(self, text: str) -> Optional[str]:
+        """Exclude a hand-written directory (relative to the project directory, e.g. ``build/_deps``, or absolute below
+        it), which need not exist (yet). It is shown and selected in the tree from then on. Returns the stored entry,
+        None if ``text`` names no directory below the project directory."""
+        path = relative_entry(self.project_root, text)
+        if path is None:
+            return None
+        if excluding_directory(self.excluded, path) is None:
+            self._toggle(path)
+            self.reload()
+        item = self.expand_path(path)
+        if item is not None:
+            self.setCurrentItem(item)
+        return path
+
+    def removable_path(self) -> Optional[str]:
+        """The selected directory if it is on the list itself (an entry that can be removed)."""
+        item = self.currentItem()
+        path = item.data(0, PATH_ROLE) if item is not None else None
+        return path if path in self.excluded else None
+
+    def remove_selected(self) -> None:
+        """Remove the selected entry from the list (a directory that does not exist disappears from the tree)."""
+        path = self.removable_path()
+        if path is not None:
+            self._toggle(path)
+            self.reload()
+
+    def with_buttons(self) -> QWidget:
+        """The tree with the buttons "Add path…" and "Remove" below it; put this into the layout, not the tree."""
+        self.add_path_button = widgets.create_button(
+            ADD_PATH_TEXT,
+            self._add_path_clicked,
+            tooltip="Type the path of a directory below the project directory, e.g. build/_deps; it need not exist yet",
+        )
+        self.remove_button = widgets.create_button(
+            REMOVE_TEXT, self.remove_selected, tooltip="Remove the selected directory from the list"
+        )
+        self.currentItemChanged.connect(lambda *_args: self._update_buttons())
+        self.changed.connect(lambda _list: self._update_buttons())
+        self._update_buttons()
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self, 1)
+        layout.addLayout(widgets.hbox(self.add_path_button, self.remove_button, None, margins=0))
+        return container
+
+    def _update_buttons(self) -> None:
+        self.remove_button.setEnabled(self.removable_path() is not None)
+
+    def _add_path_clicked(self) -> None:
+        text = dialogs.ask_string(
+            self,
+            "Add a path",
+            "Directory to exclude, relative to the project directory (e.g. build/_deps); it need not exist yet:",
+        )
+        if text is not None and self.add_path(text) is None:
+            dialogs.show_warning(
+                self, "Cannot add the path", "Give a directory below the project directory, relative to it."
+            )
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         if self._updating or column != 0:
@@ -185,5 +265,16 @@ class ExcludedDirectoriesTree(QTreeWidget):
             self._refresh_checks()
             self.failed.emit(f"The excluded directories could not be saved: {error}")
             return
-        self._refresh_checks()
+        if self._has_stale_items():
+            self.reload()
+        else:
+            self._refresh_checks()
         self.changed.emit(list(self.excluded))
+
+    def _has_stale_items(self) -> bool:
+        """Whether an item of a directory that does not exist is no longer on the way to a listed entry."""
+        wanted = {entry.rsplit("/", depth)[0] for entry in self.excluded for depth in range(entry.count("/") + 1)}
+        wanted.update(self.excluded)
+        return any(
+            not os.path.isdir(os.path.join(self.project_root, path)) and path not in wanted for path in self._items
+        )

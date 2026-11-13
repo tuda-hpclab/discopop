@@ -98,13 +98,14 @@ def environment_value(directories: Sequence[str], existing: str = "") -> str:
     return ":".join(entries)
 
 
-def problems(project_root: str, path: str) -> List[str]:
-    """Why ``path`` cannot be added (empty list: it can)."""
+def problems(project_root: str, path: str, must_exist: bool = True) -> List[str]:
+    """Why ``path`` cannot be added (empty list: it can). ``must_exist=False`` accepts a hand-written path of a
+    directory that does not exist (yet)."""
     normalized = normalize(path)
     if normalized is None:
         return ["Give an absolute path."]
     if inside_project(project_root, normalized):
         return [normalized + " lies inside the project directory, its code is project code anyway."]
-    if not os.path.isdir(normalized):
+    if must_exist and not os.path.isdir(normalized):
         return [normalized + " is not an existing directory."]
     return []

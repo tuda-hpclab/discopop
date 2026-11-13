@@ -133,3 +133,48 @@ def test_a_failed_save_shows_the_stored_state(qtbot: QtBot, project: Path, monke
     src = tree.item_of("src")
     assert src is not None and src.checkState(0) == Qt.CheckState.Unchecked
     assert _stored(project) == []
+
+
+def test_a_hand_written_path_need_not_exist_and_stays_listed(qtbot: QtBot, project: Path) -> None:
+    tree = _tree(qtbot, project)
+    assert tree.add_path("build/_deps/new-lib/") == "build/_deps/new-lib"
+    assert _stored(project) == ["build/_deps/new-lib"]
+    item = tree.item_of("build/_deps/new-lib")
+    assert item is not None and item.checkState(0) == Qt.CheckState.Checked
+    assert tree.currentItem() is item and tree.removable_path() == "build/_deps/new-lib"
+    assert not (project / "build" / "_deps" / "new-lib").exists()
+    # a fresh tree shows it as well
+    assert _tree(qtbot, project).expand_path("build/_deps/new-lib") is not None
+
+
+def test_a_hand_written_path_with_missing_parents_and_absolute_spelling(qtbot: QtBot, project: Path) -> None:
+    tree = _tree(qtbot, project)
+    assert tree.add_path(str(project / "gen" / "deps")) == "gen/deps"
+    assert tree.item_of("gen") is not None
+    assert tree.expand_path("gen/deps") is not None
+    assert tree.add_path("/elsewhere") is None and tree.add_path("../up") is None and tree.add_path("") is None
+
+
+def test_removing_a_hand_written_path_drops_it_from_list_and_tree(qtbot: QtBot, project: Path) -> None:
+    tree = _tree(qtbot, project)
+    tree.add_path("gen/deps")
+    tree.remove_selected()
+    assert _stored(project) == [] and tree.item_of("gen") is None and tree.item_of("gen/deps") is None
+    # unchecking works as well
+    tree.add_path("build/_deps/new-lib")
+    _click_check_box(tree, "build/_deps/new-lib")
+    assert _stored(project) == [] and tree.item_of("build/_deps/new-lib") is None
+
+
+def test_add_path_button_asks_for_the_path(qtbot: QtBot, project: Path, dialog_answers) -> None:  # type: ignore[no-untyped-def]
+    tree = _tree(qtbot, project)
+    container = tree.with_buttons()
+    qtbot.addWidget(container)
+    assert not tree.remove_button.isEnabled()
+    dialog_answers.answer("ask_string", "build/_deps", "/outside")
+    tree.add_path_button.click()
+    assert _stored(project) == ["build/_deps"] and tree.remove_button.isEnabled()
+    tree.add_path_button.click()
+    assert dialog_answers.titles("show_warning") == ["Cannot add the path"]
+    tree.remove_button.click()
+    assert _stored(project) == []

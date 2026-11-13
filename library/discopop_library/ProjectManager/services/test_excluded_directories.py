@@ -94,3 +94,13 @@ def test_subdirectories(tmp_path: Path) -> None:
     assert ed.subdirectories(str(tmp_path), "build") == ["build/_deps", "build/CMakeFiles"]
     assert ed.subdirectories(str(tmp_path), "does/not/exist") == []
     assert ed.is_symbolic_link(str(tmp_path), "link") and not ed.is_symbolic_link(str(tmp_path), "src")
+
+
+def test_relative_entry_and_listed_children(tmp_path: Path) -> None:
+    root = str(tmp_path)
+    assert ed.relative_entry(root, " build/_deps/ ") == "build/_deps"
+    assert ed.relative_entry(root, str(tmp_path / "a" / "b")) == "a/b"
+    assert ed.relative_entry(root, "/elsewhere") is None and ed.relative_entry(root, "..") is None
+    assert ed.listed_children(["build/_deps", "x"]) == ["build", "x"]
+    assert ed.listed_children(["build/_deps/lib"], "build") == ["build/_deps"]
+    assert ed.listed_children(["build/_deps"], "src") == []
