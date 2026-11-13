@@ -69,13 +69,14 @@ discopop_project_manager -x tiny:seq:1,tiny:par:2 -xr 5 -lp first
 Only the `seq` and `par` runs are repeated (default: 3 repetitions); the `dp` and `hd` runs and all compilations run once. Each result is stored as an entry of a list per configuration, script and settings file.
 
 ## 3. Keep the profiling data
-Pattern detection needs the data of a `dp` run. A run in a project copy deletes it together with the copy. Keep it in one of two ways:
+Pattern detection needs the data of a `dp` run. A run without `-i` happens in a *build*, a copy of the project that is kept and reused by later runs as long as nothing changed (`--list-builds` shows them, `--delete-builds` removes them). The data lands in the `.discopop` directory of the build. To get it into the project, where the explorer reads it, run in the project directory:
 
 ```bash
 # run in the project directory; data lands in ./.discopop/profiler
 discopop_project_manager -x tiny:dp:4,tiny:hd:4 -i
-# or keep the copy (named <config>_<settings file>_<project folder>, next to the project)
-discopop_project_manager -x tiny:dp:2 --skip-cleanup
+# or run in a build (<project folder>_discopop_builds/<config>_<mode>, next to the project)
+discopop_project_manager -x tiny:dp:2
+discopop_project_manager --list-builds
 ```
 
 `-i` also leaves the built program (`prog`) in the project root. The hotspot data of the `hd` run lands in `.discopop/hotspot_detection`.
@@ -129,11 +130,11 @@ The example runs for a few milliseconds, so thread start-up costs more than the 
 ```bash
 # the suggestions chosen by the autotuner (results.json)
 discopop_project_manager -x tiny:par:2 -a auto
-# explicit suggestion ids; keep the patched copy to inspect it
-discopop_project_manager -x tiny:par:2 -a 1 --skip-cleanup
+# explicit suggestion ids; the patched build is kept to inspect it (see --list-builds)
+discopop_project_manager -x tiny:par:2 -a 1
 ```
 
-The kept copy `../tiny_par_settings.json_my_project` contains the added `#pragma omp parallel for ...`. The entry in `execution_results.json` lists `applied_suggestions`, `requested_suggestions` and `failed_suggestions`. To change the original sources, use the [patch applicator](../tools/Patch_applicator.md).
+The kept build (`../my_project_discopop_builds/tiny_par_s<hash>`, see `--list-builds`) contains the added `#pragma omp parallel for ...`. The entry in `execution_results.json` lists `applied_suggestions`, `requested_suggestions` and `failed_suggestions`. To change the original sources, use the [patch applicator](../tools/Patch_applicator.md).
 
 ## 8. Reset
 ```bash
