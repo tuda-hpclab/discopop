@@ -26,10 +26,8 @@ from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
-from discopop_library.ProjectManager.services import callpath_pruning
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
-    CallpathPruningChanged,
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
@@ -373,62 +371,3 @@ def test_excluded_directories_read_again_when_shown(editor: SetupPanel, qtbot: Q
     editor.show()
     qtbot.waitExposed(editor)
     assert editor.excluded_directories.item_of("dp_build") is not None
-
-
-def write_hotspots(editor: SetupPanel) -> None:
-    directory = Path(editor.arguments.dot_dp) / "hotspot_detection"
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / "Hotspots.json").write_text(json.dumps({"code_regions": [{"hotness": "YES"}]}))
-
-
-def test_call_path_pruning_is_off_by_default_without_notice(editor: SetupPanel) -> None:
-    assert not editor.pruning_checkbox.isChecked()
-    assert editor.pruning_notice.isHidden()
-
-
-def test_the_notice_appears_with_current_hotspots_while_pruning_is_off(editor: SetupPanel) -> None:
-    write_hotspots(editor)
-    editor.project_state.publish(HotspotsChanged())
-    assert not editor.pruning_notice.isHidden()
-    assert "not activated" in editor.pruning_notice.text_label.text()
-
-
-def test_activating_saves_the_setting_hides_the_notice_and_publishes_one_event(editor: SetupPanel) -> None:
-    write_hotspots(editor)
-    editor.refresh_callpath_pruning()
-    changes: List[object] = []
-    editor.project_state.subscribe(CallpathPruningChanged, changes.append)
-    configurations = recorded_changes(editor)
-    editor.pruning_depth.setValue(5)  # only a finished entry is stored
-    editor.pruning_depth.editingFinished.emit()
-    editor.pruning_unclassified.setCurrentText("prune")
-    editor.pruning_checkbox.setChecked(True)
-    stored = callpath_pruning.load_callpath_pruning(editor.arguments.project_dir)
-    assert stored.enabled and stored.hot_depth == 5 and stored.unclassified == "prune"
-    assert editor.pruning_notice.isHidden()
-    assert len(changes) == 3 and not configurations
-    editor.pruning_depth.editingFinished.emit()  # nothing changed: nothing stored, nothing published
-    assert len(changes) == 3
-
-
-def test_the_depth_is_not_stored_with_every_key_stroke(editor: SetupPanel) -> None:
-    editor.pruning_depth.setValue(7)
-    assert callpath_pruning.load_callpath_pruning(editor.arguments.project_dir).hot_depth == 2
-
-
-def test_activating_without_hotspots_shows_the_missing_results(editor: SetupPanel) -> None:
-    editor.pruning_checkbox.setChecked(True)
-    assert not editor.pruning_notice.isHidden()
-    assert "no current hotspot" in editor.pruning_notice.text_label.text()
-
-
-def test_the_setting_is_read_again_when_changed_outside_the_gui(editor: SetupPanel) -> None:
-    callpath_pruning.save_callpath_pruning(
-        editor.arguments.project_dir, callpath_pruning.CallpathPruning(enabled=True, hot_depth=9, unclassified="prune")
-    )
-    changes: List[object] = []
-    editor.project_state.subscribe(CallpathPruningChanged, changes.append)
-    editor.reload_callpath_pruning()
-    assert editor.pruning_checkbox.isChecked() and editor.pruning_depth.value() == 9
-    assert editor.pruning_unclassified.currentText() == "prune"
-    assert not changes  # showing it is no change

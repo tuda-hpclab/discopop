@@ -11,8 +11,8 @@
 The LLVM pass can fold the call path states of functions that are not relevant according to ``Hotspots.json`` into
 the state of their caller (``profiler/DiscoPoP/static_analysis/hotspot_relevance.hpp``). It only does so if the
 environment variable ``DP_CALLPATH_HOTSPOTS`` names that file, so the project manager has to pass it: this module
-holds the project's setting (``.discopop/project/callpath_pruning.json``, off by default, edited in the Project Setup
-stage of the GUI), decides whether a ``Hotspots.json`` is *current* and builds the variables for an instrumented
+holds the project's setting (``.discopop/project/callpath_pruning.json``, off by default, edited in the Build stage
+of the GUI), decides whether a ``Hotspots.json`` is *current* and builds the variables for an instrumented
 (``dp``) build. Toolkit-free.
 """
 
@@ -177,7 +177,7 @@ def inactive_warning(arguments: ProjectManagerArguments, config: Optional[str]) 
         return None
     return (
         "Call path pruning is not activated although current hotspot detection results exist. Activating it "
-        '(GUI: Project Setup, "Call path pruning") folds the call path states of functions without hotspots, which '
+        '(GUI: Build stage, "Call path pruning") folds the call path states of functions without hotspots, which '
         "makes profiling faster and the data smaller; it takes effect with the next profiling build."
     )
 

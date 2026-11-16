@@ -16,9 +16,11 @@ import json
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QPushButton
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import widgets
+from discopop_library.ProjectManager.qt_gui.help_dialogs import HelpDialog
 from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
@@ -170,3 +172,39 @@ def test_the_chip_warns_in_dp_mode_when_pruning_is_possible_but_off(panel: Build
     callpath_pruning.save_callpath_pruning(panel.arguments.project_dir, callpath_pruning.CallpathPruning(enabled=True))
     panel.project_state.publish(CallpathPruningChanged())
     assert panel.header.chip.text() != "Call path pruning is off"
+
+
+def header_button_texts(panel: BuildPanel) -> List[str]:
+    return [button.text() for button in panel.header.findChildren(QPushButton)]
+
+
+def test_the_pruning_section_follows_the_shared_build_section(panel: BuildPanel) -> None:
+    sections = [
+        panel.findChildren(type(panel.shared_build))[0],
+        panel.callpath_pruning,
+        panel.builds,
+    ]
+    parent = panel.shared_build.parentWidget()
+    assert parent is not None
+    layout = parent.layout()
+    assert layout is not None
+    indices = [layout.indexOf(section) for section in sections]
+    assert indices == sorted(indices) and indices[1] == indices[0] + 1
+
+
+def test_the_explanation_is_behind_a_help_button_not_on_the_page(panel: BuildPanel, qtbot: QtBot) -> None:
+    assert "Help" in header_button_texts(panel)
+    page_texts = [label.text() for label in panel.findChildren(QLabel)]
+    assert not any(text.startswith("Compiles the selected configuration") for text in page_texts)
+    assert not any(
+        box.title_label is not None and box.title_label.text() == "What happens" for box in sections_of(panel)
+    )
+    help_button = next(button for button in panel.header.findChildren(QPushButton) if button.text() == "Help")
+    help_button.click()
+    dialogs = [child for child in panel.children() if isinstance(child, HelpDialog)]
+    assert len(dialogs) == 1 and "Nothing is run" in dialogs[0].text.toPlainText()
+    qtbot.addWidget(dialogs[0])
+
+
+def sections_of(panel: BuildPanel) -> List[widgets.FormSection]:
+    return panel.findChildren(widgets.FormSection)

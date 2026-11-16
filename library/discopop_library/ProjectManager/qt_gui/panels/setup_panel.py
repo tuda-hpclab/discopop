@@ -20,13 +20,10 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -46,7 +43,6 @@ from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
-from discopop_library.ProjectManager.services import callpath_pruning
 from discopop_library.ProjectManager.services.editor_files import (
     COMPILATION_FILES,
     DERIVE_TOOLTIP_SUFFIX,
@@ -61,8 +57,6 @@ from discopop_library.ProjectManager.services.editor_files import (
 from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
-    CallpathPruningChanged,
-    ConfigChanged,
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
@@ -88,19 +82,6 @@ INCLUDED_DIRECTORIES_HINT = (
     "Their code is project code as well, e.g. sources shared between projects: instrumented and part of the file"
     " mapping and the AST. They are not copied for the runs of a configuration, so suggestions for them are only"
     " applied on request. Saved at once; takes effect with the next build."
-)
-
-CALLPATH_PRUNING_TITLE = "Call path pruning"
-CALLPATH_PRUNING_TEXT = "Prune the call path states with the hotspot detection results"
-CALLPATH_PRUNING_HINT = (
-    "The profiling build folds the call path states of functions that are neither hot nor lead to a hot function"
-    " into the state of their caller: faster profiling and smaller data, with the call paths of the hot code kept."
-    " Needs current hotspot detection results (Hotspot Detection stage). Saved at once; takes effect with the next"
-    " profiling build."
-)
-CALLPATH_PRUNING_DEPTH_HINT = "Calls below a hot function whose call paths are kept."
-CALLPATH_PRUNING_UNCLASSIFIED_HINT = (
-    "Functions the hotspot detection did not classify: keep their call paths or fold them into the caller."
 )
 
 RESET_RESULTS_TEXT = "Reset Execution Results…"
@@ -184,7 +165,6 @@ class SetupPanel(Panel):
         self.included_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         included_section = widgets.FormSection(INCLUDED_DIRECTORIES_TITLE)
         included_section.add_widget(self.included_directories, INCLUDED_DIRECTORIES_HINT)
-        self.pruning_section = self._callpath_pruning_section()
         # what is project code: the project directory without the excluded directories, plus the included ones
         project_code = QHBoxLayout()
         project_code.setContentsMargins(0, 0, 0, 0)
@@ -195,89 +175,10 @@ class SetupPanel(Panel):
         layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
         layout.addLayout(project_code)
-        layout.addWidget(self.pruning_section)
         layout.addWidget(self._danger_zone())
 
         self.load_files()
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.reload_unmodified())
-        for event_type in (HotspotsChanged, ProjectDirectoriesChanged, ConfigChanged):
-            project_state.subscribe(event_type, lambda _event: self.refresh_callpath_pruning())
-
-    def _callpath_pruning_section(self) -> widgets.FormSection:
-        """The card of the call path pruning: the switch, its parameters and the notice about the hotspot results."""
-        stored = callpath_pruning.load_callpath_pruning(self.arguments.project_dir)
-        section = widgets.FormSection(CALLPATH_PRUNING_TITLE)
-        self.pruning_checkbox = QCheckBox(CALLPATH_PRUNING_TEXT)
-        self.pruning_checkbox.setChecked(stored.enabled)
-        section.add_widget(self.pruning_checkbox, CALLPATH_PRUNING_HINT)
-        self.pruning_depth = QSpinBox()
-        self.pruning_depth.setRange(0, callpath_pruning.MAX_HOT_DEPTH)
-        self.pruning_depth.setValue(stored.hot_depth)
-        section.add_row("Depth below hot functions", self.pruning_depth, CALLPATH_PRUNING_DEPTH_HINT)
-        self.pruning_unclassified = QComboBox()
-        self.pruning_unclassified.addItems(callpath_pruning.UNCLASSIFIED_CHOICES)
-        self.pruning_unclassified.setCurrentText(stored.unclassified)
-        section.add_row("Unclassified functions", self.pruning_unclassified, CALLPATH_PRUNING_UNCLASSIFIED_HINT)
-        self.pruning_notice = widgets.WarningBanner()
-        section.add_widget(self.pruning_notice)
-        self.pruning_checkbox.toggled.connect(lambda _checked: self._on_callpath_pruning_changed())
-        # a value is stored when the entry is finished, not with every key stroke
-        self.pruning_depth.editingFinished.connect(self._on_callpath_pruning_changed)
-        self.pruning_unclassified.currentTextChanged.connect(lambda _text: self._on_callpath_pruning_changed())
-        self.refresh_callpath_pruning()
-        return section
-
-    def _on_callpath_pruning_changed(self) -> None:
-        before = callpath_pruning.load_callpath_pruning(self.arguments.project_dir)
-        pruning = callpath_pruning.CallpathPruning(
-            enabled=self.pruning_checkbox.isChecked(),
-            hot_depth=self.pruning_depth.value(),
-            unclassified=self.pruning_unclassified.currentText(),
-            seeds=before.seeds,
-            hotness=before.hotness,
-        )
-        if pruning == before:
-            return
-        try:
-            callpath_pruning.save_callpath_pruning(self.arguments.project_dir, pruning)
-        except OSError as error:
-            self.status.set("Cannot save the call path pruning setting: " + str(error), widgets.STATUS_FAIL)
-            return
-        if pruning.enabled != before.enabled:
-            text = "Call path pruning " + ("activated" if pruning.enabled else "deactivated")
-        else:
-            text = (
-                "Call path pruning: depth "
-                + str(pruning.hot_depth)
-                + ", unclassified functions: "
-                + pruning.unclassified
-            )
-        self.status.set(text, widgets.STATUS_OK, reset_ms=3000)
-        self.refresh_callpath_pruning()
-        # builds and profiling data with another setting are not current any more
-        self.project_state.publish(CallpathPruningChanged())
-
-    def reload_callpath_pruning(self) -> None:
-        """Show the stored setting (it may have been changed outside the GUI) without storing it again."""
-        stored = callpath_pruning.load_callpath_pruning(self.arguments.project_dir)
-        for widget in (self.pruning_checkbox, self.pruning_depth, self.pruning_unclassified):
-            widget.blockSignals(True)
-        self.pruning_checkbox.setChecked(stored.enabled)
-        self.pruning_depth.setValue(stored.hot_depth)
-        self.pruning_unclassified.setCurrentText(stored.unclassified)
-        for widget in (self.pruning_checkbox, self.pruning_depth, self.pruning_unclassified):
-            widget.blockSignals(False)
-        self.refresh_callpath_pruning()
-
-    def refresh_callpath_pruning(self) -> None:
-        """The notice below the setting: current hotspot results exist but pruning is off, or it is on without them."""
-        config = self.project_state.current_config
-        text = callpath_pruning.inactive_warning(self.arguments, config) or callpath_pruning.no_hotspots_warning(
-            self.arguments, config
-        )
-        if text:
-            self.pruning_notice.set_message("Call path pruning", text)
-        self.pruning_notice.setVisible(bool(text))
 
     def _danger_zone(self) -> QFrame:
         """The card of the resets: framed in red, each with what it deletes and what it keeps."""
@@ -368,7 +269,6 @@ class SetupPanel(Panel):
         self.reload_unmodified()
         self.excluded_directories.reload()
         self.included_directories.reload()
-        self.reload_callpath_pruning()
         super().showEvent(event)
 
     # ── loading ─────────────────────────────────────────────────────────────

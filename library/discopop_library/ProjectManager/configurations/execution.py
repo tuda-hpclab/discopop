@@ -411,7 +411,7 @@ def execute_configuration(
             pruning_warnings.append(
                 ", ".join(ignored)
                 + " set in the environment or the settings file is ignored: call path pruning is configured in the "
-                'project (GUI: Project Setup, "Call path pruning").'
+                'project (GUI: Build stage, "Call path pruning").'
             )
         if callpath_pruning_environment is None:
             callpath_pruning_environment = callpath_pruning.environment(arguments, config_name)
