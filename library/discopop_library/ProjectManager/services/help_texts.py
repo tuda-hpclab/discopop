@@ -12,6 +12,9 @@ _PROJECT_ROOT_NOTE = (
     "\n\nVariables set for the script:\n"
     "  • $CC, $CXX, $CFLAGS, $CXXFLAGS: compilers and flags (required in compile scripts)\n"
     "  • $DP_PROJECT_ROOT_DIR: root of the project copy the script runs in (use it for paths)\n"
+    "  • $DP_PROJECT_ORIGINAL_DIR: the original project, never a copy; use it for out-of-source builds\n"
+    '    (cmake -S "$DP_PROJECT_ORIGINAL_DIR") or data that is not copied. Code built from there is\n'
+    "    not instrumented and contains no applied suggestions\n"
     "  • $DOT_DISCOPOP: the .discopop directory of that root\n"
     "  • $DP_PROJECT_INCLUDE_DIRS / $DP_PROJECT_EXCLUDE_DIRS: project directories outside / inside\n"
     "    the root that are instrumented / left out\n"

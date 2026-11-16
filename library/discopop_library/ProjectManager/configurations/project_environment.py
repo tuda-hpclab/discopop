@@ -14,6 +14,12 @@ These variables tell the DiscoPoP tools where a run happens and what is project 
     The absolute path of the project root the run uses: the project root itself, or the copy of it a run
     of a configuration works in. Scripts use it to find the project (``cmake -S "$DP_PROJECT_ROOT_DIR"``).
     The profiler and the hotspot detection instrument the code below it.
+``DP_PROJECT_ORIGINAL_DIR``
+    The absolute path of the original project, i.e. the project the run was started for, never the copy a
+    run of a configuration works in (it equals ``DP_PROJECT_ROOT_DIR`` for a run in place). Scripts use it to
+    reach what is not copied or is shared by all runs, e.g. ``cmake -S "$DP_PROJECT_ORIGINAL_DIR" -B build`` for an
+    out-of-source build or large input data. Code compiled from there lies outside of ``DP_PROJECT_ROOT_DIR``: it
+    is neither instrumented (unless listed as an included directory) nor does it contain applied suggestions.
 ``DOT_DISCOPOP``
     ``<run root>/.discopop``, always absolute. The compiler wrappers, the LLVM passes and the runtime
     libraries write there. It has to be the same absolute path for every compile step of a build and
@@ -34,10 +40,11 @@ The two lists are the *project directories*: stored in ``.discopop/project/inclu
 one invocation of the command line with ``--project-include-dirs`` / ``--project-exclude-dirs``.
 :func:`build_environment` is the single place that stacks the layers of a run's environment.
 
-``DP_PROJECT_ROOT_DIR`` and ``DOT_DISCOPOP`` cannot be set in the settings files (``seq_settings.json`` and the
-files derived from it): every run overrides them, :func:`ignored_settings_warning` reports a value found there, and
-:func:`migrate_settings_files` removes them. The two lists can be extended there: entries of a settings file are
-kept in front of the stored ones.
+``DP_PROJECT_ROOT_DIR``, ``DP_PROJECT_ORIGINAL_DIR`` and ``DOT_DISCOPOP`` cannot be set in the settings files
+(``seq_settings.json`` and the files derived from it): every run overrides them,
+:func:`ignored_settings_warning` reports a value found there, and
+:func:`migrate_settings_files` removes them. The two lists can be extended there: entries of a
+settings file are kept in front of the stored ones.
 """
 
 import json
@@ -48,14 +55,15 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 from discopop_library.ProjectManager.services import excluded_directories, included_directories
 
 ROOT_VARIABLE = "DP_PROJECT_ROOT_DIR"
+ORIGINAL_VARIABLE = "DP_PROJECT_ORIGINAL_DIR"
 DOT_DISCOPOP_VARIABLE = "DOT_DISCOPOP"
 INCLUDE_VARIABLE = included_directories.ENVIRONMENT_VARIABLE
 EXCLUDE_VARIABLE = excluded_directories.ENVIRONMENT_VARIABLE
 
 # Set from the run root for every run, hence not allowed in a settings file.
-RESERVED_VARIABLES = (ROOT_VARIABLE, DOT_DISCOPOP_VARIABLE)
+RESERVED_VARIABLES = (ROOT_VARIABLE, ORIGINAL_VARIABLE, DOT_DISCOPOP_VARIABLE)
 # What the log of a run names.
-PROJECT_VARIABLES = (ROOT_VARIABLE, DOT_DISCOPOP_VARIABLE, INCLUDE_VARIABLE, EXCLUDE_VARIABLE)
+PROJECT_VARIABLES = (ROOT_VARIABLE, ORIGINAL_VARIABLE, DOT_DISCOPOP_VARIABLE, INCLUDE_VARIABLE, EXCLUDE_VARIABLE)
 
 # The settings files below project_config_dir that are passed to the scripts as environment variables.
 SETTINGS_FILES = ("seq_settings.json", "dp_settings.json", "hd_settings.json", "par_settings.json")
@@ -114,14 +122,19 @@ def project_directories_of(
     return ProjectDirectories(included=included, excluded=excluded)
 
 
-def resolve_project_variables(directories: ProjectDirectories, run_root: str) -> Dict[str, str]:
+def resolve_project_variables(
+    directories: ProjectDirectories, run_root: str, original_root: Optional[str] = None
+) -> Dict[str, str]:
     """The variables of a run in ``run_root`` (the project root or a copy of it); the lists only if not empty.
+
+    ``original_root`` is the original project (``DP_PROJECT_ORIGINAL_DIR``); ``run_root`` if not given.
 
     The excluded directories become absolute paths in ``run_root``, so they hold for a copy of the project as well.
     """
     absolute_run_root = os.path.abspath(run_root)
     variables = {
         ROOT_VARIABLE: absolute_run_root,
+        ORIGINAL_VARIABLE: os.path.abspath(original_root) if original_root is not None else absolute_run_root,
         DOT_DISCOPOP_VARIABLE: os.path.join(absolute_run_root, ".discopop"),
     }
     if directories.included:
@@ -152,11 +165,13 @@ def build_environment(
     settings: Mapping[str, str],
     directories: ProjectDirectories,
     run_root: str,
+    original_root: Optional[str] = None,
 ) -> Dict[str, str]:
-    """The environment of a command run in ``run_root``.
+    """The environment of a command run in ``run_root`` (``original_root``: the original project, see
+    :func:`resolve_project_variables`).
 
     Layers, the later winning: ``base`` (usually the process's environment), ``settings`` (the settings file of
-    the mode), then the variables of the project. ``DP_PROJECT_ROOT_DIR`` and ``DOT_DISCOPOP`` inherited from
+    the mode), then the variables of the project. The reserved variables inherited from
     ``base`` or set in ``settings`` are overridden (:func:`ignored_settings_warning` tells the user about the
     latter); entries of the two lists found there are kept in front of the stored ones. What is specific to one run
     (``OMP_NUM_THREADS``, ``PATH``) is up to the caller.
@@ -164,7 +179,7 @@ def build_environment(
     result: Dict[str, str] = dict(base)
     for key, value in settings.items():
         result[key] = value
-    for name, value in resolve_project_variables(directories, run_root).items():
+    for name, value in resolve_project_variables(directories, run_root, original_root).items():
         result[name] = _merged(result.get(name, ""), value) if name in (INCLUDE_VARIABLE, EXCLUDE_VARIABLE) else value
     return result
 
