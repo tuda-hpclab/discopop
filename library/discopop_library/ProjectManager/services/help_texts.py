@@ -9,17 +9,13 @@
 """The texts of the help dialogs of the editors (shared by the Tk and the Qt GUI): file name -> (title, text)."""
 
 _PROJECT_ROOT_NOTE = (
-    "\n\nPaths relative to the project root:\n"
-    "Every script is started in a copy of the project (a build of the configuration and mode), not in\n"
-    "the original directory, and gets the environment variable DP_PROJECT_ROOT_DIR: the root of the\n"
-    "project it works on. Use it to name files relative to the project, e.g.\n"
-    '  cd "$DP_PROJECT_ROOT_DIR/src"\n'
-    '  "$DP_PROJECT_ROOT_DIR/build/program" <args>\n'
-    "instead of absolute paths into the original checkout, which would leave the copy and its\n"
-    "instrumentation behind. Directories outside the project are not copied; list them under\n"
-    "'Included directories' in Project Setup and use their real paths (DP_PROJECT_INCLUDE_DIRS holds\n"
-    "them). DOT_DISCOPOP is the .discopop directory of the same root. Do not set these variables in\n"
-    "the settings files."
+    "\n\nVariables set for the script:\n"
+    "  • $CC, $CXX, $CFLAGS, $CXXFLAGS: compilers and flags (required in compile scripts)\n"
+    "  • $DP_PROJECT_ROOT_DIR: root of the project copy the script runs in (use it for paths)\n"
+    "  • $DOT_DISCOPOP: the .discopop directory of that root\n"
+    "  • $DP_PROJECT_INCLUDE_DIRS / $DP_PROJECT_EXCLUDE_DIRS: project directories outside / inside\n"
+    "    the root that are instrumented / left out\n"
+    "  • $OMP_NUM_THREADS: the thread count of the run"
 )
 
 HELP_TEXTS: dict[str, tuple[str, str]] = {
