@@ -372,17 +372,38 @@ def _write_json_atomically(path: PATH, data: Dict[str, Any]) -> None:
 
 
 def activate_run(arguments: ProjectManagerArguments, run: RunRecord) -> List[str]:
-    """Put the data of ``run`` into the ``.discopop`` of the project, where the pattern detection reads it.
+    """Put the data of ``run`` into the ``.discopop`` of the project (see :func:`activate_runs`)."""
+    return activate_runs(arguments, [run])
+
+
+def activate_runs(arguments: ProjectManagerArguments, runs: Sequence[RunRecord]) -> List[str]:
+    """Put the data of ``runs`` into the ``.discopop`` of the project, where the pattern detection reads it.
 
     The data of the same kind that was there is replaced (``profiler`` for a dp run, ``hotspot_detection`` for an
     hd run), the paths of the build tree in it become paths of the project, and the results derived from the data
     that was there (explorer, patches) are left alone, which the workflow status then reports as outdated. Returns
     the replaced entries of ``.discopop``. Either everything is replaced or, if that fails, nothing.
 
+    Several runs are only accepted for the mode ``hd``, whose results accumulate: the runs have to belong to one build
+    (they are the runs of different inputs of the same program), and the result files of all are put into the project
+    next to each other, in the order of ``runs``. For the other modes, ``runs`` holds exactly one run.
+
     Raises :class:`ActivationError` for a run that is unfinished or failed, whose build has suggestions applied (its
     line numbers do not match the project's sources), or whose file ids contradict those of the data of the other
     kind that stays in the project (the file ids belong to the build; dp and hd builds assign them independently).
     """
+    if not runs:
+        raise ActivationError("there is no run to put into the project")
+    run = runs[0]
+    if len(runs) > 1 and (
+        run.mode != "hd" or any(member.mode != run.mode or member.build_id != run.build_id for member in runs)
+    ):
+        raise ActivationError("several runs can only be put into the project together if they are hd runs of one build")
+    for member in runs[1:]:
+        if member.return_code != 0:
+            raise ActivationError("the run " + member.run_id + " did not finish successfully")
+        if not os.path.isdir(os.path.abspath(member.dot_discopop)):
+            raise ActivationError("the data of the run " + member.run_id + " does not exist any more")
     if run.mode not in PROFILING_MODES:
         raise ActivationError("only runs of the modes " + ", ".join(PROFILING_MODES) + " write profiling data")
     if run.return_code != 0:
@@ -414,15 +435,47 @@ def activate_run(arguments: ProjectManagerArguments, run: RunRecord) -> List[str
             )
     try:
         with FileLock(os.path.join(dot, ".activate.lock"), timeout=0):
-            return _activate_locked(arguments, run, run_dot, tree, root, dot)
+            return _activate_locked(arguments, run, run_dot, tree, root, dot, runs[1:])
     except Timeout:
         raise ActivationError("another run is being put into the project right now")
     except OSError as error:
         raise ActivationError("the run could not be put into the project: " + str(error))
 
 
+def _add_result_files(runs: Sequence[RunRecord], staging: PATH, tree: PATH, root: PATH) -> None:
+    """Add the hotspot result files of ``runs`` to the staged ``hotspot_detection``, numbered after those there.
+
+    Every run starts with an empty result directory, so each wrote ``hotspot_result_0.txt``; the analysis reads
+    ``hotspot_result_<N>.txt`` with consecutive numbers.
+    """
+    private = os.path.join(staging, "hotspot_detection", "private")
+    for other in runs:
+        source = os.path.join(os.path.abspath(other.dot_discopop), "hotspot_detection", "private")
+        names = sorted(
+            (name for name in os.listdir(source) if name.startswith(_RESULT_FILE_PREFIXES) and name.endswith(".txt")),
+            key=lambda name: (len(name), name),
+        )
+        os.makedirs(private, exist_ok=True)
+        for name in names:
+            position = 0
+            while os.path.exists(os.path.join(private, "hotspot_result_" + str(position) + ".txt")):
+                position += 1
+            replace_in_file(
+                os.path.join(source, name),
+                os.path.join(private, "hotspot_result_" + str(position) + ".txt"),
+                tree,
+                root,
+            )
+
+
 def _activate_locked(
-    arguments: ProjectManagerArguments, run: RunRecord, run_dot: PATH, tree: PATH, root: PATH, dot: PATH
+    arguments: ProjectManagerArguments,
+    run: RunRecord,
+    run_dot: PATH,
+    tree: PATH,
+    root: PATH,
+    dot: PATH,
+    further_runs: Sequence[RunRecord] = (),
 ) -> List[str]:
     staging = os.path.join(dot, ".activating")
     backup = os.path.join(dot, ".replaced")
@@ -439,6 +492,7 @@ def _activate_locked(
         for name in _RUN_DIRECTORIES[run.mode]:
             if os.path.isdir(os.path.join(run_dot, name)):
                 _copy_tree_rewriting(os.path.join(run_dot, name), os.path.join(staging, name), tree, root)
+        _add_result_files(further_runs, staging, tree, root)
         # everything is prepared: swap it in, keeping what it replaces until all is in place
         for name in sorted(os.listdir(staging)):
             target = os.path.join(dot, name)
@@ -448,7 +502,13 @@ def _activate_locked(
             os.replace(os.path.join(staging, name), target)
             replaced.append(name)
         _write_json_atomically(
-            os.path.join(dot, "active_run.json"), {"run_id": run.run_id, "build_id": run.build_id, "mode": run.mode}
+            os.path.join(dot, "active_run.json"),
+            {
+                "run_id": run.run_id,
+                "build_id": run.build_id,
+                "mode": run.mode,
+                **({"run_ids": [run.run_id] + [other.run_id for other in further_runs]} if further_runs else {}),
+            },
         )
     except BaseException:
         # put back what was there

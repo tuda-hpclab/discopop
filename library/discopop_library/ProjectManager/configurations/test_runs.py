@@ -23,6 +23,7 @@ from discopop_library.ProjectManager.configurations.builds import list_builds
 from discopop_library.ProjectManager.configurations.runs import (
     ActivationError,
     activate_run,
+    activate_runs,
     delete_runs,
     latest_successful_run,
     list_all_runs,
@@ -187,6 +188,74 @@ def test_a_run_that_failed_or_whose_build_has_suggestions_cannot_be_activated(pr
     with pytest.raises(ActivationError, match="suggestions"):
         activate_run(arguments, with_suggestions)
     assert not (project["root"] / ".discopop" / "profiler").exists()
+
+
+def _hotspot_run(project: Dict[str, Path], name: str, result: str, build_id: str = "cfg_hd") -> runs.RunRecord:
+    dot = project["tmp"] / "hd_runs" / name
+    (dot / "hotspot_detection" / "private").mkdir(parents=True)
+    (dot / "hotspot_detection" / "private" / "hotspot_result_0.txt").write_text(result)
+    (dot / "hotspot_detection" / "private" / "cs_id.txt").write_text("static of " + name)
+    (dot / "FileMapping.txt").write_text(f"1\t{project['tmp']}/tree/main.c\n")
+    return runs.RunRecord(
+        run_id=name,
+        build_id=build_id,
+        configuration="cfg",
+        mode="hd",
+        thread_count=1,
+        label="",
+        started_at=0.0,
+        dot_discopop=str(dot),
+        tree=str(project["tmp"] / "tree"),
+        return_code=0,
+    )
+
+
+def test_the_hotspot_runs_of_several_inputs_are_put_into_the_project_together(project: Dict[str, Path]) -> None:
+    arguments = _arguments(project["root"])
+    first = _hotspot_run(project, "small", "small input")
+    second = _hotspot_run(project, "large", "large input")
+    third = _hotspot_run(project, "larger", "larger input")
+    (project["root"] / ".discopop" / "hotspot_detection").mkdir()
+    (project["root"] / ".discopop" / "hotspot_detection" / "old.txt").write_text("old")
+
+    assert "hotspot_detection" in activate_runs(arguments, [first, second, third])
+
+    dot = project["root"] / ".discopop"
+    private = dot / "hotspot_detection" / "private"
+    assert not (dot / "hotspot_detection" / "old.txt").exists()
+    # the result files of the runs are numbered one after the other, in the order given; the static data is the build's
+    assert sorted(entry.name for entry in private.iterdir()) == [
+        "cs_id.txt",
+        "hotspot_result_0.txt",
+        "hotspot_result_1.txt",
+        "hotspot_result_2.txt",
+    ]
+    assert [(private / f"hotspot_result_{n}.txt").read_text() for n in range(3)] == [
+        "small input",
+        "large input",
+        "larger input",
+    ]
+    assert (private / "cs_id.txt").read_text() == "static of small"
+    assert (dot / "FileMapping.txt").read_text() == f"1\t{project['root']}/main.c\n"
+    assert json.loads((dot / "active_run.json").read_text())["run_ids"] == ["small", "large", "larger"]
+
+
+def test_several_runs_are_only_put_into_the_project_together_if_they_are_hd_runs_of_one_build(
+    project: Dict[str, Path],
+) -> None:
+    arguments = _arguments(project["root"])
+    first = _hotspot_run(project, "a", "a")
+    with pytest.raises(ActivationError, match="hd runs of one build"):
+        activate_runs(arguments, [first, _hotspot_run(project, "b", "b", build_id="other_hd")])
+    with pytest.raises(ActivationError, match="hd runs of one build"):
+        activate_runs(arguments, [first, runs.RunRecord(**{**_hotspot_run(project, "c", "c").__dict__, "mode": "dp"})])
+    with pytest.raises(ActivationError, match="successfully"):
+        activate_runs(
+            arguments, [first, runs.RunRecord(**{**_hotspot_run(project, "d", "d").__dict__, "return_code": 1})]
+        )
+    with pytest.raises(ActivationError, match="no run"):
+        activate_runs(arguments, [])
+    assert not (project["root"] / ".discopop" / "hotspot_detection").exists()
 
 
 def test_deleting_runs(project: Dict[str, Path]) -> None:

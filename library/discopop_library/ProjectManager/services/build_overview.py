@@ -12,7 +12,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Set, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.builds import (
@@ -20,6 +20,7 @@ from discopop_library.ProjectManager.configurations.builds import (
     BuildRecord,
     BuildState,
     build_status,
+    build_trees_dir_of,
     delete_builds,
     list_builds,
 )
@@ -165,3 +166,50 @@ def delete_selected_builds(arguments: ProjectManagerArguments, build_ids: Sequen
 
 def delete_selected_runs(arguments: ProjectManagerArguments, run_ids: Sequence[str]) -> List[str]:
     return delete_runs(arguments, list(run_ids))
+
+
+def storage_of(path: str) -> int:
+    """The bytes the files below ``path`` occupy; a file with several hard links (the runs link the static data of
+    their build) counts once, which is what the disk holds."""
+    seen: Set[Tuple[int, int]] = set()
+    total = 0
+    for directory, _subdirectories, files in os.walk(path):
+        for name in files:
+            try:
+                info = os.lstat(os.path.join(directory, name))
+            except OSError:
+                continue
+            if info.st_nlink > 1:
+                if (info.st_dev, info.st_ino) in seen:
+                    continue
+                seen.add((info.st_dev, info.st_ino))
+            total += info.st_size
+    return total
+
+
+def storage_warning(arguments: ProjectManagerArguments, expected_builds: Sequence[str]) -> Optional[str]:
+    """A warning that builds and runs pile up in ``<project>_discopop_builds``, or None while they do not.
+
+    ``expected_builds`` are the ids of the builds the caller works with. Builds beyond them and runs that are not the
+    latest of their build are what accumulates (every rebuild, every further input, every configuration leaves
+    one), so only they trigger the warning; it then states the totals, the number of builds and runs and the
+    storage they occupy. Nothing is ever deleted automatically: the text names the commands for that. The size is
+    only computed if there is something to warn about, as it reads every file of the trees.
+    """
+    builds = list_builds(arguments.project_dir)
+    runs = list_all_runs(arguments)
+    latest_of_build = {}
+    for run in runs:
+        latest_of_build[run.build_id] = run.run_id
+    extra_builds = [build for build in builds if build.build_id not in expected_builds]
+    extra_runs = [run for run in runs if latest_of_build.get(run.build_id) != run.run_id]
+    if not extra_builds and not extra_runs:
+        return None
+    trees = build_trees_dir_of(arguments.project_root)
+    return (
+        "%d builds and %d runs of this project occupy %s in %s: %d builds beyond those used here and %d older runs. "
+        "Builds and runs are never deleted automatically; the user can list them with `discopop_project_manager "
+        "--list-builds` / `--list-runs` and remove what is no longer needed with `--delete-builds` / "
+        '`--delete-runs` (or in the GUI card "Builds and runs"). Do not delete them yourself.'
+        % (len(builds), len(runs), format_size(storage_of(trees)), trees, len(extra_builds), len(extra_runs))
+    )
