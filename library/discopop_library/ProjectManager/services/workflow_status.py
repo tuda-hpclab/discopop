@@ -31,6 +31,7 @@ from discopop_library.ProjectManager.services.explorer_state import (
 )
 from discopop_library.ProjectManager.services.hotspot_build import BUILD_MISMATCH
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
+from discopop_library.ProjectManager.services.hotspot_session import forget_build_states as forget_hotspot_build_states
 from discopop_library.ProjectManager.services.patch_repair_view import load_results as load_patch_repair_results
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
 
@@ -182,6 +183,7 @@ _build_states: Dict[Tuple[str, Optional[str]], Tuple[float, str]] = {}
 def forget_build_states() -> None:
     """Drop the cached build states (call after a hotspot build or measurement)."""
     _build_states.clear()
+    forget_hotspot_build_states()
 
 
 def _build_state(arguments: ProjectManagerArguments, config: Optional[str]) -> str:
