@@ -25,6 +25,7 @@ from discopop_library.ProjectManager.qt_gui.tabs import TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.wizard import ConfigurationWizard
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, members_of
 from discopop_library.ProjectManager.services.configurations import (
     ConfigurationError,
     SameNameError,
@@ -179,7 +180,14 @@ class ConfigListPanel(Panel):
                 self.tab_bar.removeTab(0)
             for name in configs:
                 index = self.tab_bar.addTab(name)
-                self.tab_bar.setTabToolTip(index, f"Execution configuration '{name}'; right-click for more")
+                owner = build_owner_of(self.config_dir, name)
+                shared = members_of(self.config_dir, name)
+                note = (
+                    f"\nBuilds from '{owner}'."
+                    if owner != name
+                    else (f"\nIts build is shared with {', '.join(shared)}." if shared else "")
+                )
+                self.tab_bar.setTabToolTip(index, f"Execution configuration '{name}'; right-click for more{note}")
             if chosen is not None:
                 self.tab_bar.setCurrentIndex(configs.index(chosen))
         finally:

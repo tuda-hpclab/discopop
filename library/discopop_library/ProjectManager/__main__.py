@@ -81,6 +81,12 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("--reuse-build", action="store_true", help="Never compile: run in the existing build of the "
     "configuration and mode. A missing or outdated build is an error. Not available with --inplace.")
     parser.add_argument("--build-only", action="store_true", help="Compile only, do not execute the configurations.")
+    parser.add_argument("--share-build", default=None, metavar="MEMBER:OWNER", help="Let the configuration MEMBER use "
+    "the build of the configuration OWNER: the compile script, the settings and the files of OWNER make the build, "
+    "MEMBER only brings its own execute.sh / validate.sh. Refused if MEMBER has files of its own that change the "
+    "build or OWNER has a separate validation compile script. If set, nothing else will be done.")
+    parser.add_argument("--unshare-build", default=None, metavar="MEMBER", help="Let the configuration MEMBER build "
+    "for itself again. If set, nothing else will be done.")
     parser.add_argument("--list-builds", action="store_true", help="List the builds of the project (kept project "
     "copies that runs execute in) and whether they are current. If set, nothing else will be done.")
     parser.add_argument("--delete-builds", nargs="?", const="all", default=None, metavar="IDS", help="Delete the "
@@ -202,6 +208,8 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         project_exclude_dirs=arguments.project_exclude_dirs,
         build_policy="rebuild" if arguments.rebuild else "reuse" if arguments.reuse_build else "auto",
         build_only=arguments.build_only,
+        share_build=arguments.share_build,
+        unshare_build=arguments.unshare_build,
         list_builds=arguments.list_builds,
         delete_builds=arguments.delete_builds,
         list_runs=arguments.list_runs,

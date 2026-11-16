@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from filelock import FileLock, Timeout
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONLY_FILES
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
 
 PATH = str
@@ -204,9 +205,7 @@ def _hash_entries(root: PATH, names: Sequence[str]) -> str:
     return digest.hexdigest()
 
 
-# the files of a configuration directory that only the runs read; everything else (helper files of compile.sh, ...)
-# can change the build
-_RUN_ONLY_FILES = ("execute.sh", "validate.sh", "execution_time.json")
+_RUN_ONLY_FILES = RUN_ONLY_FILES
 
 
 def configuration_fingerprint(arguments: ProjectManagerArguments, key: BuildKey) -> str:

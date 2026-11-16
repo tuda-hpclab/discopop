@@ -39,6 +39,20 @@ class TestCreateExecutionConfiguration(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.configs_dir, "default", "execute.sh")))
         self.assertEqual(os.listdir(os.path.join(self.configs_dir, "default")), ["execute.sh"])
 
+    def test_build_from_shares_the_build_of_another_configuration(self) -> None:
+        self._handle(config_name="owner")
+        data = self._handle(config_name="member", build_from="owner")
+        self.assertEqual(data["build_from"], "owner")
+        with open(os.path.join(self.configs_dir, "member", "build_from.json")) as f:
+            self.assertEqual(json.load(f), {"build_from": "owner"})
+        data = self._handle(config_name="member", build_from="")
+        self.assertIsNone(data["build_from"])
+        self.assertFalse(os.path.exists(os.path.join(self.configs_dir, "member", "build_from.json")))
+
+    def test_build_from_a_missing_configuration_is_reported(self) -> None:
+        data = self._handle(config_name="member", build_from="nowhere")
+        self.assertIn("does not exist", data["build_from_error"])
+
     def test_compile_scripts_are_only_set_via_set_compile_script(self) -> None:
         properties = create_execution_configuration.TOOL.inputSchema["properties"]
         self.assertNotIn("compile_script_body", properties)

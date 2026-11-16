@@ -48,12 +48,12 @@ from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from discopop_library.ProjectManager.configurations.builds import (
     BuildKey,
     BuildPolicy,
     BuildState,
     build_status,
-    list_builds,
 )
 from discopop_library.ProjectManager.configurations.building import (
     BuildLockAborted,
@@ -196,20 +196,11 @@ class HotspotSession:
         return hotspot_data.region_fingerprint(keys.values()) if keys else None
 
     def serving_build_config(self, config_name: Optional[str]) -> Optional[str]:
-        """The configuration whose hd build serves ``config_name``: the one of an existing build that was compiled
-        with the same compile script (configurations differ in their input, not in how they are built), else its own."""
+        """The configuration whose hd build serves ``config_name``: its declared build owner (see
+        :mod:`~discopop_library.ProjectManager.configurations.build_sharing`), else itself."""
         if not config_name:
             return None
-        compile_sh = os.path.abspath(resolve_compile_script_path(self.arguments.project_config_dir, config_name))
-        for record in list_builds(self.arguments.project_dir):
-            if (
-                record.mode == "hd"
-                and not record.suggestions
-                and os.path.isdir(record.tree)
-                and os.path.abspath(record.compile_script) == compile_sh
-            ):
-                return record.configuration
-        return config_name
+        return build_owner_of(self.arguments.project_config_dir, config_name)
 
     def build_state(self, current_config: Optional[str]) -> Tuple[str, str]:
         """Whether the hd build that serves the configuration can run it directly, and why not.
@@ -261,7 +252,9 @@ class HotspotSession:
         return HotspotRunRequest(
             config_name=config_name,
             config_path=os.path.join(self.arguments.project_config_dir, config_name),
-            compile_sh=resolve_compile_script_path(self.arguments.project_config_dir, config_name),
+            compile_sh=resolve_compile_script_path(
+                self.arguments.project_config_dir, self.serving_build_config(config_name) or config_name
+            ),
             settings_path=os.path.join(self.arguments.project_config_dir, "hd_settings.json"),
             arguments=args_copy,
             needs_compile=needs_compile,

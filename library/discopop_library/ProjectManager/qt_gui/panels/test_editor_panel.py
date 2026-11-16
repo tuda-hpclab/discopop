@@ -356,3 +356,17 @@ def test_a_refresh_of_the_selection_keeps_the_cursor_and_reloads_what_changed_on
     (config_dir(panel) / "execute.sh").write_text("#!/bin/bash\n./other\n")
     select(panel)
     assert editor.text() == "#!/bin/bash\n./other\n"
+
+
+def test_a_member_of_a_shared_build_cannot_add_a_compile_script(panel: EditorPanel, dialog_answers: Any) -> None:
+    from discopop_library.ProjectManager.configurations.build_sharing import set_build_from
+
+    configs = Path(panel.arguments.project_config_dir)
+    for name in ("owner", "other"):
+        (configs / name).mkdir(exist_ok=True)
+        (configs / name / "execute.sh").write_text("true\n")
+    set_build_from(str(configs), "other", "owner")
+    panel.project_state.current_config = "other"
+    panel._toggle_compile_override()
+    assert not (configs / "other" / "compile.sh").exists()
+    assert "builds from" in dialog_answers.messages("show_warning")[-1]

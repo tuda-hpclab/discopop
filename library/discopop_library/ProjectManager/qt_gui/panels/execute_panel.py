@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.execution_time import read_execution_time_settings
 from discopop_library.ProjectManager.configurations.repetitions import (
@@ -363,7 +364,9 @@ class ExecutePanel(Panel):
             self.console.clear()
             return
         config_path = os.path.join(self.arguments.project_config_dir, config)
-        compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, config)
+        compile_sh = resolve_compile_script_path(
+            self.arguments.project_config_dir, build_owner_of(self.arguments.project_config_dir, config)
+        )
         execute_sh = os.path.join(config_path, "execute.sh")
         for mode, exists in available_modes(self.arguments.project_config_dir, compile_sh, execute_sh).items():
             self.mode_checks[mode].setEnabled(exists)

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Set, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, members_of
 from discopop_library.ProjectManager.configurations.builds import (
     BuildKey,
     BuildRecord,
@@ -83,6 +84,8 @@ class BuildRow:
     built: str
     compile_time: str
     size: str
+    # the configurations that run in this build besides its own (see configurations/build_sharing.py)
+    used_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,7 @@ def build_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> 
             format_time(record.built_at),
             "%.1f s" % record.compile_seconds,
             _size_text(record.tree, with_sizes),
+            ", ".join(members_of(arguments.project_config_dir, record.configuration)),
         )
         for record in list_builds(arguments.project_dir)
     ]
@@ -136,11 +140,13 @@ def run_rows(
 
 def last_build_text(arguments: ProjectManagerArguments, configuration: Optional[str], mode: str) -> str:
     """One line about the builds of ``configuration`` in ``mode`` for a panel (reads the manifests only)."""
-    records = [r for r in list_builds(arguments.project_dir) if r.configuration == configuration and r.mode == mode]
+    owner = build_owner_of(arguments.project_config_dir, configuration) if configuration else configuration
+    records = [r for r in list_builds(arguments.project_dir) if r.configuration == owner and r.mode == mode]
     if not records:
         return "No build yet."
     newest = max(records, key=lambda r: r.built_at)
-    return "Compiled " + format_time(newest.built_at) + " (" + newest.build_id + ")."
+    shared = " (shared: built from " + str(owner) + ")" if owner != configuration else ""
+    return "Compiled " + format_time(newest.built_at) + " (" + newest.build_id + ")" + shared + "."
 
 
 def active_profiling_run(arguments: ProjectManagerArguments) -> Optional[RunRecord]:

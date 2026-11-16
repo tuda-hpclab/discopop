@@ -12,7 +12,11 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 import logging
 
 from discopop_library.ProjectManager.reports.full import generate_full_report
-from discopop_library.ProjectManager.utilities.CLI.builds import delete_builds_from_cli, show_builds
+from discopop_library.ProjectManager.utilities.CLI.builds import (
+    change_build_sharing,
+    delete_builds_from_cli,
+    show_builds,
+)
 from discopop_library.ProjectManager.utilities.CLI.runs import activate_run_from_cli, delete_runs_from_cli, show_runs
 from discopop_library.ProjectManager.utilities.CLI.listConfiguration import (
     show_configurations_with_execution,
@@ -69,6 +73,9 @@ def run(arguments: ProjectManagerArguments) -> None:
 
     derive_settings_files(arguments.project_config_dir)
 
+    if arguments.share_build is not None or arguments.unshare_build is not None:
+        change_build_sharing(arguments)
+        return
     if arguments.list_builds:
         show_builds(arguments)
         return

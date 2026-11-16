@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.configurations.build_sharing import set_build_from
 from discopop_library.ProjectManager.configurations import building, running
 from discopop_library.ProjectManager.configurations.builds import list_builds
 from discopop_library.ProjectManager.configurations.project_environment import (
@@ -218,11 +219,13 @@ def test_by_default_the_configuration_of_the_header_bar_is_checked(env: Env) -> 
 def test_several_configurations_are_measured_one_after_another(qtbot: QtBot, env: Env) -> None:
     for name in ("big", "small", "unused"):
         env.add_configuration(name)
+    # "small" declares that it builds from "big" (sharing is explicit)
+    set_build_from(env.panel.arguments.project_config_dir, "small", "big")
     env.panel.set_selected_configs(["big", "small"])
     env.panel.run_button.click()
     assert [state for _name, _checked, state in configs_in_list(env.panel)][:2] == ["queued", "queued"]
     wait_idle(qtbot, env.panel)
-    # one build serves both (the same compile.sh), each is executed, the runs are analyzed once
+    # one build serves both (small builds from big), each is executed, the runs are analyzed once
     assert [name for name, _timeout in env.executed] == ["compile.sh", "execute.sh", "execute.sh"]
     assert env.executed_configs == ["big", "small"]
     out = env.panel.output.text()
@@ -618,10 +621,11 @@ def test_a_configuration_with_its_own_compile_script_gets_its_own_build(qtbot: Q
     configs = env.root / ".discopop" / "project" / "configs"
     (configs / "compile.sh").write_text("$CXX main.cpp\n")
     (configs / "b" / "compile.sh").write_text("$CXX -DBIG main.cpp\n")
+    set_build_from(str(configs), "c", "a")
     env.panel.select_all_button.click()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    # a: shared script; b: its own; c: runs in the build of a, which has the same script
+    # a: shared script; b: its own; c: declares that it builds from a
     assert env.compiled_scripts == [str(configs / "compile.sh"), str(configs / "b" / "compile.sh")]
     assert env.executed_configs == ["a", "b", "c"]
 

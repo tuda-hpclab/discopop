@@ -136,3 +136,16 @@ def test_has_real_configuration(tmp_path: Path) -> None:
     assert not has_real_configuration(config_dir)
     Path(config_dir, "a", "execute.sh").write_text("./prog\n")
     assert has_real_configuration(config_dir)
+
+
+def test_renaming_and_deleting_an_owner_updates_its_members(tmp_path: Path) -> None:
+    from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, set_build_from
+
+    config_dir = str(tmp_path)
+    for name in ("owner", "member"):
+        (tmp_path / name).mkdir()
+    set_build_from(config_dir, "member", "owner")
+    rename_configuration(config_dir, "owner", "renamed")
+    assert build_owner_of(config_dir, "member") == "renamed"
+    assert delete_configuration_directory(config_dir, "renamed") == ["member"]
+    assert build_owner_of(config_dir, "member") == "member"

@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from discopop_library.ProjectManager.configurations.build_sharing import detach_members
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from mcp_server.tools.helpers import (
@@ -81,12 +82,15 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 "delete_execution_configuration",
             )
 
+        # configurations that built from it build for themselves from now on
+        detached = detach_members(str(configs_dir), config_name)
         shutil.rmtree(config_dir)
         ctx.log_action(project_path, "delete_execution_configuration", f"Deleted config directory: {config_dir}")
 
         result: dict[str, Any] = {
             "config_name": config_name,
             "deleted": str(config_dir),
+            **({"now_building_for_themselves": detached} if detached else {}),
             "next_step": setup_next_step(configs_dir),
         }
         ctx.log_response("delete_execution_configuration", result, project_path)
