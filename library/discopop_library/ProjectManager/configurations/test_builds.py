@@ -433,3 +433,63 @@ def test_a_member_runs_in_the_build_of_its_owner_and_is_compiled_once(project: D
     assert result is not None and result[0] == 0
     assert _count(project, "executions.txt") == 1
     assert [record.build_id for record in list_builds(str(project["root"] / ".discopop" / "project"))] == ["cfg_seq"]
+
+
+def _run_execute_stage(project: Dict[str, Path], configuration: str, **kw: object) -> None:
+    request = execution_run.ExecutionRequest(
+        configuration=configuration,
+        modes=("seq",),
+        inplace=False,
+        skip_cleanup=False,
+        thread_count=4,
+        label_prefix="",
+        timeout_execution=0,
+        timeout_compilation=0,
+        timeout_validation=0,
+        repetitions=1,
+        log_level="WARNING",
+        suggestion_ids=(),
+        **kw,  # type: ignore[arg-type]
+    )
+    execution_run.run_execution(_arguments(project["root"]), request, WorkContext(queue.Queue(), threading.Event()))
+
+
+def _share_with_member(project: Dict[str, Path], owner_override: bool) -> None:
+    from discopop_library.ProjectManager.configurations.build_sharing import set_build_from
+
+    if owner_override:
+        # the owner compiles with a script of its own, which differs from the shared one
+        (project["configs"] / "cfg" / "compile.sh").write_text(
+            f'#!/bin/bash\necho owner_override >> "{project["tmp"]}/compiles.txt"\ncp main.c prog.out\n'
+        )
+    (project["configs"] / "other").mkdir()
+    (project["configs"] / "other" / "execute.sh").write_text(
+        f'#!/bin/bash\necho other >> "{project["tmp"]}/executions.txt"\ntest -f prog.out\n'
+    )
+    set_build_from(str(project["configs"]), "other", "cfg")
+
+
+def test_a_member_is_compiled_with_the_script_of_its_owner(project: Dict[str, Path]) -> None:
+    _share_with_member(project, owner_override=True)
+    _run_execute_stage(project, "other")
+    # the script of the owner ran, not the shared compile.sh the member would resolve to by itself
+    assert (project["tmp"] / "compiles.txt").read_text().split() == ["owner_override"]
+    assert _count(project, "executions.txt") == 1
+    # the owner reuses the build, the member's results are recorded under the member
+    _run_execute_stage(project, "cfg")
+    assert _count(project, "compiles.txt") == 1 and _count(project, "executions.txt") == 2
+    assert [r.build_id for r in list_builds(str(project["root"] / ".discopop" / "project"))] == ["cfg_seq"]
+    with open(project["root"] / ".discopop" / "project" / "execution_results.json") as f:
+        results = json.load(f)
+    assert set(results) == {"cfg", "other"}
+
+
+def test_a_member_is_validated_in_the_shared_build_without_compiling_again(project: Dict[str, Path]) -> None:
+    _share_with_member(project, owner_override=False)
+    (project["configs"] / "other" / "validate.sh").write_text(
+        f'#!/bin/bash\necho validated >> "{project["tmp"]}/validations.txt"\ntest -f prog.out\n'
+    )
+    _run_execute_stage(project, "other")
+    _run_execute_stage(project, "other")
+    assert _count(project, "validations.txt") == 2
+    assert _count(project, "compiles.txt") == 1
