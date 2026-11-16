@@ -349,7 +349,9 @@ def execute_configuration(
     # what is project code (the included and excluded directories of the Project Setup stage): the excluded ones
     # become absolute paths in the copy; entries set in the settings are kept
     project_directories = project_directories_of_arguments(arguments)
-    my_env: Dict[str, str] = build_environment(os.environ, settings, project_directories, project_copy_root_path)
+    my_env: Dict[str, str] = build_environment(
+        os.environ, settings, project_directories, project_copy_root_path, arguments.project_root
+    )
     logger.info(describe_project_variables(my_env))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
     if dot_discopop is not None:

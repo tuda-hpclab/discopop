@@ -79,6 +79,7 @@ Every script is executed with the project root as its working directory, so rela
 | `$CC`, `$CXX` | compiler executables, taken from the settings file of the active mode |
 | `$CFLAGS`, `$CXXFLAGS` | compiler flags, likewise from the settings file |
 | `$DP_PROJECT_ROOT_DIR` | absolute path of the (possibly copied) project root; use it to refer to the project, e.g. `cmake -S "$DP_PROJECT_ROOT_DIR" -B build` |
+| `$DP_PROJECT_ORIGINAL_DIR` | absolute path of the original project, never a copy (equal to `$DP_PROJECT_ROOT_DIR` for runs in place); use it to reach what is not copied, e.g. `cmake -S "$DP_PROJECT_ORIGINAL_DIR" -B build` or large input data. Code compiled from there lies outside of `$DP_PROJECT_ROOT_DIR`: it is not instrumented (unless listed as an included directory) and contains no applied suggestions |
 | `$DOT_DISCOPOP` | absolute path of the `.discopop` directory inside that root |
 | `$DP_PROJECT_EXCLUDE_DIRS` | the [excluded directories](#project-directories) as absolute paths inside that root, separated by `:`, after the entries a settings file may set; only set if there are any |
 | `$DP_PROJECT_INCLUDE_DIRS` | the [included directories](#project-directories) outside the project, absolute, separated by `:`, after the entries a settings file may set; only set if there are any |
@@ -102,7 +103,7 @@ Edit them in the GUI (*Project Setup* stage: a folder tree with check boxes for 
 
 Every instrumented build records the lists it was built with in `.discopop/instrumented_project_directories.json`; if they change afterwards, the GUI marks the profiling and hotspot data stale.
 
-`DP_PROJECT_ROOT_DIR` and `DOT_DISCOPOP` are set by the project manager for every run and cannot be set in a settings file: a value found there is ignored with a warning, and the command line removes it from the settings files. A `project_environment.json` of an earlier development version (a single "instrumentation scope") is no longer read; the command line says so.
+`DP_PROJECT_ROOT_DIR`, `DP_PROJECT_ORIGINAL_DIR` and `DOT_DISCOPOP` are set by the project manager for every run and cannot be set in a settings file: a value found there is ignored with a warning, and the command line removes it from the settings files. A `project_environment.json` of an earlier development version (a single "instrumentation scope") is no longer read; the command line says so.
 
 ### Checks of instrumented builds and runs
 An instrumented build only produces consistent data if every compiler call uses the same `.discopop` directory. The project manager sets the absolute `DOT_DISCOPOP` for every run; without it (a build that resets the environment), the compiler wrappers use the nearest `.discopop` directory of the current directory and above, which is the one of the project or its copy, and the instrumented program remembers it. Only a `.discopop` below the project other than `$DOT_DISCOPOP` (a build that compiles outside of the project or whose compiler call finds no other directory) would spread the data over several of them, with file and instruction numbers that do not fit together. Therefore, in the `dp` and `hd` modes:

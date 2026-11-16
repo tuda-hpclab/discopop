@@ -42,6 +42,7 @@ TOOL = Tool(
         "  $CC, $CXX          — compiler executables (injected from the active settings file)\n"
         "  $CFLAGS, $CXXFLAGS — compiler flags\n"
         "  $DP_PROJECT_ROOT_DIR — absolute path to the project root (of the copy a run works in)\n"
+        "  $DP_PROJECT_ORIGINAL_DIR — absolute path to the original project (never the copy)\n"
         "  $DOT_DISCOPOP      — absolute path to the .discopop directory; the build must pass it on to "
         "every compiler call unchanged\n"
         "\n"

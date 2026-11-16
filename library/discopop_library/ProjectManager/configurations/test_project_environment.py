@@ -82,8 +82,17 @@ def test_command_line_overrides_replace_a_list(project: Tuple[Path, Path, Path])
 def test_resolve_project_variables_without_lists(tmp_path: Path) -> None:
     assert resolve_project_variables(ProjectDirectories(), str(tmp_path / "copy")) == {
         "DP_PROJECT_ROOT_DIR": str(tmp_path / "copy"),
+        "DP_PROJECT_ORIGINAL_DIR": str(tmp_path / "copy"),
         "DOT_DISCOPOP": str(tmp_path / "copy" / ".discopop"),
     }
+
+
+def test_original_dir_is_the_project_not_the_copy(tmp_path: Path) -> None:
+    environment = build_environment(
+        {"DP_PROJECT_ORIGINAL_DIR": "/x"}, {}, ProjectDirectories(), str(tmp_path / "copy"), str(tmp_path / "orig")
+    )
+    assert environment["DP_PROJECT_ROOT_DIR"] == str(tmp_path / "copy")
+    assert environment["DP_PROJECT_ORIGINAL_DIR"] == str(tmp_path / "orig")
 
 
 def test_resolve_project_variables_with_lists(tmp_path: Path) -> None:
@@ -117,16 +126,17 @@ def test_build_environment_layers(tmp_path: Path) -> None:
     assert base["DP_PROJECT_ROOT_DIR"] == "/elsewhere" and "DP_PROJECT_INCLUDE_DIRS" not in settings
 
 
-@pytest.mark.parametrize("key", ["DP_PROJECT_ROOT_DIR", "DOT_DISCOPOP"])
+@pytest.mark.parametrize("key", ["DP_PROJECT_ROOT_DIR", "DP_PROJECT_ORIGINAL_DIR", "DOT_DISCOPOP"])
 def test_build_environment_overrides_a_reserved_key_of_the_settings(tmp_path: Path, key: str) -> None:
     environment = build_environment({}, {key: "/somewhere/else"}, ProjectDirectories(), str(tmp_path))
     assert environment[key] != "/somewhere/else"
 
 
-def test_describe_project_variables_names_all_four() -> None:
+def test_describe_project_variables_names_all_five() -> None:
     line = describe_project_variables({"DP_PROJECT_ROOT_DIR": "/p", "DP_PROJECT_INCLUDE_DIRS": "/s"})
-    assert (
-        line == "Environment: DP_PROJECT_ROOT_DIR=/p DOT_DISCOPOP= DP_PROJECT_INCLUDE_DIRS=/s DP_PROJECT_EXCLUDE_DIRS="
+    assert line == (
+        "Environment: DP_PROJECT_ROOT_DIR=/p DP_PROJECT_ORIGINAL_DIR= DOT_DISCOPOP= "
+        "DP_PROJECT_INCLUDE_DIRS=/s DP_PROJECT_EXCLUDE_DIRS="
     )
 
 
