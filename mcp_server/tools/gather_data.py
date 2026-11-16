@@ -25,6 +25,7 @@ from discopop_library.ProjectManager.configurations.building import (
     build_lock,
     ensure_build,
 )
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, build_tree_path_of
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.running import execute_in_build
@@ -220,6 +221,8 @@ def _compile_in_build(
     a build that is still current is not compiled again.
     """
     configs_dir = Path(project_path) / ".discopop" / "project" / "configs"
+    # a configuration that builds from another one is compiled in the build of that one
+    config_name = build_owner_of(str(configs_dir), config_name)
     compile_sh = resolve_compile_script_path(str(configs_dir), config_name)
     key = BuildKey(config_name, mode, ())
     arguments = _build_arguments(project_path, timeout_seconds, ctx)
@@ -367,7 +370,7 @@ def _hotspot_instrument(
     if not config_dir.exists():
         return {"status": "error", "message": unknown_configuration_message(configs_dir, config_name)}
     # honours a per-configuration compile.sh override, falling back to the shared script
-    compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
+    compile_sh = Path(resolve_compile_script_path(str(configs_dir), build_owner_of(str(configs_dir), config_name)))
     if not compile_sh.exists():
         return {"status": "error", "message": "compile.sh not found. Run set_compile_script first."}
     if not hd_settings.exists():
@@ -605,7 +608,7 @@ def _instrument_project(
     if not config_dir.exists():
         return {"status": "error", "message": unknown_configuration_message(configs_dir, config_name)}
     # honours a per-configuration compile.sh override, falling back to the shared script
-    compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
+    compile_sh = Path(resolve_compile_script_path(str(configs_dir), build_owner_of(str(configs_dir), config_name)))
     if not compile_sh.exists():
         return {"status": "error", "message": "compile.sh not found. Run set_compile_script first."}
     if not dp_settings.exists():
@@ -632,7 +635,10 @@ def _instrument_project(
         state.dp_data_is_current = False
     result = _compile_in_build(project_path, config_name, "dp", "Instrumentation", timeout_seconds, force, ctx)
     if result["status"] in ("success", "skipped"):
-        built_data_xml = Path(build_tree_path_of(project_path, BuildKey(config_name, "dp", ()))) / ".discopop"
+        built_data_xml = (
+            Path(build_tree_path_of(project_path, BuildKey(build_owner_of(str(configs_dir), config_name), "dp", ())))
+            / ".discopop"
+        )
         if not (built_data_xml / "profiler" / "Data.xml").exists():
             return {
                 "status": "error",
@@ -691,7 +697,9 @@ def _run_profiling(
         "gather_data",
         f"Profiling: execute.sh for config='{config_name}', timeout={timeout_seconds}s",
     )
-    exec_result, run, unavailable = _run_in_build(project_path, config_name, config_name, "dp", timeout_seconds, ctx)
+    exec_result, run, unavailable = _run_in_build(
+        project_path, build_owner_of(str(configs_dir), config_name), config_name, "dp", timeout_seconds, ctx
+    )
     if exec_result is None or run is None:
         return {"status": "error", "message": unavailable or "The profiling run did not start."}
 
@@ -891,7 +899,9 @@ def _pipeline(
     """
     steps: dict[str, Any] = {}
     hotspot_ok = True
-    state = _PipelineState(build_config=config_name)
+    state = _PipelineState(
+        build_config=build_owner_of(str(Path(project_path) / ".discopop" / "project" / "configs"), config_name)
+    )
 
     # Compute source mtime once and reuse across all staleness checks.
     source_mtime = ToolContext.newest_source_mtime(project_path)
@@ -1075,7 +1085,12 @@ def _storage_warning(project_path: str, config_name: str, ctx: ToolContext) -> O
     if not (Path(project_path) / ".discopop").is_dir():
         return None  # the arguments of the project manager exit the process for a project without one
     try:
-        expected = [BuildKey(config_name, mode, ()).build_id for mode in ("hd", "dp")]
+        expected = [
+            BuildKey(
+                build_owner_of(str(Path(project_path) / ".discopop" / "project" / "configs"), config_name), mode, ()
+            ).build_id
+            for mode in ("hd", "dp")
+        ]
         return storage_warning(ctx.make_pm_args(project_path), expected)
     except Exception as error:
         logger.warning("The storage of the builds could not be determined: %s", error)

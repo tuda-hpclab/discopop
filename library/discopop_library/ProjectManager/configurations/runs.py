@@ -163,8 +163,13 @@ def _clone_directory(source: PATH, destination: PATH, link_files: bool) -> None:
             )
 
 
-def prepare_run(project_root: PATH, build: BuildRecord, thread_count: int, label: str = "") -> RunRecord:
-    """Create the directory of a new run of ``build`` and fill it with the static data of the build."""
+def prepare_run(
+    project_root: PATH, build: BuildRecord, thread_count: int, label: str = "", configuration: Optional[str] = None
+) -> RunRecord:
+    """Create the directory of a new run of ``build`` and fill it with the static data of the build.
+
+    ``configuration`` is the configuration that runs (a member of a shared build); default: the one of the build.
+    """
     run_mode = build.mode
     runs_directory = runs_directory_of(project_root, build.build_id)
     os.makedirs(runs_directory, exist_ok=True)
@@ -181,7 +186,7 @@ def prepare_run(project_root: PATH, build: BuildRecord, thread_count: int, label
     record = RunRecord(
         run_id=run_id,
         build_id=build.build_id,
-        configuration=build.configuration,
+        configuration=configuration or build.configuration,
         mode=run_mode,
         thread_count=thread_count,
         label=label,

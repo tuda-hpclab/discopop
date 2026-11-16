@@ -26,6 +26,7 @@ from discopop_library.ProjectManager.configurations.building import (
     build_lock,
     ensure_build,
 )
+from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
 from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.runs import ActivationError, activate_run
@@ -212,7 +213,9 @@ def run_execution(
     if inplace and args_copy.apply_suggestions:
         ctx.output("Note: Apply suggestions is ignored in inplace mode.\n")
 
-    compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
+    inputs = build_inputs_for(arguments.project_config_dir, current_config)
+    build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
 
     def execute_and_validate(
         project_copy_path: str, settings_path: str, mode: str, build: Optional[BuildRecord] = None
@@ -346,7 +349,7 @@ def run_execution(
             compile_result = execute_configuration(
                 args_copy,
                 project_copy_path,
-                config_path,
+                build_config_path,
                 settings_path,
                 compile_sh,
                 1 if mode == "seq" else thread_count,
@@ -370,7 +373,7 @@ def run_execution(
         # The build of the mode: kept between runs, compiled only when there is no current one (or the user asks
         # for it), see configurations/builds.py. Its tree is a copy of the project that holds the applied suggestions.
         key = BuildKey(
-            current_config,
+            inputs.build_config,
             mode,
             tuple(resolve_requested_suggestions(args_copy, arguments.dot_dp, log_skipped=False)),
         )
@@ -412,10 +415,10 @@ def run_execution(
                 build = ensure_build(
                     args_copy,
                     key,
-                    config_path,
+                    build_config_path,
                     settings_path,
                     compile_sh,
-                    1 if mode == "seq" else thread_count,
+                    1 if mode == "seq" or inputs.shared else thread_count,
                     BuildPolicy(request.build_policy),
                     args_copy.timeout_compilation,
                     process_started_callback=ctx.register_process,
@@ -475,9 +478,11 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
 
     logger = logging.getLogger(f"Prepare {status_noun.title()}")
     logger.info(f"Starting {status_noun} preparation for: {current_config}")
-    compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
+    inputs = build_inputs_for(arguments.project_config_dir, current_config)
+    build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
     shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
-    key = BuildKey(current_config, mode, ())
+    key = BuildKey(inputs.build_config, mode, ())
 
     success = False
     ctx.status("⏳ Building...", StatusKind.BUSY)
@@ -492,7 +497,7 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
             build = ensure_build(
                 args_copy,
                 key,
-                config_path,
+                build_config_path,
                 shared_settings,
                 compile_sh,
                 1,
@@ -601,7 +606,9 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
     # this always runs inplace; see the note in run_execution
     clear_application_result(patch_applicator_dir_of(arguments.project_root))
 
-    compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
+    inputs = build_inputs_for(arguments.project_config_dir, current_config)
+    build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
     shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
 
     ctx.status("⏳ Compiling...", StatusKind.BUSY)
@@ -611,7 +618,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
     compile_result = execute_configuration(
         args_copy,
         arguments.project_root,
-        config_path,
+        build_config_path,
         shared_settings,
         compile_sh,
         1,

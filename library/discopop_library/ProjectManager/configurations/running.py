@@ -8,6 +8,7 @@
 
 """The run phase: execute ``execute.sh`` in a build, a profiling run (dp, hd) in a run directory of its own."""
 
+import os
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import subprocess
@@ -46,7 +47,13 @@ def execute_in_build(
     annotations: Dict[str, Any] = {"build_id": build.build_id}
     dot_discopop: Optional[str] = None
     if build.mode in PROFILING_MODES:
-        run = prepare_run(arguments.project_root, build, thread_count, arguments.label_prefix)
+        run = prepare_run(
+            arguments.project_root,
+            build,
+            thread_count,
+            arguments.label_prefix,
+            os.path.basename(os.path.normpath(config_path)),
+        )
         dot_discopop = run.dot_discopop
         annotations["run_id"] = run.run_id
         if on_run is not None:
@@ -76,6 +83,4 @@ def execute_in_build(
 
 
 def _execute_script(config_path: PATH) -> PATH:
-    import os
-
     return os.path.join(config_path, "execute.sh")

@@ -400,3 +400,36 @@ def test_a_validation_build_in_the_tree_invalidates_the_build(project: Dict[str,
     # the validation build changed the tree, so the next run compiles again
     run()
     assert _count(project, "compiles.txt") == 2
+
+
+def test_a_member_runs_in_the_build_of_its_owner_and_is_compiled_once(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for, set_build_from
+    from discopop_library.ProjectManager.configurations.running import execute_in_build
+
+    configs = str(project["configs"])
+    (project["configs"] / "other").mkdir()
+    (project["configs"] / "other" / "execute.sh").write_text(
+        f'#!/bin/bash\necho other >> "{project["tmp"]}/executions.txt"\ntest -f prog.out\n'
+    )
+    set_build_from(configs, "other", "cfg")
+    owner_build = _build(project)
+    assert owner_build.record is not None
+
+    inputs = build_inputs_for(configs, "other")
+    member_build = _build(project, key=BuildKey(inputs.build_config, "seq"))
+    assert member_build.result == BuildResult.REUSED and _count(project, "compiles.txt") == 1
+
+    arguments = _arguments(project["root"])
+    result, _run = execute_in_build(
+        arguments,
+        owner_build.record,
+        str(project["configs"] / "other"),
+        str(project["configs"] / "seq_settings.json"),
+        1,
+        None,
+        None,
+        1,
+    )
+    assert result is not None and result[0] == 0
+    assert _count(project, "executions.txt") == 1
+    assert [record.build_id for record in list_builds(str(project["root"] / ".discopop" / "project"))] == ["cfg_seq"]

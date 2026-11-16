@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Set, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from discopop_library.ProjectManager.configurations.builds import (
     BuildKey,
     BuildRecord,
@@ -136,11 +137,13 @@ def run_rows(
 
 def last_build_text(arguments: ProjectManagerArguments, configuration: Optional[str], mode: str) -> str:
     """One line about the builds of ``configuration`` in ``mode`` for a panel (reads the manifests only)."""
-    records = [r for r in list_builds(arguments.project_dir) if r.configuration == configuration and r.mode == mode]
+    owner = build_owner_of(arguments.project_config_dir, configuration) if configuration else configuration
+    records = [r for r in list_builds(arguments.project_dir) if r.configuration == owner and r.mode == mode]
     if not records:
         return "No build yet."
     newest = max(records, key=lambda r: r.built_at)
-    return "Compiled " + format_time(newest.built_at) + " (" + newest.build_id + ")."
+    shared = " (shared: built from " + str(owner) + ")" if owner != configuration else ""
+    return "Compiled " + format_time(newest.built_at) + " (" + newest.build_id + ")" + shared + "."
 
 
 def active_profiling_run(arguments: ProjectManagerArguments) -> Optional[RunRecord]:

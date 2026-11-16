@@ -19,6 +19,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
 from discopop_library.ProjectManager.configurations.building import build_lock, ensure_build
+from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for, build_owner_of
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
 from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.copying import (
@@ -151,7 +152,10 @@ def show_configurations_with_execution(
             clear_application_result(patch_applicator_dir_of(arguments.project_root))
 
         # collect overview information
-        compile_sh = resolve_compile_script_path(arguments.project_config_dir, os.path.basename(config))
+        # a configuration that builds from another one is compiled with the compile script of that configuration
+        compile_sh = resolve_compile_script_path(
+            arguments.project_config_dir, build_owner_of(arguments.project_config_dir, os.path.basename(config))
+        )
         outcomes: Dict[str, _ModeOutcome] = dict()
         for mode in _RUN_ORDER:
             shared_settings = os.path.join(arguments.project_config_dir, mode + "_settings.json")
@@ -309,15 +313,23 @@ def __run_mode(
     """Compile and execute ``config`` in ``mode``: in the project root (``--inplace``), otherwise in a build that is
     kept and reused as long as it is current (see :mod:`discopop_library.ProjectManager.configurations.builds`)."""
     outcome = _ModeOutcome(settings_exist=os.path.exists(shared_settings))
+    inputs = build_inputs_for(arguments.project_config_dir, os.path.basename(config))
+    build_config = os.path.join(arguments.project_config_dir, inputs.build_config)
     if arguments.execute_inplace:
         project_path = arguments.project_root
         ret = execute_configuration(
-            arguments, project_path, config, shared_settings, compile_sh, thread_count, arguments.timeout_compilation
+            arguments,
+            project_path,
+            build_config,
+            shared_settings,
+            compile_sh,
+            thread_count,
+            arguments.timeout_compilation,
         )
         outcome.compile_successful = ret is not None and ret[0] == 0
     else:
         key = BuildKey(
-            os.path.basename(config),
+            inputs.build_config,
             mode,
             tuple(resolve_requested_suggestions(arguments, arguments.dot_dp, log_skipped=False)),
         )
@@ -333,10 +345,10 @@ def __run_mode(
             build = ensure_build(
                 arguments,
                 key,
-                config,
+                build_config,
                 shared_settings,
                 compile_sh,
-                thread_count,
+                1 if inputs.shared else thread_count,
                 BuildPolicy(arguments.build_policy),
                 arguments.timeout_compilation,
                 message=print,
