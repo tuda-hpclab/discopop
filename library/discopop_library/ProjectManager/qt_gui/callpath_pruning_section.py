@@ -9,9 +9,9 @@
 """The "Call path pruning" card of the Build stage: the project setting of ``services/callpath_pruning.py``, its
 parameters and the notice that current hotspot results exist while pruning is off (or are missing while it is on)."""
 
-from typing import Optional
+from typing import Dict, Optional
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QSpinBox, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QSpinBox, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import widgets
@@ -35,6 +35,9 @@ HINT = (
 )
 INACTIVE_TOOLTIP = "Call path pruning only applies to the mode dp; select it above to change the setting."
 DEPTH_HINT = "Calls below a hot function whose call paths are kept."
+HOTNESS_HINT = (
+    "Classes of the hotspot detection that count as hot; at least one. Functions of other classes are pruned."
+)
 UNCLASSIFIED_HINT = (
     "Functions the hotspot detection did not classify: keep their call paths or fold them into the caller."
 )
@@ -64,6 +67,18 @@ class CallpathPruningSection(widgets.FormSection):
         self.depth_spin.setRange(0, callpath_pruning.MAX_HOT_DEPTH)
         self.depth_spin.setValue(stored.hot_depth)
         self.add_row("Depth below hot functions", self.depth_spin, DEPTH_HINT)
+        self.hotness_boxes: Dict[str, QCheckBox] = {}
+        hotness_row = QWidget()
+        hotness_layout = QHBoxLayout(hotness_row)
+        hotness_layout.setContentsMargins(0, 0, 0, 0)
+        for name in callpath_pruning.HOTNESS_CHOICES:
+            box = QCheckBox(name.upper())
+            box.setChecked(name in callpath_pruning.hotness_classes(stored.hotness))
+            hotness_layout.addWidget(box)
+            self.hotness_boxes[name] = box
+            box.toggled.connect(lambda _checked: self._changed())
+        hotness_layout.addStretch(1)
+        self.add_row("Hot classes", hotness_row, HOTNESS_HINT)
         self.unclassified = QComboBox()
         self.unclassified.addItems(callpath_pruning.UNCLASSIFIED_CHOICES)
         self.unclassified.setCurrentText(stored.unclassified)
@@ -87,14 +102,25 @@ class CallpathPruningSection(widgets.FormSection):
         self.setToolTip("" if active else INACTIVE_TOOLTIP)
         self.refresh_notice()
 
+    def _hotness(self, before: str) -> str:
+        """The checked classes; classes of the stored setting the boxes do not offer are kept."""
+        extra = sorted(callpath_pruning.hotness_classes(before) - set(callpath_pruning.HOTNESS_CHOICES))
+        return ",".join([name for name, box in self.hotness_boxes.items() if box.isChecked()] + extra)
+
     def _changed(self) -> None:
         before = callpath_pruning.load_callpath_pruning(self.arguments.project_dir)
+        hotness = self._hotness(before.hotness)
+        if not callpath_pruning.hotness_classes(hotness):
+            # without a hot class nothing would be kept: restore the stored setting
+            self.status.set("At least one hot class is needed", widgets.STATUS_FAIL, reset_ms=3000)
+            self.reload()
+            return
         pruning = callpath_pruning.CallpathPruning(
             enabled=self.checkbox.isChecked(),
             hot_depth=self.depth_spin.value(),
             unclassified=self.unclassified.currentText(),
             seeds=before.seeds,
-            hotness=before.hotness,
+            hotness=hotness,
         )
         if pruning == before:
             return
@@ -111,6 +137,8 @@ class CallpathPruningSection(widgets.FormSection):
                 + str(pruning.hot_depth)
                 + ", unclassified functions: "
                 + pruning.unclassified
+                + ", hot classes: "
+                + pruning.hotness
             )
         self.status.set(text, widgets.STATUS_OK, reset_ms=3000)
         self.refresh_notice()
@@ -120,12 +148,14 @@ class CallpathPruningSection(widgets.FormSection):
     def reload(self) -> None:
         """Show the stored setting (it may have been changed outside the GUI) without storing it again."""
         stored = callpath_pruning.load_callpath_pruning(self.arguments.project_dir)
-        widgets_to_block = (self.checkbox, self.depth_spin, self.unclassified)
+        widgets_to_block = (self.checkbox, self.depth_spin, self.unclassified, *self.hotness_boxes.values())
         for widget in widgets_to_block:
             widget.blockSignals(True)
         self.checkbox.setChecked(stored.enabled)
         self.depth_spin.setValue(stored.hot_depth)
         self.unclassified.setCurrentText(stored.unclassified)
+        for name, box in self.hotness_boxes.items():
+            box.setChecked(name in callpath_pruning.hotness_classes(stored.hotness))
         for widget in widgets_to_block:
             widget.blockSignals(False)
         self.refresh_notice()

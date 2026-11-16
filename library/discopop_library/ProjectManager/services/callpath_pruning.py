@@ -21,7 +21,7 @@ import json
 import os
 import re
 from dataclasses import asdict, dataclass
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.project_environment import (
@@ -39,6 +39,7 @@ SEEDS_VARIABLE = "DP_CALLPATH_SEEDS"
 HOTNESS_VARIABLE = "DP_CALLPATH_HOTNESS"
 VARIABLES = (HOTSPOTS_VARIABLE, HOT_DEPTH_VARIABLE, UNCLASSIFIED_VARIABLE, SEEDS_VARIABLE, HOTNESS_VARIABLE)
 
+HOTNESS_CHOICES = ("yes", "maybe")
 UNCLASSIFIED_CHOICES = ("keep", "prune")
 SEEDS_CHOICES = ("both", "loops", "functions")
 DEFAULT_HOT_DEPTH = 2
@@ -86,7 +87,7 @@ def load_callpath_pruning(project_dir: str) -> CallpathPruning:
         ),
         unclassified=unclassified if unclassified in UNCLASSIFIED_CHOICES else default.unclassified,
         seeds=seeds if seeds in SEEDS_CHOICES else default.seeds,
-        hotness=hotness if isinstance(hotness, str) and hotness.strip() else default.hotness,
+        hotness=hotness if isinstance(hotness, str) and hotness_classes(hotness) else default.hotness,
     )
 
 
@@ -106,11 +107,31 @@ def save_callpath_pruning(project_dir: str, pruning: CallpathPruning) -> None:
 
 # What was read from a Hotspots.json, by (path, modification time, size): the GUI asks after every event, and the
 # fingerprint of a build hashes the file.
-_file_facts: Dict[Tuple[str, int, int], Tuple[bool, str]] = {}
+_file_facts: Dict[Tuple[str, int, int], Tuple[FrozenSet[str], str]] = {}
 
 
-def _hotspots_facts(dot_dp: str) -> Optional[Tuple[str, bool, str]]:
-    """``(path, has hot regions, content hash)`` of the project's Hotspots.json; None if there is none."""
+def hotness_classes(hotness: str) -> FrozenSet[str]:
+    """The classes of a ``hotness`` setting (comma separated, as ``DP_CALLPATH_HOTNESS``), lower case."""
+    return frozenset(part.strip().lower() for part in hotness.split(",") if part.strip())
+
+
+def _classes_in(dot_dp: str) -> FrozenSet[str]:
+    """The ``hotness`` classes (lower case) the regions of Hotspots.json have; like the hotspot loader, all top-level
+    lists count."""
+    data = hotspot_data.load_json_file(hotspot_data.hotspots_json_path(dot_dp))
+    if data is None:
+        return frozenset()
+    classes = set()
+    for entries in data.values():
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and "hotness" in entry:
+                    classes.add(str(entry["hotness"]).strip().lower())
+    return frozenset(classes)
+
+
+def _hotspots_facts(dot_dp: str) -> Optional[Tuple[str, FrozenSet[str], str]]:
+    """``(path, classes of its regions, content hash)`` of the project's Hotspots.json; None if there is none."""
     path = os.path.abspath(hotspot_data.hotspots_json_path(dot_dp))
     try:
         stat = os.stat(path)
@@ -125,21 +146,22 @@ def _hotspots_facts(dot_dp: str) -> Optional[Tuple[str, bool, str]]:
             return None
         if len(_file_facts) > 32:
             _file_facts.clear()
-        _file_facts[key] = (hotspot_data.hotspots_available_for_explorer(dot_dp), digest)
+        _file_facts[key] = (_classes_in(dot_dp), digest)
     return (path, *_file_facts[key])
 
 
 def current_hotspots_file(arguments: ProjectManagerArguments, config: Optional[str]) -> Optional[str]:
     """The absolute path of ``Hotspots.json`` if it is current, else None.
 
-    Current: it exists, classifies at least one region as hot (otherwise there is nothing to prune by), was not
+    Current: it exists, classifies at least one region with one of the configured hotness classes (otherwise there
+    is nothing to prune by), was not
     created with other project directories than the stored ones (``stale_directories_message``) and the sources
     did not change since the instrumented build it belongs to (the same rule as the *Hotspot Detection* stage: the
     functions and lines of the file would not fit any more). ``config`` is the configuration whose build is
     compared; without one, the sources are not compared.
     """
     facts = _hotspots_facts(arguments.dot_dp)
-    if facts is None or not facts[1]:
+    if facts is None or not facts[1] & hotness_classes(load_callpath_pruning(arguments.project_dir).hotness):
         return None
     if stale_directories_message(arguments.dot_dp, "hd", arguments.project_dir) is not None:
         return None
@@ -195,8 +217,8 @@ def no_hotspots_warning(arguments: ProjectManagerArguments, config: Optional[str
         return None
     return (
         "Call path pruning is activated, but there are no current hotspot detection results (none, none that "
-        "classifies a hot region, or the sources changed since): the call path states are not pruned. Run the "
-        "hotspot detection first."
+        "classifies a region with a configured hotness class, or the sources changed since): the call path states "
+        "are not pruned. Run the hotspot detection first."
     )
 
 

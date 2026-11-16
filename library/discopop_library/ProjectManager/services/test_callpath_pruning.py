@@ -191,3 +191,14 @@ def test_pruning_note_reports_what_the_pass_printed() -> None:
     note = cp.pruning_note("/h.json", output)
     assert "2 module(s)" in note and "15 call path states" in note
     assert "did not report" in cp.pruning_note("/h.json", "nothing")
+
+
+def test_only_regions_of_the_configured_hot_classes_make_the_hotspots_current(
+    arguments: ProjectManagerArguments,
+) -> None:
+    _hotspots(arguments, hotness="MAYBE")
+    cp.save_callpath_pruning(arguments.project_dir, cp.CallpathPruning(enabled=True, hotness="yes"))
+    assert cp.current_hotspots_file(arguments, None) is None
+    assert cp.environment(arguments, None) == {}
+    cp.save_callpath_pruning(arguments.project_dir, cp.CallpathPruning(enabled=True, hotness="Yes, maybe"))
+    assert cp.environment(arguments, None)[cp.HOTNESS_VARIABLE] == "Yes, maybe"

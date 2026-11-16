@@ -96,3 +96,22 @@ def test_the_setting_is_read_again_when_changed_outside_the_gui(section: Callpat
     assert section.checkbox.isChecked() and section.depth_spin.value() == 9
     assert section.unclassified.currentText() == "prune"
     assert not changes  # showing it is no change
+
+
+def test_the_hot_classes_are_stored_and_at_least_one_stays_checked(section: CallpathPruningSection) -> None:
+    changes = recorded(section, CallpathPruningChanged)
+    assert section.hotness_boxes["yes"].isChecked() and section.hotness_boxes["maybe"].isChecked()
+    section.hotness_boxes["maybe"].setChecked(False)
+    assert callpath_pruning.load_callpath_pruning(section.arguments.project_dir).hotness == "yes"
+    assert len(changes) == 1
+    section.hotness_boxes["yes"].setChecked(False)  # nothing would be hot: refused, the stored setting is shown
+    assert callpath_pruning.load_callpath_pruning(section.arguments.project_dir).hotness == "yes"
+    assert section.hotness_boxes["yes"].isChecked() and len(changes) == 1
+
+
+def test_the_hot_classes_are_read_again_when_changed_outside_the_gui(section: CallpathPruningSection) -> None:
+    callpath_pruning.save_callpath_pruning(
+        section.arguments.project_dir, callpath_pruning.CallpathPruning(hotness="maybe")
+    )
+    section.reload()
+    assert not section.hotness_boxes["yes"].isChecked() and section.hotness_boxes["maybe"].isChecked()
