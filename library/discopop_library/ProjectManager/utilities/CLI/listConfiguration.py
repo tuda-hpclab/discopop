@@ -18,7 +18,7 @@ from discopop_library.ProjectManager.configurations.compile_script import (
     validation_needs_separate_compile,
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
-from discopop_library.ProjectManager.configurations.building import BuildResult, build_lock, ensure_build
+from discopop_library.ProjectManager.configurations.building import build_lock, ensure_build
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
 from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.copying import (
@@ -342,8 +342,13 @@ def __run_mode(
                 message=print,
                 on_application_failure=application_failed,
             )
-            if build.result == BuildResult.UNAVAILABLE:
-                print("ERROR: " + build.message)
+            if not build.usable:
+                print("ERROR: " + (build.message or "The build failed."))
+                if build.compile_result is not None and build.compile_result[0] != 0:
+                    # the end of the output of the failed compilation, which names the error
+                    _return_code, _elapsed, stdout, stderr = build.compile_result
+                    print("Return code " + str(build.compile_result[0]) + ". Output of the compilation (end):")
+                    print((stderr or stdout)[-3000:])
             outcome.compile_successful = build.usable
             if build.tree is not None and build.record is not None and build.usable and not arguments.build_only:
                 _execute_and_validate(

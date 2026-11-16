@@ -124,7 +124,8 @@ def copy_configuration(
         def ignore(directory: str, names: List[str]) -> List[str]:  # type: ignore[misc]
             return list(leave_out_of_dot_discopop) if os.path.abspath(directory) == left_out else []
 
-    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore)
+    # a symbolic link that points nowhere (submodules of large codes have some) is skipped instead of failing the copy
+    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore, ignore_dangling_symlinks=True)
     # correct paths in Filemapping.txt
     fmap_path = os.path.join(project_copy_path, ".discopop", "FileMapping.txt")
     if os.path.exists(fmap_path):

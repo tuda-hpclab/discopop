@@ -121,6 +121,16 @@ def test_the_first_run_compiles_and_the_second_reuses_the_build(project: Dict[st
     assert [record.build_id for record in records] == ["cfg_seq"]
 
 
+def test_a_dangling_symbolic_link_does_not_fail_the_build(project: Dict[str, Path]) -> None:
+    (project["root"] / "dangling").symlink_to(project["root"] / "does_not_exist")
+    build = _build(project)
+    assert build.result == BuildResult.BUILT and build.tree is not None
+    assert (Path(build.tree) / "main.c").exists()
+    assert not os.path.lexists(os.path.join(build.tree, "dangling"))
+    # the link does not make the build stale either
+    assert _build(project).result == BuildResult.REUSED
+
+
 def test_the_build_tree_is_kept_next_to_the_project(project: Dict[str, Path]) -> None:
     outcome = _build(project)
     assert outcome.tree == build_tree_path_of(str(project["root"]), KEY)
