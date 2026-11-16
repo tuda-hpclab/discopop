@@ -208,3 +208,17 @@ def test_the_explanation_is_behind_a_help_button_not_on_the_page(panel: BuildPan
 
 def sections_of(panel: BuildPanel) -> List[widgets.FormSection]:
     return panel.findChildren(widgets.FormSection)
+
+
+def test_the_pruning_section_is_collapsed_and_disabled_unless_the_mode_is_dp(panel: BuildPanel) -> None:
+    section = panel.callpath_pruning
+
+    def body_visible() -> bool:
+        return not section.checkbox.isHidden() and not section.depth_spin.isHidden()
+
+    for mode in ("seq", "hd"):
+        panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(mode))
+        assert not section.isEnabled() and not body_visible()
+        assert section.title_label is not None and not section.title_label.isHidden()
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("dp"))
+    assert section.isEnabled() and body_visible()

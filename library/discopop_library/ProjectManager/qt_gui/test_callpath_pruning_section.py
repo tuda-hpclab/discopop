@@ -55,7 +55,8 @@ def test_the_notice_appears_with_current_hotspots_while_pruning_is_off(section: 
     write_hotspots(section)
     section.project_state.publish(HotspotsChanged())
     assert not section.notice.isHidden()
-    assert "not activated" in section.notice.text_label.text()
+    text = section.notice.text_label.text()
+    assert "not activated" in text and "GUI:" not in text  # it is shown at the setting
 
 
 def test_activating_saves_the_setting_hides_the_notice_and_publishes_one_event(section: CallpathPruningSection) -> None:

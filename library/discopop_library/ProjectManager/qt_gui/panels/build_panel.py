@@ -223,8 +223,12 @@ class BuildPanel(Panel):
         self.builds.refresh()
         self.shared_build.refresh(config)
         self.shared_build.setEnabled(bool(config) and not self.is_running() and not self._blocked)
+        # only the instrumented compilation of the mode dp prunes call path states
+        self.callpath_pruning.set_active(self.mode() == "dp")
         missing = self._missing_requirement()
-        pruning_warning = callpath_pruning.inactive_warning(self.arguments, config) if self.mode() == "dp" else None
+        pruning_warning = (
+            callpath_pruning.inactive_warning(self.arguments, config, at_setting=True) if self.mode() == "dp" else None
+        )
         self.goto_setup_button.setVisible(bool(missing) and bool(config))
         if not self.is_running():
             can_start = not missing and not self._blocked

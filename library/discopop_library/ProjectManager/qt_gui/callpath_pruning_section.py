@@ -33,6 +33,7 @@ HINT = (
     " Needs current hotspot detection results (Hotspot Detection stage). Applies to the mode dp. Saved at once;"
     " takes effect with the next profiling build."
 )
+INACTIVE_TOOLTIP = "Call path pruning only applies to the mode dp; select it above to change the setting."
 DEPTH_HINT = "Calls below a hot function whose call paths are kept."
 UNCLASSIFIED_HINT = (
     "Functions the hotspot detection did not classify: keep their call paths or fold them into the caller."
@@ -54,6 +55,7 @@ class CallpathPruningSection(widgets.FormSection):
         self.arguments = arguments
         self.project_state = project_state
         self.status = status
+        self._active = True
         stored = callpath_pruning.load_callpath_pruning(arguments.project_dir)
         self.checkbox = QCheckBox(TEXT)
         self.checkbox.setChecked(stored.enabled)
@@ -74,6 +76,15 @@ class CallpathPruningSection(widgets.FormSection):
         self.unclassified.currentTextChanged.connect(lambda _text: self._changed())
         for event_type in (HotspotsChanged, ProjectDirectoriesChanged, ConfigChanged):
             project_state.subscribe(event_type, lambda _event: self.refresh_notice())
+        self.refresh_notice()
+
+    def set_active(self, active: bool) -> None:
+        """Only the mode dp prunes: for the others the section is collapsed to its title and disabled."""
+        self._active = active
+        for row in range(self.form.rowCount()):
+            self.form.setRowVisible(row, active)
+        self.setEnabled(active)
+        self.setToolTip("" if active else INACTIVE_TOOLTIP)
         self.refresh_notice()
 
     def _changed(self) -> None:
@@ -122,9 +133,9 @@ class CallpathPruningSection(widgets.FormSection):
     def refresh_notice(self) -> None:
         """Current hotspot results exist but pruning is off, or it is on without them."""
         config = self.project_state.current_config
-        text = callpath_pruning.inactive_warning(self.arguments, config) or callpath_pruning.no_hotspots_warning(
-            self.arguments, config
-        )
+        text = callpath_pruning.inactive_warning(
+            self.arguments, config, at_setting=True
+        ) or callpath_pruning.no_hotspots_warning(self.arguments, config)
         if text:
             self.notice.set_message("Call path pruning", text)
-        self.notice.setVisible(bool(text))
+        self.notice.setVisible(bool(text) and self._active)

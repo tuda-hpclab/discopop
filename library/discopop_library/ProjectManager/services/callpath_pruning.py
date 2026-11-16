@@ -171,14 +171,21 @@ def environment(arguments: ProjectManagerArguments, config: Optional[str]) -> Di
     }
 
 
-def inactive_warning(arguments: ProjectManagerArguments, config: Optional[str]) -> Optional[str]:
-    """A warning if pruning is off although a current ``Hotspots.json`` exists, else None."""
+def inactive_warning(
+    arguments: ProjectManagerArguments, config: Optional[str], *, at_setting: bool = False
+) -> Optional[str]:
+    """A warning if pruning is off although a current ``Hotspots.json`` exists, else None.
+
+    ``at_setting``: the warning is shown at the setting itself (the GUI section), so it need not say where it is.
+    """
     if load_callpath_pruning(arguments.project_dir).enabled or current_hotspots_file(arguments, config) is None:
         return None
+    where = "" if at_setting else ' (GUI: Build stage, "Call path pruning")'
     return (
-        "Call path pruning is not activated although current hotspot detection results exist. Activating it "
-        '(GUI: Build stage, "Call path pruning") folds the call path states of functions without hotspots, which '
-        "makes profiling faster and the data smaller; it takes effect with the next profiling build."
+        "Call path pruning is not activated although current hotspot detection results exist. Activating it"
+        + where
+        + " folds the call path states of functions without hotspots, which makes profiling faster and the data "
+        "smaller; it takes effect with the next profiling build."
     )
 
 
