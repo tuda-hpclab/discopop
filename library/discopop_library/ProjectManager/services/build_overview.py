@@ -110,7 +110,10 @@ def build_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> 
     ]
 
 
-def run_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> List[RunRow]:
+def run_rows(
+    arguments: ProjectManagerArguments, with_sizes: bool = False, modes: Optional[Sequence[str]] = None
+) -> List[RunRow]:
+    """One row per run, of the ``modes`` given (all if None)."""
     active = active_run_ids(arguments.dot_dp)
     return [
         RunRow(
@@ -124,6 +127,7 @@ def run_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> Li
             run.run_id in active,
         )
         for run in list_all_runs(arguments)
+        if modes is None or run.mode in modes
     ]
 
 

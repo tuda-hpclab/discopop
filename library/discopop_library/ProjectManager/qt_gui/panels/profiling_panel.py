@@ -147,7 +147,7 @@ class ProfilingPanel(Panel):
         # compiling alone is the Build stage, so there is no "only compile" check box here
         self.build_options = BuildOptions(offer_build_only=False)
         self.builds_and_runs = BuildsAndRuns(
-            arguments, changed=lambda: project_state.publish(ResultsChanged()), show_builds=False
+            arguments, changed=lambda: project_state.publish(ResultsChanged()), show_builds=False, run_modes=("dp",)
         )
         self.builds_section = widgets.CollapsibleSection("Runs", self.builds_and_runs, summary="list, use, delete")
 

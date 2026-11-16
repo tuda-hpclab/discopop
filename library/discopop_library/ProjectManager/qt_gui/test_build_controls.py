@@ -158,3 +158,15 @@ def test_nothing_is_changed_while_a_job_uses_the_builds(widget: BuildsAndRuns) -
     )
     widget.set_blocked(False)
     assert widget.delete_builds_button.isEnabled() and widget.delete_runs_button.isEnabled()
+
+
+def test_the_runs_can_be_limited_to_modes(qtbot: QtBot, widget: BuildsAndRuns) -> None:
+    trees = Path(build_trees_dir_of(widget.arguments.project_root))
+    dot = trees / "tiny_hd.runs" / "20260101-000002"
+    dot.mkdir(parents=True)
+    write_run(RunRecord("20260101-000002", "tiny_hd", "tiny", "hd", 1, "", time.time(), str(dot), return_code=0))
+    widget.refresh()
+    assert widget.run_table.rowCount() == 3
+    only_dp = BuildsAndRuns(widget.arguments, show_builds=False, run_modes=("dp",))
+    qtbot.addWidget(only_dp)
+    assert [only_dp.run_table.item(row, 2).text() for row in range(only_dp.run_table.rowCount())] == ["dp", "dp"]  # type: ignore[union-attr]

@@ -13,7 +13,7 @@
 and deletes builds and runs on request: nothing is deleted automatically.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -107,12 +107,15 @@ class BuildsAndRuns(widgets.FormSection):
         *,
         show_builds: bool = True,
         show_runs: bool = True,
+        run_modes: Optional[Sequence[str]] = None,
     ) -> None:
         super().__init__(
             "Builds and runs" if show_builds and show_runs else ("Builds" if show_builds else "Runs"), parent=parent
         )
         self._show_builds = show_builds
         self._show_runs = show_runs
+        # the modes of the runs listed (all if None)
+        self._run_modes = run_modes
         self.arguments = arguments
         self._changed = changed
         self._job: Optional[WorkRunner] = None
@@ -144,7 +147,7 @@ class BuildsAndRuns(widgets.FormSection):
         self.add_widget(
             QLabel(
                 "Builds and runs are kept until you delete them. A build is a copy of the project that was compiled; "
-                "runs are the profiling runs (dp, hd) that ran in a build, each with its own results."
+                "runs are the profiling runs that ran in a build, each with its own results."
             ),
         )
         if show_builds:
@@ -166,7 +169,7 @@ class BuildsAndRuns(widgets.FormSection):
             values = [build.build_id, build.mode, build.suggestions, build.built, build.compile_time, build.size, ""]
             for column, value in enumerate(values):
                 self.build_table.setItem(row, column, QTableWidgetItem(value))
-        runs = build_overview.run_rows(self.arguments, with_sizes)
+        runs = build_overview.run_rows(self.arguments, with_sizes, self._run_modes)
         self.run_table.setRowCount(len(runs))
         for row, run in enumerate(runs):
             values = [
