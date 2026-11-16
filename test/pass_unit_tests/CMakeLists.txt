@@ -29,6 +29,7 @@ target_sources(
   DiscoPoP_Pass_UT
   PRIVATE
   tests.cpp
+  utils/dputil/test_dot_discopop.cpp
   utils/dputil/test_lid.cpp
   utils/dputil/test_variable_name.cpp
   utils/output/test_output.cpp

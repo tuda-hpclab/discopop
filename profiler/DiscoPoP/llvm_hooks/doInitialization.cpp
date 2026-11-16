@@ -15,11 +15,34 @@
 #include <string>
 
 #include "DiscoPoP.hpp"
+#include "dot_discopop_default.hpp"
+
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using llvm::dyn_cast;
 using llvm::errs;
 using llvm::Module;
 using llvm::Value;
+
+namespace {
+
+// Records the absolute path of the .discopop directory in the module (see dot_discopop_default.hpp). The constant is
+// linkonce_odr, so the modules of a program agree on one, and listed as used, so that no optimization of the link drops
+// it before the runtime reads it.
+void RecordDotDiscopop(Module& m, const std::string& directory) {
+  if (m.getNamedGlobal(kDotDiscopopDefaultSymbol) != nullptr) {
+    return;
+  }
+  llvm::Constant* const value = llvm::ConstantDataArray::getString(m.getContext(), directory, true);
+  auto* const variable = new llvm::GlobalVariable(m, value->getType(), true, llvm::GlobalValue::LinkOnceODRLinkage, value,
+                                                  kDotDiscopopDefaultSymbol);
+  variable->setVisibility(llvm::GlobalValue::HiddenVisibility);
+  llvm::appendToUsed(m, {variable});
+}
+
+}  // namespace
 
 bool DiscoPoP::DoInitialization(Module& m) {
   if (kDpDebug) {
@@ -28,15 +51,40 @@ bool DiscoPoP::DoInitialization(Module& m) {
 
   // prepare environment variables
   const char* tmp = std::getenv("DOT_DISCOPOP");
+  if (tmp != nullptr && tmp[0] == '\0') {
+    tmp = nullptr;  // an empty value is no value
+  }
+  if (tmp == nullptr) {
+    // Without DOT_DISCOPOP: the .discopop directory of the project, the nearest one from the current directory (or the
+    // source file) upwards. Every compiler call of a build finds the same one, wherever it compiles, and so does
+    // the instrumented program (it is recorded in the object code below). The compiler wrappers have done this
+    // already, which is the reason for DP_PROJECT_ROOT_DIR to be set as well.
+    std::string shadowed;
+    const std::string found = dputil::DiscoverDotDiscopop(m.getSourceFileName(), &shadowed);
+    if (!found.empty()) {
+      setenv("DOT_DISCOPOP", found.c_str(), 1);
+      if (std::getenv("DP_PROJECT_ROOT_DIR") == nullptr) {
+        setenv("DP_PROJECT_ROOT_DIR", std::filesystem::path(found).parent_path().c_str(), 1);
+      }
+      if (!shadowed.empty()) {
+        std::cerr << "\nDiscoPoP: WARNING: using " << found << ", which holds no project configuration, although "
+                  << shadowed << " does.\n"
+                  << "          Remove the former if an earlier build left it behind, or set DOT_DISCOPOP.\n\n";
+      }
+      tmp = std::getenv("DOT_DISCOPOP");
+    }
+  }
   if (tmp == nullptr || tmp[0] != '/') {
     // A relative directory is resolved against the directory of each compiler call: a build that compiles in
     // several directories (every CMake build) spreads its data over several .discopop directories whose file
     // and instruction ids do not fit together, and the program does not find them when it is started elsewhere.
     std::cerr << "\nWARNING: DOT_DISCOPOP is " << (tmp == nullptr ? "not set" : "relative (" + std::string(tmp) + ")")
-              << ", so DiscoPoP writes to .discopop below the current directory\n"
+              << " and no .discopop directory exists in the current directory or above,\n"
+              << "         so DiscoPoP writes to .discopop below the current directory\n"
               << "         (" << std::filesystem::current_path().string() << ").\n"
-              << "         Set it to the same absolute path for every compiler call of the build and for the\n"
-              << "         instrumented program.\n"
+              << "         Create the directory in the root of the project (discopop_project_manager --init does)\n"
+              << "         and every compiler call below it finds it, or set DOT_DISCOPOP to the same absolute path\n"
+              << "         for every compiler call of the build and for the instrumented program.\n"
               << "         https://tuda-hpclab.github.io/discopop/setup/environment_variables/\n\n";
   }
   if (tmp == nullptr) {
@@ -45,6 +93,9 @@ bool DiscoPoP::DoInitialization(Module& m) {
   }
   const std::string tmp_str(std::getenv("DOT_DISCOPOP"));
   setenv("DOT_DISCOPOP_PROFILER", (tmp_str + "/profiler").data(), 1);
+  if (tmp_str[0] == '/') {
+    RecordDotDiscopop(m, tmp_str);
+  }
 
   // prepare .discopop directory if not present
   struct stat st1;

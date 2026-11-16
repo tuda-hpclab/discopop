@@ -19,7 +19,7 @@ The wrappers build the instrumented version of your sequential program. They cal
 2. runs the compiler with your `<arguments>` and the additional flags `-g -O0 -fno-discard-value-names -fPIC`, loads the pass (`-fpass-plugin`), and links `libDiscoPoP_RT.a` and `pthread`. Optimization is therefore always off;
 3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below `DP_PROJECT_ROOT_DIR`, or below the directory holding `.discopop` if it is not set) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
 
-The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default `.discopop` in the current directory. The pass warns if `DOT_DISCOPOP` is not set or relative: a build that compiles in several directories then spreads its data over several `.discopop` directories that do not fit together. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
+The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default the nearest `.discopop` directory of the current directory and its parents (the wrappers and the pass find it, so a build that compiles in several directories writes to one; the instrumented program remembers it, so it needs no variable). Without such a directory, the default is `.discopop` in the current directory and the pass warns: a build that compiles in several directories then spreads its data over several `.discopop` directories that do not fit together. Create `.discopop` in the root of the project to avoid this. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
 
 {: .note }
 The profiler must be installed without `-e` (`pip install ./profiler`): the wrappers locate the pass and the runtime relative to their own location, and refuse to run from the source tree.
@@ -32,7 +32,7 @@ discopop_cxx example.cpp -o a.out
 ./a.out
 ```
 
-The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. Run the program from the project directory, or set `DOT_DISCOPOP` so that it finds the `.discopop` directory; if it cannot create its results there, the program stops at its start with an error and exit code 1. Afterwards, continue with the [Explorer](Explorer.md).
+The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. The program writes to the `.discopop` directory it was compiled for from any directory, unless `DOT_DISCOPOP` is set when it starts; if it cannot create its results there, the program stops at its start with an error and exit code 1. Afterwards, continue with the [Explorer](Explorer.md).
 
 ### Makefile projects
 Pass the wrappers as compilers:
@@ -63,6 +63,7 @@ The directory `discopop-profiler.libs` contains further scripts that are not ins
 | `MPI_CC_wrapper.sh`, `MPI_CXX_wrapper.sh`, `MPI_LINKER_wrapper.sh` | Variants for MPI programs; need the MPI compiler wrappers on the `PATH` (compile with `MPI_CC_wrapper.sh` / `MPI_CXX_wrapper.sh`, link with `MPI_LINKER_wrapper.sh`) |
 | `CMAKE_wrapper.sh` | Calls `cmake` with `CC_wrapper.sh` / `CXX_wrapper.sh` as compilers |
 | `filter_ast_dump.py` | Used by the wrappers to reduce the AST: keeps the declarations of the files in `FileMapping.txt` (below the project directory without one) and drops the type nodes |
+| `dp_environment.sh` | Sourced by `CC_wrapper.sh` and `CXX_wrapper.sh`: if `DOT_DISCOPOP` is not set, exports the nearest `.discopop` directory (and `DP_PROJECT_ROOT_DIR`, if unset, as the directory holding it) |
 | `dump_ast.sh` | Sourced by `CC_wrapper.sh` and `CXX_wrapper.sh`: writes the AST of a translation unit, with the AST export plugin if there is one, otherwise by filtering clang's complete dump |
 | `DiscoPoPASTExport-<clang version>.so` | The AST export plugin (only built if the Clang development files are installed, see below) |
 | `dp-fmap` | Creates a [file mapping](../data/Filemapping.md) by hand. This is not necessary anymore since the instrumentation creates `FileMapping.txt`. |

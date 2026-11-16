@@ -13,6 +13,7 @@
 #define _GNU_SOURCE
 
 // temporary rtlib
+#include <stdint.h>
 #include <stdio.h>
 #include "time.h"
 #include <stdbool.h>
@@ -29,12 +30,19 @@ long double* time_b = NULL;
 
 struct timeval start1, end1;
 
+// The path of the .discopop directory the pass recorded in the instrumented program (see HotspotDetection.cpp); the
+// symbol is missing in a program the pass did not instrument.
+extern const char __dp_dot_discopop_default[] __attribute__((weak));
+
 extern inline void __hotspot_detection_init(){
     // prepare environment variables
+    // DOT_DISCOPOP if it is set; else the directory the pass recorded in the program (where the static data is); else
+    // .discopop below the current directory
     char const * tmp = getenv("DOT_DISCOPOP");
-    if(tmp == NULL){
-        // DOT_DISCOPOP needs to be initialized
-        setenv("DOT_DISCOPOP", ".discopop", 1);
+    if(tmp == NULL || tmp[0] == '\0'){
+        // the address of a weak symbol without definition is 0
+        char const * recorded = (uintptr_t) &__dp_dot_discopop_default[0] != 0 ? &__dp_dot_discopop_default[0] : NULL;
+        setenv("DOT_DISCOPOP", recorded != NULL ? recorded : ".discopop", 1);
     }
 
     FILE *filePointer;

@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <filesystem>
 #include "llvm/Pass.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 // #include "llvm/LoopPass.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/raw_ostream.h"
@@ -295,6 +297,86 @@ long int UID = 0;
 
 namespace
 {
+  // The nearest directory named ".discopop" in start or one of its ancestors (symbolic links resolved); empty if there
+  // is none. A ".discopop" without a "project" subdirectory is still the nearest one; a farther one with a project
+  // directory is stored in *shadowed. The same rule as dputil::FindDotDiscopop of the profiler and of
+  // scripts/dp_environment.sh (the packages are built independently).
+  std::string findDotDiscopop(const std::string &start, std::string *shadowed)
+  {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    fs::path directory = fs::canonical(start.empty() ? "." : start, error);
+    if (error)
+    {
+      return "";
+    }
+    std::string nearest;
+    while (true)
+    {
+      const fs::path candidate = directory / ".discopop";
+      if (fs::is_directory(candidate, error))
+      {
+        const bool hasProject = fs::is_directory(candidate / "project", error);
+        if (nearest.empty())
+        {
+          nearest = candidate.string();
+          if (hasProject)
+          {
+            break;
+          }
+        }
+        else if (hasProject)
+        {
+          if (shadowed != nullptr)
+          {
+            *shadowed = candidate.string();
+          }
+          break;
+        }
+      }
+      if (!directory.has_parent_path() || directory.parent_path() == directory)
+      {
+        break;
+      }
+      directory = directory.parent_path();
+    }
+    return nearest;
+  }
+
+  // From the current directory and, if there is none, from the directory of the source file.
+  std::string discoverDotDiscopop(const std::string &sourceFile, std::string *shadowed)
+  {
+    std::error_code error;
+    std::string found = findDotDiscopop(std::filesystem::current_path(error).string(), shadowed);
+    if (found.empty() && !sourceFile.empty())
+    {
+      const std::filesystem::path source = std::filesystem::absolute(sourceFile, error);
+      if (!error)
+      {
+        found = findDotDiscopop(source.parent_path().string(), shadowed);
+      }
+    }
+    return found;
+  }
+
+  // The runtime of the instrumented program uses the directory recorded here when DOT_DISCOPOP is not set (the name is
+  // the one of the profiler's runtime: no program is instrumented by both).
+  void recordDotDiscopop(Module &M, const std::string &directory)
+  {
+    static const char *const symbol = "__dp_dot_discopop_default";
+    if (M.getNamedGlobal(symbol) != nullptr)
+    {
+      return;
+    }
+    Constant *const value = ConstantDataArray::getString(M.getContext(), directory, true);
+    auto *const variable = new GlobalVariable(M, value->getType(), true, GlobalValue::LinkOnceODRLinkage, value, symbol);
+    variable->setVisibility(GlobalValue::HiddenVisibility);
+    appendToUsed(M, {variable});
+  }
+}
+
+namespace
+{
   // Whether path lies in the project. This package cannot link the profiler's DPUtils, so the rule of
   // dputil::IsInProjectRoot (profiler/share/lib/DPUtils.cpp) is repeated here and the two must agree: the path
   // contains DP_PROJECT_ROOT_DIR or one of the directories of DP_PROJECT_INCLUDE_DIRS (project code outside the
@@ -434,9 +516,35 @@ namespace
     {
       // prepare environment variables
       char const * tmp = getenv("DOT_DISCOPOP");
+      if(tmp != NULL && tmp[0] == '\0'){
+          tmp = NULL;  // an empty value is no value
+      }
       if(tmp == NULL){
-          // DOT_DISCOPOP needs to be initialized
-          setenv("DOT_DISCOPOP", ".discopop", 1);
+          // the .discopop directory of the project (the nearest one from the current directory or the source file upwards)
+          std::string shadowed;
+          const std::string found = discoverDotDiscopop(M.getSourceFileName(), &shadowed);
+          if(!found.empty()){
+              setenv("DOT_DISCOPOP", found.c_str(), 1);
+              if(getenv("DP_PROJECT_ROOT_DIR") == NULL){
+                  setenv("DP_PROJECT_ROOT_DIR", std::filesystem::path(found).parent_path().c_str(), 1);
+              }
+              if(!shadowed.empty()){
+                  std::cerr << "\nDiscoPoP: WARNING: using " << found << ", which holds no project configuration, although "
+                            << shadowed << " does.\n"
+                            << "          Remove the former if an earlier build left it behind, or set DOT_DISCOPOP.\n\n";
+              }
+          }
+          else{
+              // DOT_DISCOPOP needs to be initialized
+              std::cerr << "\nWARNING: DOT_DISCOPOP is not set and no .discopop directory exists in the current directory or above,\n"
+                        << "         so DiscoPoP writes to .discopop below the current directory.\n"
+                        << "         Create the directory in the root of the project (discopop_project_manager --init does)\n"
+                        << "         or set DOT_DISCOPOP to the same absolute path for every compiler call and the program.\n\n";
+              setenv("DOT_DISCOPOP", ".discopop", 1);
+          }
+      }
+      if(getenv("DOT_DISCOPOP")[0] == '/'){
+          recordDotDiscopop(M, getenv("DOT_DISCOPOP"));
       }
 
       // prepare .discopop directory if not present

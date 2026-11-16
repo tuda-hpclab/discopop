@@ -145,6 +145,18 @@ inline bool FileExists(const std::string& filename) {
 // rule and must agree.
 bool IsInProjectRoot(const std::string& path);
 
+// The nearest directory named ".discopop" in start_directory or one of its ancestors (symbolic links resolved), as an
+// absolute path; empty if there is none. Used when DOT_DISCOPOP is not set, so that the compiler calls of any build (in
+// the project directory, a build directory below it or a subdirectory) and the instrumented program write to the same
+// directory. A ".discopop" without a "project" subdirectory (what an earlier build that wrote to its current directory
+// left) is still the nearest one; if a farther one holds the project configuration of discopop_project_manager
+// --init, its path is stored in *shadowed (if given). scripts/dp_environment.sh implements the same rule and must agree.
+std::string FindDotDiscopop(const std::string& start_directory, std::string* shadowed = nullptr);
+
+// FindDotDiscopop from the current directory and, if there is none, from the directory of source_file (a build outside
+// of the project directory); empty if there is none.
+std::string DiscoverDotDiscopop(const std::string& source_file, std::string* shadowed = nullptr);
+
 int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);
 
 // Encode a file id and a line number as LID, see lid_constants.hpp. Returns 0 ("no location") and warns
