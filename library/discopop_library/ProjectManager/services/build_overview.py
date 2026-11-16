@@ -29,6 +29,7 @@ from discopop_library.ProjectManager.configurations.runs import (
     ActivationError,
     RunRecord,
     activate_run,
+    active_run_ids,
     delete_runs,
     disk_usage,
     list_all_runs,
@@ -109,17 +110,8 @@ def build_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> 
     ]
 
 
-def active_run_id(arguments: ProjectManagerArguments) -> str:
-    """The run whose data was put into the project's ``.discopop`` last, "" if none."""
-    try:
-        with open(os.path.join(arguments.dot_dp, "active_run.json")) as f:
-            return str(json.load(f).get("run_id", ""))
-    except (OSError, ValueError):
-        return ""
-
-
 def run_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> List[RunRow]:
-    active = active_run_id(arguments)
+    active = active_run_ids(arguments.dot_dp)
     return [
         RunRow(
             run.run_id,
@@ -129,7 +121,7 @@ def run_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> Li
             format_time(run.started_at),
             "running/aborted" if run.return_code is None else ("ok" if run.return_code == 0 else "failed"),
             _size_text(run.dot_discopop, with_sizes),
-            run.run_id == active,
+            run.run_id in active,
         )
         for run in list_all_runs(arguments)
     ]
@@ -190,19 +182,19 @@ def storage_of(path: str) -> int:
 def storage_warning(arguments: ProjectManagerArguments, expected_builds: Sequence[str]) -> Optional[str]:
     """A warning that builds and runs pile up in ``<project>_discopop_builds``, or None while they do not.
 
-    ``expected_builds`` are the ids of the builds the caller works with. Builds beyond them and runs that are not the
-    latest of their build are what accumulates (every rebuild, every further input, every configuration leaves
-    one), so only they trigger the warning; it then states the totals, the number of builds and runs and the
+    ``expected_builds`` are the ids of the builds the caller works with. Builds beyond them and runs whose data is not
+    in the project (see :func:`active_runs`) are what accumulates (every rebuild, every further input, every
+    configuration leaves one), so only they trigger the warning; it then states the totals, the number of builds and runs and the
     storage they occupy. Nothing is ever deleted automatically: the text names the commands for that. The size is
     only computed if there is something to warn about, as it reads every file of the trees.
     """
     builds = list_builds(arguments.project_dir)
     runs = list_all_runs(arguments)
-    latest_of_build = {}
-    for run in runs:
-        latest_of_build[run.build_id] = run.run_id
+    # the runs whose data is in the project are the ones in use; the others (older runs of inputs that were
+    # profiled again, failed runs, runs of builds that were built again) accumulate
+    in_use = active_run_ids(arguments.dot_dp)
     extra_builds = [build for build in builds if build.build_id not in expected_builds]
-    extra_runs = [run for run in runs if latest_of_build.get(run.build_id) != run.run_id]
+    extra_runs = [run for run in runs if run.run_id not in in_use]
     if not extra_builds and not extra_runs:
         return None
     trees = build_trees_dir_of(arguments.project_root)

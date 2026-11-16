@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from typing import Any, Callable, Iterator, List, Optional, Tuple
 from unittest import mock
@@ -119,6 +120,10 @@ class FakeBuilds:
             os.makedirs(os.path.join(dot, "profiler"), exist_ok=True)
             with open(os.path.join(dot, "profiler", "dynamic_dependencies.txt"), "w") as f:
                 f.write(config)
+            # the static data of the build, with the time of its compilation
+            with open(os.path.join(dot, "profiler", "Data.xml"), "w") as f:
+                f.write("<Nodes></Nodes>\n")
+            os.utime(os.path.join(dot, "profiler", "Data.xml"), (1000.0, 1000.0))
         else:
             os.makedirs(os.path.join(dot, "hotspot_detection", "private"), exist_ok=True)
             with open(os.path.join(dot, "hotspot_detection", "private", "hotspot_result_0.txt"), "w") as f:
@@ -713,14 +718,51 @@ class TestGatherDataLeavesTheProjectAlone(unittest.TestCase):
         self.assertEqual(self.builds.runs, [("hd", CONFIG_NAME), ("dp", CONFIG_NAME)])
         self.assertEqual(self.builds.activated, [["run1"], ["run2"]])
 
+    def test_a_second_call_finds_the_data_current_although_the_build_is_older(self) -> None:
+        # the static files of a run carry the time of the compilation: a file the call saved after it (the lists of
+        # project directories) must not make every following call profile again
+        self.__handle()
+        self.builds.runs.clear()
+        self.builds.reused = True
+        result = self.__handle(force=False)
+        self.assertEqual(self.builds.runs, [])
+        self.assertEqual(result["steps"]["instrumentation"]["status"], "skipped")
+        self.assertEqual(result["steps"]["profiling"]["status"], "skipped")
+
+    def test_an_edited_execute_script_profiles_again_without_compiling(self) -> None:
+        self.__handle()
+        self.builds.runs.clear()
+        self.builds.policies.clear()
+        self.builds.reused = True
+        future = time.time() + 5
+        os.utime(os.path.join(self.configs_dir, CONFIG_NAME, "execute.sh"), (future, future))
+        result = self.__handle(force=False)
+        self.assertEqual(self.builds.runs, [("hd", CONFIG_NAME), ("dp", CONFIG_NAME)])
+        # the builds are used as they are
+        self.assertEqual(result["steps"]["instrumentation"]["status"], "skipped")
+        self.assertNotIn(BuildPolicy.REBUILD, self.builds.policies)
+
+    def test_the_runs_use_the_build_as_it_is_and_never_compile(self) -> None:
+        self.__handle()
+        self.assertEqual(self.builds.policies[1::2], [BuildPolicy.REUSE, BuildPolicy.REUSE])
+
+    def test_data_of_another_configuration_is_not_taken_as_current(self) -> None:
+        self.__handle()
+        self.builds.runs.clear()
+        self.builds.reused = True
+        with open(os.path.join(self.project_path, ".discopop", "active_run.json"), "w") as f:
+            json.dump({"active": {"dp": {"run_ids": ["x"], "configuration": "other"}}}, f)
+        self.__handle(force=False)
+        self.assertEqual(self.builds.runs, [("dp", CONFIG_NAME)])
+
     def test_force_rebuilds_and_the_default_compiles_only_what_is_not_current(self) -> None:
         self.__handle()
         # the compilations (the runs ask for the build as it is)
         self.assertEqual(self.builds.policies[::2], [BuildPolicy.REBUILD, BuildPolicy.REBUILD])
-        self.assertEqual(set(self.builds.policies[1::2]), {BuildPolicy.AUTO})
+        self.assertEqual(set(self.builds.policies[1::2]), {BuildPolicy.REUSE})
         self.builds.policies.clear()
         self.__handle(force=False)
-        self.assertEqual(set(self.builds.policies), {BuildPolicy.AUTO})
+        self.assertNotIn(BuildPolicy.REBUILD, self.builds.policies)
 
     def test_a_failed_instrumentation_is_an_error_of_the_call(self) -> None:
         self.builds.compile_result = (1, 1.0, "", "boom")
@@ -795,6 +837,31 @@ class TestStorageWarning(unittest.TestCase):
         self.assertIn("3 builds and 0 runs", warning)
         self.assertIn("4.0 KiB", warning)
         self.assertIn("--delete-builds", warning)
+
+    def __run(self, build_id: str, run_id: str) -> None:
+        from discopop_library.ProjectManager.configurations.runs import runs_directory_of, write_run
+
+        dot = os.path.join(runs_directory_of(self.project_path, build_id), run_id)
+        os.makedirs(dot)
+        write_run(RunRecord(run_id, build_id, "cfg", build_id.rsplit("_", 1)[1], 1, "", 0.0, dot, return_code=0))
+
+    def test_runs_whose_data_is_in_the_project_are_in_use_and_older_ones_are_reported(self) -> None:
+        self.__build(f"{CONFIG_NAME}_hd", 10)
+        self.__build(f"{CONFIG_NAME}_dp", 10)
+        # two hotspot runs of one call and the dp run are what the project holds
+        for build_id, run_id in ((f"{CONFIG_NAME}_hd", "h1"), (f"{CONFIG_NAME}_hd", "h2"), (f"{CONFIG_NAME}_dp", "d1")):
+            self.__run(build_id, run_id)
+        with open(os.path.join(self.project_path, ".discopop", "active_run.json"), "w") as f:
+            json.dump(
+                {"active": {"hd": {"run_ids": ["h1", "h2"]}, "dp": {"run_ids": ["d1"]}}},
+                f,
+            )
+        self.assertIsNone(gather_data._storage_warning(self.project_path, CONFIG_NAME, self.ctx))
+        self.__run(f"{CONFIG_NAME}_dp", "d0")
+        warning = gather_data._storage_warning(self.project_path, CONFIG_NAME, self.ctx)
+        assert warning is not None
+        self.assertIn("2 builds and 4 runs", warning)
+        self.assertIn("1 older runs", warning)
 
     def test_the_warning_is_part_of_the_result(self) -> None:
         self.__build(f"{CONFIG_NAME}_dp", 10)

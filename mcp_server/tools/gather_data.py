@@ -28,7 +28,13 @@ from discopop_library.ProjectManager.configurations.building import (
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, build_tree_path_of
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.running import execute_in_build
-from discopop_library.ProjectManager.configurations.runs import ActivationError, RunRecord, activate_run, activate_runs
+from discopop_library.ProjectManager.configurations.runs import (
+    ActivationError,
+    RunRecord,
+    activate_run,
+    activate_runs,
+    active_runs,
+)
 from discopop_library.ProjectManager.services.build_overview import storage_warning
 from mcp_server.tools.helpers import (
     ToolContext,
@@ -172,6 +178,16 @@ class _PipelineState:
     hotspot_runs: list[tuple[str, RunRecord]] = field(default_factory=list)
 
 
+def _from_other_configuration(project_path: str, mode: str, config_name: str) -> bool:
+    """Whether the ``mode`` data in the project comes from a run of another configuration than ``config_name``.
+
+    Data without a record (made by hand or before the runs were recorded) is taken as the configuration's.
+    """
+    entry = active_runs(str(Path(project_path) / ".discopop")).get(mode, {})
+    configuration = entry.get("configuration")
+    return isinstance(configuration, str) and configuration != config_name
+
+
 def _build_arguments(project_path: str, timeout_seconds: int, ctx: ToolContext) -> ProjectManagerArguments:
     """The arguments for builds: compiled in a copy of the project, never in the project itself."""
     arguments = ctx.make_pm_args(project_path, timeout_seconds)
@@ -276,8 +292,8 @@ def _run_in_build(
     """Run the ``execute.sh`` of ``run_config`` in the build of ``build_config``; its results go to a run of their own.
 
     Returns what the script returned, the run and an error text for a build that is not available. The build is
-    checked again under its lock (the project may have changed since it was compiled), which also refreshes the
-    scripts in its tree.
+    checked again under its lock (the project may have changed since it was compiled; a build that is not current
+    any more is an error, never compiled here), which also refreshes the scripts in its tree.
     """
     configs_dir = Path(project_path) / ".discopop" / "project" / "configs"
     key = BuildKey(build_config, mode, ())
@@ -299,13 +315,20 @@ def _run_in_build(
                 settings,
                 resolve_compile_script_path(str(configs_dir), build_config),
                 1,
-                BuildPolicy.AUTO,
+                # the build of the step before: one that changed meanwhile (the sources were edited during a long run)
+                # is no reason to compile silently, and the runs of one call have to come from one binary
+                BuildPolicy.REUSE,
                 float(timeout_seconds),
                 process_started_callback=ctx.track_process,
                 message=log,
             )
             if not outcome.usable or outcome.record is None:
-                return None, None, outcome.message or f"The build {key.build_id} is not available."
+                return (
+                    None,
+                    None,
+                    (outcome.message or f"The build {key.build_id} is not available.")
+                    + " Call gather_data again (force=true compiles anew).",
+                )
             result, run = execute_in_build(
                 arguments,
                 outcome.record,
@@ -352,7 +375,12 @@ def _hotspot_instrument(
 
     # Skipped only when the results cover exactly the requested configurations: the data of the project is
     # replaced by the runs of all of them together, so a configuration that is missing needs every run again.
-    if not force and private_dir.exists() and set(_profiled_configurations(hotspot_dir)) == set(hotspot_config_names):
+    if (
+        not force
+        and private_dir.exists()
+        and set(_profiled_configurations(hotspot_dir)) == set(hotspot_config_names)
+        and not _from_other_configuration(project_path, "hd", config_name)
+    ):
         result_files = list(private_dir.glob("hotspot_result_*.txt"))
         if result_files:
             last_run_mtime = max(f.stat().st_mtime for f in result_files)
@@ -467,7 +495,10 @@ def _hotspot_activate(
     except ActivationError as error:
         return {
             "status": "error",
-            "message": f"The hotspot runs could not be put into the project: {error}",
+            "message": (
+                f"The hotspot runs could not be put into the project: {error}. "
+                "Call gather_data with force=true to compile and profile again."
+            ),
         }
     hotspot_dir = Path(project_path) / ".discopop" / "hotspot_detection"
     names: list[str] = []
@@ -582,7 +613,12 @@ def _instrument_project(
 
     # Skipped only when the profiling output is current as well: if profiling still has to run, it needs the build.
     dyn_deps = profiler_dir / "dynamic_dependencies.txt"
-    if not force and data_xml.exists() and dyn_deps.exists():
+    if (
+        not force
+        and data_xml.exists()
+        and dyn_deps.exists()
+        and not _from_other_configuration(project_path, "dp", config_name)
+    ):
         result_mtime = min(data_xml.stat().st_mtime, dyn_deps.stat().st_mtime)
         if source_mtime is None or source_mtime <= result_mtime:
             return {
@@ -693,6 +729,13 @@ def _run_profiling(
             ),
             "elapsed_time": elapsed,
         }
+    # The static files of the run carry the time of the compilation. The data is as current as this run: a source
+    # newer than the build (but not newer than the run) must not make the next call (and get_project_status)
+    # take the instrumentation for outdated again.
+    try:
+        os.utime(p / ".discopop" / "profiler" / "Data.xml", None)
+    except OSError:
+        pass
     ctx.log_action(project_path, "gather_data", f"Profiling complete in {elapsed}s (run {run.run_id})")
     return {"status": "success", "elapsed_time": elapsed, "run_id": run.run_id, **warning_fields(stderr)}
 
@@ -852,6 +895,15 @@ def _pipeline(
 
     # Compute source mtime once and reuse across all staleness checks.
     source_mtime = ToolContext.newest_source_mtime(project_path)
+    # an edited execute.sh (another input) means the runs are due again, which does not compile again: the build
+    # does not depend on it
+    configs_dir = Path(project_path) / ".discopop" / "project" / "configs"
+    for name in {config_name, *hotspot_config_names}:
+        try:
+            mtime = (configs_dir / name / "execute.sh").stat().st_mtime
+        except OSError:
+            continue
+        source_mtime = mtime if source_mtime is None else max(source_mtime, mtime)
 
     total_steps = 6  # 3 hotspot steps, instrument + profile + detect
     step = 0
@@ -905,6 +957,17 @@ def _pipeline(
     # The suggestions are ranked by the hotspots, so there is nothing to continue with.
     if ctx.cancelled:
         return _cancelled_result(project_path, steps)
+    if not hotspot_ok and _failed_hotspot_step(steps) == "hotspot_activation":
+        return {
+            "status": "error",
+            "message": "Hotspot detection failed. See steps.hotspot_activation for details.",
+            "steps": steps,
+            "next_step": (
+                "The hotspot runs succeeded, but their data could not be put into the project (see "
+                "steps.hotspot_activation.message). Call gather_data again with force=true, which compiles and "
+                "profiles anew."
+            ),
+        }
     if not hotspot_ok:
         failed_step = _failed_hotspot_step(steps)
         return {

@@ -19,12 +19,13 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 from discopop_library.ProjectManager.configurations.runs import (
     ActivationError,
     activate_run,
+    active_run_ids,
     delete_runs,
     disk_usage,
     latest_successful_run,
     list_all_runs,
 )
-from discopop_library.ProjectManager.services.build_overview import active_run_id, format_size
+from discopop_library.ProjectManager.services.build_overview import format_size
 
 
 def show_runs(arguments: ProjectManagerArguments) -> None:
@@ -32,7 +33,7 @@ def show_runs(arguments: ProjectManagerArguments) -> None:
     if not runs:
         print("No runs. A dp or hd run of a configuration in a build (without --inplace) creates one.")
         return
-    active = active_run_id(arguments)
+    active = active_run_ids(arguments.dot_dp)
     table: List[List[str]] = [["Run", "Build", "Mode", "Threads", "Started", "Result", "Size", "Active"]]
     for run in runs:
         table.append(
@@ -44,7 +45,7 @@ def show_runs(arguments: ProjectManagerArguments) -> None:
                 time.strftime("%Y-%m-%d %H:%M", time.localtime(run.started_at)),
                 "running/aborted" if run.return_code is None else ("ok" if run.return_code == 0 else "failed"),
                 format_size(disk_usage(run.dot_discopop)) if os.path.isdir(run.dot_discopop) else "-",
-                "yes" if run.run_id == active else "",
+                "yes" if run.run_id in active else "",
             ]
         )
     print(tabulate(table, headers="firstrow", tablefmt="grid"))

@@ -32,7 +32,7 @@ import re
 import shutil
 import time
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from filelock import FileLock, Timeout
 
@@ -364,6 +364,29 @@ def _mapping_conflict(project_mapping: PATH, run_mapping: PATH, tree: PATH, root
     return None
 
 
+ACTIVE_RUN_FILE = "active_run.json"
+
+
+def active_runs(dot_discopop: PATH) -> Dict[str, Dict[str, Any]]:
+    """The runs whose data is in the ``.discopop`` of the project, per mode: ``run_ids``, ``build_id`` and
+    ``configuration`` of each. Empty if there is none (or the file is unreadable)."""
+    try:
+        with open(os.path.join(dot_discopop, ACTIVE_RUN_FILE)) as f:
+            data = json.load(f)
+        active = data.get("active")
+        if isinstance(active, dict):
+            return {str(mode): dict(entry) for mode, entry in active.items() if isinstance(entry, dict)}
+        if isinstance(data.get("run_id"), str):  # written before the runs were kept per mode
+            return {str(data.get("mode", "")): {"run_ids": data.get("run_ids") or [data["run_id"]]}}
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {}
+
+
+def active_run_ids(dot_discopop: PATH) -> Set[str]:
+    return {str(run_id) for entry in active_runs(dot_discopop).values() for run_id in entry.get("run_ids", [])}
+
+
 def _write_json_atomically(path: PATH, data: Dict[str, Any]) -> None:
     temporary = path + ".tmp"
     with open(temporary, "w") as f:
@@ -501,13 +524,18 @@ def _activate_locked(
             swapped.append(name)
             os.replace(os.path.join(staging, name), target)
             replaced.append(name)
+        run_ids = [run.run_id] + [member.run_id for member in further_runs]
+        # per mode (a dp and an hd run are active side by side): the runs, their build and their configuration
+        active = active_runs(dot)
+        active[run.mode] = {"run_ids": run_ids, "build_id": run.build_id, "configuration": run.configuration}
         _write_json_atomically(
-            os.path.join(dot, "active_run.json"),
+            os.path.join(dot, ACTIVE_RUN_FILE),
             {
                 "run_id": run.run_id,
                 "build_id": run.build_id,
                 "mode": run.mode,
-                **({"run_ids": [run.run_id] + [other.run_id for other in further_runs]} if further_runs else {}),
+                **({"run_ids": run_ids} if further_runs else {}),
+                "active": active,
             },
         )
     except BaseException:

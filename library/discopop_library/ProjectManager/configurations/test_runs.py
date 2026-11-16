@@ -24,6 +24,8 @@ from discopop_library.ProjectManager.configurations.runs import (
     ActivationError,
     activate_run,
     activate_runs,
+    active_run_ids,
+    active_runs,
     delete_runs,
     latest_successful_run,
     list_all_runs,
@@ -238,6 +240,24 @@ def test_the_hotspot_runs_of_several_inputs_are_put_into_the_project_together(pr
     assert (private / "cs_id.txt").read_text() == "static of small"
     assert (dot / "FileMapping.txt").read_text() == f"1\t{project['root']}/main.c\n"
     assert json.loads((dot / "active_run.json").read_text())["run_ids"] == ["small", "large", "larger"]
+
+
+def test_the_active_runs_are_kept_per_mode(project: Dict[str, Path]) -> None:
+    _run(project)
+    arguments = _arguments(project["root"])
+    (dp_run,) = list_all_runs(arguments)
+    hd_runs = [_hotspot_run(project, "small", "s"), _hotspot_run(project, "large", "l")]
+    activate_runs(arguments, hd_runs)
+    activate_run(arguments, dp_run)
+    dot = str(project["root"] / ".discopop")
+    assert active_run_ids(dot) == {"small", "large", dp_run.run_id}
+    assert active_runs(dot)["hd"] == {"run_ids": ["small", "large"], "build_id": "cfg_hd", "configuration": "cfg"}
+    assert active_runs(dot)["dp"]["run_ids"] == [dp_run.run_id]
+    # the record written before the runs were kept per mode still names the run
+    (project["root"] / ".discopop" / "active_run.json").write_text('{"run_id": "x", "mode": "dp"}')
+    assert active_run_ids(dot) == {"x"}
+    (project["root"] / ".discopop" / "active_run.json").write_text("not json")
+    assert active_run_ids(dot) == set()
 
 
 def test_several_runs_are_only_put_into_the_project_together_if_they_are_hd_runs_of_one_build(
