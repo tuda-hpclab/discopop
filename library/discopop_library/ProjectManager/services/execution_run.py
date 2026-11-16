@@ -95,7 +95,34 @@ class PreparationRequest:
     build_only: bool = False
 
 
-def report_compilation_failure(ctx: WorkContext, compile_result: Optional[Tuple[int, float, str, str]]) -> None:
+class OutputStream:
+    """The live output of the scripts of one phase, which :meth:`show` completes from the final result.
+
+    Pass the object as ``output_callback`` of a script run: every line is shown while the script runs.
+    :meth:`show` prints the collected output of the finished script only if nothing was shown live, so that the
+    output appears exactly once (a runner that does not stream still reports it).
+    """
+
+    def __init__(self, ctx: WorkContext) -> None:
+        self._ctx = ctx
+        self.received = False
+
+    def __call__(self, text: str) -> None:
+        self.received = True
+        self._ctx.output(text)
+
+    def show(self, stdout: str, stderr: str) -> None:
+        if self.received:
+            return
+        if stdout:
+            self._ctx.output(f"stdout: {stdout}\n")
+        if stderr:
+            self._ctx.output(f"stderr: {stderr}\n")
+
+
+def report_compilation_failure(
+    ctx: WorkContext, compile_result: Optional[Tuple[int, float, str, str]], streamed: bool = False
+) -> None:
     """Report a failed compilation with everything the compile script printed: that is what the user needs to find
     out why it failed (the build tree of a failed compilation is removed, so nothing else keeps it)."""
     if compile_result is None:
@@ -103,6 +130,8 @@ def report_compilation_failure(ctx: WorkContext, compile_result: Optional[Tuple[
         return
     ret_code, _elapsed, stdout, stderr = compile_result
     ctx.output(f"Compilation failed (return code: {ret_code})\n")
+    if streamed:  # the output was shown while the script ran
+        return
     if stdout:
         ctx.output(f"stdout: {stdout}\n")
     if stderr:
@@ -195,6 +224,7 @@ def run_execution(
 
         ctx.status("⏳ Executing...", StatusKind.BUSY)
         ctx.output("Executing...\n")
+        stream = OutputStream(ctx)
         repetitions = repetitions_for_mode(mode, args_copy.execution_repetitions)
         if build is None:
             # in place: the project root is compiled and executed, no build is involved
@@ -212,6 +242,7 @@ def run_execution(
                 # the command line, so the two cannot drift apart.
                 repetitions=repetitions,
                 should_abort=ctx.cancel_event.is_set,
+                output_callback=stream,
             )
         else:
             execute_result, _run = execute_in_build(
@@ -226,6 +257,7 @@ def run_execution(
                 process_started_callback=ctx.register_process,
                 should_abort=ctx.cancel_event.is_set,
                 on_run=lambda run: ctx.output(f"Run {run.run_id}: results in {run.dot_discopop}\n"),
+                output_callback=stream,
             )
         ctx.clear_process()
 
@@ -236,10 +268,7 @@ def run_execution(
         ret_code, elapsed, stdout, stderr = execute_result
         described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
         ctx.output(f"Execution succeeded ({described})\n")
-        if stdout:
-            ctx.output(f"stdout: {stdout}\n")
-        if stderr:
-            ctx.output(f"stderr: {stderr}\n")
+        stream.show(stdout, stderr)
 
         # optional output validation (auto-run when validate.sh exists),
         # applied only to the "real" runs (seq/par) — matching the CLI.
@@ -249,6 +278,7 @@ def run_execution(
                 ctx.status(status, StatusKind.BUSY)
                 ctx.output(message)
 
+            validation_stream = OutputStream(ctx)
             validation = run_validation_phase(
                 args_copy,
                 project_copy_path,
@@ -263,6 +293,7 @@ def run_execution(
                 ),
                 on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
                 should_abort=ctx.cancel_event.is_set,
+                output_callback=validation_stream,
             )
             ctx.clear_process()
 
@@ -276,10 +307,7 @@ def run_execution(
                     assert validation.compile_result is not None
                     _, c_elapsed, c_stdout, c_stderr = validation.compile_result
                     ctx.output(f"Validation build succeeded ({c_elapsed:.2f}s)\n")
-                    if c_stdout:
-                        ctx.output(f"stdout: {c_stdout}\n")
-                    if c_stderr:
-                        ctx.output(f"stderr: {c_stderr}\n")
+                    validation_stream.show(c_stdout, c_stderr)
                 else:
                     c_rc = validation.compile_result[0] if validation.compile_result else "None"
                     ctx.output(f"Validation build FAILED (return code: {c_rc})\n")
@@ -295,10 +323,7 @@ def run_execution(
                 assert validation.validate_result is not None
                 _, v_elapsed, v_stdout, v_stderr = validation.validate_result
                 ctx.output(f"Validation succeeded ({v_elapsed:.2f}s)\n")
-                if v_stdout:
-                    ctx.output(f"stdout: {v_stdout}\n")
-                if v_stderr:
-                    ctx.output(f"stderr: {v_stderr}\n")
+                validation_stream.show(v_stdout, v_stderr)
         return True
 
     for mode in request.modes:
@@ -317,6 +342,7 @@ def run_execution(
             project_copy_path = arguments.project_root
             ctx.status("⏳ Compiling...", StatusKind.BUSY)
             ctx.output("Compiling...\n")
+            compile_stream = OutputStream(ctx)
             compile_result = execute_configuration(
                 args_copy,
                 project_copy_path,
@@ -326,17 +352,15 @@ def run_execution(
                 1 if mode == "seq" else thread_count,
                 args_copy.timeout_compilation,
                 process_started_callback=ctx.register_process,
+                output_callback=compile_stream,
             )
             ctx.clear_process()
             if compile_result is None or compile_result[0] != 0:
-                report_compilation_failure(ctx, compile_result)
+                report_compilation_failure(ctx, compile_result, streamed=True)
                 continue
             ret_code, elapsed, stdout, stderr = compile_result
             ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-            if stdout:
-                ctx.output(f"stdout: {stdout}\n")
-            if stderr:
-                ctx.output(f"stderr: {stderr}\n")
+            compile_stream.show(stdout, stderr)
             if request.build_only:
                 continue
             if not execute_and_validate(project_copy_path, settings_path, mode):
@@ -384,6 +408,7 @@ def run_execution(
                 should_abort=ctx.cancel_event.is_set,
                 on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
             ):
+                compile_stream = OutputStream(ctx)
                 build = ensure_build(
                     args_copy,
                     key,
@@ -395,12 +420,13 @@ def run_execution(
                     args_copy.timeout_compilation,
                     process_started_callback=ctx.register_process,
                     message=ctx.output,
+                    output_callback=compile_stream,
                     on_application_failure=report_application_failure,
                 )
                 ctx.clear_process()
 
                 if build.result == BuildResult.COMPILE_FAILED:
-                    report_compilation_failure(ctx, build.compile_result)
+                    report_compilation_failure(ctx, build.compile_result, streamed=True)
                     continue
                 if build.result in (BuildResult.UNAVAILABLE, BuildResult.COPY_FAILED):
                     ctx.output(build.message + "\n")
@@ -410,10 +436,7 @@ def run_execution(
                 if build.result == BuildResult.BUILT and build.compile_result is not None:
                     _, elapsed, stdout, stderr = build.compile_result
                     ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-                    if stdout:
-                        ctx.output(f"stdout: {stdout}\n")
-                    if stderr:
-                        ctx.output(f"stderr: {stderr}\n")
+                    compile_stream.show(stdout, stderr)
                 if request.build_only:
                     continue
                 if not execute_and_validate(build.tree, settings_path, mode, build.record):
@@ -465,6 +488,7 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
             should_abort=ctx.cancel_event.is_set,
             on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
         ):
+            compile_stream = OutputStream(ctx)
             build = ensure_build(
                 args_copy,
                 key,
@@ -476,20 +500,18 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
                 args_copy.timeout_compilation,
                 process_started_callback=ctx.register_process,
                 message=ctx.output,
+                output_callback=compile_stream,
             )
             ctx.clear_process()
             if build.result == BuildResult.COMPILE_FAILED:
-                report_compilation_failure(ctx, build.compile_result)
+                report_compilation_failure(ctx, build.compile_result, streamed=True)
             elif not build.usable or build.record is None:
                 ctx.output((build.message or "The build failed.") + "\n")
             else:
                 if build.result == BuildResult.BUILT and build.compile_result is not None:
                     _, elapsed, stdout, stderr = build.compile_result
                     ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-                    if stdout:
-                        ctx.output(f"stdout: {stdout}\n")
-                    if stderr:
-                        ctx.output(f"stderr: {stderr}\n")
+                    compile_stream.show(stdout, stderr)
                 if request.build_only:
                     success = True
                 elif ctx.cancel_event.is_set():
@@ -519,6 +541,7 @@ def _profile_in_build(
     """Run the configuration in ``build`` and activate the run; True if both worked."""
     ctx.status("⏳ Executing...", StatusKind.BUSY)
     ctx.output("Executing...\n")
+    stream = OutputStream(ctx)
     execution_time_regex = resolve_execution_time_regex(config_path, arguments.execution_time_regex)
     execute_result, run = execute_in_build(
         args_copy,
@@ -531,6 +554,7 @@ def _profile_in_build(
         1,
         process_started_callback=ctx.register_process,
         on_run=lambda started: ctx.output(f"Run {started.run_id}: results in {started.dot_discopop}\n"),
+        output_callback=stream,
     )
     ctx.clear_process()
     if execute_result is None or execute_result[0] != 0:
@@ -540,10 +564,7 @@ def _profile_in_build(
     _, elapsed, stdout, stderr = execute_result
     described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
     ctx.output(f"Execution succeeded ({described})\n")
-    if stdout:
-        ctx.output(f"stdout: {stdout}\n")
-    if stderr:
-        ctx.output(f"stderr: {stderr}\n")
+    stream.show(stdout, stderr)
     if run is None:
         return True
     if ctx.cancel_event.is_set():
@@ -586,6 +607,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
     ctx.status("⏳ Compiling...", StatusKind.BUSY)
     ctx.output("Compiling...\n")
 
+    compile_stream = OutputStream(ctx)
     compile_result = execute_configuration(
         args_copy,
         arguments.project_root,
@@ -595,25 +617,24 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
         1,
         args_copy.timeout_compilation,
         process_started_callback=ctx.register_process,
+        output_callback=compile_stream,
     )
     ctx.clear_process()
 
     success = False
     if compile_result is None or compile_result[0] != 0:
-        report_compilation_failure(ctx, compile_result)
+        report_compilation_failure(ctx, compile_result, streamed=True)
     else:
         ret_code, elapsed, stdout, stderr = compile_result
         ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-        if stdout:
-            ctx.output(f"stdout: {stdout}\n")
-        if stderr:
-            ctx.output(f"stderr: {stderr}\n")
+        compile_stream.show(stdout, stderr)
 
         if ctx.cancel_event.is_set():
             ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
         else:
             ctx.status("⏳ Executing...", StatusKind.BUSY)
             ctx.output("Executing...\n")
+            stream = OutputStream(ctx)
 
             execution_time_regex = resolve_execution_time_regex(config_path, arguments.execution_time_regex)
             execute_result = execute_configuration(
@@ -626,6 +647,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
                 args_copy.timeout_execution,
                 process_started_callback=ctx.register_process,
                 execution_time_regex=execution_time_regex,
+                output_callback=stream,
             )
             ctx.clear_process()
 
@@ -636,10 +658,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
                 ret_code, elapsed, stdout, stderr = execute_result
                 described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
                 ctx.output(f"Execution succeeded ({described})\n")
-                if stdout:
-                    ctx.output(f"stdout: {stdout}\n")
-                if stderr:
-                    ctx.output(f"stderr: {stderr}\n")
+                stream.show(stdout, stderr)
                 success = True
 
     if not ctx.cancel_event.is_set():

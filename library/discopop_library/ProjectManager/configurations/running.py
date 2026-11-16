@@ -32,6 +32,7 @@ def execute_in_build(
     process_started_callback: Optional[Callable[["subprocess.Popen[bytes]"], None]] = None,
     should_abort: Optional[Callable[[], bool]] = None,
     on_run: Optional[Callable[[RunRecord], None]] = None,
+    output_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[Optional[Tuple[int, float, str, str]], Optional[RunRecord]]:
     """Run ``execute.sh`` of the configuration in the tree of ``build``.
 
@@ -66,6 +67,7 @@ def execute_in_build(
             should_abort=should_abort,
             dot_discopop=dot_discopop,
             result_annotations=annotations,
+            output_callback=output_callback,
         )
     finally:
         if run is not None:

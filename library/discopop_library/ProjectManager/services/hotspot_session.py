@@ -72,7 +72,7 @@ from discopop_library.ProjectManager.services.commands import (
 from discopop_library.ProjectManager.services import measurement_queue
 from discopop_library.ProjectManager.services import hotspot_import
 from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT, BUILD_MISMATCH, BUILD_NONE
-from discopop_library.ProjectManager.services.execution_run import report_compilation_failure
+from discopop_library.ProjectManager.services.execution_run import OutputStream, report_compilation_failure
 from discopop_library.ProjectManager.services.jobs import JobSpec, StatusKind, WorkContext
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 
@@ -314,6 +314,7 @@ class HotspotSession:
                 should_abort=ctx.cancel_event.is_set,
                 on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
             ):
+                compile_stream = OutputStream(ctx)
                 build = ensure_build(
                     args_copy,
                     key,
@@ -325,11 +326,12 @@ class HotspotSession:
                     args_copy.timeout_compilation,
                     process_started_callback=ctx.register_process,
                     message=ctx.output,
+                    output_callback=compile_stream,
                 )
                 ctx.clear_process()
                 if build.result == BuildResult.COMPILE_FAILED:
                     code = build.compile_result[0] if build.compile_result else "None"
-                    report_compilation_failure(ctx, build.compile_result)
+                    report_compilation_failure(ctx, build.compile_result, streamed=True)
                     return f"{INSTRUMENTATION_FAILED} (return code {code})"
                 if not build.usable or build.record is None:
                     ctx.output((build.message or "The build failed.") + "\n")
@@ -338,10 +340,7 @@ class HotspotSession:
                 if build.result == BuildResult.BUILT and build.compile_result is not None:
                     _code, elapsed, stdout, stderr = build.compile_result
                     ctx.output(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
-                    if stdout:
-                        ctx.output(f"stdout: {stdout}\n")
-                    if stderr:
-                        ctx.output(f"stderr: {stderr}\n")
+                    compile_stream.show(stdout, stderr)
                 else:
                     ctx.output(f"Using the current build {key.build_id}.\n")
 
@@ -370,6 +369,7 @@ class HotspotSession:
                     label = f" ({repetition + 1}/{repetitions})" if repetitions > 1 else ""
                     ctx.status("⏳ Measuring...", StatusKind.BUSY)
                     ctx.output(f"\nExecuting '{config_name}'{label}...\n")
+                    stream = OutputStream(ctx)
                     result, run = execute_in_build(
                         args_copy,
                         record,
@@ -381,6 +381,7 @@ class HotspotSession:
                         1,
                         process_started_callback=ctx.register_process,
                         should_abort=ctx.cancel_event.is_set,
+                        output_callback=stream,
                     )
                     ctx.clear_process()
                     if result is None:
@@ -389,12 +390,10 @@ class HotspotSession:
                     code, elapsed, stdout, stderr = result
                     if code != 0:
                         ctx.output(f"Execution failed (return code: {code})\n")
-                        if stderr:
-                            ctx.output(f"stderr: {stderr}\n")
+                        stream.show("", stderr)
                         return f"execution failed (return code {code})"
                     ctx.output(f"Execution succeeded ({elapsed:.2f}s)\n")
-                    if stdout:
-                        ctx.output(f"stdout: {stdout}\n")
+                    stream.show(stdout, "")
 
                     imported = (
                         hotspot_import.import_run(
