@@ -206,7 +206,7 @@ class PatternDetectionPanel(Panel):
         )
         card = widgets.FormSection("Profiling run")
         card.add_widget(self.basis_label, "The detection reads the profiling data of the project.")
-        self.runs_section = widgets.CollapsibleSection("Choose another run", self.runs, summary="use a kept run")
+        self.runs_section = widgets.CollapsibleSection("Choose another run", self.runs)
         card.add_widget(self.runs_section)
         return card
 
