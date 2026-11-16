@@ -56,7 +56,8 @@ class SharedBuildSection(widgets.FormSection):
         self.add_widget(hint)
         self.owner_combo = QComboBox()
         self.owner_combo.activated.connect(self._owner_chosen)
-        self.add_row("Build from:", self.owner_combo, "the configuration whose build is used", stretch_field=True)
+        self.owner_combo.setToolTip("The configuration whose build is used")
+        self.add_row("Build from:", self.owner_combo, stretch_field=True)
         self.members_label = QLabel("Also used by:")
         self.members_list = QListWidget()
         self.members_list.setMaximumHeight(110)
@@ -93,7 +94,9 @@ class SharedBuildSection(widgets.FormSection):
             # an owner stays one until its members are released
             self.owner_combo.setEnabled(not members)
             self.owner_combo.setToolTip(
-                "Other configurations build from this one; release them first." if members else ""
+                "Other configurations build from this one; release them first."
+                if members
+                else "The configuration whose build is used"
             )
 
             # only a configuration that builds for itself can be the owner of others
