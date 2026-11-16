@@ -60,6 +60,19 @@ class ProjectManagerArguments(GeneralArguments):
     # Allows --apply-suggestions to patch files outside of the project (shared sources, see
     # discopop_library.PatchApplicator.outside_project); refused by default. Never honoured for "auto" / "prm".
     allow_patching_outside_project: bool = False
+    # When a run compiles (see discopop_library.ProjectManager.configurations.builds.BuildPolicy): "auto" compiles
+    # when there is no current build of the configuration and mode, "rebuild" always, "reuse" never.
+    build_policy: str = "auto"
+    # Compile only, do not run execute.sh.
+    build_only: bool = False
+    # List the builds of the project / delete the given ones (comma separated ids, "all" for every build) and stop.
+    list_builds: bool = False
+    delete_builds: Optional[str] = None
+    # List the runs of the builds / delete the given ones (comma separated ids, "all") / put one into the project's
+    # .discopop (an id, "latest" for the latest successful dp run) and stop.
+    list_runs: bool = False
+    delete_runs: Optional[str] = None
+    activate_run: Optional[str] = None
     # derived values
     dot_dp: str = ""
     project_dir: str = ""

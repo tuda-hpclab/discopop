@@ -9,12 +9,17 @@
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
+import time
 import unittest
-from typing import Any, Callable, Iterator, List, Tuple
+from typing import Any, Callable, Iterator, List, Optional, Tuple
 from unittest import mock
 
+from discopop_library.ProjectManager.configurations.building import BuildLockAborted, BuildOutcome, BuildResult
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, build_tree_path_of
+from discopop_library.ProjectManager.configurations.runs import ActivationError, RunRecord
 from mcp_server.tools import gather_data
 from mcp_server.tools.helpers import OUTPUT_TAIL_CHARS, ToolContext
 
@@ -33,6 +38,121 @@ def hotspot_steps_succeed() -> Iterator[None]:
         yield
 
 
+class FakeBuilds:
+    """Stands in for the builds and runs of the project manager (which have tests of their own).
+
+    Records what is compiled, run and put into the project, and leaves what the real ones leave: the static data of
+    a dp build, the results of a run and, once activated, the data in the project's ``.discopop``.
+    """
+
+    def __init__(self, project_path: str) -> None:
+        self.project_path = project_path
+        self.compiles: List[str] = []
+        self.compile_modes: List[str] = []
+        self.policies: List[BuildPolicy] = []
+        self.runs: List[Tuple[str, str]] = []
+        self.activated: List[List[str]] = []
+        self.reused = False
+        self.compile_result: Tuple[int, float, str, str] = (0, 1.0, "", "")
+        self.write_data_xml = True
+        self.failing_runs: set[str] = set()
+        self.run_stderr = ""
+
+    @contextlib.contextmanager
+    def patched(self) -> Iterator["FakeBuilds"]:
+        with (
+            mock.patch.object(gather_data, "ensure_build", side_effect=self.ensure_build),
+            mock.patch.object(gather_data, "execute_in_build", side_effect=self.execute_in_build),
+            mock.patch.object(gather_data, "activate_run", side_effect=self.activate_run),
+            mock.patch.object(gather_data, "activate_runs", side_effect=self.activate_runs),
+        ):
+            yield self
+
+    def ensure_build(
+        self,
+        arguments: Any,
+        key: BuildKey,
+        config_path: str,
+        settings_path: str,
+        compile_script: str,
+        thread_count: int,
+        policy: BuildPolicy,
+        timeout: Optional[float] = None,
+        **_kwargs: Any,
+    ) -> BuildOutcome:
+        self.compiles.append(compile_script)
+        self.compile_modes.append(key.mode)
+        self.policies.append(policy)
+        tree = build_tree_path_of(self.project_path, key)
+        if self.reused:
+            outcome = BuildResult.REUSED
+        elif self.compile_result[0] != 0:
+            return BuildOutcome(BuildResult.COMPILE_FAILED, key, compile_result=self.compile_result)
+        else:
+            outcome = BuildResult.BUILT
+        if key.mode == "dp" and self.write_data_xml:
+            os.makedirs(os.path.join(tree, ".discopop", "profiler"), exist_ok=True)
+            with open(os.path.join(tree, ".discopop", "profiler", "Data.xml"), "w") as f:
+                f.write("<Nodes></Nodes>\n")
+        record = BuildRecord(key.build_id, key.configuration, key.mode, [], "", tree, 0.0, 0.0, compile_script)
+        return BuildOutcome(
+            outcome, key, tree=tree, record=record, compile_result=None if self.reused else self.compile_result
+        )
+
+    def execute_in_build(
+        self,
+        arguments: Any,
+        build: BuildRecord,
+        config_path: str,
+        settings_path: str,
+        thread_count: int,
+        timeout: Optional[float],
+        regex: Optional[str],
+        repetitions: int,
+        **_kwargs: Any,
+    ) -> Tuple[Tuple[int, float, str, str], RunRecord]:
+        config = os.path.basename(config_path)
+        self.runs.append((build.mode, config))
+        run_id = f"run{len(self.runs)}"
+        dot = os.path.join(self.project_path, ".fake_runs", run_id)
+        returncode = -15 if config in self.failing_runs else 0
+        if build.mode == "dp":
+            os.makedirs(os.path.join(dot, "profiler"), exist_ok=True)
+            with open(os.path.join(dot, "profiler", "dynamic_dependencies.txt"), "w") as f:
+                f.write(config)
+            # the static data of the build, with the time of its compilation
+            with open(os.path.join(dot, "profiler", "Data.xml"), "w") as f:
+                f.write("<Nodes></Nodes>\n")
+            os.utime(os.path.join(dot, "profiler", "Data.xml"), (1000.0, 1000.0))
+        else:
+            os.makedirs(os.path.join(dot, "hotspot_detection", "private"), exist_ok=True)
+            with open(os.path.join(dot, "hotspot_detection", "private", "hotspot_result_0.txt"), "w") as f:
+                f.write(config)
+        run = RunRecord(
+            run_id, build.build_id, build.configuration, build.mode, 1, "", 0.0, dot, return_code=returncode
+        )
+        return (returncode, 1.0, "", self.run_stderr), run
+
+    def activate_run(self, arguments: Any, run: RunRecord) -> List[str]:
+        self.activated.append([run.run_id])
+        target = os.path.join(self.project_path, ".discopop", "profiler")
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(os.path.join(run.dot_discopop, "profiler"), target)
+        return ["profiler"]
+
+    def activate_runs(self, arguments: Any, runs: List[RunRecord]) -> List[str]:
+        self.activated.append([run.run_id for run in runs])
+        target = os.path.join(self.project_path, ".discopop", "hotspot_detection")
+        shutil.rmtree(target, ignore_errors=True)
+        os.makedirs(os.path.join(target, "private"))
+        for position, run in enumerate(runs):
+            shutil.copy(
+                os.path.join(run.dot_discopop, "hotspot_detection", "private", "hotspot_result_0.txt"),
+                os.path.join(target, "private", f"hotspot_result_{position}.txt"),
+            )
+        return ["hotspot_detection"]
+
+
 class TestGatherDataCompileScriptResolution(unittest.TestCase):
     """The instrumentation steps must honour a per-configuration compile.sh override."""
 
@@ -46,20 +166,11 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
         for filename in ["compile.sh", "hd_settings.json", "dp_settings.json"]:
             self.__write(filename)
 
-        self.script_paths: List[str] = []
         # _instrument_project treats a build that produced no Data.xml as a failure
-        data_xml = os.path.join(self.project_path, ".discopop", "profiler", "Data.xml")
-
-        def fake_execute_configuration(**kwargs: Any) -> Tuple[int, float, str, str]:
-            self.script_paths.append(kwargs["script_path"])
-            os.makedirs(os.path.dirname(data_xml), exist_ok=True)
-            with open(data_xml, "w") as f:
-                f.write("<Nodes></Nodes>\n")
-            return (0, 1.0, "", "")
-
-        patcher = mock.patch.object(gather_data, "execute_configuration", side_effect=fake_execute_configuration)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.builds = FakeBuilds(self.project_path)
+        patcher = self.builds.patched()
+        patcher.__enter__()
+        self.addCleanup(patcher.__exit__, None, None, None)
 
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
@@ -77,7 +188,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
         ]
 
     def __run(self, step: Callable[..., dict[str, Any]], config_name: str = CONFIG_NAME) -> dict[str, Any]:
-        self.script_paths.clear()
+        self.builds.compiles.clear()
         return step(self.project_path, config_name, 60, True, self.ctx, None)
 
     def test_shared_script_is_used_without_an_override(self) -> None:
@@ -85,7 +196,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
             with self.subTest(step=name):
                 result = self.__run(step)
                 self.assertEqual(result["status"], "success")
-                self.assertEqual(self.script_paths, [os.path.join(self.configs_dir, "compile.sh")])
+                self.assertEqual(self.builds.compiles, [os.path.join(self.configs_dir, "compile.sh")])
 
     def test_per_config_override_is_used_when_present(self) -> None:
         override = self.__write(CONFIG_NAME, "compile.sh")
@@ -93,7 +204,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
             with self.subTest(step=name):
                 result = self.__run(step)
                 self.assertEqual(result["status"], "success")
-                self.assertEqual(self.script_paths, [override])
+                self.assertEqual(self.builds.compiles, [override])
 
     def test_missing_configuration_errors_before_compiling(self) -> None:
         for name, step in self.__steps():
@@ -101,7 +212,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
                 result = self.__run(step, config_name="does_not_exist")
                 self.assertEqual(result["status"], "error")
                 self.assertIn("does_not_exist", result["message"])
-                self.assertEqual(self.script_paths, [])
+                self.assertEqual(self.builds.compiles, [])
 
     def test_missing_shared_script_errors_when_no_override_exists(self) -> None:
         os.remove(os.path.join(self.configs_dir, "compile.sh"))
@@ -110,7 +221,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
                 result = self.__run(step)
                 self.assertEqual(result["status"], "error")
                 self.assertIn("compile.sh not found", result["message"])
-                self.assertEqual(self.script_paths, [])
+                self.assertEqual(self.builds.compiles, [])
 
     def test_override_satisfies_the_check_without_a_shared_script(self) -> None:
         os.remove(os.path.join(self.configs_dir, "compile.sh"))
@@ -119,7 +230,7 @@ class TestGatherDataCompileScriptResolution(unittest.TestCase):
             with self.subTest(step=name):
                 result = self.__run(step)
                 self.assertEqual(result["status"], "success")
-                self.assertEqual(self.script_paths, [override])
+                self.assertEqual(self.builds.compiles, [override])
 
 
 class TestGatherDataFailureHints(unittest.TestCase):
@@ -199,23 +310,18 @@ class TestGatherDataCancelledStep(unittest.TestCase):
         self.assertEqual(result["steps"]["profiling"]["returncode"], -15)
         detection.assert_not_called()
 
-    def test_the_plain_rebuild_is_not_stopped_by_the_cancel_it_cleans_up_after(self) -> None:
-        # processes a cancelled call registers are stopped, also those started after the cancel
+    def test_a_cancel_while_waiting_for_a_build_is_reported_as_an_error_of_the_step(self) -> None:
         with tempfile.TemporaryDirectory() as project_path:
             configs_dir = os.path.join(project_path, ".discopop", "project", "configs")
             os.makedirs(os.path.join(configs_dir, CONFIG_NAME))
-            for name in ["compile.sh", "par_settings.json"]:
+            for name in ["compile.sh", "dp_settings.json"]:
                 with open(os.path.join(configs_dir, name), "w") as f:
                     f.write("{}\n")
             ctx = ToolContext(debug=False)
-            with (
-                ctx.cancellable(),
-                mock.patch.object(gather_data, "execute_configuration", return_value=(0, 1.0, "", "")) as execute,
-            ):
-                ctx.cancel()
-                result = gather_data._restore_plain_build(project_path, CONFIG_NAME, 60, ctx)
-        self.assertEqual(result["status"], "success")
-        self.assertIsNone(execute.call_args.kwargs["process_started_callback"])
+            with mock.patch.object(gather_data, "build_lock", side_effect=BuildLockAborted("b")):
+                result = gather_data._instrument_project(project_path, CONFIG_NAME, 60, True, ctx, None)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Cancelled", result["message"])
 
 
 class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
@@ -244,17 +350,35 @@ class TestIncompleteStepsAreNotTakenAsCurrent(unittest.TestCase):
         with open(path, "w") as f:
             f.write("partial\n")
 
-    def test_a_profiling_run_that_failed_leaves_no_dependencies_behind(self) -> None:
+    def test_a_profiling_run_that_failed_is_not_put_into_the_project(self) -> None:
         dyn_deps = os.path.join(self.profiler_dir, "dynamic_dependencies.txt")
-
-        def killed_after_writing(**_kwargs: Any) -> Tuple[int, float, str, str]:
-            self.__write(dyn_deps)
-            return (-15, 1.0, "", "")
-
-        with mock.patch.object(gather_data, "execute_configuration", side_effect=killed_after_writing):
+        builds = FakeBuilds(self.project_path)
+        builds.failing_runs = {CONFIG_NAME}
+        with builds.patched():
             result = gather_data._run_profiling(self.project_path, CONFIG_NAME, 60, False, self.ctx, None)
         self.assertEqual(result["status"], "error")
+        self.assertEqual(builds.activated, [])
         self.assertFalse(os.path.exists(dyn_deps))
+
+    def test_a_successful_profiling_run_is_put_into_the_project(self) -> None:
+        dyn_deps = os.path.join(self.profiler_dir, "dynamic_dependencies.txt")
+        builds = FakeBuilds(self.project_path)
+        with builds.patched():
+            result = gather_data._run_profiling(self.project_path, CONFIG_NAME, 60, False, self.ctx, None)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(builds.activated, [[result["run_id"]]])
+        self.assertTrue(os.path.exists(dyn_deps))
+
+    def test_a_run_that_cannot_be_put_into_the_project_is_an_error(self) -> None:
+        builds = FakeBuilds(self.project_path)
+        with (
+            builds.patched(),
+            mock.patch.object(gather_data, "activate_run", side_effect=ActivationError("ids differ")),
+        ):
+            result = gather_data._run_profiling(self.project_path, CONFIG_NAME, 60, False, self.ctx, None)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("ids differ", result["message"])
+        self.assertIn("force=true", result["message"])
 
     def test_a_pattern_detection_that_failed_is_run_again(self) -> None:
         self.__write(os.path.join(self.profiler_dir, "dynamic_dependencies.txt"))
@@ -324,36 +448,34 @@ class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
                 f.write("{}\n")
         self.private_dir = os.path.join(self.project_path, ".discopop", "hotspot_detection", "private")
         self.ctx = ToolContext(debug=False)
-        self.failing: set[str] = set()
-        self.runs: list[str] = []
+        self.builds = FakeBuilds(self.project_path)
+        patcher = self.builds.patched()
+        patcher.__enter__()
+        self.addCleanup(patcher.__exit__, None, None, None)
 
-        def fake_execute_configuration(**kwargs: Any) -> Tuple[int, float, str, str]:
-            script = kwargs["script_path"]
-            if script.endswith("compile.sh"):
-                return (0, 1.0, "", "")
-            config = os.path.basename(kwargs["config_path"])
-            self.runs.append(config)
-            os.makedirs(self.private_dir, exist_ok=True)
-            with open(os.path.join(self.private_dir, f"hotspot_result_{len(self.runs)}.txt"), "w") as f:
-                f.write(config)
-            return (-15, 1.0, "", "") if config in self.failing else (0, 1.0, "", "")
-
-        patcher = mock.patch.object(gather_data, "execute_configuration", side_effect=fake_execute_configuration)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    @property
+    def runs(self) -> list[str]:
+        return [config for _mode, config in self.builds.runs]
 
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
 
     def __collect(self, names: list[str]) -> list[str]:
         """instrumentation plus profiling of `names`, as gather_data runs them; the statuses"""
+        state = gather_data._PipelineState(build_config=names[0])
         statuses = [
-            gather_data._hotspot_instrument(self.project_path, names[0], names, 60, False, self.ctx, None)["status"]
+            gather_data._hotspot_instrument(self.project_path, names[0], names, 60, False, self.ctx, None, state)[
+                "status"
+            ]
         ]
         for name in names:
             statuses.append(
-                gather_data._hotspot_profiling_single(self.project_path, name, 60, False, self.ctx, None)["status"]
+                gather_data._hotspot_profiling_single(self.project_path, name, 60, False, self.ctx, None, state)[
+                    "status"
+                ]
             )
+        if all(status != "error" for status in statuses):
+            gather_data._hotspot_activate(self.project_path, 60, self.ctx, state)
         return statuses
 
     def test_a_complete_set_is_not_collected_again(self) -> None:
@@ -362,13 +484,15 @@ class TestHotspotResultsCoverTheRequestedConfigurations(unittest.TestCase):
         self.assertEqual(self.runs, ["small", "large"])
 
     def test_a_configuration_that_failed_has_every_configuration_profiled_again(self) -> None:
-        self.failing = {"large"}
+        self.builds.failing_runs = {"large"}
         self.assertEqual(self.__collect(["small", "large"]), ["success", "success", "error"])
-        self.failing = set()
+        self.assertEqual(self.builds.activated, [])
+        self.builds.failing_runs = set()
         self.assertEqual(self.__collect(["small", "large"]), ["success", "success", "success"])
         self.assertEqual(self.runs, ["small", "large", "small", "large"])
         # only this call's results are left: one per configuration
-        self.assertEqual(sorted(os.listdir(self.private_dir)), ["hotspot_result_3.txt", "hotspot_result_4.txt"])
+        self.assertEqual(sorted(os.listdir(self.private_dir)), ["hotspot_result_0.txt", "hotspot_result_1.txt"])
+        self.assertEqual(self.builds.activated, [["run3", "run4"]])
 
     def test_a_configuration_added_later_is_profiled(self) -> None:
         self.__collect(["small"])
@@ -419,15 +543,9 @@ class TestWarningsOfSuccessfulSteps(unittest.TestCase):
         self.ctx = ToolContext(debug=False)
 
     def __instrument(self, stdout: str, stderr: str) -> dict[str, Any]:
-        def build(**_kwargs: Any) -> Tuple[int, float, str, str]:
-            # the instrumented build writes Data.xml
-            profiler = os.path.join(self.project_path, ".discopop", "profiler")
-            os.makedirs(profiler, exist_ok=True)
-            with open(os.path.join(profiler, "Data.xml"), "w") as f:
-                f.write("<x/>")
-            return (0, 1.0, stdout, stderr)
-
-        with mock.patch.object(gather_data, "execute_configuration", side_effect=build):
+        builds = FakeBuilds(self.project_path)
+        builds.compile_result = (0, 1.0, stdout, stderr)
+        with builds.patched():
             return gather_data._instrument_project(self.project_path, CONFIG_NAME, 60, True, self.ctx, None)
 
     def test_the_warnings_of_the_instrumentation_build_are_listed(self) -> None:
@@ -505,21 +623,17 @@ class TestGatherDataStderrTail(unittest.TestCase):
             with open(os.path.join(configs_dir, filename), "w") as f:
                 f.write("{}\n")
         self.ctx = ToolContext(debug=False)
-        self.stderr = ""
         self.long_stderr = "warning: unused variable\n" * (OUTPUT_TAIL_CHARS // 10) + "error: expected ';'\n"
-
-        def fake_execute_configuration(**kwargs: Any) -> Tuple[int, float, str, str]:
-            return (1, 1.0, "", self.stderr)
-
-        patcher = mock.patch.object(gather_data, "execute_configuration", side_effect=fake_execute_configuration)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.builds = FakeBuilds(self.project_path)
+        patcher = self.builds.patched()
+        patcher.__enter__()
+        self.addCleanup(patcher.__exit__, None, None, None)
 
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
 
     def __instrument(self, stderr: str) -> dict[str, Any]:
-        self.stderr = stderr
+        self.builds.compile_result = (1, 1.0, "", stderr)
         result: dict[str, Any] = gather_data._instrument_project(
             self.project_path, CONFIG_NAME, 60, True, self.ctx, None
         )
@@ -553,16 +667,13 @@ class TestGatherDataStderrTail(unittest.TestCase):
         self.assertEqual(result["stderr_length"], len(self.long_stderr))
 
 
-class TestGatherDataRestoresThePlainBuild(unittest.TestCase):
-    """`gather_data` must not leave the project's build directory instrumented.
+class TestGatherDataLeavesTheProjectAlone(unittest.TestCase):
+    """`gather_data` compiles in builds next to the project, so the project's build directory stays plain.
 
-    The instrumentation steps compile *in place* (`execute_inplace=True`), so a
-    compile script that configures a build directory leaves it pinned to
-    `discopop_cc`/`discopop_cxx`. Nothing says so, and anyone who then builds and
-    runs the program to check their own work measures DiscoPoP's instrumentation
-    instead -- one observed harness run lost six minutes to three such
-    executions hitting its agent's shell timeout, and then discarded a working
-    parallelization because it read the resulting crash as its own bug.
+    It used to compile in place, which left a build directory pinned to `discopop_cc` / `discopop_cxx`: whoever then
+    built and ran the program by hand measured DiscoPoP's instrumentation (and once discarded a working
+    parallelization over the resulting crash). Nothing is compiled in the project any more, so nothing needs to be
+    rebuilt afterwards.
     """
 
     def setUp(self) -> None:
@@ -571,99 +682,193 @@ class TestGatherDataRestoresThePlainBuild(unittest.TestCase):
         self.configs_dir = os.path.join(self.project_path, ".discopop", "project", "configs")
         os.makedirs(os.path.join(self.configs_dir, CONFIG_NAME))
         self.ctx = ToolContext(debug=False)
-
-        for filename in ["compile.sh", "dp_settings.json", "hd_settings.json", "par_settings.json"]:
-            self.__write(filename)
-        self.__write(CONFIG_NAME, "execute.sh")
-
-        profiler_dir = os.path.join(self.project_path, ".discopop", "profiler")
-        self.settings_used: List[str] = []
-        self.compile_returncode = 0
-        self.restore_returncode = 0
-
-        def fake_execute_configuration(**kwargs: Any) -> Tuple[int, float, str, str]:
-            settings = os.path.basename(kwargs["settings_path"])
-            script = os.path.basename(kwargs["script_path"])
-            self.settings_used.append(settings)
-            # The instrumented steps produce what the next step checks for.
-            os.makedirs(profiler_dir, exist_ok=True)
-            for name in ("Data.xml", "dynamic_dependencies.txt"):
-                with open(os.path.join(profiler_dir, name), "w") as f:
-                    f.write("\n")
-            if settings in ("par_settings.json", "seq_settings.json"):
-                return (self.restore_returncode, 1.0, "", "")
-            if script == "compile.sh":
-                return (self.compile_returncode, 1.0, "", "")
-            return (0, 1.0, "", "")
-
-        patcher = mock.patch.object(gather_data, "execute_configuration", side_effect=fake_execute_configuration)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-        # The explorer is a subprocess of its own and not what is under test here.
-        detection = mock.patch.object(gather_data, "_run_pattern_detection", return_value={"status": "success"})
-        detection.start()
-        self.addCleanup(detection.stop)
-
-        # So are the hotspot steps, which always run; they have tests of their own.
-        for step in ("_hotspot_instrument", "_hotspot_profiling_single", "_hotspot_analysis"):
-            hotspot_step = mock.patch.object(gather_data, step, return_value={"status": "skipped"})
-            hotspot_step.start()
-            self.addCleanup(hotspot_step.stop)
+        for filename in ["compile.sh", "dp_settings.json", "hd_settings.json"]:
+            with open(os.path.join(self.configs_dir, filename), "w") as f:
+                f.write("{}\n")
+        with open(os.path.join(self.configs_dir, CONFIG_NAME, "execute.sh"), "w") as f:
+            f.write("#!/bin/bash\n")
+        self.builds = FakeBuilds(self.project_path)
+        patcher = self.builds.patched()
+        patcher.__enter__()
+        self.addCleanup(patcher.__exit__, None, None, None)
+        # the explorer and the hotspot analysis are subprocesses of their own and not what is under test here
+        for step in ("_run_pattern_detection", "_hotspot_analysis"):
+            detection = mock.patch.object(gather_data, step, return_value={"status": "success"})
+            detection.start()
+            self.addCleanup(detection.stop)
 
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
 
-    def __write(self, *parts: str) -> str:
-        path = os.path.join(self.configs_dir, *parts)
-        with open(path, "w") as f:
-            f.write("{}\n" if path.endswith(".json") else "#!/bin/bash\nexit 0\n")
-        return path
-
     def __handle(self, **extra: Any) -> dict[str, Any]:
-        self.settings_used.clear()
         arguments = {"project_path": self.project_path, "config_name": CONFIG_NAME, "force": True}
         arguments.update(extra)
-        response = gather_data.handle(arguments, self.ctx)
-        result: dict[str, Any] = json.loads(response[0].text)
+        result: dict[str, Any] = json.loads(gather_data.handle(arguments, self.ctx)[0].text)
         return result
 
-    def test_the_last_build_is_a_plain_one(self) -> None:
+    def test_every_compilation_happens_in_a_build_and_nothing_is_rebuilt_afterwards(self) -> None:
         result = self.__handle()
         self.assertNotIn("status", result)
-        self.assertEqual(self.settings_used[-1], "par_settings.json")
-        self.assertEqual(result["steps"]["build_restore"]["status"], "success")
+        # each mode: the compilation, then the run looks at the build again under its lock
+        self.assertEqual(self.builds.compile_modes, ["hd", "hd", "dp", "dp"])
+        self.assertNotIn("build_restore", result["steps"])
 
-    def test_seq_settings_are_used_when_there_are_no_par_settings(self) -> None:
-        os.remove(os.path.join(self.configs_dir, "par_settings.json"))
-        self.__write("seq_settings.json")
-        result = self.__handle()
-        self.assertEqual(self.settings_used[-1], "seq_settings.json")
-        self.assertEqual(result["steps"]["build_restore"]["settings"], "seq_settings.json")
+    def test_the_hotspot_runs_and_the_dp_run_are_put_into_the_project(self) -> None:
+        self.__handle()
+        self.assertEqual(self.builds.runs, [("hd", CONFIG_NAME), ("dp", CONFIG_NAME)])
+        self.assertEqual(self.builds.activated, [["run1"], ["run2"]])
 
-    def test_a_failed_instrumentation_still_restores_the_build(self) -> None:
-        # The case most in need of it: the compile that broke is the one that
-        # left the build directory instrumented.
-        self.compile_returncode = 1
+    def test_a_second_call_finds_the_data_current_although_the_build_is_older(self) -> None:
+        # the static files of a run carry the time of the compilation: a file the call saved after it (the lists of
+        # project directories) must not make every following call profile again
+        self.__handle()
+        self.builds.runs.clear()
+        self.builds.reused = True
+        result = self.__handle(force=False)
+        self.assertEqual(self.builds.runs, [])
+        self.assertEqual(result["steps"]["instrumentation"]["status"], "skipped")
+        self.assertEqual(result["steps"]["profiling"]["status"], "skipped")
+
+    def test_an_edited_execute_script_profiles_again_without_compiling(self) -> None:
+        self.__handle()
+        self.builds.runs.clear()
+        self.builds.policies.clear()
+        self.builds.reused = True
+        future = time.time() + 5
+        os.utime(os.path.join(self.configs_dir, CONFIG_NAME, "execute.sh"), (future, future))
+        result = self.__handle(force=False)
+        self.assertEqual(self.builds.runs, [("hd", CONFIG_NAME), ("dp", CONFIG_NAME)])
+        # the builds are used as they are
+        self.assertEqual(result["steps"]["instrumentation"]["status"], "skipped")
+        self.assertNotIn(BuildPolicy.REBUILD, self.builds.policies)
+
+    def test_the_runs_use_the_build_as_it_is_and_never_compile(self) -> None:
+        self.__handle()
+        self.assertEqual(self.builds.policies[1::2], [BuildPolicy.REUSE, BuildPolicy.REUSE])
+
+    def test_data_of_another_configuration_is_not_taken_as_current(self) -> None:
+        self.__handle()
+        self.builds.runs.clear()
+        self.builds.reused = True
+        with open(os.path.join(self.project_path, ".discopop", "active_run.json"), "w") as f:
+            json.dump({"active": {"dp": {"run_ids": ["x"], "configuration": "other"}}}, f)
+        self.__handle(force=False)
+        self.assertEqual(self.builds.runs, [("dp", CONFIG_NAME)])
+
+    def test_force_rebuilds_and_the_default_compiles_only_what_is_not_current(self) -> None:
+        self.__handle()
+        # the compilations (the runs ask for the build as it is)
+        self.assertEqual(self.builds.policies[::2], [BuildPolicy.REBUILD, BuildPolicy.REBUILD])
+        self.assertEqual(set(self.builds.policies[1::2]), {BuildPolicy.REUSE})
+        self.builds.policies.clear()
+        self.__handle(force=False)
+        self.assertNotIn(BuildPolicy.REBUILD, self.builds.policies)
+
+    def test_a_failed_instrumentation_is_an_error_of_the_call(self) -> None:
+        self.builds.compile_result = (1, 1.0, "", "boom")
         result = self.__handle()
         self.assertEqual(result["status"], "error")
-        self.assertEqual(self.settings_used[-1], "par_settings.json")
+        self.assertEqual(self.builds.runs, [])
 
-    def test_a_failed_restore_is_reported_but_not_fatal(self) -> None:
-        self.restore_returncode = 1
-        result = self.__handle()
+    def test_hotspot_runs_of_several_configurations_are_put_into_the_project_together(self) -> None:
+        os.makedirs(os.path.join(self.configs_dir, "large"))
+        with open(os.path.join(self.configs_dir, "large", "execute.sh"), "w") as f:
+            f.write("#!/bin/bash\n")
+        result = self.__handle(hotspot_config_names=[CONFIG_NAME, "large"])
         self.assertNotIn("status", result)
-        self.assertEqual(result["steps"]["build_restore"]["status"], "error")
-        self.assertIn("instrumented", result["warning"])
+        self.assertEqual(self.builds.runs[:2], [("hd", CONFIG_NAME), ("hd", "large")])
+        self.assertEqual(self.builds.activated[0], ["run1", "run2"])
+        # both are run in the build of the main configuration
+        self.assertEqual(set(self.builds.compile_modes[:1]), {"hd"})
 
-    def test_nothing_is_rebuilt_when_every_step_was_skipped(self) -> None:
-        # Current results and force=False: no in-place compile happened, so the
-        # build is the one the previous call already restored.
-        self.__handle()
-        result = self.__handle(force=False)
-        self.assertEqual(result["steps"]["instrumentation"]["status"], "skipped")
-        self.assertNotIn("build_restore", result["steps"])
-        self.assertEqual(self.settings_used, [])
+
+class TestStorageWarning(unittest.TestCase):
+    """Builds and runs are kept, so the result says how much of them there is once they pile up."""
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+        self.project_path = os.path.join(self._tmp_dir.name, "proj")
+        os.makedirs(os.path.join(self.project_path, ".discopop", "project", "builds"))
+        self.ctx = ToolContext(debug=False)
+
+    def __build(self, build_id: str, size: int) -> None:
+        from discopop_library.ProjectManager.configurations.builds import (
+            MANIFEST_VERSION,
+            builds_dir_of,
+        )
+
+        trees = os.path.join(self._tmp_dir.name, "proj_discopop_builds")
+        tree = os.path.join(trees, build_id)
+        os.makedirs(tree)
+        with open(os.path.join(tree, "prog"), "wb") as f:
+            f.write(b"x" * size)
+        configuration, mode = build_id.rsplit("_", 1)
+        record = {
+            "build_id": build_id,
+            "configuration": configuration,
+            "mode": mode,
+            "suggestions": [],
+            "fingerprint": "",
+            "tree": tree,
+            "built_at": 0.0,
+            "compile_seconds": 0.0,
+            "compile_script": "",
+            "version": MANIFEST_VERSION,
+            "fingerprint_parts": {},
+        }
+        with open(
+            os.path.join(builds_dir_of(os.path.join(self.project_path, ".discopop", "project")), build_id + ".json"),
+            "w",
+        ) as f:
+            json.dump(record, f)
+
+    def test_no_warning_while_only_the_builds_of_the_call_exist(self) -> None:
+        self.__build(f"{CONFIG_NAME}_hd", 10)
+        self.__build(f"{CONFIG_NAME}_dp", 10)
+        self.assertIsNone(gather_data._storage_warning(self.project_path, CONFIG_NAME, self.ctx))
+
+    def test_further_builds_are_reported_with_their_number_and_storage(self) -> None:
+        self.__build(f"{CONFIG_NAME}_hd", 1024)
+        self.__build(f"{CONFIG_NAME}_dp", 1024)
+        self.__build("other_dp", 2048)
+        warning = gather_data._storage_warning(self.project_path, CONFIG_NAME, self.ctx)
+        assert warning is not None
+        self.assertIn("3 builds and 0 runs", warning)
+        self.assertIn("4.0 KiB", warning)
+        self.assertIn("--delete-builds", warning)
+
+    def __run(self, build_id: str, run_id: str) -> None:
+        from discopop_library.ProjectManager.configurations.runs import runs_directory_of, write_run
+
+        dot = os.path.join(runs_directory_of(self.project_path, build_id), run_id)
+        os.makedirs(dot)
+        write_run(RunRecord(run_id, build_id, "cfg", build_id.rsplit("_", 1)[1], 1, "", 0.0, dot, return_code=0))
+
+    def test_runs_whose_data_is_in_the_project_are_in_use_and_older_ones_are_reported(self) -> None:
+        self.__build(f"{CONFIG_NAME}_hd", 10)
+        self.__build(f"{CONFIG_NAME}_dp", 10)
+        # two hotspot runs of one call and the dp run are what the project holds
+        for build_id, run_id in ((f"{CONFIG_NAME}_hd", "h1"), (f"{CONFIG_NAME}_hd", "h2"), (f"{CONFIG_NAME}_dp", "d1")):
+            self.__run(build_id, run_id)
+        with open(os.path.join(self.project_path, ".discopop", "active_run.json"), "w") as f:
+            json.dump(
+                {"active": {"hd": {"run_ids": ["h1", "h2"]}, "dp": {"run_ids": ["d1"]}}},
+                f,
+            )
+        self.assertIsNone(gather_data._storage_warning(self.project_path, CONFIG_NAME, self.ctx))
+        self.__run(f"{CONFIG_NAME}_dp", "d0")
+        warning = gather_data._storage_warning(self.project_path, CONFIG_NAME, self.ctx)
+        assert warning is not None
+        self.assertIn("2 builds and 4 runs", warning)
+        self.assertIn("1 older runs", warning)
+
+    def test_the_warning_is_part_of_the_result(self) -> None:
+        self.__build(f"{CONFIG_NAME}_dp", 10)
+        self.__build("other_dp", 10)
+        with mock.patch.object(gather_data, "_pipeline", return_value={"status": "success", "steps": {}}):
+            response = gather_data.handle({"project_path": self.project_path, "config_name": CONFIG_NAME}, self.ctx)
+        self.assertIn("2 builds", json.loads(response[0].text)["warning"])
 
 
 if __name__ == "__main__":
@@ -686,18 +891,14 @@ class TestInstrumentationSkip(unittest.TestCase):
         with open(os.path.join(self.profiler_dir, "Data.xml"), "w") as f:
             f.write("<Nodes></Nodes>\n")
         self.ctx = ToolContext(debug=False)
-        self.compiled = 0
+        self.builds = FakeBuilds(self.project_path)
+        patcher = self.builds.patched()
+        patcher.__enter__()
+        self.addCleanup(patcher.__exit__, None, None, None)
 
-        def fake_execute_configuration(**kwargs: Any) -> Tuple[int, float, str, str]:
-            self.compiled += 1
-            os.makedirs(self.profiler_dir, exist_ok=True)
-            with open(os.path.join(self.profiler_dir, "Data.xml"), "w") as f:
-                f.write("<Nodes></Nodes>\n")
-            return (0, 1.0, "", "")
-
-        patcher = mock.patch.object(gather_data, "execute_configuration", side_effect=fake_execute_configuration)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    @property
+    def compiled(self) -> int:
+        return len(self.builds.compiles)
 
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
@@ -710,7 +911,7 @@ class TestInstrumentationSkip(unittest.TestCase):
         return result
 
     def test_reinstruments_when_profiling_never_produced_its_output(self) -> None:
-        """A previous call whose profiling failed restored the plain build before returning."""
+        """A previous call whose profiling failed left no dependencies, so the run needs the build again."""
         result = self.__instrument()
         self.assertEqual(result["status"], "success")
         self.assertEqual(self.compiled, 1)

@@ -267,6 +267,8 @@ def execute_configuration(
     repetitions: int = SINGLE_MEASUREMENT,
     should_abort: Optional[Callable[[], bool]] = None,
     store_result: bool = True,
+    dot_discopop: Optional[PATH] = None,
+    result_annotations: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -298,6 +300,11 @@ def execute_configuration(
     ``store_result=False`` runs the script without recording it in
     ``execution_results.json`` (and leaves ``measurement`` alone): a test
     compilation of the GUI belongs to no configuration and measures nothing.
+
+    ``dot_discopop`` replaces the ``.discopop`` directory of the run root as ``DOT_DISCOPOP`` of the script, which
+    is where an instrumented program reads its static data from and writes its results to (see
+    :mod:`discopop_library.ProjectManager.configurations.runs`). ``result_annotations`` are stored with the record
+    in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
     """
     # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
@@ -345,6 +352,8 @@ def execute_configuration(
     my_env: Dict[str, str] = build_environment(os.environ, settings, project_directories, project_copy_root_path)
     logger.info(describe_project_variables(my_env))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
+    if dot_discopop is not None:
+        my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
 
     # Ensure the PATH includes the directory where discopop tools are found
     import sys
@@ -503,6 +512,7 @@ def execute_configuration(
             "time_source": representative.time_source,
             "thread_count": thread_count,
             "executed": True,
+            **(result_annotations or {}),
             "repetitions": len(outcomes),
             "repetition_times": [outcome.time for outcome in outcomes],
             "repetition_wall_clock_times": [outcome.wall_clock_time for outcome in outcomes],

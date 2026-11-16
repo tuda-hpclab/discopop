@@ -41,6 +41,7 @@ from discopop_library.ProjectManager.configurations.repetitions import (
 )
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.build_controls import BuildOptions
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -185,25 +186,29 @@ class ExecutePanel(Panel):
         self.timeout_compilation_spin = self._timeout_spin()
         self.timeout_validation_spin = self._timeout_spin()
         self.log_level_combo = widgets.log_level_selector("WARNING")
-        self.inplace_check = QCheckBox("Execute in-place (skip project copy)")
+        self.inplace_check = QCheckBox("Execute in-place (no build is kept)")
         self.inplace_check.setToolTip(
-            "In-place: execution modifies your project directory directly\n"
-            "Non-in-place: execution happens in a copy, keeping your project clean"
+            "In-place: compilation and execution happen in your project directory directly\n"
+            "Otherwise: they happen in a build, a copy of the project that is kept and reused while it is current "
+            "(see Profiling -> Builds and runs)"
         )
-        self.skip_cleanup_check = QCheckBox("Skip cleanup (keep project copies)")
+        self.skip_cleanup_check = QCheckBox("Keep the copies of failed builds")
         self.skip_cleanup_check.setToolTip(
-            "Warning: Enabling this may result in significant disk space usage\n"
-            "as project copies are retained after execution."
+            "The copies of successful builds are always kept (until you delete them).\n"
+            "Warning: Enabling this may result in significant disk space usage."
         )
+        self.build_options = BuildOptions(offer_in_place=False)
+        self.inplace_check.toggled.connect(lambda checked: self.build_options.setEnabled(not checked))
         advanced = widgets.FormSection()
         advanced.add_row("Execution timeout (s):", self.timeout_execution_spin, "0 = disabled")
         advanced.add_row("Compilation timeout (s):", self.timeout_compilation_spin, "0 = disabled")
         advanced.add_row("Validation timeout (s):", self.timeout_validation_spin, "0 = disabled; validate.sh only")
         advanced.add_row("Log level:", self.log_level_combo)
         advanced.add_widget(self.inplace_check)
+        advanced.add_widget(self.build_options)
         advanced.add_widget(self.skip_cleanup_check)
         self.advanced_section = widgets.CollapsibleSection(
-            "Advanced", advanced, summary="timeouts, log level, in-place, cleanup"
+            "Advanced", advanced, summary="timeouts, log level, builds, in-place"
         )
 
         # ── apply suggestions ────────────────────────────────────────────────
@@ -517,6 +522,8 @@ class ExecutePanel(Panel):
             log_level=log_level,
             suggestion_ids=suggestion_ids,
             allow_patching_outside_project=allow_outside,
+            build_policy=self.build_options.build_policy(),
+            build_only=self.build_options.build_only(),
         )
         self._begin_run("Running", "⏳ Execution in progress...")
         restore_logging = widgets.redirect_logging_to_console(self.console, log_level)

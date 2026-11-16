@@ -19,6 +19,8 @@ from discopop_library.ProjectManager.configurations.project_environment import (
 )
 from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
 from discopop_library.ProjectManager.plots import hotspot_data
+from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT, BUILD_MISMATCH, BUILD_NONE
+from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services.workflow_status import (
     OTHER_DIRECTORIES,
@@ -26,6 +28,7 @@ from discopop_library.ProjectManager.services.workflow_status import (
     STAGE_AUTOTUNING,
     STAGE_EDITOR,
     STAGE_EXECUTE,
+    STAGE_BUILD,
     STAGE_PROFILING,
     STAGE_SETUP,
     STAGE_HOTSPOT,
@@ -100,6 +103,7 @@ def test_empty_project(tmp_path: Path) -> None:
     assert result[STAGE_EDITOR].state == StageState.NOT_RUN
     assert result[STAGE_SETUP] == StageStatus(StageState.NOT_RUN, "no compile.sh")
     assert result[STAGE_PROFILING] == StageStatus(StageState.NOT_RUN, "no profiling data")
+    assert result[STAGE_BUILD] == StageStatus(StageState.NOT_RUN, "no configuration selected")
     assert result[STAGE_EXECUTE] == StageStatus(StageState.NOT_RUN, "no measured runs")
     assert result[STAGE_HOTSPOT].state == StageState.NOT_RUN
     assert result[STAGE_PATTERN_DETECTION] == StageStatus(StageState.LOCKED, "needs profiling data")
@@ -147,19 +151,23 @@ def test_unreadable_execution_results(tmp_path: Path) -> None:
     assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.DONE, "profiled")
 
 
-def test_hotspot_done_and_stale(tmp_path: Path) -> None:
+def test_hotspot_done_and_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     arguments = make_arguments(tmp_path)
     touch(hotspot_data.hotspots_json_path(arguments.dot_dp), "{}")
-    cs_id = hotspot_data.cs_id_path(arguments.dot_dp)
-    source = str(tmp_path / "main.cpp")
-    touch(cs_id, mtime=2000.0)
-    touch(source, mtime=1000.0)
+    state = {"value": (BUILD_CURRENT, "")}
+    monkeypatch.setattr(HotspotSession, "build_state", lambda self, config: state["value"])
     assert statuses(arguments)[STAGE_HOTSPOT].state == StageState.DONE
-    os.utime(source, (3000.0, 3000.0))
+    state["value"] = (BUILD_MISMATCH, "Changed since the build: project_files.")
     # the build state is reused for a few seconds; the GUI drops it after events and when it is activated
     assert statuses(arguments)[STAGE_HOTSPOT].state == StageState.DONE
     forget_build_states()
     assert statuses(arguments)[STAGE_HOTSPOT] == StageStatus(StageState.STALE, "sources changed")
+
+
+def test_the_hotspot_build_state_follows_the_kept_build(tmp_path: Path) -> None:
+    session = HotspotSession(make_arguments(tmp_path))
+    assert session.build_state("tiny") == (BUILD_NONE, "No instrumented build yet.")
+    assert session.serving_build_config("tiny") == "tiny" and session.serving_build_config(None) is None
 
 
 def test_pattern_detection_states(tmp_path: Path) -> None:

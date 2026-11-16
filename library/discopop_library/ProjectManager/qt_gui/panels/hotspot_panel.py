@@ -57,7 +57,7 @@ from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services import hotspot_view, measurement_queue
 from discopop_library.ProjectManager.services.configurations import list_configurations
 from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT
-from discopop_library.ProjectManager.services.hotspot_session import HotspotSession, Timeouts
+from discopop_library.ProjectManager.services.hotspot_session import HotspotSession, Timeouts, forget_build_states
 from discopop_library.ProjectManager.services.measurement_queue import MeasurementQueue
 from discopop_library.ProjectManager.services.jobs import (
     StatusKind,
@@ -216,6 +216,8 @@ class HotspotPanel(Panel):
         project_state.subscribe(ConfigChanged, lambda _event: self.refresh_configurations())
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh_configurations())
         project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.update_ui())
+        # e.g. "Reset Project" in the setup stage removed the results this panel still shows
+        project_state.subscribe(HotspotsChanged, lambda _event: self.refresh_results())
         # open with the quadrant chart shown, mirroring the Report tab opening on a trade-off scatter
         self.add_plot("quadrant")
         self.notebook.setCurrentIndex(0)
@@ -837,7 +839,9 @@ class HotspotPanel(Panel):
             if len(self.queue.items) > 1:
                 tally = " (" + self.queue.tally() + ")"
 
-        self.refresh_results()
+        # the build may have been made or changed meanwhile
+        forget_build_states()
+        # (refreshes this panel through its own subscription)
         # the analyzer's output gates the hotspot types of the Autotuning tab and the hint of Pattern Detection
         self.project_state.publish(HotspotsChanged())
 
@@ -878,6 +882,5 @@ class HotspotPanel(Panel):
         self.session.delete_hotspot_dir()
         self.queue = None
         self.output.clear()
-        self.refresh_results()
         self.project_state.publish(HotspotsChanged())
         self.status.set("Hotspot measurements cleared", reset_ms=_RESET_MS)

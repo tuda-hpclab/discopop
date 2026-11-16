@@ -10,6 +10,7 @@
 
 from discopop_library.ProjectManager.services.workflow_status import (
     STAGE_AUTOTUNING,
+    STAGE_BUILD,
     STAGE_EDITOR,
     STAGE_EXECUTE,
     STAGE_HOTSPOT,
@@ -23,6 +24,7 @@ from discopop_library.ProjectManager.services.workflow_status import (
 # the tabs are the stages of the workflow (services/workflow_status.py defines the keys, toolkit-free)
 TAB_SETUP = STAGE_SETUP
 TAB_EDITOR = STAGE_EDITOR
+TAB_BUILD = STAGE_BUILD
 TAB_PROFILING = STAGE_PROFILING
 TAB_EXECUTE = STAGE_EXECUTE
 TAB_REPORT = STAGE_REPORT
@@ -30,13 +32,15 @@ TAB_HOTSPOT = STAGE_HOTSPOT
 TAB_PATTERN_DETECTION = STAGE_PATTERN_DETECTION
 TAB_PATCH_REPAIR = STAGE_PATCH_REPAIR
 TAB_AUTOTUNING = STAGE_AUTOTUNING
-# the order of the tabs, as in the sidebar: the build of the project and its configurations first; hotspots and
-# profiling are measured before, and feed into, pattern detection and the autotuner; patch repair sits between them, a
-# suggestion that does not build is one the tuner can only record as a failure; Execute measures the configurations
+# the order of the tabs, as in the sidebar: the setup of the project and its configurations first, then the Build
+# (compiling is a stage of its own; the stages after it run what it built); hotspots and profiling are measured
+# before, and feed into, pattern detection and the autotuner; patch repair sits between them, a suggestion that does
+# not build is one the tuner can only record as a failure; Execute measures the configurations
 # with or without the suggestions, the report shows the measurements
 TAB_ORDER = (
     TAB_SETUP,
     TAB_EDITOR,
+    TAB_BUILD,
     TAB_HOTSPOT,
     TAB_PROFILING,
     TAB_PATTERN_DETECTION,
@@ -49,7 +53,7 @@ TAB_ORDER = (
 # the stages that work on the selected configuration: the configuration selector is at the top of their pages (and
 # nowhere else); Hotspots has a list of its own (measuring several configurations), Pattern Detection works on the
 # profiling data, the Report and the Project Setup on all configurations
-CONFIG_STAGES = (TAB_EDITOR, TAB_PROFILING, TAB_PATCH_REPAIR, TAB_AUTOTUNING, TAB_EXECUTE)
+CONFIG_STAGES = (TAB_EDITOR, TAB_BUILD, TAB_PROFILING, TAB_PATCH_REPAIR, TAB_AUTOTUNING, TAB_EXECUTE)
 
 # the workflow sidebar: sections of (tab, title) in display order; the setup first, the results last
 NAV_SECTIONS = (
@@ -57,6 +61,7 @@ NAV_SECTIONS = (
     (
         "Pipeline",
         (
+            (TAB_BUILD, "Build"),
             (TAB_HOTSPOT, "Hotspots"),
             (TAB_PROFILING, "Profiling"),
             (TAB_PATTERN_DETECTION, "Pattern Detection"),

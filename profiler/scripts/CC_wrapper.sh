@@ -73,6 +73,9 @@ PTHREAD_XLINKER_FLAGS=()
 # explicitly, or the runtime is never brought up.
 # Mach-O prefixes C symbols with an underscore, so ld64 has to be asked for ___dp_init.
 DP_INIT_SYMBOL="__dp_init"; [[ "$(uname)" == "Darwin" ]] && DP_INIT_SYMBOL="___dp_init"
+# DOT_DISCOPOP not set: the nearest .discopop of the project (see dp_environment.sh), seen by the pass as well
+source "${PARENT_PATH}/dp_environment.sh"
+dp_resolve_dot_discopop "$@" || true
 ${LLVM_CLANG} "$@" -g -O0 -fno-discard-value-names -Xclang -load -Xclang ${DISCOPOP_PLUGIN} -Xclang -fpass-plugin=${DISCOPOP_PLUGIN} -fPIC -Xlinker -L${PARENT_PATH} -Xlinker -u -Xlinker ${DP_INIT_SYMBOL} -Xlinker -lDiscoPoP_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v -Xlinker -lstdc++
 compile_status=$?
 

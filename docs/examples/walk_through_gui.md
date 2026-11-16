@@ -29,7 +29,7 @@ discopop_gui
 
 ![Main window of the GUI](../assets/screenshots/gui_main_window.svg)
 
-The header bar shows the execution configurations as tabs; the selected one is highlighted, and a click on another tab switches to it. The path of the `.discopop` folder is at the right end of the status line at the bottom. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Profiling, Hotspots, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
+The stages that work on one configuration (Configuration Setup, Build, Profiling, Patch Repair, Autotuning, Execute) show the execution configurations as tabs at the top of their page; the selected one is highlighted, and a click on another tab switches to it. The path of the `.discopop` folder is at the right end of the status line at the bottom. The left column is the workflow sidebar with the stages, grouped into "Setup" (Project Setup, Configuration Setup), "Pipeline" (Build, Hotspots, Profiling, Pattern Detection, Patch Repair, Autotuning, Execute) and "Results" (Report). Each stage shows a badge (✓ done, ! stale, ○ not run yet, 🔒 locked) and a line of detail. The selected stage is shown on the right, and the output of all jobs is in the output pane at the bottom.
 
 ## Step 2: Create a configuration with the wizard
 If the project has no real configuration yet, the "Configuration Assistant" opens on its own. Its steps are:
@@ -47,7 +47,7 @@ If the project has no real configuration yet, the "Configuration Assistant" open
 
 ![Configuration Assistant, first step (Welcome)](../assets/screenshots/gui_wizard.svg)
 
-You can edit the wizard's results later: the stage **Project Setup** at the top of the sidebar shows `compile.sh` and the settings files, with the buttons "Save (Ctrl+S)", "Test Compilation" (its output appears in the output pane) and "Derive" (derives the settings of the other modes from `seq_settings.json`). "+" next to the configuration tabs adds a further configuration; the "⋯" menu at the right end of the header bar offers "New with Wizard…" and "Copy", "Rename" and "Delete" of the selected one (right-clicking a tab offers them for its configuration).
+You can edit the wizard's results later: the stage **Project Setup** at the top of the sidebar shows `compile.sh` and the settings files, with the buttons "Save (Ctrl+S)", "Test Compilation" (its output appears in the output pane) and "Derive" (derives the settings of the other modes from `seq_settings.json`). "+" next to the configuration tabs adds a further configuration; the "⋯" menu next to them offers "New with Wizard…" and "Copy", "Rename" and "Delete" of the selected one (right-clicking a tab offers them for its configuration).
 
 ## Step 3: Edit the scripts
 The stage **Configuration Setup** shows the files of the selected configuration in the sub-tabs `execute.sh`, `compile.sh (override)`, `validate.sh` and `compile_validate.sh (override)`. "Help" explains each script; "Add Override" and "Add validate.sh" create the optional ones. Save with "Save (Ctrl+S)".
@@ -58,27 +58,32 @@ The box **Execution time** below `execute.sh` sets what is measured. Off (defaul
 
 The example prints no time, so keep the default.
 
+### Optional: compile in advance (Build)
+The stage **Build** (the first of the pipeline) compiles the configuration in the selected mode (seq, dp, hd) into a *build*, a copy of the project that is kept, without running it. Profiling, Hotspots and Execute run in that build and compile only if there is no current one, so a long compilation is done once. "Build" compiles if needed, "Rebuild" always; the table lists the builds (mode, suggestions, time, size) and checks or deletes them. Nothing is deleted automatically.
+
+![Build stage with the kept builds of the configuration](../assets/screenshots/gui_build.svg)
+
 ## Step 4: Execute
 Open the stage **Execute** (the last one of the pipeline).
 
-![Execute stage after a sequential run](../assets/screenshots/gui_execute.svg)
+![Execute stage after sequential and parallel runs](../assets/screenshots/gui_execute.svg)
 
 | Card | Settings |
 |---|---|
 | Modes | "Sequential (seq)", "DiscoPoP Instrumented (dp)", "Hotspot Detection (hd)", "Parallel (par)". A mode is selectable once its settings file, the compile script and `execute.sh` exist. |
 | Run | "Threads", "Repetitions" (the median is reported; only seq and par are repeated), "Label prefix" |
 | Apply suggestions | "None (apply no suggestions)", "Apply manually selected suggestions" (select ids, "Browse / Edit →" opens the patches), "Apply autotuner-selected suggestions" |
-| Advanced (collapsed) | "Execution timeout (s)", "Compilation timeout (s)", "Validation timeout (s)"; 3600 by default, 0 disables. "Log level"; "Execute in-place (skip project copy)"; "Skip cleanup (keep project copies)" |
+| Advanced (collapsed) | "Execution timeout (s)", "Compilation timeout (s)", "Validation timeout (s)"; 3600 by default, 0 disables. "Log level"; "Execute in-place (no build is kept)"; "Keep the copies of failed builds"; "Build" (compile if there is no current build / always compile / never compile) and "Only compile, do not run" |
 
 It measures the configuration, with or without the suggestions found by the later steps. Measure the original program first: select `seq`, `dp`, `hd` and `par` and click "Run". The output pane shows the compilations and runs; the button turns into "■ Stop" while the run lasts, and cancels it.
 
 ## Step 5: Profiling
-Open the stage **Profiling** and click "Profile for Pattern Detection". It compiles and runs the configuration in `dp` mode in place, which creates the profiling data that the Pattern Detection stage needs (runs of the `dp` mode in a project copy delete their profiling data with the copy). The card "Profiling data" shows when the last profiling run happened; "Advanced" holds the timeouts. The button turns into "■ Stop" while the run lasts; Profiling and Execute do not run at the same time.
+Open the stage **Profiling** and click "Profile for Pattern Detection". It compiles the configuration in `dp` mode in a *build* (a copy of the project that is kept and reused by later profiling runs as long as nothing changed, so a long compilation is not repeated), runs it in a run directory of its own and puts the result into `.discopop/profiler` of the project, which creates the profiling data that the Pattern Detection stage needs. The collapsed section "Runs" lists the profiling runs and deletes them (the builds are listed and checked in the stage **Build**); which run the pattern detection is based on is chosen in the stage **Pattern Detection**. Nothing is deleted automatically. The card "Profiling data" shows when the last profiling run happened; "Advanced" holds the timeouts. The button turns into "■ Stop" while the run lasts; Profiling and Execute do not run at the same time.
 
 ## Step 6: Report
 The stage **Report** shows all stored measurements.
 
-![Report stage with a trade-off scatter plot of speedup over parallel efficiency and the details of a selected point](../assets/screenshots/gui_report.svg)
+![Report stage with the table of the measured runs](../assets/screenshots/gui_report.svg)
 
 - The tab "Table" lists Config, Script, Setting, Label, Applied Suggestions, Not Applied, Threads, Status, Time, Speedup and Efficiency. Missing values are shown as "—", and applied suggestions as their IDs.
 - The "+" button adds charts: "Trade-off scatter", "Thread scaling", "Speedup / efficiency bars" and "Runtime bars". Click a point or bar to see its details in the bar at the side.
@@ -88,9 +93,9 @@ The stage **Report** shows all stored measurements.
 ## Step 7: Hotspot detection (optional)
 The stage **Hotspots** measures which code regions take the most time. Pattern detection and the hotspot-guided autotuning use the result.
 
-![Hotspots stage after two measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
+![Hotspots stage after three measured runs, with the status chip and the regions](../assets/screenshots/gui_hotspot_detection.svg)
 
-Check the configurations to measure in the card "Execution configurations" (at first only the one selected in the header bar) and click "Run Measurements", with the "Repetitions" set below. It measures the checked configurations one after another: it instruments the program in `hd` mode (if the build is not current), runs each configuration and records its runs, and analyzes all runs at the end. The list shows the state of each configuration (queued, measuring, measured, failed, stopped). The status chip shows the build state, and the column shows the accumulated runs and the number of code regions classified YES / MAYBE / NO. The "⋯" menu offers "Re-instrument" (rebuilds), "Re-run Analysis" (analyzes the recorded runs again) and "Clear Measurements…" (deletes them).
+Check the configurations to measure in the card "Execution configurations" (at first only the selected one) and click "Run Measurements", with the "Repetitions" set below. It measures the checked configurations one after another: it instruments the program in `hd` mode (if the build is not current), runs each configuration and records its runs, and analyzes all runs at the end. The list shows the state of each configuration (queued, measuring, measured, failed, stopped). The status chip shows the build state, and the column shows the accumulated runs and the number of code regions classified YES / MAYBE / NO. The "⋯" menu offers "Re-instrument" (rebuilds), "Re-run Analysis" (analyzes the recorded runs again) and "Clear Measurements…" (deletes them).
 
 The hotness of a region combines its average runtime with how strongly the runtime varies between runs. With a single run every ratio is 0.5, so check a second configuration with another input size for a meaningful result; both are measured with one click. The tabs "Runs" and "Regions" list the recorded runs and the regions (Hotness, Kind, Location, Name, Avg, Share, Min, Max, Ratio, Runs). The "+" button adds the charts "Hotness quadrant", "Top-N runtime bars" and "Per-region run profile". "Show in VSCode" in the detail bar opens a region in VS Code, if the `code` command is available.
 
@@ -106,7 +111,7 @@ Open the stage **Pattern Detection**. It is enabled after profiling data exists 
 - In "Advanced", **Dependency Data**: "default (full states)" or "no_states (states ignored)".
 - In "Advanced", "Show graph visualization" runs the explorer with `--visualize`, which opens the graphs in a window of its own; the GUI stays responsive meanwhile. (The Tk version runs the explorer inside the GUI instead and shows the graphs on the sub-tab "Graph Visualization".)
 
-Click "Run Pattern Detection". The output of the [explorer](../tools/Explorer.md) appears in the output pane. Afterwards the stage shows the suggestions as a table with the columns ID, Type, Location, Function, Hotness and Pragma (the chip shows their number, or "No suggestions found"). Select a row to see its details and its patch with the changes highlighted on the right. For the example you see suggestion 0 (`#pragma omp parallel for firstprivate(N)`) and 1 (`... reduction(+:sum)`). You can edit a patch and save it with "Save File" in the window "Browse Parallelization Suggestions" (opened with "Browse / Edit →"). "Open in VSCode" opens the source file of the selected suggestion; "Show suggestions in VSCode" in the "⋯" menu opens the project in VS Code for the [extension](walk_through_vscode.md).
+The card "Profiling run" names the profiling run the detection reads (or says that the data is not a kept run, e.g. because the program was profiled in place); "Choose another run" lists the profiling runs and uses the selected one. Click "Run Pattern Detection". The output of the [explorer](../tools/Explorer.md) appears in the output pane. Afterwards the stage shows the suggestions as a table with the columns ID, Type, Location, Function, Hotness and Pragma (the chip shows their number, or "No suggestions found"). Select a row to see its details and its patch with the changes highlighted on the right. For the example you see suggestion 0 (`#pragma omp parallel for firstprivate(N)`) and 1 (`... reduction(+:sum)`). You can edit a patch and save it with "Save File" in the window "Browse Parallelization Suggestions" (opened with "Browse / Edit →"). "Open in VSCode" opens the source file of the selected suggestion; "Show suggestions in VSCode" in the "⋯" menu opens the project in VS Code for the [extension](walk_through_vscode.md).
 
 To select suggestions, use the selectors that appear in the Execute and Autotuning stages: tables with a check box per suggestion (ID, Type, Location, Hotness), with "Select all"/"Deselect all" and an entry "Select IDs" that takes lists and ranges such as `1,3,5-8`.
 

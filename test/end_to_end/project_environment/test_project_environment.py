@@ -34,7 +34,7 @@ COMPILE_SH = """#!/bin/bash
 mkdir -p build && cd build && $CXX $CXXFLAGS ../src/main.cpp -o prog
 """
 
-# The same build, with DOT_DISCOPOP removed on the way to the compiler.
+# The same build, with DOT_DISCOPOP removed on the way to the compiler (it finds the .discopop of the project).
 COMPILE_SH_LOSING_DOT_DISCOPOP = """#!/bin/bash
 mkdir -p build && cd build && env -u DOT_DISCOPOP $CXX $CXXFLAGS ../src/main.cpp -o prog
 """
@@ -43,7 +43,7 @@ EXECUTE_SH = """#!/bin/bash
 build/prog
 """
 
-# Starts the program from another directory without DOT_DISCOPOP: it cannot find its .discopop.
+# Starts the program from another directory without DOT_DISCOPOP: it uses the .discopop recorded at compile time.
 EXECUTE_SH_LOSING_DOT_DISCOPOP = """#!/bin/bash
 prog="$PWD/build/prog"
 cd build && env -u DOT_DISCOPOP "$prog"
@@ -132,8 +132,9 @@ def test_an_excluded_directory_is_left_out(tmp_path: pathlib.Path) -> None:
 
 def test_command_line_exclusion_applies_to_the_copy_of_the_project(tmp_path: pathlib.Path) -> None:
     root = _project(tmp_path)
-    process = _run_project_manager(root, "-x", "tiny:dp", "--skip-cleanup", "--project-exclude-dirs", "third_party")
-    copies = [path for path in tmp_path.iterdir() if path.name.startswith("tiny_dp_settings.json_proj")]
+    process = _run_project_manager(root, "-x", "tiny:dp", "--project-exclude-dirs", "third_party")
+    # the copy is the build of the configuration and mode, which is kept
+    copies = [path for path in (tmp_path / "proj_discopop_builds").iterdir() if path.name == "tiny_dp"]
     assert len(copies) == 1, _output(process)
     mapping = _file_mapping(copies[0] / ".discopop")
     assert mapping and all(str(copies[0] / "src") + "/" in line for line in mapping), mapping
@@ -173,21 +174,26 @@ def test_everything_excluded_warns(tmp_path: pathlib.Path) -> None:
     assert "No instrumented file lies in the project directory" in compile_entry["stderr"]
 
 
-def test_a_build_losing_dot_discopop_fails(tmp_path: pathlib.Path) -> None:
+def test_a_build_losing_dot_discopop_still_writes_to_the_project(tmp_path: pathlib.Path) -> None:
+    # without DOT_DISCOPOP the compiler calls find the .discopop of the project from the build directory below it
+    # (dputil::FindDotDiscopop), so nothing is written to build/.discopop
     root = _project(tmp_path, compile_sh=COMPILE_SH_LOSING_DOT_DISCOPOP)
     process = _profile(root)
     compile_entry = _only_entry(root, "compile.sh")
-    assert compile_entry["code"] != 0, _output(process)
-    assert str(root / "build" / ".discopop") in compile_entry["stderr"]
+    assert compile_entry["code"] == 0, _output(process)
+    assert not (root / "build" / ".discopop").exists()
+    mapping = _file_mapping(root / ".discopop")
+    assert any(line.endswith("/src/main.cpp") for line in mapping), mapping
 
 
-def test_a_run_losing_dot_discopop_fails(tmp_path: pathlib.Path) -> None:
+def test_a_run_losing_dot_discopop_still_writes_to_the_project(tmp_path: pathlib.Path) -> None:
+    # the program remembers the .discopop directory it was compiled for
     root = _project(tmp_path, execute_sh=EXECUTE_SH_LOSING_DOT_DISCOPOP)
     process = _profile(root)
     assert _only_entry(root, "compile.sh")["code"] == 0, _output(process)
-    execute = _only_entry(root, "execute.sh")
-    assert execute["code"] != 0, _output(process)
-    assert "dynamic_dependencies.txt" in execute["stderr"]
+    assert _only_entry(root, "execute.sh")["code"] == 0, _output(process)
+    assert (root / ".discopop" / "profiler" / "dynamic_dependencies.txt").stat().st_size > 0
+    assert not (root / "build" / ".discopop").exists()
 
 
 @pytest.mark.parametrize("variable", ["DP_PROJECT_ROOT_DIR", "DOT_DISCOPOP"])

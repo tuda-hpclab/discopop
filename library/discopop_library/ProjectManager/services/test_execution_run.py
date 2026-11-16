@@ -48,3 +48,22 @@ def test_the_request_is_immutable() -> None:
     request = ExecutionRequest("c", ("seq",), False, False, 1, "", 0, 0, 0, 1, "INFO", ())
     with pytest.raises(dataclasses.FrozenInstanceError):
         request.thread_count = 2  # type: ignore[misc]
+
+
+def test_a_failed_compilation_reports_everything_the_script_printed() -> None:
+    from discopop_library.ProjectManager.services.execution_run import report_compilation_failure
+
+    class Output:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def output(self, text: str) -> None:
+            self.text += text
+
+    ctx = Output()
+    report_compilation_failure(ctx, (1, 2.5, "make: entering", "error: no such file"))  # type: ignore[arg-type]
+    assert "return code: 1" in ctx.text and "stdout: make: entering" in ctx.text
+    assert "stderr: error: no such file" in ctx.text
+    ctx = Output()
+    report_compilation_failure(ctx, None)  # type: ignore[arg-type]
+    assert "Compilation failed" in ctx.text

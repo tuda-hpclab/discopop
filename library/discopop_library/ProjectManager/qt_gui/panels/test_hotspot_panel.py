@@ -17,6 +17,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidget
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.configurations import building, running
+from discopop_library.ProjectManager.configurations.builds import list_builds
 from discopop_library.ProjectManager.configurations.project_environment import (
     ProjectDirectories,
     record_instrumented_directories,
@@ -30,7 +32,6 @@ from discopop_library.ProjectManager.qt_gui.panels import hotspot_panel
 from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services import hotspot_session
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
 from discopop_library.ProjectManager.services.jobs import WorkContext
 from discopop_library.ProjectManager.plots.hotspot_data import MeasurementLog
@@ -57,7 +58,6 @@ class Env:
         self.published: List[HotspotsChanged] = []
         panel.project_state.subscribe(HotspotsChanged, self.published.append)
         self.executed: List[Tuple[str, Any]] = []  # (script name, timeout)
-        self.next_result = 0
         self.exit_code = 0
         self.compile_exit_code = 0
         self.gate: Optional[threading.Event] = None
@@ -97,27 +97,29 @@ class Env:
         name = Path(script).name
         self.executed.append((name, args[1]))
         self.threads.append(threading.current_thread() is threading.main_thread())
-        private = self.dot_dp / "hotspot_detection" / "private"
-        private.mkdir(parents=True, exist_ok=True)
         if name == "compile.sh":
             self.compiled_scripts.append(script)
             if Path(config_path).name in self.failing_compile_configs:
                 return (2, 0.1, "", "")
             if self.compile_exit_code != 0:
                 return (self.compile_exit_code, 0.1, "", "")
-            (private / "cs_id.txt").write_text(CS_ID)
-            (self.dot_dp / "FileMapping.txt").write_text(f"1\t{self.source}\n")
+            # the build writes its static data into the .discopop of its tree
+            tree_dot = Path(root) / ".discopop"
+            (tree_dot / "hotspot_detection" / "private").mkdir(parents=True, exist_ok=True)
+            (tree_dot / "hotspot_detection" / "private" / "cs_id.txt").write_text(CS_ID)
+            (tree_dot / "FileMapping.txt").write_text(f"1\t{Path(root) / 'main.cpp'}\n")
             return (0, 0.1, "", "")
-        else:
-            config = Path(config_path).name
-            self.executed_configs.append(config)
-            if self.gate is not None and (self.gated_configs is None or config in self.gated_configs):
-                self.gate.wait(5)
-            if config in self.failing_configs:
-                return (3, 0.25, "", "broken input")
-            if self.exit_code == 0:
-                (private / f"hotspot_result_{self.next_result}.txt").write_text("1 2.0\n2 0.5\n3 0\n")
-                self.next_result += 1
+        config = Path(config_path).name
+        self.executed_configs.append(config)
+        if self.gate is not None and (self.gated_configs is None or config in self.gated_configs):
+            self.gate.wait(5)
+        if config in self.failing_configs:
+            return (3, 0.25, "", "broken input")
+        if self.exit_code == 0:
+            # a run writes into the directory of its own, which starts with the static data of the build
+            private = Path(kw["dot_discopop"]) / "hotspot_detection" / "private"
+            private.mkdir(parents=True, exist_ok=True)
+            (private / "hotspot_result_0.txt").write_text("1 2.0\n2 0.5\n3 0\n")
         return (self.exit_code, 0.25, "", "")
 
     def fake_analyzer(self, ctx: WorkContext) -> bool:
@@ -134,7 +136,8 @@ def env(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     panel = HotspotPanel(make_arguments(tmp_path), ProjectState(), status, lambda: (11.0, 22.0, 33.0))
     qtbot.addWidget(panel)
     created = Env(panel, tmp_path)
-    monkeypatch.setattr(hotspot_session, "execute_configuration", created.fake_execute)
+    monkeypatch.setattr(building, "execute_configuration", created.fake_execute)
+    monkeypatch.setattr(running, "execute_configuration", created.fake_execute)
     monkeypatch.setattr(HotspotSession, "invoke_analyzer", lambda self, ctx: created.fake_analyzer(ctx))
     return created
 
@@ -417,7 +420,7 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
     assert panel.header.chip.text() == "Up to date"
     assert panel.regions_table.rowCount() == 3
     out = panel.output.text()
-    assert "Compiling 'tiny' in 'hd' mode (inplace)..." in out and "Executing 'tiny' (2/2)..." in out
+    assert "Compiling..." in out and "Executing 'tiny' (2/2)..." in out
     assert "Recorded run 1." in out and "analyzed" in out
     assert len(env.published) == 1
     assert panel.status.text() == "Hotspot measurement completed" and panel.status.color == widgets.STATUS_OK
@@ -452,7 +455,7 @@ def test_a_failing_run_is_reported(qtbot: QtBot, env: Env) -> None:
     env.compile_exit_code = 3
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    assert "Instrumentation failed (return code: 3)" in env.panel.output.text()
+    assert "Compilation failed (return code: 3)" in env.panel.output.text()
     assert env.executed == [("compile.sh", 22.0)] and len(env.published) == 1
     # the build is not current after a failed instrumentation, so the next try compiles again; only execute fails
     env.compile_exit_code = 0
@@ -609,7 +612,7 @@ def test_the_detail_bar_shows_no_stale_placeholder_before_the_event_loop_runs(en
     assert placeholder.isHidden()  # deleteLater has not run yet
 
 
-def test_a_configuration_with_its_own_compile_script_is_instrumented_again(qtbot: QtBot, env: Env) -> None:
+def test_a_configuration_with_its_own_compile_script_gets_its_own_build(qtbot: QtBot, env: Env) -> None:
     for name in ("a", "b", "c"):
         env.add_configuration(name)
     configs = env.root / ".discopop" / "project" / "configs"
@@ -618,31 +621,36 @@ def test_a_configuration_with_its_own_compile_script_is_instrumented_again(qtbot
     env.panel.select_all_button.click()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    # a: shared script; b: its own; c: the shared one again
-    assert env.compiled_scripts == [
-        str(configs / "compile.sh"),
-        str(configs / "b" / "compile.sh"),
-        str(configs / "compile.sh"),
-    ]
+    # a: shared script; b: its own; c: runs in the build of a, which has the same script
+    assert env.compiled_scripts == [str(configs / "compile.sh"), str(configs / "b" / "compile.sh")]
     assert env.executed_configs == ["a", "b", "c"]
 
 
-def test_a_failed_instrumentation_is_not_reused_by_the_next_configuration(qtbot: QtBot, env: Env) -> None:
+def test_a_failed_build_does_not_stop_the_next_configuration(qtbot: QtBot, env: Env) -> None:
     for name in ("a", "b"):
         env.add_configuration(name)
+    env.failing_compile_configs = ["a"]
     env.panel.select_all_button.click()
     env.panel.run_button.click()
     wait_idle(qtbot, env.panel)
-    # the build is current now; a failing rebuild of a must not let b run on what it left behind
-    env.compiled_scripts.clear()
-    env.executed_configs.clear()
-    env.failing_compile_configs = ["a"]
-    env.panel.reinstrument_button.setEnabled(True)
-    env.panel.session.save_log(replace_compile_script(env.panel.session.load_log(), "/elsewhere/compile.sh"))
-    env.panel.run_button.click()
-    wait_idle(qtbot, env.panel)
+    # nothing of the failed build is kept, so b compiles on its own
     assert len(env.compiled_scripts) == 2 and env.executed_configs == ["b"]
     assert configs_in_list(env.panel)[0][2] == "✗ failed: instrumentation failed (return code 2)"
+
+
+def test_the_runs_use_a_build_that_the_build_stage_lists(qtbot: QtBot, env: Env) -> None:
+    env.add_configuration("a")
+    env.panel.select_all_button.click()
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert [record.build_id for record in list_builds(env.panel.arguments.project_dir)] == ["a_hd"]
+    # the second measurement runs in that build and does not compile
+    env.executed.clear()
+    env.panel.run_button.click()
+    wait_idle(qtbot, env.panel)
+    assert [name for name, _timeout in env.executed] == ["execute.sh"]
+    # both runs are stored in the data of the project, numbered one after the other
+    assert hotspot_data.result_file_indices(hotspot_data.private_dir(str(env.dot_dp))) == [0, 1]
 
 
 def test_nothing_measured_skips_the_analysis(qtbot: QtBot, env: Env) -> None:

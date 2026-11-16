@@ -561,3 +561,19 @@ def test_the_autotuner_selection_never_carries_the_permission(
         panel.run_button.click()
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
     assert dialog_answers.titles("ask_yes_no") == [] and seen[0].allow_patching_outside_project is False
+
+
+def test_the_build_options_reach_the_execution_request(qtbot: QtBot, panel: ExecutePanel) -> None:
+    select(panel)
+    panel.build_options.policy_combo.setCurrentIndex(2)
+    panel.build_options.build_only_check.setChecked(True)
+    seen: List[Any] = []
+
+    def fake_run(arguments: Any, request: Any, ctx: Any) -> List[Any]:
+        seen.append(request)
+        return []
+
+    with mock.patch.object(execute_panel_module, "run_execution", fake_run):
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+    assert (seen[0].build_policy, seen[0].build_only) == ("reuse", True)

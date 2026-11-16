@@ -143,7 +143,9 @@ Results are stored in `.discopop/hotspot_detection/` (`Hotspots.json` and the ru
 ## Profiling
 ![Profiling stage with the time of the last profiling run and the timeouts](../assets/screenshots/gui_profiling.svg)
 
-The *Profiling* stage compiles the selected configuration with the DiscoPoP compiler wrappers (`dp_settings.json`) and runs its `execute.sh` once, in place, i.e. in the project directory itself. The profiler records the data dependences that occur in this run; they are kept in `.discopop/profiler`, and the *Pattern Detection* stage works on them. A new profiling run replaces the data of the previous one.
+The *Profiling* stage compiles the selected configuration with the DiscoPoP compiler wrappers (`dp_settings.json`) and runs its `execute.sh` once. The compilation happens in a *build*, a copy of the project that is kept: the next profiling run uses it again as long as the project files, the compile script, the settings of the mode and the project directories are unchanged, so a long compilation is not repeated. The profiler records the data dependences that occur in the run; the run keeps them in a directory of its own, and the data of the latest successful run is put into `.discopop/profiler` of the project, where the *Pattern Detection* stage works on it.
+
+The options *Build* (compile if there is no current build / always compile / never compile), *Only compile, do not run* and *Compile and run in the project directory (no build is kept or reused)* select what a profiling run does. The card **Builds and runs** lists the builds and the profiling runs of the project. **Check selected builds** compares the project with a build (this reads the whole project), **Use selected run for pattern detection** puts the data of another run into the project (the pattern detection results derived from the data there before are outdated afterwards), and the delete buttons remove builds and runs. **Builds and runs are never deleted automatically** and may need much disk space; *Calculate sizes* shows how much.
 
 Its header holds **Profile for Pattern Detection** (**■ Stop** while it runs). The cards show the selected configuration and the time of the last profiling run (or which profiling files are missing), and explain the run. The instrumented program runs much slower than the original, so give the configuration a small, but representative input. *Advanced* (collapsed) holds the timeouts for compilation, execution and validation in seconds (0 = disabled).
 
@@ -200,7 +202,7 @@ The *Execute* stage compiles and runs the selected configuration, as `discopop_p
 | Modes | `seq` (sequential), `dp` (DiscoPoP instrumented), `hd` (hotspot detection), `par` (parallel). A mode is available when its settings file, the compile script and `execute.sh` exist. |
 | Run | Thread count (`OMP_NUM_THREADS`), repetitions (median of N, `seq` and `par` only), label prefix, and a summary of the execution time setting of the *Configuration Setup* stage |
 | Apply suggestions | None, manually selected suggestions (**Browse / Edit →**), or the suggestions selected by the autotuner |
-| Advanced (collapsed) | Timeouts for execution, compilation and validation in seconds (0 = disabled), log level, *Execute in-place (skip project copy)*, *Skip cleanup (keep project copies)* |
+| Advanced (collapsed) | Timeouts for execution, compilation and validation in seconds (0 = disabled), log level, *Execute in-place (no build is kept)*, *Keep the copies of failed builds*, *Build* (compile if there is no current build / always compile / never compile) and *Only compile, do not run* |
 
 The profiling data for the pattern detection is created by the [Profiling](#profiling) stage. Runs of the `dp` mode in a project copy delete their profiling data with the copy.
 

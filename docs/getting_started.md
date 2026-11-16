@@ -34,7 +34,7 @@ discopop_gui
 ```
 Use `discopop_gui -p <project directory>` to start it from another directory. DiscoPoP keeps all its data in the folder `.discopop` of the project.
 
-![The main window with the configuration tabs in the header bar, the workflow sidebar and the output pane](assets/screenshots/gui_main_window.svg)
+![The main window with the workflow sidebar, the configuration selector at the top of the stage and the collapsed output pane](assets/screenshots/gui_main_window.svg)
 
 ## Configure the project
 On the first start, the Configuration Assistant asks for two scripts and checks that they work:
@@ -53,8 +53,9 @@ On the first start, the Configuration Assistant asks for two scripts and checks 
 Optionally, a validation script `validate.sh` checks that the output is still correct after a parallelization. The assistant derives the settings for the instrumented and the parallel builds itself; you can review them later in the *Project Setup* stage.
 
 ## Find and measure parallelism
-Select the configuration in the header bar and work through the stages of the sidebar from top to bottom:
+Select the configuration (tabs at the top of the stage) and work through the stages of the sidebar from top to bottom:
 
+0. **Build** (optional): click *Build* to compile the configuration in advance; the following stages reuse the kept build.
 1. **Profiling**: click *Profile for Pattern Detection*: it builds and runs the instrumented program and keeps its profiling data in `.discopop`.
 2. **Hotspots**: check the execution configurations to measure and click *Run Measurements* to find the regions that take the most time; the configurations are measured one after another. The autotuner uses this result. Measuring two configurations with different input sizes gives the best ranking.
 3. **Pattern Detection**: click *Run Pattern Detection*. The table lists each suggestion with its source location; selecting one shows its OpenMP patch.

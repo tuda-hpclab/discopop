@@ -14,10 +14,12 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #define DP_DEBUG_TYPE "dputils"
@@ -176,6 +178,50 @@ bool IsInProjectRoot(const std::string& path) {
   const auto contains = [&path](const std::string& part) { return path.find(part) != std::string::npos; };
   return std::any_of(directories.roots.begin(), directories.roots.end(), contains) &&
          std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
+}
+
+std::string FindDotDiscopop(const std::string& start_directory, std::string* shadowed) {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  fs::path directory = fs::canonical(start_directory.empty() ? "." : start_directory, error);
+  if (error) {
+    return "";
+  }
+  std::string nearest;
+  while (true) {
+    const fs::path candidate = directory / ".discopop";
+    if (fs::is_directory(candidate, error)) {
+      const bool has_project = fs::is_directory(candidate / "project", error);
+      if (nearest.empty()) {
+        nearest = candidate.string();
+        if (has_project) {
+          break;
+        }
+      } else if (has_project) {
+        if (shadowed != nullptr) {
+          *shadowed = candidate.string();
+        }
+        break;
+      }
+    }
+    if (!directory.has_parent_path() || directory.parent_path() == directory) {
+      break;
+    }
+    directory = directory.parent_path();
+  }
+  return nearest;
+}
+
+std::string DiscoverDotDiscopop(const std::string& source_file, std::string* shadowed) {
+  std::error_code error;
+  std::string found = FindDotDiscopop(std::filesystem::current_path(error).string(), shadowed);
+  if (found.empty() && !source_file.empty()) {
+    const std::filesystem::path source = std::filesystem::absolute(source_file, error);
+    if (!error) {
+      found = FindDotDiscopop(source.parent_path().string(), shadowed);
+    }
+  }
+  return found;
 }
 
 std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& full_path_name) {

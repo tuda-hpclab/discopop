@@ -45,6 +45,7 @@ from discopop_library.ProjectManager.qt_gui.panels.execute_panel import ExecuteP
 from discopop_library.ProjectManager.qt_gui.panels.hotspot_panel import HotspotPanel
 from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
 from discopop_library.ProjectManager.qt_gui.panels.pattern_detection_panel import PatternDetectionPanel
+from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
 from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
@@ -61,6 +62,7 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_ORDER as TAB_ORDER,
     TAB_PATCH_REPAIR as TAB_PATCH_REPAIR,
     TAB_PATTERN_DETECTION as TAB_PATTERN_DETECTION,
+    TAB_BUILD as TAB_BUILD,
     TAB_PROFILING as TAB_PROFILING,
     TAB_REPORT as TAB_REPORT,
     TAB_SETUP as TAB_SETUP,
@@ -181,6 +183,7 @@ class MainWindow(QMainWindow):
             self,
             run_state_changed=lambda running: self._run_state_changed(self.execute_panel, running),
         )
+        self.build_panel = BuildPanel(args, state, status, self, run_state_changed=self._build_state_changed)
         self.setup_panel = SetupPanel(args, state, status, self)
         self.editor_panel = EditorPanel(args, state, status, self)
         self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
@@ -200,6 +203,7 @@ class MainWindow(QMainWindow):
         panels: Dict[str, Panel] = {
             TAB_SETUP: self.setup_panel,
             TAB_EDITOR: self.editor_panel,
+            TAB_BUILD: self.build_panel,
             TAB_PROFILING: self.profiling_panel,
             TAB_HOTSPOT: self.hotspot_panel,
             TAB_PATTERN_DETECTION: self.pattern_detection_panel,
@@ -256,8 +260,17 @@ class MainWindow(QMainWindow):
             theme.set_theme(app, key)
         self.theme_actions[theme.current_theme()].setChecked(True)
 
+    def _build_state_changed(self, running: bool) -> None:
+        """A build runs: the stages that run the configuration wait."""
+        self.execute_panel.set_blocked(running)
+        self.profiling_panel.set_blocked(running)
+        self.report_panel.set_execution_running(running)
+        self.setup_panel.set_blocked(running)
+
     def _run_state_changed(self, other: "ExecutePanel | ProfilingPanel", running: bool) -> None:
         other.set_blocked(running)
+        # Execute and Profiling run the configuration: not while it is built
+        self.build_panel.set_blocked(running)
         self.report_panel.set_execution_running(running)
         self.setup_panel.set_blocked(running)
 

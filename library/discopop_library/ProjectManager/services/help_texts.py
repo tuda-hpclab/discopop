@@ -8,6 +8,16 @@
 
 """The texts of the help dialogs of the editors (shared by the Tk and the Qt GUI): file name -> (title, text)."""
 
+_PROJECT_ROOT_NOTE = (
+    "\n\nVariables set for the script:\n"
+    "  • $CC, $CXX, $CFLAGS, $CXXFLAGS: compilers and flags (required in compile scripts)\n"
+    "  • $DP_PROJECT_ROOT_DIR: root of the project copy the script runs in (use it for paths)\n"
+    "  • $DOT_DISCOPOP: the .discopop directory of that root\n"
+    "  • $DP_PROJECT_INCLUDE_DIRS / $DP_PROJECT_EXCLUDE_DIRS: project directories outside / inside\n"
+    "    the root that are instrumented / left out\n"
+    "  • $OMP_NUM_THREADS: the thread count of the run"
+)
+
 HELP_TEXTS: dict[str, tuple[str, str]] = {
     "compile.sh": (
         "compile.sh Help",
@@ -34,7 +44,7 @@ HELP_TEXTS: dict[str, tuple[str, str]] = {
         "Separate build for validation:\n"
         "This script builds the code that execute.sh runs. If validate.sh needs a\n"
         "differently compiled binary, provide a compile_validate.sh in addition — see its\n"
-        "own help for details.",
+        "own help for details." + _PROJECT_ROOT_NOTE,
     ),
     "compile_validate.sh": (
         "compile_validate.sh Help",
@@ -63,7 +73,7 @@ HELP_TEXTS: dict[str, tuple[str, str]] = {
         "  • Must be executable from the project root directory\n\n"
         "Example:\n"
         "#!/bin/bash\n"
-        "$CXX $CXXFLAGS -DVALIDATE_OUTPUT -o program main.cpp",
+        "$CXX $CXXFLAGS -DVALIDATE_OUTPUT -o program main.cpp" + _PROJECT_ROOT_NOTE,
     ),
     "execute.sh": (
         "execute.sh Help",
@@ -99,7 +109,7 @@ HELP_TEXTS: dict[str, tuple[str, str]] = {
         "run is recorded as having fallen back to it — a measurement is never silently\n"
         "replaced by the other kind. The setting is stored per configuration in\n"
         "execution_time.json, next to this script, and can be overridden for a single\n"
-        "run with --execution-time-regex.",
+        "run with --execution-time-regex." + _PROJECT_ROOT_NOTE,
     ),
     "validate.sh": (
         "validate.sh Help",
@@ -124,7 +134,7 @@ HELP_TEXTS: dict[str, tuple[str, str]] = {
         "Example:\n"
         "#!/bin/bash\n"
         "./program <args> > output.out\n"
-        "diff output.out reference.out",
+        "diff output.out reference.out" + _PROJECT_ROOT_NOTE,
     ),
     "seq_settings.json": (
         "seq_settings.json Help",

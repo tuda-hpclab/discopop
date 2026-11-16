@@ -20,6 +20,7 @@ from unittest import mock
 import pytest
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations import building
 from discopop_library.ProjectManager.configurations.copying import (
     copy_configuration,
     get_application_result,
@@ -199,7 +200,10 @@ def _run(project: Dict[str, Path], allow: bool, skip_cleanup: bool, behaviour: s
             cancel.set()
         return (0, 0.1, "", "")
 
-    with mock.patch.object(execution_run, "execute_configuration", fake_execute):
+    with (
+        mock.patch.object(execution_run, "execute_configuration", fake_execute),
+        mock.patch.object(building, "execute_configuration", fake_execute),
+    ):
         failures = execution_run.run_execution(arguments, request, ctx)
     return {"seen": seen, "failures": failures}
 

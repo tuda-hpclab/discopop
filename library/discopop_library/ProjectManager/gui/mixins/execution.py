@@ -310,6 +310,8 @@ class ExecutionMixin(ConfigManagerMixinBase):
             timeout_execution=self.timeout_execution_var.get(),
             timeout_compilation=self.timeout_compilation_var.get(),
             timeout_validation=self.timeout_validation_var.get(),
+            # the Tk GUI has no controls for builds and runs: it works in the project directory as it always did
+            inplace=True,
         )
 
         restore_logging = redirect_logging_to_text_area(self.output_text, "INFO")
