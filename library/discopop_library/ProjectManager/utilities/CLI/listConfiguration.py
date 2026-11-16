@@ -58,7 +58,7 @@ def show_configurations_without_execution(arguments: ProjectManagerArguments) ->
     configurations = [f.path for f in os.scandir(arguments.project_config_dir) if f.is_dir()]
 
     compatibility: Dict[PATH, Dict[NAME, bool]] = dict()
-    table = [["Configuration", "(TC) Autotuner"]]
+    table = [["Configuration", "(TC) Autotuner", "Builds from"]]
     # collect compatibility information
     for config in configurations:
         # autotuner: dp settings & hd settings
@@ -79,7 +79,9 @@ def show_configurations_without_execution(arguments: ProjectManagerArguments) ->
             autotuner_cell_contents += "(M) dp - settings\n" if not dp_settings_exist else ""
             autotuner_cell_contents += "(M) hd - settings\n" if not hd_settings_exist else ""
 
-        table.append([os.path.basename(config), autotuner_cell_contents])
+        name = os.path.basename(config)
+        owner = build_owner_of(arguments.project_config_dir, name)
+        table.append([name, autotuner_cell_contents, owner if owner != name else ""])
 
     # display
     print(__get_legend())

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Set, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, members_of
 from discopop_library.ProjectManager.configurations.builds import (
     BuildKey,
     BuildRecord,
@@ -84,6 +84,8 @@ class BuildRow:
     built: str
     compile_time: str
     size: str
+    # the configurations that run in this build besides its own (see configurations/build_sharing.py)
+    used_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,7 @@ def build_rows(arguments: ProjectManagerArguments, with_sizes: bool = False) -> 
             format_time(record.built_at),
             "%.1f s" % record.compile_seconds,
             _size_text(record.tree, with_sizes),
+            ", ".join(members_of(arguments.project_config_dir, record.configuration)),
         )
         for record in list_builds(arguments.project_dir)
     ]

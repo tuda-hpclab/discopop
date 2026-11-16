@@ -66,6 +66,9 @@ class ProjectManagerArguments(GeneralArguments):
     # Compile only, do not run execute.sh.
     build_only: bool = False
     # List the builds of the project / delete the given ones (comma separated ids, "all" for every build) and stop.
+    # Let a configuration build from another one ("MEMBER:OWNER") / build for itself again ("MEMBER") and stop.
+    share_build: Optional[str] = None
+    unshare_build: Optional[str] = None
     list_builds: bool = False
     delete_builds: Optional[str] = None
     # List the runs of the builds / delete the given ones (comma separated ids, "all") / put one into the project's
