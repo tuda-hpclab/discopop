@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import declared_owner_of, members_of
 from discopop_library.ProjectManager.configurations.compile_script import (
     get_per_config_compile_script_path,
     get_per_config_validation_compile_script_path,
@@ -423,11 +424,36 @@ class EditorPanel(Panel):
             os.remove(path)
             message = "Removed compile.sh override for this configuration"
         else:
+            if self._refuse_for_shared_build(config, "compile.sh"):
+                return
             write_script_file(path, self._read(get_shared_compile_script_path(self.arguments.project_config_dir)))
             message = "Added compile.sh override for this configuration"
         self._load_compile_override()
         self.project_state.publish(ConfigurationsChanged())
         self.status.set(message, widgets.STATUS_OK, reset_ms=2000)
+
+    def _refuse_for_shared_build(self, config: str, file_name: str) -> bool:
+        """Whether adding ``file_name`` to ``config`` is refused because of a shared build (and says why)."""
+        config_dir = self.arguments.project_config_dir
+        owner = declared_owner_of(config_dir, config)
+        if owner is not None:
+            dialogs.show_warning(
+                self,
+                "Shared Build",
+                config + " builds from " + owner + ", so a " + file_name + " of its own would be ignored.\n\n"
+                "Edit it in " + owner + ", or let " + config + " build for itself first (Build stage).",
+            )
+            return True
+        if file_name == "compile_validate.sh" and members_of(config_dir, config):
+            dialogs.show_warning(
+                self,
+                "Shared Build",
+                "Other configurations build from " + config + ". A separate validation build changes the build "
+                "tree and would make the build stale after every validation.\n\n"
+                "Let them build for themselves first (Build stage).",
+            )
+            return True
+        return False
 
     def _toggle_validate_script(self) -> None:
         if not self.project_state.current_config:
@@ -467,6 +493,8 @@ class EditorPanel(Panel):
             os.remove(path)
             message = "Removed compile_validate.sh override for this configuration"
         else:
+            if self._refuse_for_shared_build(config, "compile_validate.sh"):
+                return
             if not has_validate_script(self._config_path()):
                 dialogs.show_warning(
                     self,

@@ -19,12 +19,14 @@ from typing import Callable, Dict, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.build_controls import BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
+from discopop_library.ProjectManager.qt_gui.shared_build import SharedBuildSection
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
 from discopop_library.ProjectManager.services import build_overview
@@ -126,6 +128,7 @@ class BuildPanel(Panel):
         target.add_row("Compilation timeout (s):", self.timeout_spin, "0 = disabled")
         target.add_widget(widgets.hbox(self.goto_setup_button, None, margins=0))
 
+        self.shared_build = SharedBuildSection(arguments, project_state)
         self.builds = BuildsAndRuns(arguments, changed=lambda: project_state.publish(ResultsChanged()), show_runs=False)
 
         self.run_button = widgets.RunStopButton(BUILD_TEXT, self._build, self._stop)
@@ -147,7 +150,7 @@ class BuildPanel(Panel):
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.setSpacing(widgets.CARD_SPACING)
-        for section in (target, about, self.builds):
+        for section in (target, self.shared_build, about, self.builds):
             column_layout.addWidget(section)
         column_layout.addStretch(1)
         options = QWidget()
@@ -189,7 +192,10 @@ class BuildPanel(Panel):
         config = self.project_state.current_config
         if not config:
             return "No configuration selected."
-        compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, config)
+        # a configuration that builds from another one is compiled with the files of that one
+        compile_sh = resolve_compile_script_path(
+            self.arguments.project_config_dir, build_owner_of(self.arguments.project_config_dir, config)
+        )
         execute_sh = os.path.join(self.arguments.project_config_dir, config, "execute.sh")
         modes: Dict[str, bool] = available_modes(self.arguments.project_config_dir, compile_sh, execute_sh)
         if not modes[self.mode()]:
@@ -200,9 +206,15 @@ class BuildPanel(Panel):
 
     def refresh(self) -> None:
         config = self.project_state.current_config
-        self.configuration_label.setText(config or "—")
+        text = "—"
+        if config:
+            owner = build_owner_of(self.arguments.project_config_dir, config)
+            text = config + (" (builds from " + owner + ")" if owner != config else "")
+        self.configuration_label.setText(text)
         self.build_label.setText(build_overview.last_build_text(self.arguments, config, self.mode()))
         self.builds.refresh()
+        self.shared_build.refresh(config)
+        self.shared_build.setEnabled(bool(config) and not self.is_running() and not self._blocked)
         missing = self._missing_requirement()
         self.goto_setup_button.setVisible(bool(missing) and bool(config))
         if not self.is_running():

@@ -13,6 +13,7 @@ from typing import Any, List, Optional
 from unittest import mock
 
 import pytest
+from PySide6.QtCore import Qt
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
@@ -101,3 +102,46 @@ def test_blocked_while_another_stage_runs(panel: BuildPanel) -> None:
     assert not panel.run_button.isEnabled()
     panel.set_blocked(False)
     assert panel.run_button.isEnabled()
+
+
+def _add_configuration(panel: BuildPanel, name: str) -> None:
+    configs = Path(panel.arguments.project_config_dir)
+    (configs / name).mkdir(exist_ok=True)
+    (configs / name / "execute.sh").write_text("true\n")
+
+
+def test_a_configuration_can_be_released_into_the_build_of_another(panel: BuildPanel, dialog_answers: Any) -> None:
+    from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, members_of
+
+    _add_configuration(panel, "big")
+    select(panel, "tiny")
+    section = panel.shared_build
+    assert section.members_list.count() == 1 and section.checked_members() == []
+
+    section.members_list.item(0).setCheckState(Qt.CheckState.Checked)
+    config_dir = panel.arguments.project_config_dir
+    assert members_of(config_dir, "tiny") == ["big"]
+    assert section.checked_members() == ["big"]
+    assert not section.owner_combo.isEnabled()
+
+    # the member sees its owner and cannot own builds
+    select(panel, "big")
+    assert build_owner_of(config_dir, "big") == "tiny"
+    assert section.owner_combo.currentData() == "tiny"
+    assert not section.members_list.isVisibleTo(panel)
+    assert "builds from tiny" in panel.configuration_label.text()
+
+    section.owner_combo.setCurrentIndex(0)
+    section._owner_chosen(0)
+    assert build_owner_of(config_dir, "big") == "big"
+
+
+def test_sharing_that_is_not_possible_is_explained(panel: BuildPanel, dialog_answers: Any) -> None:
+    _add_configuration(panel, "big")
+    configs = Path(panel.arguments.project_config_dir)
+    (configs / "big" / "compile.sh").write_text("true\n")
+    select(panel, "tiny")
+    item = panel.shared_build.members_list.item(0)
+    # a configuration with a compile script of its own is shown disabled, with the reason
+    assert not item.flags() & Qt.ItemFlag.ItemIsEnabled
+    assert "compile.sh" in item.toolTip()
