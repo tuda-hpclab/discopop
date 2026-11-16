@@ -24,6 +24,7 @@ from discopop_library.ProjectManager.configurations.build_sharing import build_o
 from discopop_library.ProjectManager.configurations.builds import list_builds
 from discopop_library.ProjectManager.configurations.project_environment import stale_directories_message
 from discopop_library.ProjectManager.plots import hotspot_data
+from discopop_library.ProjectManager.services import callpath_pruning
 from discopop_library.ProjectManager.services.autotuner_results import autotuner_results_exist
 from discopop_library.ProjectManager.services.explorer_state import (
     explorer_prerequisites_met,
@@ -161,11 +162,13 @@ def _build_status(arguments: ProjectManagerArguments, config: Optional[str]) -> 
     return StageStatus(StageState.DONE, "built: " + ", ".join(modes))
 
 
-def _profiling_status(arguments: ProjectManagerArguments) -> StageStatus:
+def _profiling_status(arguments: ProjectManagerArguments, config: Optional[str]) -> StageStatus:
     if not explorer_prerequisites_met(arguments.dot_dp):
         return StageStatus(StageState.NOT_RUN, "no profiling data")
     if _instrumented_with_other_directories(arguments, "dp"):
         return StageStatus(StageState.STALE, OTHER_DIRECTORIES)
+    if callpath_pruning.stale_message(arguments, config) is not None:
+        return StageStatus(StageState.STALE, "call path pruning changed")
     return StageStatus(StageState.DONE, "profiled")
 
 
@@ -251,7 +254,7 @@ def stage_statuses(arguments: ProjectManagerArguments, config: Optional[str]) ->
         STAGE_SETUP: _setup_status(arguments),
         STAGE_EDITOR: _editor_status(arguments, config),
         STAGE_BUILD: _build_status(arguments, config),
-        STAGE_PROFILING: _profiling_status(arguments),
+        STAGE_PROFILING: _profiling_status(arguments, config),
         STAGE_EXECUTE: _execute_status(runs),
         STAGE_HOTSPOT: _hotspot_status(arguments, config),
         STAGE_PATTERN_DETECTION: _pattern_detection_status(arguments),

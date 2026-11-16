@@ -250,3 +250,20 @@ def test_data_instrumented_with_other_directories_is_stale(tmp_path: Path) -> No
     exclude(arguments, "lib")
     assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.STALE, OTHER_DIRECTORIES)
     assert statuses(arguments)[STAGE_HOTSPOT] == StageStatus(StageState.STALE, OTHER_DIRECTORIES)
+
+
+def test_profiling_is_stale_when_it_was_pruned_differently(tmp_path: Path) -> None:
+    from discopop_library.ProjectManager.services import callpath_pruning
+
+    arguments = make_arguments(tmp_path)
+    profile(arguments.dot_dp)
+    touch(
+        os.path.join(arguments.dot_dp, "instrumented_project_directories.json"),
+        json.dumps({"dp": {"included": [], "excluded": []}}),
+    )
+    touch(hotspot_data.hotspots_json_path(arguments.dot_dp), json.dumps({"code_regions": [{"hotness": "YES"}]}))
+    callpath_pruning.record_state(arguments.dot_dp, callpath_pruning.state_of({}, arguments.dot_dp))
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.DONE, "profiled")
+    # pruning is switched on after the data was profiled without it
+    callpath_pruning.save_callpath_pruning(arguments.project_dir, callpath_pruning.CallpathPruning(enabled=True))
+    assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.STALE, "call path pruning changed")

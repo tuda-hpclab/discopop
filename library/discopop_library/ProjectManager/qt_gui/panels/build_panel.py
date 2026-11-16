@@ -29,7 +29,7 @@ from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.shared_build import SharedBuildSection
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
-from discopop_library.ProjectManager.services import build_overview
+from discopop_library.ProjectManager.services import build_overview, callpath_pruning
 from discopop_library.ProjectManager.services.execution_run import PreparationRequest, run_preparation
 from discopop_library.ProjectManager.services.jobs import (
     StatusKind,
@@ -43,6 +43,8 @@ from discopop_library.ProjectManager.services.modes import available_modes, sett
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
+    CallpathPruningChanged,
+    HotspotsChanged,
     ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
@@ -174,6 +176,8 @@ class BuildPanel(Panel):
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         project_state.subscribe(ResultsChanged, lambda _event: self.refresh())
         project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.refresh())
+        project_state.subscribe(HotspotsChanged, lambda _event: self.refresh())
+        project_state.subscribe(CallpathPruningChanged, lambda _event: self.refresh())
         self.refresh()
 
     def output_console(self) -> widgets.OutputConsole:
@@ -216,6 +220,7 @@ class BuildPanel(Panel):
         self.shared_build.refresh(config)
         self.shared_build.setEnabled(bool(config) and not self.is_running() and not self._blocked)
         missing = self._missing_requirement()
+        pruning_warning = callpath_pruning.inactive_warning(self.arguments, config) if self.mode() == "dp" else None
         self.goto_setup_button.setVisible(bool(missing) and bool(config))
         if not self.is_running():
             can_start = not missing and not self._blocked
@@ -226,6 +231,9 @@ class BuildPanel(Panel):
                 self._chip_shows_obstacle = True
             elif self._blocked:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Another stage is running")
+                self._chip_shows_obstacle = True
+            elif self.mode() == "dp" and pruning_warning is not None:
+                self.header.chip.set_status(widgets.CHIP_WARN, "Call path pruning is off", pruning_warning)
                 self._chip_shows_obstacle = True
             elif self._chip_shows_obstacle:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Ready to build")

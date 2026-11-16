@@ -52,6 +52,11 @@ class ProjectDirectoriesChanged:
 
 
 @dataclass(frozen=True)
+class CallpathPruningChanged:
+    """The call path pruning setting of the profiler build (``services/callpath_pruning.py``) was saved."""
+
+
+@dataclass(frozen=True)
 class AutotuningChanged:
     """The autotuner's suggestions, or what it can work on, changed."""
 

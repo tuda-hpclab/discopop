@@ -12,14 +12,18 @@ from pathlib import Path
 from typing import Any, List, Optional
 from unittest import mock
 
+import json
+
 import pytest
 from PySide6.QtCore import Qt
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, ProjectState
+from discopop_library.ProjectManager.services import callpath_pruning
+from discopop_library.ProjectManager.services.project_state import CallpathPruningChanged, ConfigChanged, ProjectState
 
 
 class FakeTabs:
@@ -147,3 +151,22 @@ def test_sharing_that_is_not_possible_is_explained(panel: BuildPanel, dialog_ans
     # a configuration with a compile script of its own is shown disabled, with the reason
     assert not item.flags() & Qt.ItemFlag.ItemIsEnabled
     assert "compile.sh" in item.toolTip()
+
+
+def test_the_chip_warns_in_dp_mode_when_pruning_is_possible_but_off(panel: BuildPanel) -> None:
+    hotspots = Path(panel.arguments.dot_dp) / "hotspot_detection"
+    hotspots.mkdir(parents=True)
+    (hotspots / "Hotspots.json").write_text(json.dumps({"code_regions": [{"hotness": "YES"}]}))
+    select(panel)
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("dp"))
+    panel.refresh()
+    assert panel.header.chip.level == widgets.CHIP_WARN and panel.header.chip.text() == "Call path pruning is off"
+    # other modes do not prune
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("seq"))
+    panel.refresh()
+    assert panel.header.chip.level != widgets.CHIP_WARN
+    # activated: nothing to warn about
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("dp"))
+    callpath_pruning.save_callpath_pruning(panel.arguments.project_dir, callpath_pruning.CallpathPruning(enabled=True))
+    panel.project_state.publish(CallpathPruningChanged())
+    assert panel.header.chip.text() != "Call path pruning is off"

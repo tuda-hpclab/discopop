@@ -168,7 +168,7 @@ The settings are cards:
 
 The stage shows its results itself. The table lists the suggestions with ID, type, location, function, hotness and pragma; a filter line and a type filter narrow the rows, and the columns can be sorted. For the selected suggestion, the details and the patch are shown below the table, the patch as a colored diff; **Open in VSCode** opens the source file at the loop of the suggestion. The chip shows the number of suggestions, or that none were found. The patch files are in `.discopop/patch_generator/`.
 
-If the profiling data was instrumented with other [project directories](Project_manager.md#project-directories) than the current ones, the chip says *Project directories changed* (Qt version); run the *Profiling* stage again to update the data. The chips of the *Profiling* and *Hotspots* stages do the same (the latter for the `hd` data), and the sidebar marks both stages stale.
+If the profiling data was instrumented with other [project directories](Project_manager.md#project-directories) than the current ones, the chip says *Project directories changed* (Qt version); run the *Profiling* stage again to update the data. The same holds if the data was pruned with other [call path pruning](Project_manager.md#call-path-pruning) settings or hotspot results (chip *Call path pruning changed*). The chips of the *Profiling* and *Hotspots* stages do the same (the latter for the `hd` data), and the sidebar marks both stages stale.
 
 Results are the files described in [Explorer](Explorer.md): `explorer/patterns.json` and the patches in `patch_generator/`.
 

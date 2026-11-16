@@ -77,6 +77,8 @@ def test_a_successful_dp_compile_records_the_directories(tmp_path: Path) -> None
     _write_project(root, "dp_settings.json", "#!/bin/bash\ntrue\n")
     assert _compile(root, "dp_settings.json") == 0
     recorded = json.loads((root / ".discopop" / INSTRUMENTED_DIRECTORIES_FILE).read_text())
+    # how the call path states were pruned is recorded with them (none here: pruning is off)
+    assert recorded["dp"].pop("callpath_pruning") == '{"hotspots": "", "variables": {}}'
     assert recorded == {"dp": {"included": [], "excluded": ["third_party"]}}
 
 

@@ -38,6 +38,7 @@ from filelock import FileLock, Timeout
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONLY_FILES
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
+from discopop_library.ProjectManager.services import callpath_pruning
 
 PATH = str
 
@@ -263,7 +264,11 @@ def _patch_fingerprint(dot_dp: PATH) -> str:
 
 
 def compute_fingerprint_parts(
-    arguments: ProjectManagerArguments, key: BuildKey, compile_script: PATH, settings_path: PATH
+    arguments: ProjectManagerArguments,
+    key: BuildKey,
+    compile_script: PATH,
+    settings_path: PATH,
+    pruning_environment: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """The parts the fingerprint of a build is made of.
 
@@ -271,6 +276,8 @@ def compute_fingerprint_parts(
     - the compile script and the settings file of the mode (compiler, flags)
     - what is project code (included and excluded directories), as it decides what is instrumented, and the files
       of the included directories
+    - for a ``dp`` build: whether and how it prunes its call path states, and the hotspot results it prunes with
+      (``pruning_environment``, see :func:`callpath_pruning.environment`; computed if not given)
     - for a build with suggestions: the generated patches
     - the files of the configuration directory that can change the build (not execute.sh and validate.sh, which
       the runs take from the project)
@@ -295,6 +302,10 @@ def compute_fingerprint_parts(
     if directories.included:
         # project code outside of the root is compiled as well
         parts["included_sources"] = "\n".join(source_fingerprint(d) for d in directories.included)
+    if key.mode == "dp":
+        if pruning_environment is None:
+            pruning_environment = callpath_pruning.environment(arguments, key.configuration)
+        parts["callpath_pruning"] = callpath_pruning.state_of(pruning_environment, arguments.dot_dp)
     if key.suggestions:
         parts["patches"] = _patch_fingerprint(arguments.dot_dp)
     return parts

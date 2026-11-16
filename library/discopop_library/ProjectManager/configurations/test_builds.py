@@ -493,3 +493,50 @@ def test_a_member_is_validated_in_the_shared_build_without_compiling_again(proje
     _run_execute_stage(project, "other")
     assert _count(project, "validations.txt") == 2
     assert _count(project, "compiles.txt") == 1
+
+
+def _hotspots(project: Dict[str, Path], hotness: str = "YES") -> None:
+    directory = project["root"] / ".discopop" / "hotspot_detection"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "Hotspots.json").write_text(json.dumps({"code_regions": [{"hotness": hotness}]}))
+
+
+def _enable_pruning(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.services import callpath_pruning
+
+    callpath_pruning.save_callpath_pruning(
+        str(project["root"] / ".discopop" / "project"), callpath_pruning.CallpathPruning(enabled=True)
+    )
+
+
+def test_the_fingerprint_of_a_dp_build_contains_the_call_path_pruning_only_for_dp(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import compute_fingerprint_parts
+
+    arguments = _arguments(project["root"])
+    settings = str(project["configs"] / "dp_settings.json")
+    assert "callpath_pruning" in compute_fingerprint_parts(
+        arguments, BuildKey("cfg", "dp"), str(project["compile"]), settings
+    )
+    for mode in ("seq", "hd", "par"):
+        parts = compute_fingerprint_parts(arguments, BuildKey("cfg", mode), str(project["compile"]), settings)
+        assert "callpath_pruning" not in parts
+
+
+def test_a_dp_build_is_stale_when_pruning_is_switched_on_or_the_hotspots_change(project: Dict[str, Path]) -> None:
+    dp = BuildKey("cfg", "dp")
+    _hotspots(project)
+    assert _build(project, key=dp).result == BuildResult.BUILT
+    assert _build(project, key=dp).result == BuildResult.REUSED
+    _enable_pruning(project)  # pruning on: other compilation
+    assert _build(project, key=dp).result == BuildResult.BUILT
+    assert _build(project, key=dp).result == BuildResult.REUSED
+    _hotspots(project, hotness="MAYBE")  # other hotspot results: other pruning
+    assert _build(project, key=dp).result == BuildResult.BUILT
+    assert _build(project, key=dp).result == BuildResult.REUSED
+
+
+def test_hotspot_results_do_not_matter_to_a_dp_build_without_pruning(project: Dict[str, Path]) -> None:
+    dp = BuildKey("cfg", "dp")
+    assert _build(project, key=dp).result == BuildResult.BUILT
+    _hotspots(project)
+    assert _build(project, key=dp).result == BuildResult.REUSED
