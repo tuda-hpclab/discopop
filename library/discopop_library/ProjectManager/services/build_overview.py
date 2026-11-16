@@ -26,14 +26,17 @@ from discopop_library.ProjectManager.configurations.builds import (
 )
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.runs import (
+    ACTIVE_RUN_FILE,
     ActivationError,
     RunRecord,
     activate_run,
     active_run_ids,
+    active_runs,
     delete_runs,
     disk_usage,
     list_all_runs,
 )
+from discopop_library.ProjectManager.services.explorer_state import explorer_prerequisites_met, required_explorer_files
 from discopop_library.ProjectManager.services.modes import settings_path as mode_settings_path
 
 
@@ -138,6 +141,41 @@ def last_build_text(arguments: ProjectManagerArguments, configuration: Optional[
         return "No build yet."
     newest = max(records, key=lambda r: r.built_at)
     return "Compiled " + format_time(newest.built_at) + " (" + newest.build_id + ")."
+
+
+def active_profiling_run(arguments: ProjectManagerArguments) -> Optional[RunRecord]:
+    """The dp run whose data the pattern detection reads (the project's ``.discopop/profiler``), or None if the data
+    is not that of a kept run: it was never activated, or profiled in place or by another tool since (the profiling
+    files are newer than the note of the activation)."""
+    entry = active_runs(arguments.dot_dp).get("dp")
+    if not entry or not entry.get("run_ids"):
+        return None
+    try:
+        noted = os.path.getmtime(os.path.join(arguments.dot_dp, ACTIVE_RUN_FILE))
+        newest = max(
+            [os.path.getmtime(path) for path in required_explorer_files(arguments.dot_dp) if os.path.exists(path)]
+            or [0.0]
+        )
+    except OSError:
+        return None
+    if newest > noted + 1.0:
+        return None
+    return find_run(arguments, str(entry["run_ids"][0]))
+
+
+def profiling_basis_text(arguments: ProjectManagerArguments) -> str:
+    """Which profiling data the pattern detection is based on, for its panel."""
+    if not explorer_prerequisites_met(arguments.dot_dp):
+        return "No profiling data."
+    run = active_profiling_run(arguments)
+    if run is None:
+        return "The profiling data in the project (profiled in place or by another tool, not a kept run)."
+    return "Run %s of the configuration %s, started %s (build %s)." % (
+        run.run_id,
+        run.configuration,
+        format_time(run.started_at),
+        run.build_id,
+    )
 
 
 def find_run(arguments: ProjectManagerArguments, run_id: str) -> Optional[RunRecord]:

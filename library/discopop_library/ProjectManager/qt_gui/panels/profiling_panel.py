@@ -74,7 +74,8 @@ BUILD_NOTE = (
     "The configuration is run in its build, a copy of the project that is kept (compile it in advance in the Build "
     "stage; without a current build it is compiled first). Every run keeps its results in a "
     "directory of its own; the data of the latest successful run is put into .discopop/profiler of the project, "
-    "where the pattern detection reads it. Runs are only deleted by you."
+    "where the pattern detection reads it (the Pattern Detection stage can base it on another run). Runs are only "
+    "deleted by you."
 )
 INPUT_NOTE = (
     "The instrumented program runs much slower than the original one: give the configuration a small, but "
@@ -147,9 +148,13 @@ class ProfilingPanel(Panel):
         # compiling alone is the Build stage, so there is no "only compile" check box here
         self.build_options = BuildOptions(offer_build_only=False)
         self.builds_and_runs = BuildsAndRuns(
-            arguments, changed=lambda: project_state.publish(ResultsChanged()), show_builds=False, run_modes=("dp",)
+            arguments,
+            changed=lambda: project_state.publish(ResultsChanged()),
+            show_builds=False,
+            run_modes=("dp",),
+            offer_activate=False,
         )
-        self.builds_section = widgets.CollapsibleSection("Runs", self.builds_and_runs, summary="list, use, delete")
+        self.builds_section = widgets.CollapsibleSection("Runs", self.builds_and_runs, summary="list, delete")
 
         # ── header ──────────────────────────────────────────────────────────
         self.run_button = widgets.RunStopButton(PROFILE_TEXT, self._profile, self._stop)

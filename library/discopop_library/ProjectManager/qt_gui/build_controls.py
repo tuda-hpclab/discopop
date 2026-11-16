@@ -108,6 +108,8 @@ class BuildsAndRuns(widgets.FormSection):
         show_builds: bool = True,
         show_runs: bool = True,
         run_modes: Optional[Sequence[str]] = None,
+        offer_activate: bool = True,
+        offer_delete_runs: bool = True,
     ) -> None:
         super().__init__(
             "Builds and runs" if show_builds and show_runs else ("Builds" if show_builds else "Runs"), parent=parent
@@ -155,7 +157,22 @@ class BuildsAndRuns(widgets.FormSection):
             self.add_widget(widgets.hbox(self.check_button, self.delete_builds_button, None, margins=0))
         if show_runs:
             self.add_widget(self.run_table)
-            self.add_widget(widgets.hbox(self.activate_button, self.delete_runs_button, None, margins=0))
+            self.activate_button.setVisible(offer_activate)
+            self.delete_runs_button.setVisible(offer_delete_runs)
+            self.add_widget(
+                widgets.hbox(
+                    *[
+                        b
+                        for b, offered in (
+                            (self.activate_button, offer_activate),
+                            (self.delete_runs_button, offer_delete_runs),
+                        )
+                        if offered
+                    ],
+                    None,
+                    margins=0,
+                )
+            )
         self.add_widget(widgets.hbox(self.refresh_button, self.sizes_button, None, margins=0))
         self.add_widget(self.note)
         self.refresh()

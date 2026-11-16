@@ -43,7 +43,8 @@ from discopop_library.ProjectManager.qt_gui.suggestion_table import NO_SUGGESTIO
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_HOTSPOT, TAB_PATTERN_DETECTION, TAB_PROFILING
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
-from discopop_library.ProjectManager.services import explorer_state
+from discopop_library.ProjectManager.qt_gui.build_controls import BuildsAndRuns
+from discopop_library.ProjectManager.services import build_overview, explorer_state
 from discopop_library.ProjectManager.services.commands import explorer_command
 from discopop_library.ProjectManager.services.explorer_state import (
     DEFAULT_DETECTION_MODE,
@@ -129,6 +130,7 @@ class PatternDetectionPanel(Panel):
         self._selected: Optional[SuggestionInfo] = None
 
         self.hotspot_hint = self._build_hotspot_hint()
+        self.basis_card = self._build_basis_card()
 
         self.run_button = widgets.RunStopButton(_RUN_TEXT, self.run_pattern_detection, self.stop_pattern_detection)
         self.run_button.setEnabled(False)
@@ -190,6 +192,24 @@ class PatternDetectionPanel(Panel):
         card.add_widget(widgets.hbox(self.goto_hotspot_button, None))
         return card
 
+    def _build_basis_card(self) -> QWidget:
+        """Which profiling run the detection is based on, and the choice of another one."""
+        self.basis_label = QLabel("")
+        self.basis_label.setWordWrap(True)
+        self.basis_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.runs = BuildsAndRuns(
+            self.arguments,
+            changed=lambda: self.project_state.publish(ResultsChanged()),
+            show_builds=False,
+            run_modes=("dp",),
+            offer_delete_runs=False,
+        )
+        card = widgets.FormSection("Profiling run")
+        card.add_widget(self.basis_label, "The detection reads the profiling data of the project.")
+        self.runs_section = widgets.CollapsibleSection("Choose another run", self.runs, summary="use a kept run")
+        card.add_widget(self.runs_section)
+        return card
+
     def _build_settings(self) -> QWidget:
         self.pattern_checks: Dict[str, QCheckBox] = {}
         pattern_row: List[QWidget] = []
@@ -232,6 +252,7 @@ class PatternDetectionPanel(Panel):
         column = QWidget()
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.addWidget(self.basis_card)
         column_layout.addWidget(detection)
         column_layout.addWidget(self.hotspot_hint)
         column_layout.addWidget(self.advanced)
@@ -307,6 +328,9 @@ class PatternDetectionPanel(Panel):
 
         self.hotspot_hint.setVisible(not hotspot_data.hotspots_available_for_explorer(dot_dp))
         self.run_button.setEnabled(ready and not self.explorer_running)
+        self.basis_label.setText(build_overview.profiling_basis_text(self.arguments))
+        self.runs.refresh()
+        self.runs.set_blocked(self.explorer_running)
 
         infos = load_suggestions(dot_dp)
         if infos != self.table.suggestions():
@@ -386,6 +410,7 @@ class PatternDetectionPanel(Panel):
         self.explorer_running = True
         self._explorer_stopped = False
         self.run_button.set_running(True)
+        self.runs.set_blocked(True)  # the data the detection reads must not change meanwhile
         self._update_chip(True, len(self.table.suggestions()), False)
         self.output_requested.emit()
         self.status.set("⏳ Pattern detection in progress...", widgets.STATUS_BUSY)

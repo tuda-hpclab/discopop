@@ -474,3 +474,45 @@ def test_the_stale_warning_follows_the_project_environment(panel: PatternDetecti
     _exclude(panel, "src")
     panel.project_state.publish(ProjectDirectoriesChanged())
     assert _directories_warning(panel) == ""
+
+
+def test_the_panel_names_the_run_the_detection_is_based_on(panel: PatternDetectionPanel) -> None:
+    import os
+    import time
+
+    from discopop_library.ProjectManager.configurations.runs import (
+        ACTIVE_RUN_FILE,
+        RunRecord,
+        runs_directory_of,
+        write_run,
+    )
+
+    assert panel.basis_label.text() == "No profiling data."
+    profile(panel)
+    assert "not a kept run" in panel.basis_label.text()
+    # a run that was put into the project is named, until the data is profiled again
+    dot = Path(panel.arguments.dot_dp)
+    run_dot = Path(runs_directory_of(panel.arguments.project_root, "tiny_dp")) / "r1"
+    run_dot.mkdir(parents=True)
+    write_run(RunRecord("r1", "tiny_dp", "tiny", "dp", 1, "", time.time(), str(run_dot), return_code=0))
+    note = dot / ACTIVE_RUN_FILE
+    note.write_text(json.dumps({"active": {"dp": {"run_ids": ["r1"], "build_id": "tiny_dp", "configuration": "tiny"}}}))
+    future = time.time() + 10
+    os.utime(note, (future, future))
+    panel.refresh()
+    assert "Run r1 of the configuration tiny" in panel.basis_label.text()
+    for path in required_explorer_files(str(dot)):
+        os.utime(path, (future + 100, future + 100))
+    panel.refresh()
+    assert "not a kept run" in panel.basis_label.text()
+
+
+def test_a_run_is_chosen_here_and_not_in_the_profiling_stage(qtbot: QtBot, panel: PatternDetectionPanel) -> None:
+    assert not panel.runs.activate_button.isHidden() and panel.runs.delete_runs_button.isHidden()
+    from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
+    from discopop_library.ProjectManager.qt_gui.panels.test_profiling_panel import FakeTabs as ProfilingTabs
+
+    profiling = ProfilingPanel(panel.arguments, ProjectState(), StatusLine(), ProfilingTabs())
+    qtbot.addWidget(profiling)
+    assert profiling.builds_and_runs.activate_button.isHidden()
+    assert not profiling.builds_and_runs.delete_runs_button.isHidden()
