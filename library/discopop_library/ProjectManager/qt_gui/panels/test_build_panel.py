@@ -110,7 +110,9 @@ def _add_configuration(panel: BuildPanel, name: str) -> None:
     (configs / name / "execute.sh").write_text("true\n")
 
 
-def test_a_configuration_can_be_released_into_the_build_of_another(panel: BuildPanel, dialog_answers: Any) -> None:
+def test_a_configuration_can_be_released_into_the_build_of_another(
+    qtbot: QtBot, panel: BuildPanel, dialog_answers: Any
+) -> None:
     from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, members_of
 
     _add_configuration(panel, "big")
@@ -120,7 +122,7 @@ def test_a_configuration_can_be_released_into_the_build_of_another(panel: BuildP
 
     section.members_list.item(0).setCheckState(Qt.CheckState.Checked)
     config_dir = panel.arguments.project_config_dir
-    assert members_of(config_dir, "tiny") == ["big"]
+    qtbot.waitUntil(lambda: members_of(config_dir, "tiny") == ["big"])
     assert section.checked_members() == ["big"]
     assert not section.owner_combo.isEnabled()
 
@@ -133,7 +135,7 @@ def test_a_configuration_can_be_released_into_the_build_of_another(panel: BuildP
 
     section.owner_combo.setCurrentIndex(0)
     section._owner_chosen(0)
-    assert build_owner_of(config_dir, "big") == "big"
+    qtbot.waitUntil(lambda: build_owner_of(config_dir, "big") == "big")
 
 
 def test_sharing_that_is_not_possible_is_explained(panel: BuildPanel, dialog_answers: Any) -> None:

@@ -26,7 +26,7 @@ from discopop_library.ProjectManager.configurations.building import (
     build_lock,
     ensure_build,
 )
-from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for
+from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for, stale_declaration_problems
 from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
 from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.runs import ActivationError, activate_run
@@ -215,6 +215,8 @@ def run_execution(
 
     inputs = build_inputs_for(arguments.project_config_dir, current_config)
     build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    for problem in stale_declaration_problems(arguments.project_config_dir, current_config):
+        ctx.output("Warning: shared build of " + current_config + ": " + problem + ".\n")
     compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
 
     def execute_and_validate(
@@ -418,7 +420,7 @@ def run_execution(
                     build_config_path,
                     settings_path,
                     compile_sh,
-                    1 if mode == "seq" or inputs.shared else thread_count,
+                    1 if mode == "seq" or inputs.build_is_shared else thread_count,
                     BuildPolicy(request.build_policy),
                     args_copy.timeout_compilation,
                     process_started_callback=ctx.register_process,
@@ -480,6 +482,8 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
     logger.info(f"Starting {status_noun} preparation for: {current_config}")
     inputs = build_inputs_for(arguments.project_config_dir, current_config)
     build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    for problem in stale_declaration_problems(arguments.project_config_dir, current_config):
+        ctx.output("Warning: shared build of " + current_config + ": " + problem + ".\n")
     compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
     shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
     key = BuildKey(inputs.build_config, mode, ())
@@ -608,6 +612,8 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
 
     inputs = build_inputs_for(arguments.project_config_dir, current_config)
     build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    for problem in stale_declaration_problems(arguments.project_config_dir, current_config):
+        ctx.output("Warning: shared build of " + current_config + ": " + problem + ".\n")
     compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
     shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
 

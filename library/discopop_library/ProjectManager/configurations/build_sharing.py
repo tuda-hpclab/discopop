@@ -51,10 +51,19 @@ class BuildInputs:
 
     build_config: str
     run_config: str
+    # whether other configurations build from ``build_config``
+    has_members: bool = False
 
     @property
     def shared(self) -> bool:
+        """Whether ``run_config`` runs in the build of another configuration."""
         return self.build_config != self.run_config
+
+    @property
+    def build_is_shared(self) -> bool:
+        """Whether more than one configuration runs in the build; it is compiled with one thread then, so that it
+        does not depend on which of them built it first."""
+        return self.shared or self.has_members
 
 
 def _declared_owner(config_dir: PATH, config: str) -> Optional[str]:
@@ -87,7 +96,8 @@ def build_owner_of(config_dir: PATH, config: str) -> str:
 
 
 def build_inputs_for(config_dir: PATH, config: str) -> BuildInputs:
-    return BuildInputs(build_owner_of(config_dir, config), config)
+    owner = build_owner_of(config_dir, config)
+    return BuildInputs(owner, config, bool(members_of(config_dir, owner)))
 
 
 def members_of(config_dir: PATH, owner: str) -> List[str]:

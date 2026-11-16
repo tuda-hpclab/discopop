@@ -271,6 +271,7 @@ class BuildPanel(Panel):
         self.rebuild_button.setEnabled(False)
         self.run_button.set_running(True)
         self.builds.set_blocked(True)
+        self.shared_build.setEnabled(False)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Building")
         self.status.set("⏳ Building...", widgets.STATUS_BUSY)
         self.console.clear()

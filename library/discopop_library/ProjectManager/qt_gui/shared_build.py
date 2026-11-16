@@ -16,7 +16,7 @@ list of the configurations that use its build (it is an owner), and saves at onc
 
 from typing import List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QComboBox, QLabel, QListWidget, QListWidgetItem, QWidget
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
@@ -80,7 +80,6 @@ class SharedBuildSection(widgets.FormSection):
                 self.members_label.setVisible(False)
                 self.members_list.setVisible(False)
                 return
-            self.setEnabled(True)
             names = [name for name in list_configurations(self._config_dir) if name != config]
             owner = build_owner_of(self._config_dir, config)
             members = members_of(self._config_dir, config)
@@ -136,13 +135,16 @@ class SharedBuildSection(widgets.FormSection):
         if self._updating or not self._config:
             return
         data = self.owner_combo.currentData()
-        self._apply(self._config, str(data) if data else None)
+        config = self._config
+        # not from inside the signal of the widget that refresh() rebuilds
+        QTimer.singleShot(0, lambda: self._apply(config, str(data) if data else None))
 
     def _member_toggled(self, item: QListWidgetItem) -> None:
         if self._updating or not self._config:
             return
         checked = item.checkState() == Qt.CheckState.Checked
-        self._apply(item.text(), self._config if checked else None)
+        member, owner = item.text(), self._config if checked else None
+        QTimer.singleShot(0, lambda: self._apply(member, owner))
 
     def checked_members(self) -> List[str]:
         return [

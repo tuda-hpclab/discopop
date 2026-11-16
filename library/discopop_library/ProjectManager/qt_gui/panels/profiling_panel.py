@@ -21,6 +21,7 @@ from typing import Callable, Optional, Tuple
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
@@ -224,7 +225,9 @@ class ProfilingPanel(Panel):
         config = self.project_state.current_config
         if not config:
             return "No configuration selected.", False
-        compile_sh = resolve_compile_script_path(self.arguments.project_config_dir, config)
+        compile_sh = resolve_compile_script_path(
+            self.arguments.project_config_dir, build_owner_of(self.arguments.project_config_dir, config)
+        )
         execute_sh = os.path.join(self.arguments.project_config_dir, config, "execute.sh")
         if not os.path.exists(compile_sh):
             return "No compile.sh: write it in Project Setup.", True

@@ -100,3 +100,20 @@ def test_members_follow_a_rename_and_can_be_detached(configs: str) -> None:
     assert build_owner_of(configs, "b") == "z"
     assert detach_members(configs, "z") == ["b", "c"]
     assert members_of(configs, "z") == []
+
+
+def test_the_build_is_compiled_with_one_thread_for_owner_and_member(configs: str) -> None:
+    assert not build_inputs_for(configs, "a").build_is_shared
+    set_build_from(configs, "b", "a")
+    assert build_inputs_for(configs, "a").build_is_shared and build_inputs_for(configs, "b").build_is_shared
+
+
+def test_a_deleted_owner_is_ignored_and_copies_keep_the_declaration(configs: str) -> None:
+    import shutil
+
+    set_build_from(configs, "b", "a")
+    shutil.copytree(Path(configs) / "b", Path(configs) / "b2")
+    assert build_owner_of(configs, "b2") == "a"
+    shutil.rmtree(Path(configs) / "a")
+    assert build_owner_of(configs, "b") == "b"
+    assert stale_declaration_problems(configs, "b")

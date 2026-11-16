@@ -350,7 +350,7 @@ def __run_mode(
                 build_config,
                 shared_settings,
                 compile_sh,
-                1 if inputs.shared else thread_count,
+                1 if inputs.build_is_shared else thread_count,
                 BuildPolicy(arguments.build_policy),
                 arguments.timeout_compilation,
                 message=print,
