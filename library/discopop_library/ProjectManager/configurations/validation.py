@@ -102,6 +102,7 @@ def run_validation_phase(
     on_compile_start: Optional[Callable[[PATH], None]] = None,
     on_validate_start: Optional[Callable[[PATH], None]] = None,
     should_abort: Optional[Callable[[], bool]] = None,
+    output_callback: Optional[Callable[[str], None]] = None,
 ) -> ValidationPhaseResult:
     """Builds for validation if required, then runs validate.sh.
 
@@ -144,6 +145,7 @@ def run_validation_phase(
             thread_count,
             timeout_compilation,
             process_started_callback=process_started_callback,
+            output_callback=output_callback,
         )
         if not result.compile_successful:
             return result
@@ -164,5 +166,6 @@ def run_validation_phase(
         thread_count,
         timeout_validation,
         process_started_callback=process_started_callback,
+        output_callback=output_callback,
     )
     return result

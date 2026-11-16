@@ -150,6 +150,7 @@ def ensure_build(
     process_started_callback: Optional[Callable[["subprocess.Popen[bytes]"], None]] = None,
     message: Callable[[str], None] = lambda _text: None,
     on_application_failure: Optional[Callable[[PATH, PatchApplicationResult], None]] = None,
+    output_callback: Optional[Callable[[str], None]] = None,
 ) -> BuildOutcome:
     """The usable build of ``key``, compiled if the policy and the state of the build require it.
 
@@ -218,6 +219,7 @@ def ensure_build(
             timeout,
             process_started_callback=process_started_callback,
             result_annotations={"build_id": key.build_id},
+            output_callback=output_callback,
         )
         if compile_result is None or compile_result[0] != 0:
             _discard_tree(arguments, tree)

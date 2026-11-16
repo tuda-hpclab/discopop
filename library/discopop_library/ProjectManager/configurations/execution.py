@@ -119,6 +119,35 @@ class _RunOutcome(NamedTuple):
     timeout_expired: bool
 
 
+def _communicate_streaming(p: "subprocess.Popen[bytes]", output_callback: Callable[[str], None]) -> Tuple[bytes, bytes]:
+    """Like ``p.communicate()``, but pass every line of stdout and stderr to ``output_callback`` as it appears."""
+    import threading
+
+    collected: Dict[str, List[bytes]] = {"stdout": [], "stderr": []}
+    lock = threading.Lock()
+
+    def pump(name: str, pipe: Any) -> None:
+        for line in iter(pipe.readline, b""):
+            collected[name].append(line)
+            try:
+                with lock:
+                    output_callback(line.decode("utf-8", errors="replace"))
+            except Exception as error:  # a failing display must not stop the build
+                logger.debug("output callback failed: " + str(error))
+        pipe.close()
+
+    threads = [
+        threading.Thread(target=pump, args=("stdout", p.stdout), daemon=True),
+        threading.Thread(target=pump, args=("stderr", p.stderr), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    p.wait()
+    for thread in threads:
+        thread.join()
+    return b"".join(collected["stdout"]), b"".join(collected["stderr"])
+
+
 def _run_once(
     script_path: PATH,
     project_copy_root_path: PATH,
@@ -127,6 +156,7 @@ def _run_once(
     timeout: Optional[float],
     execution_time_regex: Optional[str],
     process_started_callback: Optional[Callable[["subprocess.Popen[bytes]"], None]],
+    output_callback: Optional[Callable[[str], None]] = None,
 ) -> _RunOutcome:
     """Run the script once and report what it took.
 
@@ -158,7 +188,10 @@ def _run_once(
         if process_started_callback is not None:
             process_started_callback(p)
 
-        stdout, stderr = p.communicate()
+        if output_callback is None:
+            stdout, stderr = p.communicate()
+        else:
+            stdout, stderr = _communicate_streaming(p, output_callback)
 
     except subprocess.TimeoutExpired:
         timeout_expired = True
@@ -269,6 +302,7 @@ def execute_configuration(
     store_result: bool = True,
     dot_discopop: Optional[PATH] = None,
     result_annotations: Optional[Dict[str, Any]] = None,
+    output_callback: Optional[Callable[[str], None]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -305,6 +339,8 @@ def execute_configuration(
     is where an instrumented program reads its static data from and writes its results to (see
     :mod:`discopop_library.ProjectManager.configurations.runs`). ``result_annotations`` are stored with the record
     in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
+
+    ``output_callback`` receives the output of the script (stdout and stderr, line by line) while it runs.
     """
     # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
@@ -398,6 +434,7 @@ def execute_configuration(
             timeout,
             execution_time_regex,
             process_started_callback,
+            output_callback,
         )
         outcomes.append(outcome)
         # Asked between repetitions so that stopping a repeated run does not have
