@@ -95,6 +95,20 @@ class PreparationRequest:
     build_only: bool = False
 
 
+def report_compilation_failure(ctx: WorkContext, compile_result: Optional[Tuple[int, float, str, str]]) -> None:
+    """Report a failed compilation with everything the compile script printed: that is what the user needs to find
+    out why it failed (the build tree of a failed compilation is removed, so nothing else keeps it)."""
+    if compile_result is None:
+        ctx.output("Compilation failed (no result: the script did not run to completion)\n")
+        return
+    ret_code, _elapsed, stdout, stderr = compile_result
+    ctx.output(f"Compilation failed (return code: {ret_code})\n")
+    if stdout:
+        ctx.output(f"stdout: {stdout}\n")
+    if stderr:
+        ctx.output(f"stderr: {stderr}\n")
+
+
 def suggestion_ids_to_apply(
     suggestions_mode: str, manual_ids: List[str], dot_dp: str, configuration: str
 ) -> Tuple[str, ...]:
@@ -315,8 +329,7 @@ def run_execution(
             )
             ctx.clear_process()
             if compile_result is None or compile_result[0] != 0:
-                ret_code = compile_result[0] if compile_result else "None"
-                ctx.output(f"Compilation failed (return code: {ret_code})\n")
+                report_compilation_failure(ctx, compile_result)
                 continue
             ret_code, elapsed, stdout, stderr = compile_result
             ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
@@ -387,8 +400,7 @@ def run_execution(
                 ctx.clear_process()
 
                 if build.result == BuildResult.COMPILE_FAILED:
-                    ret_code = build.compile_result[0] if build.compile_result else "None"
-                    ctx.output(f"Compilation failed (return code: {ret_code})\n")
+                    report_compilation_failure(ctx, build.compile_result)
                     continue
                 if build.result in (BuildResult.UNAVAILABLE, BuildResult.COPY_FAILED):
                     ctx.output(build.message + "\n")
@@ -467,8 +479,7 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
             )
             ctx.clear_process()
             if build.result == BuildResult.COMPILE_FAILED:
-                ret_code = build.compile_result[0] if build.compile_result else "None"
-                ctx.output(f"Compilation failed (return code: {ret_code})\n")
+                report_compilation_failure(ctx, build.compile_result)
             elif not build.usable or build.record is None:
                 ctx.output((build.message or "The build failed.") + "\n")
             else:
@@ -589,8 +600,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
 
     success = False
     if compile_result is None or compile_result[0] != 0:
-        ret_code = compile_result[0] if compile_result else "None"
-        ctx.output(f"Compilation failed (return code: {ret_code})\n")
+        report_compilation_failure(ctx, compile_result)
     else:
         ret_code, elapsed, stdout, stderr = compile_result
         ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
@@ -620,8 +630,8 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
             ctx.clear_process()
 
             if execute_result is None or execute_result[0] != 0:
-                ret_code = execute_result[0] if execute_result else "None"
-                ctx.output(f"Execution failed (return code: {ret_code})\n")
+                execute_code = execute_result[0] if execute_result else "None"
+                ctx.output(f"Execution failed (return code: {execute_code})\n")
             else:
                 ret_code, elapsed, stdout, stderr = execute_result
                 described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
