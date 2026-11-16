@@ -65,3 +65,10 @@ def test_problems(tmp_path: Path) -> None:
     assert inc.problems(str(root), "relative") == ["Give an absolute path."]
     assert "inside the project" in inc.problems(str(root), str(root / "src"))[0]
     assert "not an existing directory" in inc.problems(str(root), str(tmp_path / "missing"))[0]
+
+
+def test_problems_accept_a_missing_directory_on_request(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    assert inc.problems(str(root), str(tmp_path / "missing"), must_exist=False) == []
+    assert inc.problems(str(root), "relative", must_exist=False) == ["Give an absolute path."]

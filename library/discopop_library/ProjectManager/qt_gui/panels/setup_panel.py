@@ -150,7 +150,7 @@ class SetupPanel(Panel):
         self.excluded_directories.changed.connect(self._on_excluded_directories_changed)
         self.excluded_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         excluded_section = widgets.FormSection(EXCLUDED_DIRECTORIES_TITLE)
-        excluded_section.add_widget(self.excluded_directories, EXCLUDED_DIRECTORIES_HINT)
+        excluded_section.add_widget(self.excluded_directories.with_buttons(), EXCLUDED_DIRECTORIES_HINT)
         self.included_directories = IncludedDirectoriesList(arguments.project_root, arguments.project_dir)
         self.included_directories.setMinimumHeight(140)
         self.included_directories.changed.connect(self._on_included_directories_changed)

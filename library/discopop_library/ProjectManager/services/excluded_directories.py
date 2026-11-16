@@ -124,6 +124,30 @@ def environment_value(directories: Sequence[str], existing: str = "", root: Opti
     return ":".join(entries)
 
 
+def relative_entry(project_root: str, text: str) -> Optional[str]:
+    """The list entry for a hand-written ``text``: a path relative to the project directory (``build/_deps``) or an
+    absolute path below it; None if it names no directory below the project directory. The directory need not exist
+    (yet): the build may create it."""
+    text = text.strip()
+    if os.path.isabs(text):
+        root = os.path.normpath(os.path.abspath(project_root))
+        text = os.path.relpath(os.path.normpath(text), root)
+    return normalize(text)
+
+
+def listed_children(directories: Sequence[str], relative: str = "") -> List[str]:
+    """The directories directly in ``relative`` that lie on the way to a listed directory, whether they exist or
+    not (relative to the project directory, like :func:`subdirectories`): ``build/_deps`` listed gives ``build`` for
+    "" and ``build/_deps`` for ``build``."""
+    prefix = relative + "/" if relative else ""
+    names = {
+        prefix + path[len(prefix) :].split("/", 1)[0]
+        for path in map(normalize, directories)
+        if path is not None and path.startswith(prefix) and len(path) > len(prefix)
+    }
+    return sorted(names, key=lambda name: (name.lower(), name))
+
+
 def subdirectories(project_root: str, relative: str = "") -> List[str]:
     """The directories directly in ``relative`` (relative to ``project_root``; "" is the project directory), as paths
     relative to ``project_root``, sorted by name (ignoring case, then upper case first). Symbolic links to directories
