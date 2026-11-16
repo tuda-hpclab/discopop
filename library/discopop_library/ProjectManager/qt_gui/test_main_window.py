@@ -279,3 +279,46 @@ def test_the_report_follows_the_autotuner_and_waits_for_executions(qtbot: QtBot,
     window.report_panel.generate_report_button.setEnabled(True)
     window.execute_panel._begin_run("running", "running")
     assert not window.report_panel.generate_report_button.isEnabled()
+
+
+def test_a_running_job_shows_a_spinner_on_its_stage(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    panels = {
+        TAB_BUILD: window.build_panel,
+        TAB_HOTSPOT: window.hotspot_panel,
+        TAB_PROFILING: window.profiling_panel,
+        TAB_PATTERN_DETECTION: window.pattern_detection_panel,
+        TAB_PATCH_REPAIR: window.patch_repair_panel,
+        TAB_AUTOTUNING: window.autotuning_panel,
+        TAB_EXECUTE: window.execute_panel,
+    }
+    assert not any(window.nav.is_running(name) for name in panels)
+    assert not window.nav._spinner.isActive()
+    for name, panel in panels.items():
+        panel.set_busy(True)
+        assert window.nav.is_running(name), name
+        assert window.nav._spinner.isActive()
+        angle = window.nav._delegate.angle
+        qtbot.waitUntil(lambda: window.nav._delegate.angle != angle, timeout=2000)
+        panel.set_busy(False)
+        assert not window.nav.is_running(name), name
+        assert not window.nav._spinner.isActive()
+        assert window.nav._delegate.angle == 0
+    # the other stages are unaffected, and the spinner runs while any stage does
+    window.build_panel.set_busy(True)
+    window.execute_panel.set_busy(True)
+    window.build_panel.set_busy(False)
+    assert window.nav.is_running(TAB_EXECUTE) and window.nav._spinner.isActive()
+    window.execute_panel.set_busy(False)
+    assert not window.nav._spinner.isActive()
+
+
+def test_a_run_of_the_build_panel_marks_its_stage_busy(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window.build_panel.set_busy(True)
+    window.build_panel.set_busy(True)  # no second signal
+    assert window.build_panel.is_busy()
+    window.build_panel.set_busy(False)
+    assert not window.build_panel.is_busy() and not window.nav.is_running(TAB_BUILD)

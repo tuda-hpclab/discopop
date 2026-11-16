@@ -363,6 +363,9 @@ class MainWindow(QMainWindow):
         if isinstance(widget, Panel):
             self.panels.append(widget)
             self._add_output_of(name, widget)
+            if name in self.nav.stages():
+                widget.busy_changed.connect(lambda busy, key=name: self.nav.set_running(key, busy))
+                self.nav.set_running(name, widget.is_busy())
             # every stage gets the same page margins, whatever its own layout set
             layout = widget.layout()
             if layout is not None:

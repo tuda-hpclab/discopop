@@ -15,7 +15,7 @@ A locked stage cannot be selected; its reason is its detail line and tooltip.
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,6 +36,13 @@ _NAME_ROLE = Qt.ItemDataRole.UserRole
 _DETAIL_ROLE = Qt.ItemDataRole.UserRole + 1
 _STATE_ROLE = Qt.ItemDataRole.UserRole + 2
 _SECTION_ROLE = Qt.ItemDataRole.UserRole + 3
+_RUNNING_ROLE = Qt.ItemDataRole.UserRole + 4
+
+# the spinner of a running stage: an arc of this many degrees, turned by _SPINNER_STEP every _SPINNER_INTERVAL_MS
+_SPINNER_SPAN = 270
+_SPINNER_STEP = 30
+_SPINNER_INTERVAL_MS = 80
+RUNNING_TEXT = "running…"
 
 # glyph and color of the badge; a stage that was not run gets an outlined circle, the others a filled one
 BADGES: Dict[Optional[StageState], Tuple[str, str]] = {
@@ -61,7 +68,12 @@ _BADGE_WIDTH = 26
 
 
 class _StageDelegate(QStyledItemDelegate):
-    """Draws a stage as badge | title over detail, and a section heading as small gray capitals."""
+    """Draws a stage as badge | title over detail, and a section heading as small gray capitals.
+
+    A running stage shows a spinner (an arc turned by ``angle``) in place of its badge.
+    """
+
+    angle = 0
 
     def sizeHint(  # noqa: N802 (Qt's name)
         self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
@@ -122,13 +134,24 @@ class _StageDelegate(QStyledItemDelegate):
             if not enabled:
                 text_color = palette.color(QPalette.ColorRole.PlaceholderText)
             state_value = index.data(_STATE_ROLE)
+            running = bool(index.data(_RUNNING_ROLE))
             badge, badge_color = BADGES.get(state_value, BADGES[None])
             badge_rect = QRect(rect.left() + 10, rect.top(), _BADGE_WIDTH, rect.height())
             circle = QRect(0, 0, _BADGE_DIAMETER, _BADGE_DIAMETER)
             circle.moveCenter(badge_rect.center())
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             color = QColor(badge_color)
-            if state_value == StageState.LOCKED:
+            if running:
+                pen = QPen(
+                    widgets.accent_text_color(QApplication.palette()) if selected else QColor(widgets.STATUS_BUSY)
+                )
+                pen.setWidthF(2.2)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                # drawArc takes sixteenths of a degree, counter-clockwise: negative angles turn clockwise
+                painter.drawArc(circle.adjusted(2, 2, -2, -2), -self.angle * 16, -_SPINNER_SPAN * 16)
+            elif state_value == StageState.LOCKED:
                 # the lock glyph is its own symbol: no circle
                 painter.setPen(text_color if selected else color)
                 painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), badge)
@@ -168,7 +191,9 @@ class _StageDelegate(QStyledItemDelegate):
             detail_color = QColor(text_color)
             detail_color.setAlpha(170)
             painter.setPen(detail_color)
-            detail = str(index.data(_DETAIL_ROLE) or "") or _STATE_TEXTS.get(state_value, "")
+            detail = (
+                RUNNING_TEXT if running else str(index.data(_DETAIL_ROLE) or "") or _STATE_TEXTS.get(state_value, "")
+            )
             painter.drawText(
                 detail_rect,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -188,7 +213,11 @@ class WorkflowNav(QListWidget):
 
     def __init__(self, sections: Sequence[Tuple[str, Sequence[Tuple[str, str]]]], parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setItemDelegate(_StageDelegate(self))
+        self._delegate = _StageDelegate(self)
+        self.setItemDelegate(self._delegate)
+        self._spinner = QTimer(self)
+        self._spinner.setInterval(_SPINNER_INTERVAL_MS)
+        self._spinner.timeout.connect(self._advance_spinner)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setMouseTracking(True)
         self.setFrameShape(QListWidget.Shape.NoFrame)
@@ -271,6 +300,28 @@ class WorkflowNav(QListWidget):
         item.setData(_STATE_ROLE, status.state)
         item.setData(_DETAIL_ROLE, status.detail)
         item.setToolTip(status.detail)
+
+    def set_running(self, key: str, running: bool) -> None:
+        """Show a spinner on stage ``key`` while a job of it runs; the timer only runs while some stage does."""
+        item = self._items[key]
+        if bool(item.data(_RUNNING_ROLE)) == running:
+            return
+        item.setData(_RUNNING_ROLE, running)
+        if any(bool(i.data(_RUNNING_ROLE)) for i in self._items.values()):
+            if not self._spinner.isActive():
+                self._spinner.start()
+        else:
+            self._spinner.stop()
+            self._delegate.angle = 0
+
+    def is_running(self, key: str) -> bool:
+        return bool(self._items[key].data(_RUNNING_ROLE))
+
+    def _advance_spinner(self) -> None:
+        self._delegate.angle = (self._delegate.angle + _SPINNER_STEP) % 360
+        for key, item in self._items.items():
+            if item.data(_RUNNING_ROLE):
+                self.update(self.indexFromItem(item))
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 (Qt's name)
         # a pointing hand over the stages that can be selected (not over headings and locked stages)

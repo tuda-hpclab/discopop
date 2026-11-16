@@ -384,6 +384,7 @@ class PatchRepairPanel(Panel):
 
         self.running = True
         self.run_button.set_running(True)
+        self.set_busy(True)
         self.output_requested.emit()
         self.status.set("⏳ Patch repair in progress...", widgets.STATUS_BUSY)
 
@@ -494,6 +495,7 @@ class PatchRepairPanel(Panel):
         # was missed
         self._load_results_from_file()
         self.run_button.set_running(False, enabled_after=True)
+        self.set_busy(False)
 
         if error:
             self.header.chip.set_status(widgets.CHIP_ERROR, "Failed", "See the output pane for the error.")

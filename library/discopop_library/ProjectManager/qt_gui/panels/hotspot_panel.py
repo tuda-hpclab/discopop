@@ -778,6 +778,7 @@ class HotspotPanel(Panel):
         self.queue = MeasurementQueue(configs)
         self.running = True
         self.run_button.set_running(True)
+        self.set_busy(True)
         self._fill_config_list()
         self.update_ui()
         self.output.clear()
@@ -810,6 +811,7 @@ class HotspotPanel(Panel):
 
         self.running = True
         self.run_button.set_running(True)
+        self.set_busy(True)
         self.update_ui()
         self.output.clear()
         self.output_requested.emit()
@@ -822,6 +824,7 @@ class HotspotPanel(Panel):
             return
         self.running = True
         self.run_button.set_running(True)
+        self.set_busy(True)
         self.update_ui()
         self.output.clear()
         self.output_requested.emit()
@@ -831,6 +834,7 @@ class HotspotPanel(Panel):
     def _on_work_complete(self, success: bool, cancelled: bool) -> None:
         self.running = False
         self.run_button.set_running(False)
+        self.set_busy(False)
         tally = ""
         if self.queue is not None:
             if cancelled or not self.queue.finished():
