@@ -26,6 +26,7 @@ from discopop_library.ProjectManager.services.workflow_status import (
     STAGE_AUTOTUNING,
     STAGE_EDITOR,
     STAGE_EXECUTE,
+    STAGE_BUILD,
     STAGE_PROFILING,
     STAGE_SETUP,
     STAGE_HOTSPOT,
@@ -100,6 +101,7 @@ def test_empty_project(tmp_path: Path) -> None:
     assert result[STAGE_EDITOR].state == StageState.NOT_RUN
     assert result[STAGE_SETUP] == StageStatus(StageState.NOT_RUN, "no compile.sh")
     assert result[STAGE_PROFILING] == StageStatus(StageState.NOT_RUN, "no profiling data")
+    assert result[STAGE_BUILD] == StageStatus(StageState.NOT_RUN, "no configuration selected")
     assert result[STAGE_EXECUTE] == StageStatus(StageState.NOT_RUN, "no measured runs")
     assert result[STAGE_HOTSPOT].state == StageState.NOT_RUN
     assert result[STAGE_PATTERN_DETECTION] == StageStatus(StageState.LOCKED, "needs profiling data")

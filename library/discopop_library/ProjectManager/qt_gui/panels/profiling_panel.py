@@ -71,10 +71,10 @@ WHAT_HAPPENS = (
     "the pattern detection works on them."
 )
 BUILD_NOTE = (
-    "The configuration is compiled in a build, a copy of the project that is kept: the next profiling run uses it "
-    "again as long as nothing changed, so a long compilation is not repeated. Every run keeps its results in a "
+    "The configuration is run in its build, a copy of the project that is kept (compile it in advance in the Build "
+    "stage; without a current build it is compiled first). Every run keeps its results in a "
     "directory of its own; the data of the latest successful run is put into .discopop/profiler of the project, "
-    "where the pattern detection reads it. Builds and runs are only deleted by you."
+    "where the pattern detection reads it. Runs are only deleted by you."
 )
 INPUT_NOTE = (
     "The instrumented program runs much slower than the original one: give the configuration a small, but "
@@ -144,11 +144,12 @@ class ProfilingPanel(Panel):
         self.limits_section = widgets.CollapsibleSection("Advanced", limits, summary="timeouts")
 
         # ── builds and runs ─────────────────────────────────────────────────
-        self.build_options = BuildOptions()
-        self.builds_and_runs = BuildsAndRuns(arguments, changed=lambda: project_state.publish(ResultsChanged()))
-        self.builds_section = widgets.CollapsibleSection(
-            "Builds and runs", self.builds_and_runs, summary="list, check, delete"
+        # compiling alone is the Build stage, so there is no "only compile" check box here
+        self.build_options = BuildOptions(offer_build_only=False)
+        self.builds_and_runs = BuildsAndRuns(
+            arguments, changed=lambda: project_state.publish(ResultsChanged()), show_builds=False
         )
+        self.builds_section = widgets.CollapsibleSection("Runs", self.builds_and_runs, summary="list, use, delete")
 
         # ── header ──────────────────────────────────────────────────────────
         self.run_button = widgets.RunStopButton(PROFILE_TEXT, self._profile, self._stop)
@@ -290,7 +291,6 @@ class ProfilingPanel(Panel):
             timeout_validation=self.timeout_validation_spin.value(),
             inplace=self.build_options.in_place(),
             build_policy=self.build_options.build_policy(),
-            build_only=self.build_options.build_only(),
         )
         self._run_failed = False
         self._hint_shown = False  # the chip shows the outcome of this run

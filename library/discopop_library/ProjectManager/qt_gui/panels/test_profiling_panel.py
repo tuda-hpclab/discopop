@@ -219,9 +219,8 @@ def test_the_build_options_reach_the_work(qtbot: QtBot, panel: ProfilingPanel) -
         # the default: compile if there is no current build, in a build
         assert (seen[0].build_policy, seen[0].build_only, seen[0].inplace) == ("auto", False, False)
         panel.build_options.policy_combo.setCurrentIndex(1)
-        panel.build_options.build_only_check.setChecked(True)
         panel.run_button.click()
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
-        assert (seen[1].build_policy, seen[1].build_only, seen[1].inplace) == ("rebuild", True, False)
+        assert (seen[1].build_policy, seen[1].build_only, seen[1].inplace) == ("rebuild", False, False)
         panel.build_options.in_place_check.setChecked(True)
         assert not panel.build_options.policy_combo.isEnabled()

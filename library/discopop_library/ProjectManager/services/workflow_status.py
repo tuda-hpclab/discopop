@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.builds import list_builds
 from discopop_library.ProjectManager.configurations.project_environment import stale_directories_message
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.services.autotuner_results import autotuner_results_exist
@@ -36,6 +37,7 @@ from discopop_library.ProjectManager.services.patches import count_patches, has_
 # The keys of the stages; they equal the names of the tabs of the main window (qt_gui/tabs.py re-exports them).
 STAGE_SETUP = "Setup"
 STAGE_EDITOR = "Editor"
+STAGE_BUILD = "Build"
 STAGE_PROFILING = "Profiling"
 STAGE_EXECUTE = "Execute"
 STAGE_REPORT = "Report"
@@ -145,6 +147,17 @@ def _instrumented_with_other_directories(arguments: ProjectManagerArguments, mod
     return stale_directories_message(arguments.dot_dp, mode, arguments.project_dir) is not None
 
 
+def _build_status(arguments: ProjectManagerArguments, config: Optional[str]) -> StageStatus:
+    """The kept builds of the selected configuration (whether they are current is checked in the Build stage: it
+    reads the whole project)."""
+    if not config:
+        return StageStatus(StageState.NOT_RUN, "no configuration selected")
+    modes = sorted({build.mode for build in list_builds(arguments.project_dir) if build.configuration == config})
+    if not modes:
+        return StageStatus(StageState.NOT_RUN, "no build")
+    return StageStatus(StageState.DONE, "built: " + ", ".join(modes))
+
+
 def _profiling_status(arguments: ProjectManagerArguments) -> StageStatus:
     if not explorer_prerequisites_met(arguments.dot_dp):
         return StageStatus(StageState.NOT_RUN, "no profiling data")
@@ -233,6 +246,7 @@ def stage_statuses(arguments: ProjectManagerArguments, config: Optional[str]) ->
     return {
         STAGE_SETUP: _setup_status(arguments),
         STAGE_EDITOR: _editor_status(arguments, config),
+        STAGE_BUILD: _build_status(arguments, config),
         STAGE_PROFILING: _profiling_status(arguments),
         STAGE_EXECUTE: _execute_status(runs),
         STAGE_HOTSPOT: _hotspot_status(arguments, config),

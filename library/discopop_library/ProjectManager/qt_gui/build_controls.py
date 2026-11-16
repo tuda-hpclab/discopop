@@ -46,7 +46,9 @@ POLICY_HINT = (
 class BuildOptions(widgets.FormSection):
     """When to compile, whether to run, and whether to build in the project directory (as before builds existed)."""
 
-    def __init__(self, parent: Optional[QWidget] = None, *, offer_in_place: bool = True) -> None:
+    def __init__(
+        self, parent: Optional[QWidget] = None, *, offer_in_place: bool = True, offer_build_only: bool = True
+    ) -> None:
         super().__init__(parent=parent)
         self.policy_combo = QComboBox()
         for policy, text in POLICY_TEXTS:
@@ -54,7 +56,8 @@ class BuildOptions(widgets.FormSection):
         self.build_only_check = QCheckBox("Only compile, do not run")
         self.in_place_check = QCheckBox("Compile and run in the project directory (no build is kept or reused)")
         self.add_row("Build:", self.policy_combo, POLICY_HINT)
-        self.add_widget(self.build_only_check)
+        if offer_build_only:
+            self.add_widget(self.build_only_check)
         if offer_in_place:
             self.add_widget(self.in_place_check)
         self.in_place_check.setVisible(offer_in_place)
@@ -101,8 +104,15 @@ class BuildsAndRuns(widgets.FormSection):
         arguments: ProjectManagerArguments,
         changed: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
+        *,
+        show_builds: bool = True,
+        show_runs: bool = True,
     ) -> None:
-        super().__init__("Builds and runs", parent=parent)
+        super().__init__(
+            "Builds and runs" if show_builds and show_runs else ("Builds" if show_builds else "Runs"), parent=parent
+        )
+        self._show_builds = show_builds
+        self._show_runs = show_runs
         self.arguments = arguments
         self._changed = changed
         self._job: Optional[WorkRunner] = None
@@ -137,10 +147,12 @@ class BuildsAndRuns(widgets.FormSection):
                 "runs are the profiling runs (dp, hd) that ran in a build, each with its own results."
             ),
         )
-        self.add_widget(self.build_table)
-        self.add_widget(widgets.hbox(self.check_button, self.delete_builds_button, None, margins=0))
-        self.add_widget(self.run_table)
-        self.add_widget(widgets.hbox(self.activate_button, self.delete_runs_button, None, margins=0))
+        if show_builds:
+            self.add_widget(self.build_table)
+            self.add_widget(widgets.hbox(self.check_button, self.delete_builds_button, None, margins=0))
+        if show_runs:
+            self.add_widget(self.run_table)
+            self.add_widget(widgets.hbox(self.activate_button, self.delete_runs_button, None, margins=0))
         self.add_widget(widgets.hbox(self.refresh_button, self.sizes_button, None, margins=0))
         self.add_widget(self.note)
         self.refresh()
@@ -201,6 +213,9 @@ class BuildsAndRuns(widgets.FormSection):
         free = not self._blocked and self._job is None
         has_builds = self.build_table.rowCount() > 0
         has_runs = self.run_table.rowCount() > 0
+        # the controls of a part that is not shown stay off (their tables are still filled)
+        has_builds = has_builds and self._show_builds
+        has_runs = has_runs and self._show_runs
         self.check_button.setEnabled(free and has_builds)
         self.delete_builds_button.setEnabled(free and has_builds)
         self.activate_button.setEnabled(free and has_runs)
