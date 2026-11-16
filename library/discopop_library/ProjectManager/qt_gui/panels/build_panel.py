@@ -98,6 +98,8 @@ class BuildPanel(Panel):
         self._run_state_changed = run_state_changed
         self._job: Optional[WorkRunner] = None
         self._blocked = False
+        # whether the chip shows "Cannot build" / "Another stage is running", which refresh() has to take back
+        self._chip_shows_obstacle = False
         self._failed = False
         self._rebuild = False
 
@@ -112,7 +114,6 @@ class BuildPanel(Panel):
         self.mode_combo.setCurrentIndex(1)
         self.configuration_label = QLabel("")
         self.build_label = QLabel("")
-        self.build_label.setWordWrap(True)
         self.goto_setup_button = widgets.create_button("Go to Project Setup", lambda: self.tabs.show_tab(TAB_SETUP))
         self.goto_setup_button.setVisible(False)
         self.timeout_spin = QSpinBox()
@@ -210,8 +211,13 @@ class BuildPanel(Panel):
             self.rebuild_button.setEnabled(can_start)
             if missing:
                 self.header.chip.set_status(widgets.CHIP_WARN, "Cannot build", missing)
+                self._chip_shows_obstacle = True
             elif self._blocked:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Another stage is running")
+                self._chip_shows_obstacle = True
+            elif self._chip_shows_obstacle:
+                self.header.chip.set_status(widgets.CHIP_IDLE, "Ready to build")
+                self._chip_shows_obstacle = False
 
     def set_blocked(self, blocked: bool) -> None:
         """A stage that runs the configuration is busy: no build meanwhile."""

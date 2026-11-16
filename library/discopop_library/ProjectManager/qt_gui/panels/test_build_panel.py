@@ -65,6 +65,8 @@ def test_a_configuration_can_be_built_in_each_mode(panel: BuildPanel) -> None:
     select(panel)
     assert panel.run_button.isEnabled() and panel.rebuild_button.isEnabled()
     assert panel.build_label.text() == "No build yet."
+    # the chip no longer says "Cannot build" (it did while no configuration was selected)
+    assert panel.header.chip.text() == "Ready to build"
     Path(panel.arguments.project_config_dir, "hd_settings.json").unlink()
     panel.mode_combo.setCurrentIndex(2)
     assert not panel.run_button.isEnabled()
