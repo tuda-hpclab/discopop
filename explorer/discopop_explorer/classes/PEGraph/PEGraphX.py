@@ -325,6 +325,7 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
     def calculateFunctionMetadata(
         self,
         func_nodes: Optional[List[FunctionNode]] = None,
+        jobs: Optional[int] = None,
     ) -> None:
         # store id of parent function in each node
         # and store in each function node a list of all children ids
@@ -337,27 +338,24 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
             func_nodes = all_nodes(self, FunctionNode)
 
         from discopop_explorer.parallel_utils import (
-            pet_function_metadata_initialize_worker,
+            effective_workers,
+            parallel_map,
             pet_function_metadata_parse_func,
         )
 
-        param_list = func_nodes
-        # This computation is run serially in-process, on purpose - it used to fan out over a
-        # multiprocessing.Pool that passed the whole PEGraphX to every worker via initargs.
-        # Under fork, each worker's graph traversal dirties copy-on-write pages of the shared
-        # graph, so peak memory scaled linearly with the (uncapped, = os.cpu_count()) worker
-        # count - roughly one graph copy per core (measured 146MiB -> 1.1GiB at 8 workers on
-        # LULESH, and multi-GB OOM kills on many-core machines). The metadata computation is
-        # cheap (the per-function reachability pass is memoized and effectively O(N)), so the
-        # parallelism is not worth the OOM risk. Running serially never duplicates the graph
-        # and subsumes the previous zero-work early-exit (an empty param_list is just an empty
-        # loop). pet_function_metadata_initialize_worker binds the module-level graph handle
-        # that pet_function_metadata_parse_func reads, exactly as the pool initializer did.
-        pet_function_metadata_initialize_worker(self)
-        tmp_result: List[Tuple[NodeID, Any, Set[NodeID]]] = [
-            pet_function_metadata_parse_func(func_node)
-            for func_node in progress(param_list, desc="Calculating function metadata")
-        ]
+        # The functions are independent: the work of one reads the graph and writes only its own FunctionNode
+        # (children_cu_ids), the results are applied below in the order of func_nodes. It runs on threads, which share
+        # the one graph. (It used to run on a process pool, which gave every worker a copy of the graph: under fork
+        # the traversal dirtied the copy-on-write pages, so peak memory grew by one graph per core, 146MiB -> 1.1GiB
+        # at 8 workers on LULESH.) Threads only run in parallel without the GIL (python3.14t); with it, or for
+        # jobs <= 1, the loop runs serially.
+        tmp_result: List[Tuple[NodeID, Any, Set[NodeID]]] = parallel_map(
+            lambda func_node: pet_function_metadata_parse_func(self, func_node),
+            func_nodes,
+            effective_workers(jobs),
+            desc="Calculating function metadata",
+        )
+
         # calculate global result
         for local_result in tmp_result:
             parsed_function_id, local_reachability_dict, local_children_ids = local_result
