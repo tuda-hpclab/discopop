@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Tuple
 import pytest
 
 from discopop_explorer import parallel_utils
+from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.PEGraph.FunctionNode import FunctionNode
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.enums.EdgeType import EdgeType
@@ -117,18 +118,41 @@ def _metadata(pet: PEGraphX) -> Dict[str, Any]:
     return result
 
 
-def test_function_metadata_on_threads_equals_the_serial_result(
-    make_node: MakeNode, build_pet_graph: BuildPetGraph, monkeypatch: pytest.MonkeyPatch
+def test_function_metadata_of_functions_with_and_without_a_loop(
+    make_node: MakeNode, build_pet_graph: BuildPetGraph
 ) -> None:
-    serial = _graph_with_functions(make_node, build_pet_graph)
-    monkeypatch.setattr(parallel_utils, "effective_workers", lambda jobs: 1)
-    serial.calculateFunctionMetadata()
-    expected = _metadata(serial)
+    pet = _graph_with_functions(make_node, build_pet_graph, functions=4)
+    pet.calculateFunctionMetadata()
+    metadata = _metadata(pet)
+    # function f0 has a loop back edge 4 -> 1: all of its CUs reach each other
+    children, reachability = metadata["1:0"]
+    assert children == ["1:1", "1:2", "1:3", "1:4"]
+    assert reachability["1:4"] == ["1:1", "1:2", "1:3", "1:4"]
+    # function f1 (id 10) has none: the last CU reaches only itself, the first one all
+    children, reachability = metadata["1:10"]
+    assert reachability["1:14"] == ["1:14"]
+    assert reachability["1:11"] == ["1:11", "1:12", "1:13", "1:14"]
+    # the parent function of every CU, and no reachability across functions
+    assert metadata["1:12"] == "1:10"
+    assert metadata["1:31"] == "1:30"
+    assert all(not r.startswith("1:3") for r in reachability["1:11"])
 
-    threaded = _graph_with_functions(make_node, build_pet_graph)
-    monkeypatch.setattr(parallel_utils, "effective_workers", lambda jobs: 6)
-    threaded.calculateFunctionMetadata()
-    assert _metadata(threaded) == expected
-    # the metadata is really there
-    assert expected["1:1"] == "1:0"
-    assert expected["1:0"][1]["1:1"] == ["1:1", "1:2", "1:3", "1:4"]
+
+def test_reachability_from_plain_successor_lists_equals_the_one_from_the_graph(
+    make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    pet = _graph_with_functions(make_node, build_pet_graph)
+    pet.calculateFunctionMetadata()
+    functions = [n for _, n in pet.g.nodes(data="data") if isinstance(n, FunctionNode)]  # type: ignore[misc]
+    assert len(functions) == 12
+    for function in functions:
+        assert function.reachability_pairs == function.calculate_reachability_pairs(pet)
+
+
+def test_edges_for_the_function_metadata(make_node: MakeNode, build_pet_graph: BuildPetGraph) -> None:
+    pet = _graph_with_functions(make_node, build_pet_graph, functions=2)
+    children, successors = parallel_utils.function_metadata_edges(pet)
+    assert children[NodeID("1:0")] == ["1:1", "1:2", "1:3", "1:4"]
+    assert successors[NodeID("1:1")] == ["1:2", "1:3"]
+    assert successors[NodeID("1:4")] == ["1:1"]  # the loop back edge of the first function
+    assert NodeID("1:0") not in successors

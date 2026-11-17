@@ -133,7 +133,7 @@ class PatternDetectorX(object):
         with stage("Mapping static and dynamic dependencies", 2, total=5):
             self.pet.map_static_and_dynamic_dependencies()
         with stage("Calculating function metadata", 3, total=5):
-            self.pet.calculateFunctionMetadata(jobs=jobs)
+            self.pet.calculateFunctionMetadata()
         with stage("Calculating loop metadata", 4, total=5):
             self.pet.calculateLoopMetadata()
         with stage("Enforcing single function exit nodes", 5, total=5):

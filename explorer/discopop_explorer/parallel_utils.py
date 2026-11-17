@@ -9,13 +9,12 @@
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, TypeVar
 
 from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.PEGraph.FunctionNode import FunctionNode
-from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
-from discopop_explorer.functions.PEGraph.traversal.children import direct_children
+from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_library.StatusReporting.console import progress
 
 T = TypeVar("T")
@@ -53,20 +52,37 @@ def parallel_map(fn: Callable[[T], R], items: Sequence[T], workers: int, desc: s
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def pet_function_metadata_parse_func(pet: PEGraphX, func_node: FunctionNode) -> Tuple[NodeID, Any, Set[NodeID]]:
-    """Children and reachability of one function. Reads the graph, writes only func_node.children_cu_ids, so calls
-    for different functions can run at the same time."""
-    stack: List[Node] = direct_children(pet, func_node)
-    func_node.children_cu_ids = [node.id for node in stack]
+def function_metadata_edges(pet: PEGraphX) -> Tuple[Dict[NodeID, List[NodeID]], Dict[NodeID, List[NodeID]]]:
+    """The CHILD and the SUCCESSOR edges of the graph as plain lists of ids (source -> targets, in the order of the
+    graph's edges), read in one serial pass. The functions' metadata is then computed without touching an edge: reading
+    an edge's type reads the shared EdgeType member, whose reference count all threads update (see
+    FunctionNode.calculate_reachability_pairs_from_successors)."""
+    children: Dict[NodeID, List[NodeID]] = dict()
+    successors: Dict[NodeID, List[NodeID]] = dict()
+    for source, target, dependency in pet.g.edges(data="data"):
+        if dependency.etype == EdgeType.CHILD:
+            children.setdefault(source, []).append(target)
+        elif dependency.etype == EdgeType.SUCCESSOR:
+            successors.setdefault(source, []).append(target)
+    return children, successors
+
+
+def pet_function_metadata_parse_func(
+    children: Dict[NodeID, List[NodeID]], successors: Dict[NodeID, List[NodeID]], func_node: FunctionNode
+) -> Tuple[NodeID, Any, Set[NodeID]]:
+    """Children and reachability of one function, from the edges of function_metadata_edges. Writes only
+    func_node.children_cu_ids, so calls for different functions can run at the same time."""
+    stack: List[NodeID] = list(children.get(func_node.id, ()))
+    func_node.children_cu_ids = list(stack)
     local_children: Set[NodeID] = set()
 
     while stack:
         child = stack.pop()
-        local_children.add(child.id)
-        children = direct_children(pet, child)
-        func_node.children_cu_ids.extend([node.id for node in children])
-        stack.extend(children)
+        local_children.add(child)
+        direct = children.get(child, ())
+        func_node.children_cu_ids.extend(direct)
+        stack.extend(direct)
 
-    local_reachability_dict = func_node.calculate_reachability_pairs(pet)
+    local_reachability_dict = func_node.calculate_reachability_pairs_from_successors(successors)
     local_result = func_node.id, local_reachability_dict, local_children
     return local_result

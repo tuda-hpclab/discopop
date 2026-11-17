@@ -325,7 +325,6 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
     def calculateFunctionMetadata(
         self,
         func_nodes: Optional[List[FunctionNode]] = None,
-        jobs: Optional[int] = None,
     ) -> None:
         # store id of parent function in each node
         # and store in each function node a list of all children ids
@@ -337,24 +336,19 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
         if func_nodes is None:
             func_nodes = all_nodes(self, FunctionNode)
 
-        from discopop_explorer.parallel_utils import (
-            effective_workers,
-            parallel_map,
-            pet_function_metadata_parse_func,
-        )
+        from discopop_explorer.parallel_utils import function_metadata_edges, pet_function_metadata_parse_func
 
-        # The functions are independent: the work of one reads the graph and writes only its own FunctionNode
-        # (children_cu_ids), the results are applied below in the order of func_nodes. It runs on threads, which share
-        # the one graph. (It used to run on a process pool, which gave every worker a copy of the graph: under fork
-        # the traversal dirtied the copy-on-write pages, so peak memory grew by one graph per core, 146MiB -> 1.1GiB
-        # at 8 workers on LULESH.) Threads only run in parallel without the GIL (python3.14t); with it, or for
-        # jobs <= 1, the loop runs serially.
-        tmp_result: List[Tuple[NodeID, Any, Set[NodeID]]] = parallel_map(
-            lambda func_node: pet_function_metadata_parse_func(self, func_node),
-            func_nodes,
-            effective_workers(jobs),
-            desc="Calculating function metadata",
-        )
+        # The edges are read once, as lists of ids: for every function, the reachability used to be computed on a view
+        # of the whole graph with an edge filter, which reads the type of every edge touching the function's CUs
+        # (544.9s for the 15240 functions of relearn; 2.2s now, same result). Nothing of the pass touches an edge or a
+        # node other than the function itself any more, so the functions could also be processed on threads; at 2s it
+        # is not worth it (1.4s with 32 threads). Reading an edge's type from several threads at once is slow, see
+        # FunctionNode.calculate_reachability_pairs_from_successors.
+        child_ids, successor_ids = function_metadata_edges(self)
+        tmp_result: List[Tuple[NodeID, Any, Set[NodeID]]] = [
+            pet_function_metadata_parse_func(child_ids, successor_ids, func_node)
+            for func_node in progress(func_nodes, desc="Calculating function metadata")
+        ]
 
         # calculate global result
         for local_result in tmp_result:
@@ -458,18 +452,21 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
             loop.loop_indices = [v.name for v in loop_indices]
 
     def enforce_single_function_exit_node(self) -> None:
+        # The highest node id of each file, determined once. It used to be searched for in all nodes of the graph for
+        # every function (quadratic in the size of the graph: 569s for the 15240 functions of relearn). The exit node
+        # of a function takes the next id of its file, which the following function of the file has to see, so it is
+        # recorded as well.
+        max_node_id_in_file: Dict[int, int] = dict()
+        for node in all_nodes(self):
+            if ":" in node.id:
+                id_int = int(node.id.split(":")[1])
+                if id_int > max_node_id_in_file.get(node.file_id, 0):
+                    max_node_id_in_file[node.file_id] = id_int
         for func in all_nodes(self, FunctionNode):
             # define exit node
             file_id = func.file_id
-            max_node_id_in_file = 0
-            for node in all_nodes(self):
-                if node.file_id != file_id:
-                    continue
-                if ":" in node.id:
-                    id_int = int(node.id.split(":")[1])
-                    if id_int > max_node_id_in_file:
-                        max_node_id_in_file = id_int
-            exit_id = NodeID(str(file_id) + ":" + str(max_node_id_in_file + 1))
+            max_node_id_in_file[file_id] = max_node_id_in_file.get(file_id, 0) + 1
+            exit_id = NodeID(str(file_id) + ":" + str(max_node_id_in_file[file_id]))
             exit_node = Node(exit_id)
             exit_node.type = NodeType.CU
             exit_node.name = "FuncExit_" + func.name
