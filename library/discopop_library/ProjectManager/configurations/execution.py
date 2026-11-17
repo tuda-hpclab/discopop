@@ -44,7 +44,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     project_directories_of,
     record_instrumented_directories,
 )
-from discopop_library.ProjectManager.services import callpath_pruning
+from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -423,6 +423,18 @@ def execute_configuration(
         ):
             if text is not None:
                 pruning_warnings.append(text)
+    # OpenMP flags of an instrumented compilation: kept with a warning unless the project says otherwise. The
+    # project's setting is the only source, as for the pruning
+    openmp_warnings: List[str] = []
+    instrumented_compilation = settings_name in _INSTRUMENTED_MODES and script_name.startswith("compile")
+    if instrumented_compilation:
+        ignored_openmp = tuple(name for name in openmp_handling.VARIABLES if name in my_env)
+        for name in ignored_openmp:
+            del my_env[name]
+        text = openmp_handling.ignored_variables_warning(ignored_openmp)
+        if text is not None:
+            openmp_warnings.append(text)
+        my_env.update(openmp_handling.environment(arguments))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
     if dot_discopop is not None:
         my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
@@ -456,6 +468,9 @@ def execute_configuration(
         if settings_name in _INSTRUMENTED_MODES
         else Snapshot(started=time.time())
     )
+    if instrumented_compilation:
+        # the wrappers only report the first sighting of a build: forget the one of an earlier compilation
+        openmp_handling.clear_flags_seen(my_env[DOT_DISCOPOP_VARIABLE])
     outcomes: List[_RunOutcome] = []
     for repetition in range(repetitions):
         if repetitions > 1:
@@ -550,6 +565,9 @@ def execute_configuration(
             mode = _INSTRUMENTED_MODES.get(settings_name)
             if mode is not None and not checks.errors:
                 record_instrumented_directories(my_env[DOT_DISCOPOP_VARIABLE], mode, project_directories)
+                openmp_handling.record_state(
+                    my_env[DOT_DISCOPOP_VARIABLE], mode, my_env.get(openmp_handling.STRIP_VARIABLE) == "1"
+                )
                 if mode == "dp":
                     callpath_pruning.record_state(
                         my_env[DOT_DISCOPOP_VARIABLE],
@@ -558,6 +576,13 @@ def execute_configuration(
         elif script_name == "execute.sh":
             checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
     checks.warnings.extend(pruning_warnings)
+    checks.warnings.extend(openmp_warnings)
+    if instrumented_compilation and representative.returncode == 0 and not representative.timeout_expired:
+        openmp_warning, openmp_note = openmp_handling.outcome_message(my_env[DOT_DISCOPOP_VARIABLE])
+        if openmp_warning is not None:
+            checks.warnings.append(openmp_warning)
+        if openmp_note is not None:
+            checks.notes.append(openmp_note)
     if (
         callpath_pruning.HOTSPOTS_VARIABLE in pruning_environment
         and script_name.startswith("compile")

@@ -68,6 +68,17 @@ The directory `discopop-profiler.libs` contains further scripts that are not ins
 | `DiscoPoPASTExport-<clang version>.so` | The AST export plugin (only built if the Clang development files are installed, see below) |
 | `dp-fmap` | Creates a [file mapping](../data/Filemapping.md) by hand. This is not necessary anymore since the instrumentation creates `FileMapping.txt`. |
 
+### OpenMP flags
+A program that is compiled with `-fopenmp` is profiled with its OpenMP pragmas active: the threads are instrumented as concurrent code, the dependences found depend on the thread schedule, the pattern detection does not know that a loop is parallel already, and the runtime may need `DP_PTHREAD_COMPATIBILITY_MODE` (see [Build options](../setup/build_options.md)). The wrappers therefore keep the flags (nothing changes for the compilation) and print one warning per build that names the ways to remove them:
+
+- `DP_STRIP_OPENMP=1` in the environment of `discopop_cc` / `discopop_cxx` (also the MPI, linker and hotspot detection wrappers),
+- `--strip-openmp` of `discopop_project_manager`, or
+- the check box *Remove OpenMP flags* in the *Project Setup* stage of the project manager GUI.
+
+With the flags removed, the pragmas are ignored and the sequential code is profiled; code that calls `omp_*` functions needs `#ifdef _OPENMP` guards, as it no longer links against the OpenMP runtime. Builds for the parallel version (`par`) and the validation are not affected. See [Environment variables](../setup/environment_variables.md) and [Project manager](Project_manager.md).
+
+MPI calls are ordinary external calls for DiscoPoP: nothing models message passing, and DiscoPoP is not suitable for distributed memory programs.
+
 ### AST export plugin
 The explorer reads `ast_dump.json`, but only the nodes of the files in `FileMapping.txt`. Clang's complete JSON dump contains every declaration of the included headers as well, which is tens of GB for a single translation unit of a template heavy project. If the Clang development files (`libclang-<version>-dev` on Debian and Ubuntu) were installed when the profiler was built, the build also creates the clang plugin `DiscoPoPASTExport-<clang version>.so`. The wrappers then let clang write only the declarations of the mapped files (a few seconds instead of minutes, and a few hundred MB instead of tens of GB per translation unit). Without the plugin, or if it fails, the wrappers filter the complete dump while it is written: the result is the same, but slower and needing more disk throughput.
 

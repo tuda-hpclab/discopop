@@ -39,6 +39,7 @@ from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
+from discopop_library.ProjectManager.qt_gui.openmp_section import OpenMPSection
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -165,6 +166,7 @@ class SetupPanel(Panel):
         self.included_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         included_section = widgets.FormSection(INCLUDED_DIRECTORIES_TITLE)
         included_section.add_widget(self.included_directories, INCLUDED_DIRECTORIES_HINT)
+        self.openmp = OpenMPSection(arguments, project_state, self.status)
         # what is project code: the project directory without the excluded directories, plus the included ones
         project_code = QHBoxLayout()
         project_code.setContentsMargins(0, 0, 0, 0)
@@ -175,6 +177,7 @@ class SetupPanel(Panel):
         layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
         layout.addLayout(project_code)
+        layout.addWidget(self.openmp)
         layout.addWidget(self._danger_zone())
 
         self.load_files()
@@ -269,6 +272,7 @@ class SetupPanel(Panel):
         self.reload_unmodified()
         self.excluded_directories.reload()
         self.included_directories.reload()
+        self.openmp.reload()
         super().showEvent(event)
 
     # ── loading ─────────────────────────────────────────────────────────────

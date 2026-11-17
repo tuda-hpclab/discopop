@@ -744,3 +744,43 @@ def test_the_file_lists_are_no_builds_and_unknown_manifest_fields_are_ignored(pr
         json.dump(data, file)
     assert [record.build_id for record in list_builds(_project_dir(project))] == ["cfg_seq"]
     assert read_build(_project_dir(project), KEY) is not None
+
+
+def test_the_fingerprint_contains_the_openmp_handling_only_when_the_flags_are_removed_in_instrumented_modes(
+    project: Dict[str, Path],
+) -> None:
+    from discopop_library.ProjectManager.configurations.builds import compute_fingerprint_parts
+    from discopop_library.ProjectManager.services import openmp_handling
+
+    settings = str(project["configs"] / "dp_settings.json")
+    for mode in ("seq", "par", "dp", "hd"):
+        parts = compute_fingerprint_parts(
+            _arguments(project["root"]), BuildKey("cfg", mode), str(project["compile"]), settings
+        )
+        assert "openmp" not in parts  # builds of before the setting stay current while the flags are kept
+    openmp_handling.save_openmp_handling(_project_dir(project), openmp_handling.OpenMPHandling(strip=True))
+    for mode in ("seq", "par", "dp", "hd"):
+        parts = compute_fingerprint_parts(
+            _arguments(project["root"]), BuildKey("cfg", mode), str(project["compile"]), settings
+        )
+        assert ("openmp" in parts) == (mode in ("dp", "hd"))
+
+
+def test_a_dp_build_is_stale_when_the_openmp_flags_are_removed_and_the_change_cannot_be_accepted(
+    project: Dict[str, Path],
+) -> None:
+    from discopop_library.ProjectManager.services import openmp_handling
+
+    dp = BuildKey("cfg", "dp")
+    assert _build(project, key=dp).result == BuildResult.BUILT
+    assert _build(project, key=dp).result == BuildResult.REUSED
+    openmp_handling.save_openmp_handling(_project_dir(project), openmp_handling.OpenMPHandling(strip=True))
+    status = _status(project, dp)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert "openmp" in status.changes.parts
+    assert "the OpenMP flags are now removed" in status.reason
+    with pytest.raises(BuildAcceptError):
+        accept_build(
+            _arguments(project["root"]), dp, str(project["compile"]), str(project["configs"] / "dp_settings.json")
+        )
+    assert _build(project, key=dp).result == BuildResult.BUILT

@@ -48,7 +48,8 @@ class HotspotsChanged:
 
 @dataclass(frozen=True)
 class ProjectDirectoriesChanged:
-    """The included or excluded directories of the project (what is project code) were saved."""
+    """The included or excluded directories of the project (what is project code) or the handling of its OpenMP flags
+    (``services/openmp_handling.py``) were saved: instrumented builds and data of another setting are not current."""
 
 
 @dataclass(frozen=True)
