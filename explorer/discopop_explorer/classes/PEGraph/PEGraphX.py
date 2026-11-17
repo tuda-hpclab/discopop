@@ -338,9 +338,11 @@ class PEGraphX(Plottable, object):  # type: ignore[misc]
 
         from discopop_explorer.parallel_utils import function_metadata_edges, pet_function_metadata_parse_func
 
-        # The edges are read once, as lists of ids: for every function, the reachability used to be computed on a view
-        # of the whole graph with an edge filter, which reads the type of every edge touching the function's CUs
-        # (544.9s for the 15240 functions of relearn; 2.2s now, same result). Nothing of the pass touches an edge or a
+        # The edges are read once, as lists of ids: for every function, the reachability used to be computed on a
+        # networkx view of the whole graph (node filter, edge filter on the edge type), and iterating the nodes of such
+        # a view walks all nodes of the graph: functions x nodes (about 290 of the 544.9s for the 15240 functions of
+        # relearn, 143646 nodes; estimated on a graph of that size), the rest being the edge type reads. Now it takes
+        # 2.2s, with the same result. Nothing of the pass touches an edge or a
         # node other than the function itself any more, so the functions could also be processed on threads; at 2s it
         # is not worth it (1.4s with 32 threads). Reading an edge's type from several threads at once is slow, see
         # FunctionNode.calculate_reachability_pairs_from_successors.
