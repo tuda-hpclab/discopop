@@ -1,0 +1,6 @@
+# member function: parameters of a method are variables of its loop
+[do_all]
+lines = ["1:8"]
+
+[do_all.clauses]
+shared = ["in", "out", "n"]

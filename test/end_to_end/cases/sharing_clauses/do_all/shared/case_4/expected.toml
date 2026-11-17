@@ -1,0 +1,6 @@
+# loop bound read only by the loop header
+[do_all]
+lines = ["1:7"]
+
+[do_all.clauses]
+shared = ["out", "n"]

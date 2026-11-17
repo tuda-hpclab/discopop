@@ -50,6 +50,7 @@ Options for the patterns to detect:
 | `--enable-patterns` | `reduction,doall,task` | Comma-separated list of the pattern types to identify (see below). |
 | `--hotspot-types` | `yes,maybe` | Hotspot types whose code regions are analyzed (`yes`, `no`, `maybe`). Only takes effect if `hotspot_detection/Hotspots.json` exists; otherwise, the whole program is analyzed. |
 | `--load-existing-doall-and-reduction-patterns` | off | Skip the pattern detection and insert the contents of an existing `patterns.json` into the detection result. |
+| `--doall-default-none` / `--no-doall-default-none` | on | Add `default(none)` to the pragmas of the do-all and reduction suggestions. Every variable the loop refers to is then listed in a clause, so the compiler rejects the pragma if the analysis missed one. `--no-doall-default-none` leaves it out; use it for loops which refer to globals of system headers (`std::cout`), see [do-all](../data/Parallel_patterns/doall.md). |
 
 Options for the input and the output:
 

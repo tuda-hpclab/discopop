@@ -24,6 +24,11 @@ from discopop_explorer.utilities.ASTUtils.ASTQueries import (
     ASTVariableAndTypeQueries,
 )
 from discopop_explorer.utilities.ASTUtils.ASTVisualization import ASTVisualization
+from discopop_explorer.utilities.ASTUtils.OuterReferences import (
+    OuterReference,
+    find_names_declared_in_loop,
+    find_outer_references,
+)
 from discopop_library.PathManagement.PathManagement import load_file_mapping
 
 
@@ -49,6 +54,9 @@ class ASTPatternDetectionHelper:
         # for the same reason: the answer is a property of the source, and pattern detection asks
         # about one loop header once per copy of that loop in the task graph.
         self._assigned_in_loop_cache: Dict[Tuple[str, int], FrozenSet[str]] = {}
+        # memoized results of get_outer_references_of_loop, for the same reason
+        self._outer_references_cache: Dict[Tuple[str, int], list[OuterReference]] = {}
+        self._declared_in_loop_cache: Dict[Tuple[str, int], FrozenSet[str]] = {}
 
     def load_ast_from_project(self, project_path: str) -> None:
         """Load and build AST graph from project.
@@ -72,6 +80,8 @@ class ASTPatternDetectionHelper:
 
         self._variables_at_location_cache.clear()
         self._assigned_in_loop_cache.clear()
+        self._outer_references_cache.clear()
+        self._declared_in_loop_cache.clear()
 
         ast_dict = ClangASTLoader.load_ast_from_project(project_path)
         if ast_dict is None:
@@ -189,6 +199,45 @@ class ASTPatternDetectionHelper:
                 ASTVariableAndTypeQueries.find_variables_assigned_in_loop_at(self.ast_graph, file_path_str, line)
             )
             self._assigned_in_loop_cache[cache_key] = cached
+        return cached
+
+    def get_outer_references_of_loop(self, file_id: Union[int, str], line: int) -> list[OuterReference]:
+        """The variables the loop starting on *line* refers to which are declared outside of it, with the ways the loop
+        uses them (see :func:`find_outer_references`). Empty when the file is unknown, the AST has not been loaded, or
+        no loop starts on *line*. The result is shared with the cache and must not be modified."""
+        if not self.ast_graph:
+            return []
+        if isinstance(file_id, int):
+            file_path = self.file_mapping.get(file_id)
+            if file_path is None:
+                return []
+            file_path_str = str(file_path)
+        else:
+            file_path_str = file_id
+        cache_key = (file_path_str, line)
+        cached = self._outer_references_cache.get(cache_key)
+        if cached is None:
+            cached = find_outer_references(self.ast_graph, file_path_str, line)
+            self._outer_references_cache[cache_key] = cached
+        return cached
+
+    def get_names_declared_in_loop(self, file_id: Union[int, str], line: int) -> FrozenSet[str]:
+        """The names the loop starting on *line* declares itself (index, body variables, structured bindings of the
+        header). Empty when the file is unknown, the AST has not been loaded, or no loop starts on *line*."""
+        if not self.ast_graph:
+            return frozenset()
+        if isinstance(file_id, int):
+            file_path = self.file_mapping.get(file_id)
+            if file_path is None:
+                return frozenset()
+            file_path_str = str(file_path)
+        else:
+            file_path_str = file_id
+        cache_key = (file_path_str, line)
+        cached = self._declared_in_loop_cache.get(cache_key)
+        if cached is None:
+            cached = find_names_declared_in_loop(self.ast_graph, file_path_str, line)
+            self._declared_in_loop_cache[cache_key] = cached
         return cached
 
     def get_variable_declarations_in_scope(self, scope_name: str) -> list[tuple[str, Optional[str]]]:

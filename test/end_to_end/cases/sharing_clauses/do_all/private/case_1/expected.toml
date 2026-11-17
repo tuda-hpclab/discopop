@@ -4,3 +4,4 @@ lines = ["1:11"]
 [do_all.clauses]
 first_private = ["y"]
 private = ["z"]
+shared = ["n"]  # the loop bound

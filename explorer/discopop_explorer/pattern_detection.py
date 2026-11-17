@@ -118,8 +118,10 @@ class PatternDetectorX(object):
         enable_context_graph_plot: bool,
         visualizer: Visualizer | None = None,
         ignore_dependency_states: bool = False,
+        doall_default_none: bool = True,
     ) -> DetectionResult:
-        """Runs pattern discovery on the CU graph"""
+        """Runs pattern discovery on the CU graph. doall_default_none marks the do-all and reduction patterns for a
+        pragma with default(none)."""
         with stage("Loading AST"):
             self.ast_helper.load_ast_from_project(project_path)
         # self.ast_helper.print_ast_structure()
@@ -178,6 +180,10 @@ class PatternDetectorX(object):
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]
             if "*" in enable_patterns or "reduction" in enable_patterns:
                 res.patterns.reduction = [p for p in tmp_result if isinstance(p, ReductionInfo)]
+            if doall_default_none:
+                # the patterns of the detection result: the reported lists only exist for the enabled types
+                for loop_pattern in tmp_result:
+                    loop_pattern.default_none = True
             if "*" in enable_patterns or "task" in enable_patterns:
                 first_task_group = 1 + max(
                     (g for t in res.patterns.task for g in getattr(t, "task_group", [])), default=-1

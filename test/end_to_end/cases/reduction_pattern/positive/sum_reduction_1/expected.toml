@@ -6,7 +6,7 @@ lines = ["1:42"]
 
 [reduction.clauses]
 reduction = ["+:d"]
-shared = ["r1", "r2", "dr"]
+shared = ["r1", "r2", "dr", "nd"]  # nd: the loop bound
 
 [reduction.allowed_clauses]
 first_private = ["nd"]

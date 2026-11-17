@@ -205,6 +205,8 @@ class UnpackedSuggestion(object):
         if "collapse_level" in self.values:
             if self.values["collapse_level"] > 1:
                 pragma.pragma_str += "collapse(" + str(self.values["collapse_level"]) + ") "
+        if self.values.get("default_none") and not is_gpu_pragma:
+            pragma.pragma_str += "default(none) "
         if len(self.values["first_private"]) > 0:
             pragma.pragma_str += "firstprivate(" + ",".join([str(s) for s in self.values["first_private"]]) + ") "
         if len(self.values["private"]) > 0:

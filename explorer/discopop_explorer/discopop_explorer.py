@@ -87,6 +87,8 @@ class ExplorerArguments(GeneralArguments):
     visualize_on: Optional["tk.Frame"]
     # None means no file, otherwise the path. Why candidates were (not) suggested, see PatternDecisions
     enable_pattern_decisions_file: Optional[str] = None
+    # add default(none) to the pragmas of the do-all and reduction suggestions
+    doall_default_none: bool = True
 
     def __post_init__(self) -> None:
         self.__validate()
@@ -140,6 +142,7 @@ def __run(
     visualize_on: Optional["tk.Frame"] = None,
     ignore_dependency_states: bool = False,
     pattern_decisions: Optional[PatternDecisionLog] = None,
+    doall_default_none: bool = True,
 ) -> DetectionResult:
     """pattern_decisions, if given, receives which candidates the pattern detection considered and
     why it rejected them. It stays empty when existing patterns are loaded."""
@@ -210,6 +213,7 @@ def __run(
             enable_context_graph_plot,
             visualizer,
             ignore_dependency_states=ignore_dependency_states,
+            doall_default_none=doall_default_none,
         )
 
     for plugin_name in plugins:
@@ -283,6 +287,7 @@ def run(arguments: ExplorerArguments) -> None:
                 visualize_on=arguments.visualize_on,
                 ignore_dependency_states=arguments.ignore_dependency_states,
                 pattern_decisions=pattern_decisions,
+                doall_default_none=arguments.doall_default_none,
             )
 
         end = time.time()

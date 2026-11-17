@@ -62,6 +62,12 @@ class DoAllInfo(PatternInfo):
         self.reduction = r
         self.scheduling_clause = "static"
         self.collapse_level = 1
+        # sentences about variables whose classification could not be established from the profile and was decided
+        # from the syntax tree (see complete_clauses_from_ast); shown with the suggestion
+        self.sharing_notes: List[str] = []
+        # the pragma lists every variable of the loop, so default(none) is added to it (set by the detection, which
+        # follows the explorer option --doall-default-none, on by default; absent in the patterns.json of older runs)
+        self.default_none: bool = False
         # pattern ids of the do-all patterns which have been folded into this one by the loop
         # collapse analysis, outermost first. Empty for every non-collapsed pattern.
         # Applying this pattern excludes applying any of them: inserting a pragma between two
