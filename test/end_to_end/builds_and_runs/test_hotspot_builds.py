@@ -95,6 +95,8 @@ def test_the_hotspot_stage_runs_in_the_kept_hd_build(tmp_path: pathlib.Path) -> 
     for name, argument in (("small", "100"), ("big", "5000")):
         (configs / name).mkdir()
         _write(configs / name / "execute.sh", f"#!/bin/bash\n./prog {argument}\n")
+    # "big" runs in the build of "small" (sharing is declared, no longer implied by an equal compile script)
+    (configs / "big" / "build_from.json").write_text(json.dumps({"build_from": "small"}))
 
     session = HotspotSession(_arguments(root))
     ctx, events = _context()
