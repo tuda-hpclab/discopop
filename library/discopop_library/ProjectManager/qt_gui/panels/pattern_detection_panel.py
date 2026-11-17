@@ -410,6 +410,7 @@ class PatternDetectionPanel(Panel):
         self.explorer_running = True
         self._explorer_stopped = False
         self.run_button.set_running(True)
+        self.set_busy(True)
         self.runs.set_blocked(True)  # the data the detection reads must not change meanwhile
         self._update_chip(True, len(self.table.suggestions()), False)
         self.output_requested.emit()
@@ -481,6 +482,7 @@ class PatternDetectionPanel(Panel):
     def _on_complete(self, error: bool = False, stopped: bool = False) -> None:
         self.explorer_running = False
         self.run_button.set_running(False)
+        self.set_busy(False)
         self.refresh()
         # the Autotuning and Patch Repair tabs work on the freshly generated patches
         self.project_state.publish(PatternsChanged())

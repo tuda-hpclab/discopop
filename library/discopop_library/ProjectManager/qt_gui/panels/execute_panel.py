@@ -547,6 +547,7 @@ class ExecutePanel(Panel):
         self.status.set(status_text, widgets.STATUS_BUSY)
         self.console.clear()
         self.output_requested.emit()
+        self.set_busy(True)
         if self._run_state_changed is not None:
             self._run_state_changed(True)
 
@@ -561,6 +562,7 @@ class ExecutePanel(Panel):
         else:
             self.header.chip.set_status(widgets.CHIP_OK, "Finished")
         self._update_modes()
+        self.set_busy(False)
         if self._run_state_changed is not None:
             self._run_state_changed(False)
 

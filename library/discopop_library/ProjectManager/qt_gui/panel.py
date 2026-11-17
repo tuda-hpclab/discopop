@@ -52,6 +52,8 @@ class Panel(QWidget):
 
     output_title = ""
     output_requested = Signal()
+    #: True when the panel starts a job, False when it ended (any way); the sidebar shows a spinner meanwhile
+    busy_changed = Signal(bool)
 
     def __init__(
         self,
@@ -64,6 +66,16 @@ class Panel(QWidget):
         self.arguments = arguments
         self.project_state = project_state
         self.status = status
+        self._busy = False
+
+    def set_busy(self, busy: bool) -> None:
+        """Tell the main window that a job of this panel runs / ended (emits :attr:`busy_changed` on a change)."""
+        if busy != self._busy:
+            self._busy = busy
+            self.busy_changed.emit(busy)
+
+    def is_busy(self) -> bool:
+        return self._busy
 
     def make_console(self) -> OutputConsole:
         """A console for the output pane: a hidden child until the main window moves it into the pane.

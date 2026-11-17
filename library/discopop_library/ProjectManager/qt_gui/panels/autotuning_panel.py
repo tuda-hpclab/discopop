@@ -506,6 +506,7 @@ class AutotuningPanel(Panel):
 
         self.running = True
         self.run_button.set_running(True)
+        self.set_busy(True)
         self.output_requested.emit()
         self.status.set("⏳ Autotuning in progress...", widgets.STATUS_BUSY)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Tuning…")
@@ -640,6 +641,8 @@ class AutotuningPanel(Panel):
         self._show_plot_or_caption(NO_PLOT_TEXT)
 
         self.run_button.set_running(False, enabled_after=autotuning_missing(self.arguments.dot_dp) is None)
+
+        self.set_busy(False)
         self._refresh_suggestions_display()
 
         if stopped:

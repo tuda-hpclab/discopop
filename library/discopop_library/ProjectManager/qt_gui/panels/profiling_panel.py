@@ -309,6 +309,7 @@ class ProfilingPanel(Panel):
         self.status.set("⏳ Preparing pattern detection...", widgets.STATUS_BUSY)
         self.console.clear()
         self.output_requested.emit()
+        self.set_busy(True)
         if self._run_state_changed is not None:
             self._run_state_changed(True)
         restore_logging = widgets.redirect_logging_to_console(self.console, "INFO")
@@ -353,6 +354,7 @@ class ProfilingPanel(Panel):
         else:
             self.header.chip.set_status(widgets.CHIP_OK, "Profiled")
         self.refresh()
+        self.set_busy(False)
         if self._run_state_changed is not None:
             self._run_state_changed(False)
 
