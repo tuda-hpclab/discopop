@@ -29,16 +29,19 @@ from filelock import FileLock, Timeout
 from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.builds import (
+    BuildFiles,
     BuildKey,
     BuildPolicy,
     BuildRecord,
     BuildState,
+    accepted_changes_text,
     build_status,
     build_tree_path_of,
-    compute_fingerprint_parts,
+    compute_fingerprint,
     delete_build,
     make_record,
     manifest_path_of,
+    remove_build_files,
     write_build,
 )
 from discopop_library.ProjectManager.configurations.copying import (
@@ -139,6 +142,11 @@ def refresh_run_scripts(arguments: ProjectManagerArguments, tree: PATH) -> None:
     shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
+def _accepted_note(arguments: ProjectManagerArguments, key: BuildKey) -> str:
+    text = accepted_changes_text(arguments.project_dir, key)
+    return text + "\n" if text else ""
+
+
 def ensure_build(
     arguments: ProjectManagerArguments,
     key: BuildKey,
@@ -169,7 +177,7 @@ def ensure_build(
     if policy == BuildPolicy.REUSE:
         if reusable and status.record is not None:
             refresh_run_scripts(arguments, status.record.tree)
-            message("Reusing the build " + key.build_id + ".\n")
+            message("Reusing the build " + key.build_id + ".\n" + _accepted_note(arguments, key))
             return BuildOutcome(BuildResult.REUSED, key, status.record.tree, status.record)
         reason = status.reason if not status.usable else "Its suggestions patch files outside of the project."
         return BuildOutcome(
@@ -179,7 +187,14 @@ def ensure_build(
         )
     if policy == BuildPolicy.AUTO and reusable and status.record is not None:
         refresh_run_scripts(arguments, status.record.tree)
-        message("Reusing the build " + key.build_id + " (compiled " + _age(status.record) + ").\n")
+        message(
+            "Reusing the build "
+            + key.build_id
+            + " (compiled "
+            + _age(status.record)
+            + ").\n"
+            + _accepted_note(arguments, key)
+        )
         return BuildOutcome(BuildResult.REUSED, key, status.record.tree, status.record)
     if status.state == BuildState.STALE:
         message("The build " + key.build_id + " is stale. " + status.reason + "\n")
@@ -189,10 +204,11 @@ def ensure_build(
         os.remove(manifest_path_of(arguments.project_dir, key))
     except OSError:
         pass
+    remove_build_files(arguments.project_dir, key)
     # taken before the copy, so that a change while copying makes the build stale rather than wrongly current
     # computed once: the fingerprint describes the pruning the compilation below uses, even if hotspot results change
     pruning_environment = callpath_pruning.environment(arguments, key.configuration) if key.mode == "dp" else None
-    parts = compute_fingerprint_parts(arguments, key, compile_script, settings_path, pruning_environment)
+    parts, entries = compute_fingerprint(arguments, key, compile_script, settings_path, pruning_environment)
     tree = build_tree_path_of(arguments.project_root, key)
 
     message("Copying project to " + tree + "...\n")
@@ -235,7 +251,7 @@ def ensure_build(
                 message="Compilation failed.",
             )
         record = make_record(arguments, key, compile_script, settings_path, tree, compile_result[1], parts)
-        write_build(arguments.project_dir, record)
+        write_build(arguments.project_dir, record, BuildFiles(sources=entries))
         return BuildOutcome(
             BuildResult.BUILT,
             key,

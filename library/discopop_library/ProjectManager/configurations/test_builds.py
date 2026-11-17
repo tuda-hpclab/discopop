@@ -20,16 +20,30 @@ import pytest
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.building import BuildOutcome, BuildResult, build_lock, ensure_build
 from discopop_library.ProjectManager.configurations.builds import (
+    NO_FILE_LIST_NOTE,
+    BuildAcceptError,
+    BuildInUseError,
     BuildKey,
     BuildPolicy,
     BuildState,
+    BuildStatus,
+    accept_build,
+    accepted_changes_text,
+    build_files_path_of,
     build_status,
     build_tree_path_of,
+    combine_fingerprint,
     delete_builds,
     list_builds,
     manifest_path_of,
+    read_build,
+    read_build_files,
+    source_fingerprint,
+    write_build,
 )
 from discopop_library.ProjectManager.services import execution_run
+from discopop_library.ProjectManager.services.callpath_pruning import CallpathPruning, save_callpath_pruning
+from discopop_library.ProjectManager.services.fingerprint_ignore import add_patterns
 from discopop_library.ProjectManager.services.jobs import WorkContext
 
 KEY = BuildKey("cfg", "seq")
@@ -540,3 +554,193 @@ def test_hotspot_results_do_not_matter_to_a_dp_build_without_pruning(project: Di
     assert _build(project, key=dp).result == BuildResult.BUILT
     _hotspots(project)
     assert _build(project, key=dp).result == BuildResult.REUSED
+
+
+# ── what changed since a build, ignore patterns, accepting changes ─────────────
+
+
+def _status(project: Dict[str, Path], key: BuildKey = KEY) -> BuildStatus:
+    return build_status(
+        _arguments(project["root"]),
+        key,
+        str(project["compile"]),
+        str(project["configs"] / (key.mode + "_settings.json")),
+    )
+
+
+def _project_dir(project: Dict[str, Path]) -> str:
+    return str(project["root"] / ".discopop" / "project")
+
+
+def test_the_hash_of_the_files_is_unchanged_so_existing_builds_stay_current(project: Dict[str, Path]) -> None:
+    import hashlib
+
+    root = str(project["root"])
+    (project["root"] / "sub").mkdir()
+    (project["root"] / "sub" / "a.h").write_text("x\n")
+    legacy = hashlib.sha256()
+    lines = []
+    for name in ("main.c", "sub/a.h"):
+        stat = os.lstat(os.path.join(root, name))
+        lines.append(name + "\0" + str(stat.st_size) + "\0" + str(stat.st_mtime_ns))
+    for line in sorted(lines):
+        legacy.update(line.encode() + b"\n")
+    assert source_fingerprint(root) == legacy.hexdigest()
+
+
+def test_a_stale_build_names_the_changed_files(project: Dict[str, Path]) -> None:
+    (project["root"] / "gone.h").write_text("\n")
+    _build(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    (project["root"] / "dp_build").mkdir()
+    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    (project["root"] / "gone.h").unlink()
+
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert status.changes.parts == ("sources",)
+    files = status.changes.files
+    assert files is not None and not files.approximate
+    assert files.modified == ("main.c",)
+    assert files.added == ("dp_build/CMakeCache.txt",)
+    assert files.removed == ("gone.h",)
+    assert status.reason.startswith("Changed since the build: sources.")
+    assert "3 files changed (1 modified, 1 added, 1 removed)" in status.reason
+
+
+def test_an_ignore_pattern_added_after_the_build_makes_it_current(project: Dict[str, Path]) -> None:
+    _build(project)
+    (project["root"] / "dp_build").mkdir()
+    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    assert _status(project).state == BuildState.STALE
+
+    add_patterns(_project_dir(project), ["dp_build/"])
+    assert _status(project).state == BuildState.CURRENT
+    assert _build(project).result == BuildResult.REUSED
+    # a change elsewhere still counts
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
+    assert status.changes.files.paths == ("main.c",)
+
+
+def test_a_build_without_a_file_list_reports_the_files_newer_than_the_build(project: Dict[str, Path]) -> None:
+    # the build directory existed when the build was compiled (an in-place compilation before), as in practice
+    (project["root"] / "dp_build").mkdir()
+    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("old\n")
+    _build(project)
+    os.remove(build_files_path_of(_project_dir(project), KEY))
+    record = read_build(_project_dir(project), KEY)
+    assert record is not None
+    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("\n")
+    os.utime(project["root"] / "dp_build" / "CMakeCache.txt", (record.built_at + 10, record.built_at + 10))
+
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
+    assert status.changes.files.approximate and status.changes.files.modified == ("dp_build/CMakeCache.txt",)
+    assert "1 file is newer than the build: dp_build/ (1)." in status.reason
+
+    # its recorded hash covers every file: a pattern does not help, which is said
+    add_patterns(_project_dir(project), ["dp_build/"])
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
+    assert status.changes.files.modified == ("dp_build/CMakeCache.txt",)
+    assert NO_FILE_LIST_NOTE in status.reason
+    # accepted once, the pattern applies
+    accept_build(
+        _arguments(project["root"]), KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json")
+    )
+    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("changed\n")
+    assert _status(project).state == BuildState.CURRENT
+
+
+def test_a_file_list_of_another_manifest_is_not_used(project: Dict[str, Path]) -> None:
+    """An older version rebuilding the build writes a new manifest and leaves the file list of the old one."""
+    _build(project)
+    record = read_build(_project_dir(project), KEY)
+    assert record is not None
+    record.fingerprint_parts["sources"] = "the files when an older version compiled it again"
+    record.fingerprint = combine_fingerprint(record.fingerprint_parts)
+    write_build(_project_dir(project), record)
+    (project["root"] / "dp_build").mkdir()
+    (project["root"] / "dp_build" / "a").write_text("\n")
+    add_patterns(_project_dir(project), ["dp_build/"])
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
+    assert status.changes.files.approximate
+
+
+def test_a_change_of_the_call_path_pruning_cannot_be_accepted(project: Dict[str, Path]) -> None:
+    dp = BuildKey("cfg", "dp")
+    _build(project, key=dp)
+    hotspots = project["root"] / ".discopop" / "hotspot_detection"
+    hotspots.mkdir(parents=True)
+    (hotspots / "Hotspots.json").write_text(json.dumps({"code_regions": [{"hotness": "YES"}]}))
+    save_callpath_pruning(_project_dir(project), CallpathPruning(enabled=True))
+    status = _status(project, dp)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert "callpath_pruning" in status.changes.parts
+    assert "the build was not pruned, but would be now" in status.reason
+    with pytest.raises(BuildAcceptError):
+        accept_build(
+            _arguments(project["root"]), dp, str(project["compile"]), str(project["configs"] / "dp_settings.json")
+        )
+    assert _status(project, dp).state == BuildState.STALE
+
+
+def test_accepting_the_changes_makes_the_build_current_and_is_noted(project: Dict[str, Path]) -> None:
+    _build(project)
+    (project["root"] / "notes.txt").write_text("irrelevant\n")
+    arguments = _arguments(project["root"])
+    settings = str(project["configs"] / "seq_settings.json")
+
+    before = accept_build(arguments, KEY, str(project["compile"]), settings)
+    assert before.state == BuildState.STALE
+    assert _status(project).state == BuildState.CURRENT
+    files = read_build_files(_project_dir(project), KEY)
+    assert files is not None and len(files.accepted) == 1
+    assert files.accepted[0]["parts"] == ["sources"] and files.accepted[0]["files"] == ["notes.txt"]
+    assert "accepted" in accepted_changes_text(_project_dir(project), KEY)
+
+    reused = _build(project)
+    assert reused.result == BuildResult.REUSED
+    assert _count(project, "compiles.txt") == 1
+    # nothing left to accept
+    assert accept_build(arguments, KEY, str(project["compile"]), settings).state == BuildState.CURRENT
+
+
+def test_a_build_in_use_cannot_be_accepted(project: Dict[str, Path]) -> None:
+    _build(project)
+    (project["root"] / "notes.txt").write_text("irrelevant\n")
+    arguments = _arguments(project["root"])
+    with build_lock(arguments, KEY):
+        with pytest.raises(BuildInUseError):
+            accept_build(arguments, KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json"))
+    assert _status(project).state == BuildState.STALE
+
+
+def test_a_rebuild_and_a_deletion_remove_the_file_list(project: Dict[str, Path]) -> None:
+    _build(project)
+    path = build_files_path_of(_project_dir(project), KEY)
+    (project["root"] / "notes.txt").write_text("x\n")
+    accept_build(
+        _arguments(project["root"]), KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json")
+    )
+    _build(project, policy=BuildPolicy.REBUILD)
+    files = read_build_files(_project_dir(project), KEY)
+    # a new build starts without the accepted changes of the old one
+    assert files is not None and files.accepted == [] and "notes.txt" in files.sources
+    delete_builds(_arguments(project["root"]))
+    assert not os.path.exists(path)
+
+
+def test_the_file_lists_are_no_builds_and_unknown_manifest_fields_are_ignored(project: Dict[str, Path]) -> None:
+    _build(project)
+    manifest = manifest_path_of(_project_dir(project), KEY)
+    with open(manifest) as file:
+        data = json.load(file)
+    data["added_by_a_later_version"] = 1
+    with open(manifest, "w") as file:
+        json.dump(data, file)
+    assert [record.build_id for record in list_builds(_project_dir(project))] == ["cfg_seq"]
+    assert read_build(_project_dir(project), KEY) is not None

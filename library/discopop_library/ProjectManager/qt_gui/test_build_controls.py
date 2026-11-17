@@ -8,6 +8,7 @@
 
 """Tests of the widgets for the builds and runs."""
 
+import json
 import time
 from pathlib import Path
 from typing import List
@@ -16,15 +17,23 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.configurations.builds import (
+    BuildFiles,
+    BuildKey,
     BuildRecord,
     build_trees_dir_of,
+    compute_fingerprint,
     list_builds,
+    make_record,
+    read_build_files,
     write_build,
 )
 from discopop_library.ProjectManager.configurations.runs import RunRecord, list_all_runs, write_run
+from discopop_library.ProjectManager.qt_gui import dialogs
 from discopop_library.ProjectManager.qt_gui.build_controls import BuildOptions, BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
+from discopop_library.ProjectManager.services import build_overview
+from discopop_library.ProjectManager.services.fingerprint_ignore import load_fingerprint_ignore
 
 
 def test_the_build_options_default_to_compiling_when_needed(qtbot: QtBot) -> None:
@@ -170,3 +179,80 @@ def test_the_runs_can_be_limited_to_modes(qtbot: QtBot, widget: BuildsAndRuns) -
     only_dp = BuildsAndRuns(widget.arguments, show_builds=False, run_modes=("dp",))
     qtbot.addWidget(only_dp)
     assert [only_dp.run_table.item(row, 2).text() for row in range(only_dp.run_table.rowCount())] == ["dp", "dp"]  # type: ignore[union-attr]
+
+
+@pytest.fixture
+def stale_build(qtbot: QtBot, tmp_path: Path) -> BuildsAndRuns:
+    """A current seq build of ``cfg`` whose project then got a build directory ``dp_build`` (not ignored by git)."""
+    arguments = make_arguments(tmp_path / "proj")
+    configs = Path(arguments.project_config_dir)
+    (configs / "cfg").mkdir()
+    (configs / "compile.sh").write_text("#!/bin/bash\n")
+    (configs / "seq_settings.json").write_text(json.dumps({"CC": "cc", "CXX": "c++"}))
+    (tmp_path / "proj" / "main.c").write_text("int main() { return 0; }\n")
+    key = BuildKey("cfg", "seq")
+    tree = Path(build_trees_dir_of(arguments.project_root)) / key.build_id
+    tree.mkdir(parents=True)
+    compile_script = str(configs / "compile.sh")
+    settings = str(configs / "seq_settings.json")
+    parts, entries = compute_fingerprint(arguments, key, compile_script, settings)
+    record = make_record(arguments, key, compile_script, settings, str(tree), 1.0, parts)
+    write_build(arguments.project_dir, record, BuildFiles(sources=entries))
+    (tmp_path / "proj" / "dp_build").mkdir()
+    (tmp_path / "proj" / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    created = BuildsAndRuns(arguments)
+    qtbot.addWidget(created)
+    created.build_table.selectRow(0)
+    return created
+
+
+def test_ignoring_the_changed_paths_makes_the_build_current(
+    qtbot: QtBot, stale_build: BuildsAndRuns, dialog_answers: DialogRecorder
+) -> None:
+    dialog_answers.answer("review_build_changes", (dialogs.REVIEW_IGNORE, "dp_build/\n"))
+    stale_build.review_button.click()
+    qtbot.waitUntil(lambda: not stale_build.is_busy(), timeout=20000)
+    assert dialog_answers.titles("review_build_changes") == ["Changes since the build cfg_seq"]
+    assert "1 file changed (1 added): dp_build/ (1)." in dialog_answers.messages("review_build_changes")[0]
+    assert load_fingerprint_ignore(stale_build.arguments.project_dir) == ["dp_build/"]
+    assert stale_build.build_table.item(0, 6).text() == "current"  # type: ignore[union-attr]
+    assert "is current" in stale_build.note.text()
+
+
+def test_accepting_a_stale_build_asks_first(
+    qtbot: QtBot, stale_build: BuildsAndRuns, dialog_answers: DialogRecorder
+) -> None:
+    dialog_answers.answer("review_build_changes", (dialogs.REVIEW_ACCEPT, ""), (dialogs.REVIEW_ACCEPT, ""))
+    dialog_answers.answer("ask_yes_no", False, True)
+    stale_build.review_button.click()
+    qtbot.waitUntil(lambda: not stale_build.is_busy(), timeout=20000)
+    # declined: nothing changed
+    assert stale_build.build_table.item(0, 6).text().startswith("stale")  # type: ignore[union-attr]
+    stale_build.review_button.click()
+    qtbot.waitUntil(lambda: not stale_build.is_busy(), timeout=20000)
+    assert stale_build.build_table.item(0, 6).text() == "current (changes accepted)"  # type: ignore[union-attr]
+    files = read_build_files(stale_build.arguments.project_dir, BuildKey("cfg", "seq"))
+    assert files is not None and files.accepted[0]["files"] == ["dp_build/CMakeCache.txt"]
+    assert load_fingerprint_ignore(stale_build.arguments.project_dir) == []
+
+
+def test_closing_the_review_changes_nothing(
+    qtbot: QtBot, stale_build: BuildsAndRuns, dialog_answers: DialogRecorder
+) -> None:
+    dialog_answers.answer("review_build_changes", None)
+    stale_build.review_button.click()
+    qtbot.waitUntil(lambda: not stale_build.is_busy(), timeout=20000)
+    files = read_build_files(stale_build.arguments.project_dir, BuildKey("cfg", "seq"))
+    assert files is not None and files.accepted == []
+    assert load_fingerprint_ignore(stale_build.arguments.project_dir) == []
+
+
+def test_the_review_proposes_build_directories_only(stale_build: BuildsAndRuns) -> None:
+    root = Path(stale_build.arguments.project_root)
+    (root / "main.c").write_text("int main() { return 1; }\n")
+    (root / "out").mkdir()
+    (root / "out" / "a.o").write_text("o")
+    review = build_overview.review_build(stale_build.arguments, "cfg_seq")
+    # no git: a directory counts as a build directory by the marker of its build system
+    assert review.suggested_patterns == ("dp_build/",)
+    assert review.file_lines() == ["A  dp_build/CMakeCache.txt", "M  main.c", "A  out/a.o"]
