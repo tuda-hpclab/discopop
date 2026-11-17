@@ -59,13 +59,17 @@ def _run(stage: str, cmd: str, cwd: Path, env: dict[str, str]) -> None:
         )
 
 
-def build_and_profile(src_dir: Path, work_dir: Path, run_args: str = "") -> Path:
+def build_and_profile(
+    src_dir: Path, work_dir: Path, run_args: str = "", extra_env: dict[str, str] | None = None
+) -> Path:
     """Copy src_dir to work_dir, build it with the DiscoPoP compiler wrappers and run it (./prog run_args).
 
-    Returns the .discopop directory. The source tree is never written to.
+    extra_env is added to the environment of both steps (e.g. CXXFLAGS, which the test Makefiles pass to the
+    compiler). Returns the .discopop directory. The source tree is never written to.
     """
     shutil.copytree(src_dir, work_dir)
     env = _environment(work_dir)
+    env.update(extra_env or {})
     _run("build", "make", work_dir, env)
     _run("profiling", f"./prog {run_args}".strip(), work_dir, env)
     return work_dir / ".discopop"
@@ -95,6 +99,7 @@ class PipelineTestCase(unittest.TestCase):
     SRC_DIR: Path
     ENABLE_PATTERNS: str | None = None
     RUN_ARGS = ""
+    EXTRA_ENV: dict[str, str] | None = None
 
     dot_discopop: Path
     profiler_dir: Path
@@ -104,7 +109,7 @@ class PipelineTestCase(unittest.TestCase):
     def setUpClass(cls) -> None:
         tmp = tempfile.TemporaryDirectory(prefix="discopop_e2e_")
         cls.addClassCleanup(tmp.cleanup)
-        cls.dot_discopop = build_and_profile(cls.SRC_DIR, Path(tmp.name) / "src", cls.RUN_ARGS)
+        cls.dot_discopop = build_and_profile(cls.SRC_DIR, Path(tmp.name) / "src", cls.RUN_ARGS, cls.EXTRA_ENV)
         cls.profiler_dir = cls.dot_discopop / "profiler"
         if cls.ENABLE_PATTERNS is not None:
             cls.test_output = explore(cls.dot_discopop, cls.ENABLE_PATTERNS)
