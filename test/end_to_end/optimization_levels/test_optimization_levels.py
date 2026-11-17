@@ -37,11 +37,6 @@ HERE = Path(__file__).parent
 LEVELS = ["-O0", "-O1", "-O2", "-O3", "-Os", "-Og"]
 PROGRAMS = ["kernels", "optimize_macro"]
 BASELINE = "-O0"
-XFAIL_AST_LEVEL = (
-    "known bug: the wrappers append -O0 to the compilation that is instrumented, but the AST export "
-    "(-fsyntax-only -ast-dump) gets the user's arguments unchanged, so with -O1 and above __OPTIMIZE__ is defined "
-    "there and the AST can describe other code than the instrumented IR"
-)
 # files that differ between two runs of the same binary (timings, locks), not between optimization levels
 IGNORED_FILES = {"statistics", "locking_files"}
 
@@ -118,9 +113,7 @@ def _diff(baseline: dict[str, list[str]], other: dict[str, list[str]]) -> list[s
 @pytest.mark.parametrize("program", PROGRAMS)
 @pytest.mark.parametrize("level", [lv for lv in LEVELS if lv != BASELINE])
 class TestProfilerOutput:
-    def test_same_files_as_baseline(self, runs: Runs, program: str, level: str, request: pytest.FixtureRequest) -> None:
-        if program == "optimize_macro":
-            request.applymarker(pytest.mark.xfail(strict=True, reason=XFAIL_AST_LEVEL))
+    def test_same_files_as_baseline(self, runs: Runs, program: str, level: str) -> None:
         baseline = _profiler_files(runs.dot_discopop(program, BASELINE) / "profiler")
         other = _profiler_files(runs.dot_discopop(program, level) / "profiler")
         problems = _diff(baseline, other)
@@ -186,7 +179,6 @@ class TestEffectiveFlags:
         for job in emit_jobs:
             assert _opt_options(job) == ["-O0"], _opt_options(job)
 
-    @pytest.mark.xfail(strict=True, reason=XFAIL_AST_LEVEL)
     def test_all_jobs_agree_on_the_level(self, level: str, tmp_path: Path) -> None:
         """The AST export (-fsyntax-only) of the same compilation must be done at the same level as the IR:
         otherwise the AST and the instrumented code can see different code (``__OPTIMIZE__``)."""

@@ -22,6 +22,9 @@
 # DP_AST_NO_PLUGIN=1 uses the filtered dump even if the plugin exists. The directories of DP_PROJECT_INCLUDE_DIRS (code
 # outside the project directory that the pass counts as part of the project) and DP_PROJECT_EXCLUDE_DIRS (which it
 # does not), both separated by ':', absolute or relative to DP_PROJECT_ROOT_DIR, are honored by both.
+# The compiler arguments are followed by -O0, like in the wrappers' compilation of the instrumented code: the AST must
+# be of the code that is instrumented, and preprocessor conditions on the optimization level (__OPTIMIZE__) must be
+# resolved in the same way for both.
 dp_dump_ast() {
   local clang="$1" dot_dp="$2" out_file="$3"
   shift 3
@@ -43,7 +46,7 @@ dp_dump_ast() {
     plugin="${PARENT_PATH}/DiscoPoPASTExport-${major}.so"
     if [ -n "$major" ] && [ -f "$plugin" ]; then
       raw_tmp="$(mktemp "${dot_dp}/profiler/ast_export.XXXXXX")" || return 1
-      if "$clang" "$@" -fsyntax-only -Xclang -load -Xclang "$plugin" -Xclang -add-plugin -Xclang dp-ast-export \
+      if "$clang" "$@" -O0 -fsyntax-only -Xclang -load -Xclang "$plugin" -Xclang -add-plugin -Xclang dp-ast-export \
         -Xclang -plugin-arg-dp-ast-export -Xclang "filemap=${file_mapping}" \
         -Xclang -plugin-arg-dp-ast-export -Xclang "root=${project_root}" \
         -Xclang -plugin-arg-dp-ast-export -Xclang "include=${DP_PROJECT_INCLUDE_DIRS:-}" \
@@ -61,7 +64,7 @@ dp_dump_ast() {
 
   (
     set -o pipefail
-    "$clang" "$@" -fsyntax-only -Xclang -ast-dump=json |
+    "$clang" "$@" -O0 -fsyntax-only -Xclang -ast-dump=json |
       python3 "${PARENT_PATH}/filter_ast_dump.py" "${project_root}" "${file_mapping}" >"$out_file"
   )
 }
