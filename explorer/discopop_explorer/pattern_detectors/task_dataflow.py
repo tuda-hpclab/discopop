@@ -398,6 +398,8 @@ def _accessed_variables(pet: PEGraphX, task: Context) -> Dict[str, Tuple[bool, b
     for tg_node in task.get_contained_nodes(inclusive=True):
         node = tg_node.get_pet_node(pet)
         for variable in list(getattr(node, "local_vars", [])) + list(getattr(node, "global_vars", [])):
+            if variable.name is None:
+                continue  # without a name there is no clause to write (and nothing to sort the names by)
             read, written, _ = accessed.get(variable.name, (False, False, variable.defLine))
             accessed[variable.name] = (
                 read or "R" in variable.accessMode,
