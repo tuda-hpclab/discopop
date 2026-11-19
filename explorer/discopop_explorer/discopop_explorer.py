@@ -306,10 +306,11 @@ def run(arguments: ExplorerArguments) -> None:
             dump_to_gephi_file(res.pet, arguments.enable_pet_plot_file)
 
         if arguments.enable_detection_result_dump_file is not None:
-            with open(arguments.enable_detection_result_dump_file, "w+") as f:
-                f.write(res.dump_to_pickled_json())
-                f.flush()
-                f.close()
+            with stage("Writing the detection result dump"):
+                with open(arguments.enable_detection_result_dump_file, "w+") as f:
+                    f.write(res.dump_to_pickled_json())
+                    f.flush()
+                    f.close()
 
         if arguments.enable_json_file is None:
             print(str(res))
@@ -318,8 +319,9 @@ def run(arguments: ExplorerArguments) -> None:
             # print(str(res))
             # since PETGraphX is not JSON Serializable, delete the field prior to executing the serialization
             del res.pet
-            with open(arguments.enable_json_file, "w+") as f:
-                json.dump(res, f, indent=2, cls=PatternBaseSerializer)
+            with stage("Writing the patterns"):
+                with open(arguments.enable_json_file, "w+") as f:
+                    json.dump(res, f, indent=2, cls=PatternBaseSerializer)
 
         # Written after the patterns, so that a decision file older than the patterns reveals
         # patterns it does not describe. Left alone when existing patterns are loaded instead
