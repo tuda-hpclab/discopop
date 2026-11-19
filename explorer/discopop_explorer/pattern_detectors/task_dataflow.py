@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import weakref
 from dataclasses import dataclass, field, replace
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import AbstractSet, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.aliases.NodeID import NodeID
@@ -60,6 +60,7 @@ from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
 from discopop_explorer.functions.PEGraph.traversal.parent import get_parent_function
 from discopop_explorer.utilities.PEGraphConstruction.parser import instructionToCUIdMap
 from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import ASTPatternDetectionHelper
+from discopop_explorer.utilities.BoundedCache import BoundedCache
 from discopop_explorer.utilities.callpath_states import call_instructions_of_state
 from discopop_explorer.classes.TaskGraph.Contexts.Context import Context
 from discopop_explorer.enums.DepType import DepType
@@ -213,26 +214,43 @@ def _referenced_names(ast_helper: Optional[ASTPatternDetectionHelper], lines: Tu
     return set(ast_helper.get_referenced_names(file_id, first, last))
 
 
+# entries (function, line, AST helper) per PEGraphX of the cache of _variables_at_line; the values are small sets of
+# names
+VARIABLES_AT_LINE_CACHE_SIZE = 8192
+_variables_at_line_cache: "weakref.WeakKeyDictionary[PEGraphX, BoundedCache[Tuple[object, ...], FrozenSet[str]]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def _variables_at_line(
     pet: PEGraphX, function: FunctionNode, line: Optional[str], ast_helper: Optional[ASTPatternDetectionHelper] = None
-) -> Optional[Set[str]]:
+) -> Optional[FrozenSet[str]]:
     """The names of the variables the CUs of the function that have an instruction on the line access, and the names
-    the code on the line refers to (AST); None for no line."""
+    the code on the line refers to (AST); None for no line. Memoized (bounded) per PEGraphX: the same few lines of a
+    function are asked about for thousands of dependences."""
     if line is None:
         return None
-    names: Set[str] = set()
-    for cu in subtree_of_type(pet, function, CUNode):
-        if any(pet.instruction_lines.get(str(i)) == line for i in cu.instruction_ids):
-            names.update(v.name for v in cu.local_vars)
-            names.update(v.name for v in cu.global_vars)
-    if ast_helper is not None:
-        file_id, line_number = (int(part) for part in line.split(":"))
-        names.update(ast_helper.get_referenced_names(file_id, line_number, line_number))
-    return names
+    cache = _variables_at_line_cache.get(pet)
+    if cache is None:
+        cache = BoundedCache(VARIABLES_AT_LINE_CACHE_SIZE)
+        _variables_at_line_cache[pet] = cache
+
+    def compute() -> FrozenSet[str]:
+        names: Set[str] = set()
+        for cu in subtree_of_type(pet, function, CUNode):
+            if any(pet.instruction_lines.get(str(i)) == line for i in cu.instruction_ids):
+                names.update(v.name for v in cu.local_vars)
+                names.update(v.name for v in cu.global_vars)
+        if ast_helper is not None:
+            file_id, line_number = (int(part) for part in line.split(":"))
+            names.update(ast_helper.get_referenced_names(file_id, line_number, line_number))
+        return frozenset(names)
+
+    return cache.get_or_compute((function.id, line, ast_helper), compute)
 
 
 def _caller_names(
-    scope: _Scope, name: str, sink_in_function: bool, own: Set[str], at_sink: Optional[Set[str]] = None
+    scope: _Scope, name: str, sink_in_function: bool, own: Set[str], at_sink: Optional[AbstractSet[str]] = None
 ) -> List[str]:
     """The names of the scope of the function for a dependence that the profiler named ``name`` at its later access.
 
