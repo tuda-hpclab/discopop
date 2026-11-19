@@ -152,3 +152,19 @@ def test_the_recursive_calls_of_the_region_are_resolved_by_the_function_name(
     # a recursive call outside of the region, a call of another function and None entries are no match
     caller.recursive_function_calls = ["fib 1:40,", "other 1:11,", None]  # type: ignore[list-item]
     assert classify_region(pet, region, hotspots) == (None, None)
+
+
+def test_a_shared_index_gives_the_classes_of_a_fresh_one(
+    isolated_pattern_id_cwd: Any, make_node: MakeNode, build_pet_graph: BuildPetGraph
+) -> None:
+    """attach_hotspot_information collects the lookups of the program once for all regions"""
+    from discopop_explorer.pattern_detectors.task_hotspots import _CalleeIndex
+
+    pet, region, _ = _group(make_node, build_pet_graph)
+    index = _CalleeIndex(pet)
+    for hotspots in (
+        {HotspotType.YES: [_entry(HotspotNodeType.FUNCTION, 5, "fib", 2.5)]},
+        {HotspotType.MAYBE: [_entry(HotspotNodeType.LOOP, 12, runtime=0.1)]},
+        {HotspotType.NO: [_entry(HotspotNodeType.FUNCTION, 5, "other")]},
+    ):
+        assert classify_region(pet, region, hotspots, index) == classify_region(pet, region, hotspots)
