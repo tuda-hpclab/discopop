@@ -1077,6 +1077,91 @@ class ScriptEditor(QPlainTextEdit):
         self.document().setModified(False)
 
 
+# --- resizable boxes ---
+
+_QWIDGETSIZE_MAX = 16_777_215
+RESIZE_HANDLE_HEIGHT = 9
+RESIZE_HANDLE_TOOLTIP = "Drag to change the height"
+
+
+class ResizeHandle(QWidget):
+    """A grip below a box: dragging it changes the height of ``target`` (never below ``minimum``).
+
+    By default the height is a minimum height, so the box can still grow with its layout; ``fixed`` makes it the exact
+    height, for boxes that must not take more room than the user gave them.
+    """
+
+    def __init__(
+        self, target: QWidget, minimum: int = 48, fixed: bool = False, parent: Optional[QWidget] = None
+    ) -> None:
+        super().__init__(parent)
+        self.target = target
+        self.minimum = minimum
+        self.fixed = fixed
+        self._drag_start: Optional[Tuple[int, int]] = None
+        # the height "View > Reset" returns to
+        self.default_height = minimum
+        self.setFixedHeight(RESIZE_HANDLE_HEIGHT)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setToolTip(RESIZE_HANDLE_TOOLTIP)
+
+    def set_target_height(self, height: int) -> None:
+        height = max(self.minimum, height)
+        self.target.setMinimumHeight(height)
+        self.target.setMaximumHeight(height if self.fixed else _QWIDGETSIZE_MAX)
+
+    def reset(self) -> None:
+        """Back to the initial height."""
+        self.set_target_height(self.default_height)
+
+    def mousePressEvent(self, event: Any) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = (int(event.globalPosition().y()), self.target.height())
+            event.accept()
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802
+        if self._drag_start is not None:
+            start_y, start_height = self._drag_start
+            self.set_target_height(start_height + int(event.globalPosition().y()) - start_y)
+            event.accept()
+
+    def mouseReleaseEvent(self, event: Any) -> None:  # noqa: N802
+        self._drag_start = None
+
+    def paintEvent(self, _event: Any) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setPen(QPen(self.palette().color(QPalette.ColorRole.Mid), 1))
+        middle = self.height() // 2
+        left = self.width() // 2 - 14
+        for offset in (-1, 1):
+            painter.drawLine(left, middle + offset, left + 28, middle + offset)
+
+
+class ResizableBox(QWidget):
+    """A box with a ``ResizeHandle`` below it (made by ``resizable``)."""
+
+    resize_handle: ResizeHandle
+
+
+def resizable(target: QWidget, height: Optional[int] = None, minimum: int = 48, fixed: bool = False) -> ResizableBox:
+    """``target`` above a ``ResizeHandle``, as one widget to put into a layout.
+
+    ``height`` is the initial height (default: the current minimum height of ``target``). The handle is available as
+    the attribute ``resize_handle`` of the result.
+    """
+    container = ResizableBox()
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    layout.addWidget(target, 1)
+    handle = ResizeHandle(target, minimum, fixed)
+    layout.addWidget(handle)
+    handle.default_height = max(minimum, height if height is not None else target.minimumHeight())
+    handle.reset()
+    container.resize_handle = handle
+    return container
+
+
 # --- thread selector ---
 
 
@@ -1541,6 +1626,7 @@ class SettingsSplitter(QSplitter):
 
     def __init__(self, settings: QWidget, main: QWidget, width: int, parent: Optional[QWidget] = None) -> None:
         super().__init__(Qt.Orientation.Horizontal, parent)
+        self._default_width = width
         settings_layout = settings.layout()
         if settings_layout is not None:
             settings_layout.setSpacing(CARD_SPACING)
@@ -1570,6 +1656,10 @@ class SettingsSplitter(QSplitter):
         self.toggle_button.setObjectName(FLAT_NAME)
         self.toggle_button.clicked.connect(lambda: self.set_settings_visible(not self.settings_visible()))
         self._update_toggle()
+
+    def reset_width(self) -> None:
+        """The settings column at its initial width (a hidden column stays hidden)."""
+        self.setSizes([self._default_width, 10_000])
 
     def _reserve_scroll_bar(self, shown: bool) -> None:
         bar_width = 0 if shown else self.settings_area.verticalScrollBar().sizeHint().width()

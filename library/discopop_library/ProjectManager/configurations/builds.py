@@ -38,7 +38,7 @@ from filelock import FileLock, Timeout
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONLY_FILES
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
-from discopop_library.ProjectManager.services import callpath_pruning
+from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored, load_fingerprint_ignore
 
 PATH = str
@@ -400,6 +400,11 @@ def compute_fingerprint(
         if pruning_environment is None:
             pruning_environment = callpath_pruning.environment(arguments, key.configuration)
         parts["callpath_pruning"] = callpath_pruning.state_of(pruning_environment, arguments.dot_dp)
+    if key.mode in ("dp", "hd"):
+        # removed OpenMP flags change what the instrumented compilation produces (no part while they are kept)
+        openmp_part = openmp_handling.fingerprint_part(arguments)
+        if openmp_part is not None:
+            parts["openmp"] = openmp_part
     if key.suggestions:
         parts["patches"] = _patch_fingerprint(arguments.dot_dp)
     return parts, entries
@@ -609,6 +614,15 @@ def build_status(
         )
         if cause:
             causes.append(("callpath_pruning", cause))
+    if "openmp" in changed:
+        causes.append(
+            (
+                "openmp",
+                "the OpenMP flags are now "
+                + ("removed" if "openmp" in parts else "kept")
+                + " by the instrumented compilation",
+            )
+        )
     changes = BuildChanges(changed, files, tuple(causes))
     return BuildStatus(BuildState.STALE, describe_changes(changes), record, changes)
 
@@ -678,6 +692,12 @@ def accept_build(
                 + ". Accepting cannot change how its code is pruned: compile it again"
                 + (", or first accept or rebuild the hd build named above" if "_hd is stale" in cause else "")
                 + "."
+            )
+        if "openmp" in status.changes.parts:
+            # the tree was compiled with or without the OpenMP flags; accepting would make its data claim the other
+            raise BuildAcceptError(
+                "The OpenMP flags would be handled differently by a compilation now (see Project Setup). Accepting "
+                "cannot change how the tree was compiled: compile it again."
             )
         parts, entries = compute_fingerprint(arguments, key, compile_script, settings_path)
         files = read_build_files(arguments.project_dir, key) or BuildFiles()

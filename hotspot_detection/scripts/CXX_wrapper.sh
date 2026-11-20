@@ -33,4 +33,7 @@ PTHREAD_XLINKER_FLAGS=()
 # DOT_DISCOPOP not set: the nearest .discopop of the project (see dp_environment.sh), seen by the pass as well
 source "${LIBS_DIR}/dp_environment.sh"
 dp_resolve_dot_discopop "$@" || true
-${LLVM_CLANGPP} "$@" -g -fno-discard-value-names -O0 -Xclang -load -Xclang ${LIBS_DIR}/LLVMHotspotDetection.so -Xclang -fpass-plugin=${LIBS_DIR}/LLVMHotspotDetection.so -Xlinker -L${LIBS_DIR} -Xlinker -lHotspotDetection_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v
+# OpenMP flags: kept with a warning, removed with DP_STRIP_OPENMP=1 (see dp_openmp.sh); DP_ARGS replaces "$@"
+source "${LIBS_DIR}/dp_openmp.sh"
+dp_handle_openmp "$@"
+${LLVM_CLANGPP} "${DP_ARGS[@]}" -g -fno-discard-value-names -O0 -Xclang -load -Xclang ${LIBS_DIR}/LLVMHotspotDetection.so -Xclang -fpass-plugin=${LIBS_DIR}/LLVMHotspotDetection.so -Xlinker -L${LIBS_DIR} -Xlinker -lHotspotDetection_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v

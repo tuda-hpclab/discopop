@@ -142,6 +142,18 @@ def test_the_data_sharing_of_the_fib_tasks() -> None:
     assert flow.sharing[1].shared == ["y"] and flow.sharing[1].first_private == ["n"]
 
 
+def test_a_variable_without_a_name_is_no_part_of_the_data_sharing() -> None:
+    """The profiler data of C++ code can contain variables without a name (found on relearn): a clause needs a name,
+    and the data sharing of the task must not fail on them (sorting None against the names raised a TypeError)."""
+    first, second, after = _fib_tasks()
+    first.variables = [_var("n", "3:26", "R"), _var("x", "3:28", "W"), Variable("ptr", None, "3:29", "RW")]  # type: ignore[arg-type]
+    _depends(after, first, "x", DepType.RAW, 40)
+    _depends(after, second, "y", DepType.RAW, 41)
+    flow = _analyze(_pet({40: "3:34", 41: "3:34"}), [first, second])
+    assert flow.sharing[0].shared == ["x"] and flow.sharing[0].first_private == ["n"]
+    assert flow.sharing[0].private == [] and flow.sharing[0].reduction == []
+
+
 def test_a_variable_declared_in_the_task_is_private_unless_the_code_after_needs_it() -> None:
     first, second, after = _fib_tasks()
     first.variables = [_var("tmp", "3:31", "RW"), _var("res", "3:31", "W")]

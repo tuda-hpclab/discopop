@@ -31,7 +31,7 @@ from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
-from discopop_library.ProjectManager.services import callpath_pruning
+from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.services.execution_run import PreparationRequest, run_preparation
 from discopop_library.ProjectManager.services.explorer_state import (
     explorer_prerequisites_met,
@@ -260,6 +260,7 @@ class ProfilingPanel(Panel):
             self.run_button.setEnabled(not missing and not self._blocked)
             stale = stale_profiling_data_message(self.arguments)
             pruning_stale = callpath_pruning.stale_message(self.arguments, self.project_state.current_config)
+            openmp_stale = openmp_handling.stale_message(self.arguments)
             # the chip says why the button is off or why the data should be profiled again; once that is over, the
             # outcome of the last run is not restored
             if missing:
@@ -270,9 +271,17 @@ class ProfilingPanel(Panel):
                 self.header.chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
             elif pruning_stale is not None:
                 self.header.chip.set_status(widgets.CHIP_WARN, "Call path pruning changed", pruning_stale)
+            elif openmp_stale is not None:
+                self.header.chip.set_status(widgets.CHIP_WARN, "OpenMP flag handling changed", openmp_stale)
             elif self._hint_shown:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "")
-            self._hint_shown = bool(missing) or self._blocked or stale is not None or pruning_stale is not None
+            self._hint_shown = (
+                bool(missing)
+                or self._blocked
+                or stale is not None
+                or pruning_stale is not None
+                or openmp_stale is not None
+            )
 
     def set_blocked(self, blocked: bool) -> None:
         """Another stage runs the configuration (Execute): no profiling run meanwhile."""

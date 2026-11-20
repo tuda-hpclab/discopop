@@ -51,4 +51,7 @@ PTHREAD_FLAG=""; [[ "$(uname)" != "Darwin" ]] && PTHREAD_FLAG="-lpthread"
 # explicitly, or the runtime is never brought up.
 # Mach-O prefixes C symbols with an underscore, so ld64 has to be asked for ___dp_init.
 DP_INIT_SYMBOL="__dp_init"; [[ "$(uname)" == "Darwin" ]] && DP_INIT_SYMBOL="___dp_init"
-${LLVM_CLANGPP} "$@" -L${PARENT_PATH} -Wl,-u,${DP_INIT_SYMBOL} -lDiscoPoP_RT ${PTHREAD_FLAG} -fPIC -v
+# OpenMP flags: kept with a warning, removed with DP_STRIP_OPENMP=1 (see dp_openmp.sh); DP_ARGS replaces "$@"
+source "${PARENT_PATH}/dp_openmp.sh"
+dp_handle_openmp "$@"
+${LLVM_CLANGPP} "${DP_ARGS[@]}" -L${PARENT_PATH} -Wl,-u,${DP_INIT_SYMBOL} -lDiscoPoP_RT ${PTHREAD_FLAG} -fPIC -v

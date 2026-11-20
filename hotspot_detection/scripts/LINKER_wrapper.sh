@@ -27,4 +27,7 @@ fi
 
 # pthread is bundled into libSystem on macOS; only link explicitly on Linux
 PTHREAD_FLAG=""; [[ "$(uname)" != "Darwin" ]] && PTHREAD_FLAG="-lpthread"
-${LLVM_CLANGPP} "$@" -L${LIBS_DIR} -lHotspotDetection_RT ${PTHREAD_FLAG} -fPIC -v
+# OpenMP flags: kept with a warning, removed with DP_STRIP_OPENMP=1 (see dp_openmp.sh); DP_ARGS replaces "$@"
+source "${LIBS_DIR}/dp_openmp.sh"
+dp_handle_openmp "$@"
+${LLVM_CLANGPP} "${DP_ARGS[@]}" -L${LIBS_DIR} -lHotspotDetection_RT ${PTHREAD_FLAG} -fPIC -v

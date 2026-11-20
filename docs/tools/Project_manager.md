@@ -112,6 +112,11 @@ Pruning only applies with *current* hotspot results: `Hotspots.json` classifies 
 
 The setting and the content of `Hotspots.json` are part of the fingerprint of `dp` builds (switching pruning or repeating the hotspot detection makes the build stale), and the profiling data records how it was pruned: if it differs from what a build would do now, the *Profiling* stage is marked stale and the MCP server treats the results as outdated.
 
+### OpenMP flags
+A program compiled with `-fopenmp` is profiled with its OpenMP pragmas active, which is rarely what the analysis needs (see [Instrumentation](Instrumentation.md#openmp-flags)). By default the project manager keeps the flags and the console output of the `dp` / `hd` compilation says so (`WARNING: The instrumented compilation kept the OpenMP flags ...`) together with how to remove them: the check box *Remove OpenMP flags* of the section *OpenMP flags* in the *Project Setup* stage of the GUI, or `--strip-openmp` on the command line (`--no-strip-openmp` keeps them for one invocation even if the setting removes them). The setting is stored in `.discopop/project/openmp_handling.json` (`strip`, off by default, kept by `--reset`) and passed to every instrumented compilation as `DP_STRIP_OPENMP=1`; a value of this variable in the environment or a settings file is ignored (with a warning). After a compilation that removed flags, a `NOTE:` says so.
+
+The setting is part of the fingerprint of `dp` and `hd` builds (switching it makes the build stale, and the change cannot be accepted: compile again), and the profiling data records which way it was compiled: if that differs from the setting, the *Profiling* stage is marked stale and the MCP server treats the results as outdated.
+
 ### Checks of instrumented builds and runs
 An instrumented build only produces consistent data if every compiler call uses the same `.discopop` directory. The project manager sets the absolute `DOT_DISCOPOP` for every run; without it (a build that resets the environment), the compiler wrappers use the nearest `.discopop` directory of the current directory and above, which is the one of the project or its copy, and the instrumented program remembers it. Only a `.discopop` below the project other than `$DOT_DISCOPOP` (a build that compiles outside of the project or whose compiler call finds no other directory) would spread the data over several of them, with file and instruction numbers that do not fit together. Therefore, in the `dp` and `hd` modes:
 
@@ -335,6 +340,7 @@ The project manager does not run the Explorer. After a `dp` run, run `discopop_e
 | `-etr`, `--execution-time-regex [RE]` | per configuration | Read the time from the output. Without a value: the `<DP_EXEC_TIME>` tag; `''` disables the search. |
 | `--project-exclude-dirs DIRS` | `excluded_directories.json` | [Excluded directories](#project-directories) for this invocation, relative to the project root, separated by `:`; `''` excludes none. |
 | `--project-include-dirs DIRS` | `included_directories.json` | [Included directories](#project-directories) outside the project for this invocation, absolute, separated by `:`; `''` includes none. |
+| `--strip-openmp`, `--no-strip-openmp` | `openmp_handling.json` | Remove (keep) the [OpenMP flags](#openmp-flags) from the instrumented compilations for this invocation. |
 | `-v`, `--verbose` | off | Verbose output. |
 | `--log LEVEL` | `WARNING` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). |
 | `--write-log` | off | Write a log file. |

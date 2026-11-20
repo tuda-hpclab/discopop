@@ -90,6 +90,9 @@ STATUS_DEBOUNCE_MS = 150
 STATUS_ON_ACTIVATE_MIN_S = 2.0
 
 
+_DEFAULT_OUTPUT_HEIGHT = 260
+
+
 class ElidedPathLabel(QLabel):
     """Shows a path, cut in the middle with an ellipsis when it does not fit; the full path is the tooltip."""
 
@@ -143,7 +146,7 @@ class MainWindow(QMainWindow):
         # the panel above, the output below; the pane collapses to its header
         self.content_splitter = QSplitter(Qt.Orientation.Vertical)
         self.content_splitter.setChildrenCollapsible(False)
-        self._expanded_output_height = 260
+        self._expanded_output_height = _DEFAULT_OUTPUT_HEIGHT
         self.output_pane.expanded_changed.connect(self._on_output_expanded)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -160,6 +163,7 @@ class MainWindow(QMainWindow):
 
         self._build_panels()
         self._build_frame()
+        self._build_menu_bar()
         self.refresh_stage_statuses()
         self.show_tab(TAB_EDITOR)
 
@@ -241,6 +245,32 @@ class MainWindow(QMainWindow):
         state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
+
+    def _build_menu_bar(self) -> None:
+        """The menu bar: "View" with "Reset" (the layout as at the start)."""
+        # in the window, at its top (not in the global menu bar of the desktop)
+        self.menuBar().setNativeMenuBar(False)
+        self.view_menu = self.menuBar().addMenu("&View")
+        self.reset_view_action = self.view_menu.addAction("&Reset")
+        self.reset_view_action.setToolTip("Undo manual changes of the layout: box heights, splitters, the output pane")
+        self.reset_view_action.triggered.connect(lambda _checked=False: self.reset_view())
+
+    def reset_view(self) -> None:
+        """Undo the manual changes of the layout: resized boxes, splitter positions, the height of the output pane."""
+        for handle in self.findChildren(widgets.ResizeHandle):
+            handle.reset()
+        for panel in self.panels:
+            reset = getattr(panel, "reset_view", None)
+            if callable(reset):
+                reset()
+        for settings_splitter in self.findChildren(widgets.SettingsSplitter):
+            settings_splitter.reset_width()
+        self.splitter.setSizes([220, 1380])
+        self._expanded_output_height = _DEFAULT_OUTPUT_HEIGHT
+        if self.output_pane.is_expanded():
+            total = sum(self.content_splitter.sizes())
+            output = min(self._expanded_output_height, total // 2)
+            self.content_splitter.setSizes([total - output, output])
 
     def _add_theme_menu(self) -> None:
         """The menu "Theme" (System / Light / Dark) of the button at the bottom of the sidebar."""

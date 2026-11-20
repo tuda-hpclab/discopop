@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from discopop_library.ProjectManager.qt_gui import widgets
+
 
 def _message_box(parent: Optional[QWidget], icon: QMessageBox.Icon, title: str, message: str) -> QMessageBox:
     box = QMessageBox(icon, title, message, QMessageBox.StandardButton.Ok, parent)
@@ -125,8 +127,7 @@ def review_build_changes(
     )
     patterns = QPlainTextEdit("\n".join(suggested_patterns))
     patterns.setFont(fixed)
-    patterns.setMaximumHeight(90)
-    layout.addWidget(patterns)
+    layout.addWidget(widgets.resizable(patterns, 90, minimum=40))
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
     ignore_button = QPushButton("Ignore and check again")
     ignore_button.setToolTip("Stores the patterns in the project and checks the build again.")

@@ -79,6 +79,7 @@ def test_a_successful_dp_compile_records_the_directories(tmp_path: Path) -> None
     recorded = json.loads((root / ".discopop" / INSTRUMENTED_DIRECTORIES_FILE).read_text())
     # how the call path states were pruned is recorded with them (none here: pruning is off)
     assert recorded["dp"].pop("callpath_pruning") == '{"hotspots": "", "variables": {}}'
+    assert recorded["dp"].pop("strip_openmp") is False
     assert recorded == {"dp": {"included": [], "excluded": ["third_party"]}}
 
 
@@ -90,7 +91,7 @@ def test_a_successful_hd_compile_records_the_directories_next_to_dp(tmp_path: Pa
     recorded = json.loads((root / ".discopop" / INSTRUMENTED_DIRECTORIES_FILE).read_text())
     assert recorded == {
         "dp": {"included": [], "excluded": []},
-        "hd": {"included": [], "excluded": ["third_party"]},
+        "hd": {"included": [], "excluded": ["third_party"], "strip_openmp": False},
     }
 
 

@@ -18,12 +18,15 @@ import copy
 import os
 from typing import Dict, List, Optional, Tuple
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
+    QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -39,6 +42,7 @@ from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
+from discopop_library.ProjectManager.qt_gui.openmp_section import OpenMPSection
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -68,6 +72,9 @@ from discopop_library.ProjectManager.utilities.reset import reset_project
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 
 DERIVE_DISABLED_TOOLTIP = "Save all changes before deriving settings"
+# the initial heights of the scripts and of the project settings below them
+_DEFAULT_SCRIPTS_HEIGHT = 560
+_DEFAULT_LOWER_HEIGHT = 300
 TEST_BUTTON_TEXT = "Test Compilation"
 
 
@@ -154,17 +161,18 @@ class SetupPanel(Panel):
             [self.derive_button, self.test_compilation_button, self.save_button],
         )
         self.excluded_directories = ExcludedDirectoriesTree(arguments.project_root, arguments.project_dir)
-        self.excluded_directories.setMinimumHeight(140)
+        self.excluded_directories.setMinimumHeight(120)
         self.excluded_directories.changed.connect(self._on_excluded_directories_changed)
         self.excluded_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         excluded_section = widgets.FormSection(EXCLUDED_DIRECTORIES_TITLE)
         excluded_section.add_widget(self.excluded_directories.with_buttons(), EXCLUDED_DIRECTORIES_HINT)
         self.included_directories = IncludedDirectoriesList(arguments.project_root, arguments.project_dir)
-        self.included_directories.setMinimumHeight(140)
+        self.included_directories.setMinimumHeight(120)
         self.included_directories.changed.connect(self._on_included_directories_changed)
         self.included_directories.failed.connect(lambda message: self.status.set(message, widgets.STATUS_FAIL))
         included_section = widgets.FormSection(INCLUDED_DIRECTORIES_TITLE)
         included_section.add_widget(self.included_directories, INCLUDED_DIRECTORIES_HINT)
+        self.openmp = OpenMPSection(arguments, project_state, self.status)
         # what is project code: the project directory without the excluded directories, plus the included ones
         project_code = QHBoxLayout()
         project_code.setContentsMargins(0, 0, 0, 0)
@@ -173,12 +181,34 @@ class SetupPanel(Panel):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
-        layout.addWidget(self.notebook, 1)
-        layout.addLayout(project_code)
-        layout.addWidget(self._danger_zone())
+        # the scripts above, the project settings below: the splitter handle between them moves the border
+        lower = QWidget()
+        lower_layout = QVBoxLayout(lower)
+        lower_layout.setContentsMargins(0, 0, 0, 0)
+        lower_layout.addLayout(project_code)
+        lower_layout.addWidget(self.openmp)
+        lower_layout.addWidget(self._danger_zone())
+        self.lower_area = QScrollArea()
+        self.lower_area.setObjectName(widgets.CLEAR_SCROLL_NAME)
+        self.lower_area.setWidgetResizable(True)
+        self.lower_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.lower_area.setWidget(lower)
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.notebook)
+        self.splitter.addWidget(self.lower_area)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([_DEFAULT_SCRIPTS_HEIGHT, _DEFAULT_LOWER_HEIGHT])
+        layout.addWidget(self.splitter, 1)
 
         self.load_files()
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.reload_unmodified())
+
+    def reset_view(self) -> None:
+        """The border between the scripts and the project settings at its initial place."""
+        total = sum(self.splitter.sizes())
+        self.splitter.setSizes([max(total - _DEFAULT_LOWER_HEIGHT, 1), _DEFAULT_LOWER_HEIGHT])
 
     def _danger_zone(self) -> QFrame:
         """The card of the resets: framed in red, each with what it deletes and what it keeps."""
@@ -269,6 +299,7 @@ class SetupPanel(Panel):
         self.reload_unmodified()
         self.excluded_directories.reload()
         self.included_directories.reload()
+        self.openmp.reload()
         super().showEvent(event)
 
     # ── loading ─────────────────────────────────────────────────────────────
