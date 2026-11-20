@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING, List
 
 from discopop_explorer.classes.ContextTaskGraph.classes.edges import CTGEdgeInfo, CTGEdgeType
 from discopop_explorer.classes.TaskGraph.Contexts.Context import Context
-from discopop_explorer.classes.ContextTaskGraph.modifications.utilities.dominator import is_dominator
+from discopop_explorer.classes.ContextTaskGraph.modifications.utilities.dominator import (
+    control_predecessor_map,
+    is_dominator,
+)
 
 if TYPE_CHECKING:
     from discopop_explorer.classes.TaskGraph.ContextTaskGraph import ContextTaskGraph
@@ -26,6 +29,7 @@ def partial_transitive_reduction(ctg: ContextTaskGraph) -> bool:
     Does not perform a full transitive reduction.
     Returns True, if a modification was applied."""
     modification_applied = False
+    control_predecessors = control_predecessor_map(ctg)
     queue: List[Context] = list(ctg.graph.nodes())
     while len(queue) > 0:
         node = queue.pop()
@@ -56,7 +60,7 @@ def partial_transitive_reduction(ctg: ContextTaskGraph) -> bool:
                     if pred_1 == pred_2:
                         continue
                     # check if pred_1 is a dominator of pred_2
-                    if not is_dominator(ctg, pred_1, pred_2):
+                    if not is_dominator(ctg, pred_1, pred_2, control_predecessors):
                         # pred_1 is not dominator of pred_2
                         pred_1_is_dominator = False
                         break
@@ -69,6 +73,7 @@ def partial_transitive_reduction(ctg: ContextTaskGraph) -> bool:
                     if info.type == CTGEdgeType.CONTROL:
                         to_be_removed.append(info)
 
+                control_predecessors[node] = [p for p in control_predecessors.get(node, []) if p != pred_1]
                 for info in to_be_removed:
                     if info in ctg.edge_information[pred_1][node]:
                         ctg.edge_information[pred_1][node].remove(info)

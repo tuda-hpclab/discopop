@@ -24,6 +24,7 @@ from discopop_explorer.classes.patterns.TaskParallelismInfo import ParallelRegio
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
+from discopop_library.StatusReporting.console import progress
 
 HotspotInformation = Dict[HotspotType, List[Tuple[int, int, HotspotNodeType, str, float]]]
 
@@ -41,21 +42,45 @@ def function_files(pet: PEGraphX) -> Dict[NodeID, int]:
     return files
 
 
+class _CalleeIndex:
+    """What _callees_of_region looks up for every region, collected once: the file of each function, the functions by
+    name and the CUs by the instructions they hold. Without it, every region (relearn: 11k) examines all CUs of the
+    program (attach_hotspot_information: 629 s)."""
+
+    def __init__(self, pet: PEGraphX) -> None:
+        self.pet = pet
+        self.files = function_files(pet)
+        self.functions: Dict[str, List[int]] = {}
+        for function in all_nodes(pet, FunctionNode):
+            self.functions.setdefault(function.name, []).append(self.files.get(function.id, function.file_id))
+        self.cus_of_instruction: Dict[int, List[CUNode]] = {}
+        for cu in all_nodes(pet, CUNode):
+            for instruction in cu.instruction_ids:
+                self.cus_of_instruction.setdefault(instruction, []).append(cu)
+
+
 def _callees_of_region(
-    pet: PEGraphX, instruction_ids: Sequence[int], file_id: int, first: int, last: int
+    pet: PEGraphX,
+    instruction_ids: Sequence[int],
+    file_id: int,
+    first: int,
+    last: int,
+    index: Optional[_CalleeIndex] = None,
 ) -> Set[Tuple[int, str]]:
     """(file id, name) of the functions called by the instructions. The recursive calls are no edges of the graph
     ("<function> <file id>:<line>," per call): those on the lines of the region are resolved by the name, preferring
-    the functions of the file of the call."""
+    the functions of the file of the call. ``index`` saves collecting the lookups of the program for every region."""
+    if index is None:
+        index = _CalleeIndex(pet)
     wanted = set(instruction_ids)
     result: Set[Tuple[int, str]] = set()
-    files = function_files(pet)
-    functions: Dict[str, List[int]] = {}
-    for function in all_nodes(pet, FunctionNode):
-        functions.setdefault(function.name, []).append(files.get(function.id, function.file_id))
-    for cu in all_nodes(pet, CUNode):
-        if wanted.isdisjoint(cu.instruction_ids):
-            continue
+    files = index.files
+    functions = index.functions
+    cus: Dict[int, CUNode] = {}
+    for instruction in wanted:
+        for cu in index.cus_of_instruction.get(instruction, []):
+            cus[id(cu)] = cu
+    for cu in cus.values():
         for call in cu.node_calls:
             call_id = call.get("callInstId")
             if call_id is None or int(call_id) not in wanted or call["cuid"] not in pet.g:
@@ -92,7 +117,10 @@ def _region_of(region: ParallelRegionInfo) -> Optional[Tuple[int, int, int]]:
 
 
 def classify_region(
-    pet: PEGraphX, region: ParallelRegionInfo, hotspots: Optional[HotspotInformation]
+    pet: PEGraphX,
+    region: ParallelRegionInfo,
+    hotspots: Optional[HotspotInformation],
+    index: Optional[_CalleeIndex] = None,
 ) -> Tuple[Optional[HotspotType], Optional[float]]:
     """(class, average runtime) of the region, (None, None) if there is no hotspot information or nothing matches.
 
@@ -107,7 +135,7 @@ def classify_region(
     if location is None:
         return None, None
     file_id, first, last = location
-    callees = _callees_of_region(pet, region.instruction_ids, file_id, first, last)
+    callees = _callees_of_region(pet, region.instruction_ids, file_id, first, last, index)
     matches: Dict[HotspotType, List[float]] = {}
     for hotspot_type, entries in hotspots.items():
         for entry_file, entry_line, node_type, name, runtime in entries:
@@ -131,10 +159,9 @@ def attach_hotspot_information(
     if not hotspots:
         return
     tasks = {p.pattern_id: p for p in patterns if isinstance(p, TaskParallelismInfo)}
-    for pattern in patterns:
-        if not isinstance(pattern, ParallelRegionInfo):
-            continue
-        hotspot_type, runtime = classify_region(pet, pattern, hotspots)
+    index = _CalleeIndex(pet)
+    for pattern in progress([p for p in patterns if isinstance(p, ParallelRegionInfo)], desc="Parallel regions"):
+        hotspot_type, runtime = classify_region(pet, pattern, hotspots, index)
         pattern.hotspot_type = hotspot_type
         pattern.hotspot_runtime = runtime
         for task_id in pattern.contains_patterns:

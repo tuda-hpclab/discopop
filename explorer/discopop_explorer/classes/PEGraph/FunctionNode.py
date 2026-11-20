@@ -90,6 +90,34 @@ class FunctionNode(Node):
                 reachability_pairs[member] = combined
         return reachability_pairs
 
+    def calculate_reachability_pairs_from_successors(
+        self, successors: Dict[NodeID, List[NodeID]]
+    ) -> Dict[NodeID, Set[NodeID]]:
+        """The result of calculate_reachability_pairs, from the SUCCESSOR edges given as plain lists of ids (every
+        source node -> its successors; the edges leaving the function are ignored). It does not touch the graph or an
+        edge, which matters when several functions are processed on threads: reading an edge's type reads the shared
+        EdgeType member, whose reference count all threads then update - up to 76 times slower with 32 threads."""
+        children = cast(List[NodeID], self.children_cu_ids)
+        children_set = set(children)
+        local_graph = nx.DiGraph()
+        local_graph.add_nodes_from(children)
+        for source in children:
+            for target in successors.get(source, ()):
+                if target in children_set:
+                    local_graph.add_edge(source, target)
+        reachability_pairs: Dict[NodeID, Set[NodeID]] = dict()
+        condensation = nx.condensation(local_graph)
+        for scc_index in reversed(list(nx.topological_sort(condensation))):
+            members = condensation.nodes[scc_index]["members"]
+            combined: Set[NodeID] = set(members)
+            for member in members:
+                for succ in local_graph.successors(member):
+                    if succ not in members:
+                        combined.update(reachability_pairs[succ])
+            for member in members:
+                reachability_pairs[member] = combined
+        return reachability_pairs
+
     def get_immediate_post_dominators(self, pet: PEGraphX) -> Dict[NodeID, NodeID]:
         if self.immediate_post_dominators_present:
             import sys

@@ -90,7 +90,6 @@ def _table(columns: tuple) -> QTableWidget:  # type: ignore[type-arg]
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.verticalHeader().setVisible(False)
     table.horizontalHeader().setStretchLastSection(True)
-    table.setMinimumHeight(110)
     return table
 
 
@@ -160,12 +159,12 @@ class BuildsAndRuns(widgets.FormSection):
             ),
         )
         if show_builds:
-            self.add_widget(self.build_table)
+            self.add_widget(widgets.resizable(self.build_table, 110, minimum=60))
             self.add_widget(
                 widgets.hbox(self.check_button, self.review_button, self.delete_builds_button, None, margins=0)
             )
         if show_runs:
-            self.add_widget(self.run_table)
+            self.add_widget(widgets.resizable(self.run_table, 110, minimum=60))
             self.activate_button.setVisible(offer_activate)
             self.delete_runs_button.setVisible(offer_delete_runs)
             self.add_widget(
