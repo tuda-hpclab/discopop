@@ -39,18 +39,23 @@ The profiler records it: e.g. `760@405 RAW 663@376|delta` (instruction 760 = lin
 states `..._loopstate12233` / `..._loopstate01133` differ in the bucket of the chunk loop (first digit, cycling
 0 -> 1 -> 2 -> 0 per iteration), i.e. the dependency crosses chunk iterations.
 
-Privatizing `delta` changes the result. Output of 1024x1024, 2 iterations, compared with the serial program:
+Privatizing `delta` changes the result: the first chunk of a thread may read the private `delta` before writing
+it, i.e. an indeterminate value (undefined behaviour). Output of 1024x1024, 2 iterations (`%g`, as compared by the
+harness), compared with the serial program:
 
 | threads | eb222a0b9 patch (`private(delta)`) | rodinia reference OpenMP |
 | --- | --- | --- |
-| 1 | - | identical |
-| 2, 3, 4, 5 | identical | identical (4; 2, 3, 5 not run) |
+| 2, 3, 4, 5 | identical | identical (1-5, 8) |
+| 6 | not run | 1 line differs |
 | 7 | 5 lines differ | 5 lines differ |
 | 12 | 4 lines differ | 4 lines differ |
 
-With 4 threads (the harness setting) the thread boundaries fall on chunks that write `delta` first, which is why
-the old suggestion passed validation. The reference implementation shares the bug (it is a bug of rodinia's
-hotspot: the interior cells of the border chunks should use the interior stencil).
+With full precision (`%.9g`) the reference also differs at 3 (30 values) and 5 threads (60 values); 2, 4 and 8
+threads stay identical, as their thread boundaries fall on chunks that write `delta` first. With the compiler used
+(g++ -O2) the differences are at most 3.1e-5 (one float ulp at about 320 K); with undefined behaviour nothing
+bounds them in general. The harness validates 4 threads with `%g`, so the old suggestion passed. The reference
+implementation shares the bug (it is a bug of rodinia's hotspot: the interior cells of the border chunks should use
+the interior stencil).
 
 ## Mechanism of the change
 
@@ -81,6 +86,10 @@ outputs compared with the serial ones at 1, 4, 7, 12 and 36 threads.
   the inner `sum -=` loops of lud (neither version offers `reduction(-:sum)` there).
 - no loop parallelized by a reference is rejected for a dependency that is not real.
 
+The reduced test cases differ from hotspot in that `r` and `c` are declared in the loops (hotspot: function scope,
+old patch `private(c,delta,r)`) and there are 2 corner branches instead of 4; the `excludes` of `stale_read` do not
+pin the reason of the rejection (the twins guard against unrelated rejections in part).
+
 ## Open points (concept)
 
 1. **Privatization check of conditionally written variables** (test
@@ -94,18 +103,28 @@ outputs compared with the serial ones at 1, 4, 7, 12 and 36 threads.
    the TaskGraph now has (since 08f83342 every branch region is single-entry with balanced markers): a variable is
    written before a point if it is written before it in the sequential part, or in *every* arm of a branch region
    before it (a region whose arms do not cover all paths, i.e. an `if` without `else`, contributes nothing). The
-   sequence order must follow the regions (arms before the merge CU).
+   sequence order must follow the regions (arms before the merge CU). Further rules: a loop region (possibly zero
+   trips) contributes nothing to the code after it, and nothing flows across a back edge (in hotspot the writes and
+   the read lie inside the inner loops 79/80); an arm that leaves the region (`continue`, `break`, `return`) never
+   reaches the read and counts as covering it; writes through calls or pointers count only if the dependencies show
+   them. Must-write has to hold for *every* iteration context: today `firstwritten` is the union of the
+   per-iteration-context sets, so one context that sees the write first suffices, which is unsound in the same way
+   as `init` (2.).
 2. **`init` as an escape of the second chance is unsound.** `init` only says that the first write of the whole run
    happened inside the loop, not that every iteration writes first. It let the stale read of hotspot pass as long as
    the dynamic dependency was missing. Once 1. exists, the static second chance should rely on must-write only.
-   Do 1. and 2. together, and run the `conditional_scalar` cases, the e2e suite and the rodinia comparison above.
+   Do 1. and 2. together, and run the `conditional_scalar` cases, the e2e suite and the rodinia comparison above:
+   `written_on_all_paths` passes today only through `init`, so removing the escape alone breaks it (it guards the
+   order).
 3. **Explain the rejection.** "A RAW dependency on 'delta' between different iterations" is correct but does not
    tell a user (or an LLM agent) what to fix. When the sink of a loop carried RAW on a scalar is reached on a path
    without a write (e.g. 1. finds no must-write before the read), say so: "the read at 1:130 can see the value of
    an earlier iteration, since not every path writes delta before it (conditional writes at 1:83..1:125)".
-4. **Harness validation.** Validate parallel versions with a thread count that does not divide the iteration space
-   evenly (7, 12) or with several; a single run with 4 threads did not detect the race. The expected speedups of
-   the reference implementations / LLM agents for hotspot rest on the same non-equivalent transformation.
+4. **Harness validation.** Validate parallel versions with several thread counts (e.g. 4, 7, 12) and, where the
+   output format allows, with full precision; one run with 4 threads and `%g` output did not detect the race
+   (whether a thread count exposes it depends on where the thread boundaries fall, not on divisibility). The
+   expected speedups of the reference implementations / LLM agents for hotspot rest on the same non-equivalent
+   transformation.
 5. **Pattern regression suite on top of the harness.** Golden `pattern_decisions.json` per benchmark (accepted /
    rejected per loop, with the rejecting dependency), produced by profiling a small input with the current
    profiler (stored profiles break with profiler format changes, see bfs) and compared after explorer changes; a
