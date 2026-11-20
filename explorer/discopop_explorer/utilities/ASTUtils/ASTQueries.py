@@ -108,7 +108,21 @@ class ASTQueries:
         Returns:
             ID of enclosing scope node or None if none found
         """
-        scope_kinds = {"FunctionDecl", "CompoundStmt", "ForStmt", "WhileStmt"}
+        # the function-like declarations include member functions, constructors, destructors and lambdas: without
+        # them the walk passes the parameters of a method, which are siblings of its body, and ends in the body
+        scope_kinds = {
+            "FunctionDecl",
+            "CXXMethodDecl",
+            "CXXConstructorDecl",
+            "CXXDestructorDecl",
+            "CXXConversionDecl",
+            "LambdaExpr",
+            "CompoundStmt",
+            "ForStmt",
+            "WhileStmt",
+            "DoStmt",
+            "CXXForRangeStmt",
+        }
         visited: set[str] = set()
 
         current: Optional[str] = node_id

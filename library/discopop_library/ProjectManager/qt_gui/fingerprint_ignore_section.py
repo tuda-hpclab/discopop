@@ -47,9 +47,8 @@ class FingerprintIgnoreSection(widgets.FormSection):
         self.status = status
         self.editor = QPlainTextEdit()
         self.editor.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.editor.setMaximumHeight(90)
         self.editor.setPlaceholderText("dp_build/")
-        self.add_widget(self.editor, HINT)
+        self.add_widget(widgets.resizable(self.editor, 90, minimum=40, fixed=True), HINT)
         self.save_button = widgets.create_button("Save", self.save)
         self.add_widget(widgets.hbox(self.save_button, None, margins=0))
         # "Show changes" adds patterns too; an edit not saved yet is kept

@@ -1,0 +1,7 @@
+# scratch object which is only used through its methods
+[do_all]
+lines = ["1:14"]
+
+[do_all.clauses]
+private = ["tmp"]
+shared = ["x", "y", "n"]

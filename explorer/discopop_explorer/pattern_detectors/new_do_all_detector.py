@@ -43,7 +43,11 @@ from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_explorer.functions.PEGraph.queries.edges import in_edges
 from discopop_explorer.functions.PEGraph.queries.nodes import all_nodes
 from discopop_explorer.functions.PEGraph.queries.subtree import subtree_of_type
-from discopop_explorer.pattern_detectors.clause_classification import filter_classifications, merge_classifications
+from discopop_explorer.pattern_detectors.clause_classification import (
+    complete_clauses_from_ast,
+    filter_classifications,
+    merge_classifications,
+)
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
 from discopop_explorer.pattern_detectors.loop_collapse_analysis import identify_collapsible_loop_nests
 
@@ -652,7 +656,7 @@ def identify_simple_doall_and_reduction(
         # node is a valid doall loop. Detect data sharing clauses
         logger.debug("CURRENT LOOP: " + str(node.created_context.get_code_scope(tg.pet)))
         counts["classified"] += 1
-        firstprivate, private, lastprivate, shared, firstwritten, init = detect_doall_sharing_clauses(
+        firstprivate, private, lastprivate, shared, firstwritten, init, sharing_notes = detect_doall_sharing_clauses(
             tg.pet,
             ast_helper,
             data_edges,
@@ -712,6 +716,7 @@ def identify_simple_doall_and_reduction(
                 Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(lastprivate)
             ]
             pattern.shared = [Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(shared)]
+            pattern.sharing_notes = [text for _, text in sharing_notes]
         else:
             # register reduction pattern. get_pattern_key rejected a missing parent loop already.
             assert node.created_context.parent_loop is not None
@@ -739,6 +744,8 @@ def identify_simple_doall_and_reduction(
                 for v in sorted(shared)
                 if v not in reduction
             ]
+            # a reduction variable is not listed in a data sharing clause, so notes about its sharing do not apply
+            pattern.sharing_notes = [text for name, text in sharing_notes if name not in reduction]
 
         # two different nodes can still collide on a tag, so the exact check remains - it is just
         # no longer the one which every duplicate has to be built for.
@@ -759,7 +766,9 @@ def identify_simple_doall_and_reduction(
     return patterns
 
 
-SharingClauses = Tuple[Set[str], Set[str], Set[str], Set[str], Set[str], Set[str]]
+# firstprivate, private, lastprivate, shared, firstwritten, init and the notes about classifications the analysis is not
+# sure of (one sentence each, shown with the suggestion)
+SharingClauses = Tuple[Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Tuple[Tuple[str, str], ...]]
 # what the classification of a loop's variables actually depends on: the loop's CU, the CU
 # sequence of each of its iterations, the CUs of the enclosing loop parent and the loop variables
 ClauseCacheKey = Tuple[NodeID, Tuple[Tuple[NodeID, ...], ...], FrozenSet[NodeID], FrozenSet[str]]
@@ -777,9 +786,15 @@ def detect_doall_sharing_clauses(
 ) -> SharingClauses:
     """classifies variables used inside the iterations and returns the OpenMP data sharing clauses in the following
     structure:
-    (firstprivate, private, lastprivate, shared, firstwritten, init)
+    (firstprivate, private, lastprivate, shared, firstwritten, init, notes)
     firstwritten and init are not data sharing clauses, but required to validate potential doall-breaking dependencies
-    originating from static information.
+    originating from static information. notes are sentences about variables whose classification the analysis could
+    not establish from the profile.
+
+    The profile alone is not complete: an access is named after the IR value it goes through, so variables which are
+    only reached through calls (a span, a smart pointer, a method of an object) or only by the loop header leave no
+    dependence under their own name. The variables the loop refers to are therefore also taken from the AST
+    (see complete_clauses_from_ast), which classifies the ones the profile did not.
 
     The result is memoized in clause_cache. The classification reaches the contexts it is given
     only to read the CU sequences out of them, so it is a function of those sequences - and the
@@ -821,6 +836,13 @@ def detect_doall_sharing_clauses(
 
     known_vars_with_types = ast_helper.get_variables_at_location(file_id, line_num)
     known_vars = set([v[0] for v in known_vars_with_types])
+    # the variables the loop refers to which are declared outside of it. Names the scope lookup misses (e.g. the
+    # parameters of a member function) are still the names of variables of the loop.
+    outer_references = ast_helper.get_outer_references_of_loop(file_id, line_num)
+    outer_names = {ref.name for ref in outer_references}
+    # ... and what the loop declares itself is not a variable of the loop: the scope lookup finds the index and the
+    # names bound by the header, because they are declared on the line of the loop
+    known_vars = (known_vars - (ast_helper.get_names_declared_in_loop(file_id, line_num) - outer_names)) | outer_names
     # names of the known variables of pointer or reference type. The types do not depend on the
     # dependency they are looked up for, so this is determined once per loop. Scanning the list of
     # typed variables per dependency instead dominated the entire analysis.
@@ -1119,8 +1141,13 @@ def detect_doall_sharing_clauses(
     logger.debug("\tPOST FILTER: shared: " + str(shared))
     logger.debug("\tPOST FILTER: lastprivate: " + str(lastprivate))
     logger.debug("\tPOST FILTER: firstprivate: " + str(firstprivate))
+    notes = complete_clauses_from_ast(outer_references, loop_variables, firstprivate, private, lastprivate, shared)
+    logger.debug("\tPOST COMPLETION: private: " + str(private))
+    logger.debug("\tPOST COMPLETION: shared: " + str(shared))
+    logger.debug("\tPOST COMPLETION: lastprivate: " + str(lastprivate))
+    logger.debug("\tPOST COMPLETION: firstprivate: " + str(firstprivate))
     logger.debug("---------------------------- LOOP END --------------------")
     logger.debug("")
-    result: SharingClauses = (firstprivate, private, lastprivate, shared, firstwritten, init)
+    result: SharingClauses = (firstprivate, private, lastprivate, shared, firstwritten, init, tuple(notes))
     clause_cache[cache_key] = result
     return result

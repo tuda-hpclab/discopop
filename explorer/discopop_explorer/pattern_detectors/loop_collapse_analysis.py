@@ -274,6 +274,7 @@ def __create_collapsed_pattern(
     collapsed.reduction = []
     collapsed.scheduling_clause = outermost_pattern.scheduling_clause
     collapsed.collapsed_pattern_ids = [p.pattern_id for p in chain]
+    collapsed.sharing_notes = list(dict.fromkeys(note for p in chain for note in getattr(p, "sharing_notes", [])))
     collapsed.pattern_tag = collapsed.get_tag()
     return collapsed
 

@@ -55,6 +55,9 @@ MPI_INCLUDES="$(mpicc -showme:compile)"
 
 # script will be located alongside LLVMDiscoPoP.so and libDiscoPoP_RT.a in the python venv/lib/../discopop-profiler.libs
 PARENT_PATH=$( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
-${LLVM_CLANG} "${@}" -g -c -O0 -fno-discard-value-names -Xclang -load -Xclang ${PARENT_PATH}/LLVMDiscoPoP.so -Xclang -fpass-plugin=${PARENT_PATH}/LLVMDiscoPoP.so -fPIC ${MPI_INCLUDES} -Xlinker -lstdc++
+# OpenMP flags: kept with a warning, removed with DP_STRIP_OPENMP=1 (see dp_openmp.sh); DP_ARGS replaces "$@"
+source "${PARENT_PATH}/dp_openmp.sh"
+dp_handle_openmp "$@"
+${LLVM_CLANG} "${DP_ARGS[@]}" -g -c -O0 -fno-discard-value-names -Xclang -load -Xclang ${PARENT_PATH}/LLVMDiscoPoP.so -Xclang -fpass-plugin=${PARENT_PATH}/LLVMDiscoPoP.so -fPIC ${MPI_INCLUDES} -Xlinker -lstdc++
 
 # WARNING: OUTPUT IS A .ll FILE, ENDING IS .o

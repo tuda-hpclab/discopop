@@ -2,4 +2,5 @@
 lines = ["1:8"]
 
 [do_all.clauses]
-# no clauses at all
+# nothing to privatize: the loop bound is the only variable the loop refers to besides its index
+shared = ["n"]

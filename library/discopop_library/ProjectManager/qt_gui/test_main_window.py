@@ -322,3 +322,19 @@ def test_a_run_of_the_build_panel_marks_its_stage_busy(qtbot: QtBot, tmp_path: P
     assert window.build_panel.is_busy()
     window.build_panel.set_busy(False)
     assert not window.build_panel.is_busy() and not window.nav.is_running(TAB_BUILD)
+
+
+def test_view_menu_reset_undoes_manual_resizing(qtbot: QtBot, tmp_path: Path) -> None:
+    from discopop_library.ProjectManager.qt_gui import widgets
+
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    assert [a.text() for a in window.menuBar().actions()] == ["&View"]
+    assert not window.menuBar().isNativeMenuBar()
+    handles = window.findChildren(widgets.ResizeHandle)
+    assert handles
+    for handle in handles:
+        handle.set_target_height(handle.default_height + 200)
+    window.reset_view_action.trigger()
+    for handle in handles:
+        assert handle.target.minimumHeight() == handle.default_height

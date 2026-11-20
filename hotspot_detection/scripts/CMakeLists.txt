@@ -11,6 +11,7 @@ install(PROGRAMS
     ${CMAKE_CURRENT_SOURCE_DIR}/CXX_wrapper.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/CMAKE_wrapper.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/dp_environment.sh
+    ${CMAKE_CURRENT_SOURCE_DIR}/dp_openmp.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/LINKER_wrapper.sh
     ${CMAKE_CURRENT_SOURCE_DIR}/runHotspotDetection
     DESTINATION discopop-hotspot-detection.libs

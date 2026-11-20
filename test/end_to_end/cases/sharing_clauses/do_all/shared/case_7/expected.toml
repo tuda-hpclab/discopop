@@ -1,0 +1,6 @@
+# shared_ptr passed by value, used through operator->
+[do_all]
+lines = ["1:13"]
+
+[do_all.clauses]
+shared = ["p", "out", "n"]

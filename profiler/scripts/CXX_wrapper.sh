@@ -87,7 +87,10 @@ DP_INIT_SYMBOL="__dp_init"; [[ "$(uname)" == "Darwin" ]] && DP_INIT_SYMBOL="___d
 # DOT_DISCOPOP not set: the nearest .discopop of the project (see dp_environment.sh), seen by the pass as well
 source "${PARENT_PATH}/dp_environment.sh"
 dp_resolve_dot_discopop "$@" || true
-${LLVM_CLANGPP} "$@" -g -O0 -fno-discard-value-names -Xclang -load -Xclang ${DISCOPOP_PLUGIN} -Xclang -fpass-plugin=${DISCOPOP_PLUGIN} -fPIC -Xlinker -L${PARENT_PATH} -Xlinker -u -Xlinker ${DP_INIT_SYMBOL} -Xlinker -lDiscoPoP_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v
+# OpenMP flags: kept with a warning, removed with DP_STRIP_OPENMP=1 (see dp_openmp.sh); DP_ARGS replaces "$@"
+source "${PARENT_PATH}/dp_openmp.sh"
+dp_handle_openmp "$@"
+${LLVM_CLANGPP} "${DP_ARGS[@]}" -g -O0 -fno-discard-value-names -Xclang -load -Xclang ${DISCOPOP_PLUGIN} -Xclang -fpass-plugin=${DISCOPOP_PLUGIN} -fPIC -Xlinker -L${PARENT_PATH} -Xlinker -u -Xlinker ${DP_INIT_SYMBOL} -Xlinker -lDiscoPoP_RT "${PTHREAD_XLINKER_FLAGS[@]}" -Xlinker -v
 compile_status=$?
 
 # Assembly inputs (.s/.S/.sx or -x assembler[-with-cpp]) cannot be parsed by the C frontend,
@@ -122,7 +125,7 @@ mkdir -p "$TMP_DOT_DISCOPOP/profiler/locking_files" || exit 1
 AST_TMP="$(mktemp "$TMP_DOT_DISCOPOP/profiler/ast_dump.XXXXXX")" || exit 1
 trap 'rm -f -- "$AST_TMP"' EXIT
 source "${PARENT_PATH}/dump_ast.sh"
-dp_dump_ast "${LLVM_CLANGPP}" "$TMP_DOT_DISCOPOP" "$AST_TMP" "$@"
+dp_dump_ast "${LLVM_CLANGPP}" "$TMP_DOT_DISCOPOP" "$AST_TMP" "${DP_ARGS[@]}"
 ast_status=$?
 if [ "$ast_status" -ne 0 ]; then
   exit "$ast_status"

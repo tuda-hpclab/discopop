@@ -2,4 +2,4 @@
 lines = ["1:13"]
 
 [do_all.clauses]
-shared = ["Arr"]
+shared = ["Arr", "n"]  # n: the loop bound
