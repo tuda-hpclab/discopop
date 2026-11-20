@@ -48,13 +48,18 @@ class Snapshot:
 
 @dataclass
 class CheckResult:
-    """``errors`` make a successful script fail, ``warnings`` are reported only."""
+    """``errors`` make a successful script fail, ``warnings`` and ``notes`` are reported only."""
 
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
 
     def messages(self) -> List[str]:
-        return ["ERROR: " + e for e in self.errors] + ["WARNING: " + w for w in self.warnings]
+        return (
+            ["ERROR: " + e for e in self.errors]
+            + ["WARNING: " + w for w in self.warnings]
+            + ["NOTE: " + n for n in self.notes]
+        )
 
 
 # Touched by take_snapshot; its modification time is when the script started, by the clock of the file

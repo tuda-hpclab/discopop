@@ -14,6 +14,7 @@ from typing import Any, List, Optional, Tuple
 from unittest import mock
 
 import pytest
+from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.configurations.project_environment import (
@@ -22,6 +23,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
 )
 from discopop_library.ProjectManager.services.excluded_directories import save_excluded_directories
 from discopop_library.ProjectManager.qt_gui import widgets
+from discopop_library.ProjectManager.qt_gui.help_dialogs import HelpDialog
 from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
@@ -224,3 +226,14 @@ def test_the_build_options_reach_the_work(qtbot: QtBot, panel: ProfilingPanel) -
         assert (seen[1].build_policy, seen[1].build_only, seen[1].inplace) == ("rebuild", False, False)
         panel.build_options.in_place_check.setChecked(True)
         assert not panel.build_options.policy_combo.isEnabled()
+
+
+def test_the_explanation_is_behind_a_help_button_not_on_the_page(panel: ProfilingPanel, qtbot: QtBot) -> None:
+    sections = panel.findChildren(widgets.FormSection)
+    assert not any(box.title_label is not None and box.title_label.text() == "What happens" for box in sections)
+    help_button = next(button for button in panel.header.findChildren(QPushButton) if button.text() == "Help")
+    help_button.click()
+    dialogs = [child for child in panel.children() if isinstance(child, HelpDialog)]
+    assert len(dialogs) == 1
+    qtbot.addWidget(dialogs[0])
+    assert dialogs[0].text.toPlainText().strip() != ""

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 
+from discopop_library.ProjectManager.services.callpath_pruning import CALLPATH_PRUNING_FILE
 from discopop_library.ProjectManager.services.excluded_directories import EXCLUDED_DIRECTORIES_FILE
 from discopop_library.ProjectManager.services.included_directories import INCLUDED_DIRECTORIES_FILE
 from mcp.types import TextContent
@@ -718,10 +719,10 @@ class ToolContext:
         """Return the mtime of the most recently modified source file under project_path,
         excluding the .discopop subtree. Returns None if no source files are found.
 
-        The lists of included and excluded directories count as sources: results instrumented before
-        they changed cover other code."""
+        The lists of included and excluded directories and the call path pruning setting count as sources: results
+        instrumented before they changed cover other code or were pruned differently."""
         newest = max(ToolContext.source_mtimes(project_path).values(), default=None)
-        for name in (INCLUDED_DIRECTORIES_FILE, EXCLUDED_DIRECTORIES_FILE):
+        for name in (INCLUDED_DIRECTORIES_FILE, EXCLUDED_DIRECTORIES_FILE, CALLPATH_PRUNING_FILE):
             try:
                 mtime = (Path(project_path) / ".discopop" / "project" / name).stat().st_mtime
             except OSError:

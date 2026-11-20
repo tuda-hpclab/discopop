@@ -47,6 +47,7 @@ from discopop_library.ProjectManager.configurations.copying import (
     restore_outside_patches,
 )
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.services import callpath_pruning
 
 PATH = str
 logger = logging.getLogger("ConfigurationManager")
@@ -189,7 +190,9 @@ def ensure_build(
     except OSError:
         pass
     # taken before the copy, so that a change while copying makes the build stale rather than wrongly current
-    parts = compute_fingerprint_parts(arguments, key, compile_script, settings_path)
+    # computed once: the fingerprint describes the pruning the compilation below uses, even if hotspot results change
+    pruning_environment = callpath_pruning.environment(arguments, key.configuration) if key.mode == "dp" else None
+    parts = compute_fingerprint_parts(arguments, key, compile_script, settings_path, pruning_environment)
     tree = build_tree_path_of(arguments.project_root, key)
 
     message("Copying project to " + tree + "...\n")
@@ -220,6 +223,7 @@ def ensure_build(
             process_started_callback=process_started_callback,
             result_annotations={"build_id": key.build_id},
             output_callback=output_callback,
+            callpath_pruning_environment=pruning_environment,
         )
         if compile_result is None or compile_result[0] != 0:
             _discard_tree(arguments, tree)

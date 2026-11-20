@@ -58,3 +58,20 @@ def help_button(parent: QWidget, filename: str) -> QPushButton:
 
 def _open(parent: QWidget, filename: str) -> None:
     show_help(parent, filename)
+
+
+def show_text(parent: QWidget, title: str, content: str) -> HelpDialog:
+    """Open a help window with ``content`` (for texts that do not belong to a file editor)."""
+    dialog = HelpDialog(title, content, parent)
+    dialog.show()
+    return dialog
+
+
+def _show_text_discarding(parent: QWidget, title: str, content: str) -> None:
+    show_text(parent, title, content)
+
+
+def text_help_button(parent: QWidget, title: str, content: str) -> QPushButton:
+    """A "Help" button opening a window with ``content``: the explanation of a stage, which is not shown on the
+    page itself."""
+    return widgets.create_button("Help", lambda: _show_text_discarding(parent, title, content))

@@ -12,14 +12,20 @@ from pathlib import Path
 from typing import Any, List, Optional
 from unittest import mock
 
+import json
+
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QPushButton
 from pytestqt.qtbot import QtBot
 
+from discopop_library.ProjectManager.qt_gui import widgets
+from discopop_library.ProjectManager.qt_gui.help_dialogs import HelpDialog
 from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services.project_state import ConfigChanged, ProjectState
+from discopop_library.ProjectManager.services import callpath_pruning
+from discopop_library.ProjectManager.services.project_state import CallpathPruningChanged, ConfigChanged, ProjectState
 
 
 class FakeTabs:
@@ -147,3 +153,72 @@ def test_sharing_that_is_not_possible_is_explained(panel: BuildPanel, dialog_ans
     # a configuration with a compile script of its own is shown disabled, with the reason
     assert not item.flags() & Qt.ItemFlag.ItemIsEnabled
     assert "compile.sh" in item.toolTip()
+
+
+def test_the_chip_warns_in_dp_mode_when_pruning_is_possible_but_off(panel: BuildPanel) -> None:
+    hotspots = Path(panel.arguments.dot_dp) / "hotspot_detection"
+    hotspots.mkdir(parents=True)
+    (hotspots / "Hotspots.json").write_text(json.dumps({"code_regions": [{"hotness": "YES"}]}))
+    select(panel)
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("dp"))
+    panel.refresh()
+    assert panel.header.chip.level == widgets.CHIP_WARN and panel.header.chip.text() == "Call path pruning is off"
+    # other modes do not prune
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("seq"))
+    panel.refresh()
+    assert panel.header.chip.level != widgets.CHIP_WARN
+    # activated: nothing to warn about
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("dp"))
+    callpath_pruning.save_callpath_pruning(panel.arguments.project_dir, callpath_pruning.CallpathPruning(enabled=True))
+    panel.project_state.publish(CallpathPruningChanged())
+    assert panel.header.chip.text() != "Call path pruning is off"
+
+
+def header_button_texts(panel: BuildPanel) -> List[str]:
+    return [button.text() for button in panel.header.findChildren(QPushButton)]
+
+
+def test_the_pruning_section_follows_the_shared_build_section(panel: BuildPanel) -> None:
+    sections = [
+        panel.findChildren(type(panel.shared_build))[0],
+        panel.callpath_pruning,
+        panel.builds,
+    ]
+    parent = panel.shared_build.parentWidget()
+    assert parent is not None
+    layout = parent.layout()
+    assert layout is not None
+    indices = [layout.indexOf(section) for section in sections]
+    assert indices == sorted(indices) and indices[1] == indices[0] + 1
+
+
+def test_the_explanation_is_behind_a_help_button_not_on_the_page(panel: BuildPanel, qtbot: QtBot) -> None:
+    assert "Help" in header_button_texts(panel)
+    page_texts = [label.text() for label in panel.findChildren(QLabel)]
+    assert not any(text.startswith("Compiles the selected configuration") for text in page_texts)
+    assert not any(
+        box.title_label is not None and box.title_label.text() == "What happens" for box in sections_of(panel)
+    )
+    help_button = next(button for button in panel.header.findChildren(QPushButton) if button.text() == "Help")
+    help_button.click()
+    dialogs = [child for child in panel.children() if isinstance(child, HelpDialog)]
+    assert len(dialogs) == 1 and "Nothing is run" in dialogs[0].text.toPlainText()
+    qtbot.addWidget(dialogs[0])
+
+
+def sections_of(panel: BuildPanel) -> List[widgets.FormSection]:
+    return panel.findChildren(widgets.FormSection)
+
+
+def test_the_pruning_section_is_collapsed_and_disabled_unless_the_mode_is_dp(panel: BuildPanel) -> None:
+    section = panel.callpath_pruning
+
+    def body_visible() -> bool:
+        return not section.checkbox.isHidden() and not section.depth_spin.isHidden()
+
+    for mode in ("seq", "hd"):
+        panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(mode))
+        assert not section.isEnabled() and not body_visible()
+        assert section.title_label is not None and not section.title_label.isHidden()
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("dp"))
+    assert section.isEnabled() and body_visible()

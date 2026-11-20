@@ -25,11 +25,13 @@ from discopop_library.ProjectManager.configurations.build_sharing import build_o
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.help_dialogs import text_help_button
 from discopop_library.ProjectManager.qt_gui.build_controls import BuildOptions, BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
+from discopop_library.ProjectManager.services import callpath_pruning
 from discopop_library.ProjectManager.services.execution_run import PreparationRequest, run_preparation
 from discopop_library.ProjectManager.services.explorer_state import (
     explorer_prerequisites_met,
@@ -49,6 +51,7 @@ from discopop_library.ProjectManager.services.modes import available_modes
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
+    CallpathPruningChanged,
     ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
@@ -113,10 +116,8 @@ class ProfilingPanel(Panel):
         self._hint_shown = False
 
         # ── what happens ────────────────────────────────────────────────────
-        about = widgets.FormSection("What happens")
-        about.add_widget(self._wrapped(WHAT_HAPPENS))
-        about.add_widget(self._wrapped(BUILD_NOTE))
-        about.add_widget(self._wrapped(INPUT_NOTE))
+        # the explanation is behind the Help button of the header, not part of the page
+        help_text = "\n\n".join((WHAT_HAPPENS, BUILD_NOTE, INPUT_NOTE))
 
         # ── the data of the last run ────────────────────────────────────────
         self.data_label = QLabel("")
@@ -167,14 +168,14 @@ class ProfilingPanel(Panel):
         self.header = widgets.PanelHeader(
             "Profiling",
             "Record the data dependences of the selected configuration for the pattern detection.",
-            [self.run_button],
+            [text_help_button(self, "Profiling", help_text), self.run_button],
         )
 
         column = QWidget()
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.setSpacing(widgets.CARD_SPACING)
-        for section in (data, about, self.build_options, self.limits_section, self.builds_section):
+        for section in (data, self.build_options, self.limits_section, self.builds_section):
             column_layout.addWidget(section)
         column_layout.addStretch(1)
         options = QWidget()
@@ -197,13 +198,8 @@ class ProfilingPanel(Panel):
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         project_state.subscribe(ResultsChanged, lambda _event: self.refresh())
         project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.refresh())
+        project_state.subscribe(CallpathPruningChanged, lambda _event: self.refresh())
         self.refresh()
-
-    @staticmethod
-    def _wrapped(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setWordWrap(True)
-        return label
 
     @staticmethod
     def _timeout_spin() -> QSpinBox:
@@ -263,6 +259,7 @@ class ProfilingPanel(Panel):
         if not self.is_running():
             self.run_button.setEnabled(not missing and not self._blocked)
             stale = stale_profiling_data_message(self.arguments)
+            pruning_stale = callpath_pruning.stale_message(self.arguments, self.project_state.current_config)
             # the chip says why the button is off or why the data should be profiled again; once that is over, the
             # outcome of the last run is not restored
             if missing:
@@ -271,9 +268,11 @@ class ProfilingPanel(Panel):
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Execute is running")
             elif stale is not None:
                 self.header.chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
+            elif pruning_stale is not None:
+                self.header.chip.set_status(widgets.CHIP_WARN, "Call path pruning changed", pruning_stale)
             elif self._hint_shown:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "")
-            self._hint_shown = bool(missing) or self._blocked or stale is not None
+            self._hint_shown = bool(missing) or self._blocked or stale is not None or pruning_stale is not None
 
     def set_blocked(self, blocked: bool) -> None:
         """Another stage runs the configuration (Execute): no profiling run meanwhile."""

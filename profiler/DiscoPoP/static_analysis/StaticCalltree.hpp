@@ -73,6 +73,8 @@ class StaticCalltree {
  public:
   std::unordered_map<std::string, StaticCalltreeNode*> function_map;
   std::unordered_map<int32_t, StaticCalltreeNode*> instruction_map;
+  // "<file id>:<start line>" of the instrumented loops of each function (by function name)
+  std::unordered_map<std::string, std::vector<std::string>> loop_locations_by_function;
   StaticCalltree();
   ~StaticCalltree();
   // owns its nodes: a copy would delete them twice, so it can only be moved (buildStaticCalltree
@@ -80,7 +82,8 @@ class StaticCalltree {
   StaticCalltree(StaticCalltree&& other) noexcept
       : node_count_(other.node_count_),
         function_map(std::move(other.function_map)),
-        instruction_map(std::move(other.instruction_map)) {
+        instruction_map(std::move(other.instruction_map)),
+        loop_locations_by_function(std::move(other.loop_locations_by_function)) {
     other.function_map.clear();
     other.instruction_map.clear();
   }

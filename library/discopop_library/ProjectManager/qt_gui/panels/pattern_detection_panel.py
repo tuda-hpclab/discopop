@@ -44,7 +44,7 @@ from discopop_library.ProjectManager.qt_gui.tabs import TAB_HOTSPOT, TAB_PATTERN
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.build_controls import BuildsAndRuns
-from discopop_library.ProjectManager.services import build_overview, explorer_state
+from discopop_library.ProjectManager.services import callpath_pruning, build_overview, explorer_state
 from discopop_library.ProjectManager.services.commands import explorer_command
 from discopop_library.ProjectManager.services.explorer_state import (
     DEFAULT_DETECTION_MODE,
@@ -64,6 +64,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigurationsChanged,
     HotspotsChanged,
     PatternsChanged,
+    CallpathPruningChanged,
     ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
@@ -172,6 +173,7 @@ class PatternDetectionPanel(Panel):
             HotspotsChanged,
             PatternsChanged,
             ProjectDirectoriesChanged,
+            CallpathPruningChanged,
         ):
             project_state.subscribe(event_type, lambda _event: self.refresh())
         self.refresh()
@@ -363,6 +365,8 @@ class PatternDetectionPanel(Panel):
             chip.set_status(widgets.CHIP_BUSY, "Running...")
         elif (stale := explorer_state.stale_profiling_data_message(self.arguments)) is not None:
             chip.set_status(widgets.CHIP_WARN, "Project directories changed", stale)
+        elif (pruning := callpath_pruning.stale_message(self.arguments, self.project_state.current_config)) is not None:
+            chip.set_status(widgets.CHIP_WARN, "Call path pruning changed", pruning)
         elif not ready:
             chip.set_status(widgets.CHIP_IDLE, "Not run yet", "Needs profiling data from the Profiling stage.")
         elif detection_is_stale(dot_dp):

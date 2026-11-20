@@ -44,6 +44,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     project_directories_of,
     record_instrumented_directories,
 )
+from discopop_library.ProjectManager.services import callpath_pruning
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -277,7 +278,10 @@ def _apply_instrumentation_checks(outcome: _RunOutcome, checks: CheckResult) -> 
     if not messages:
         return outcome
     for message in messages:
-        logger.warning(message)
+        if message.startswith("NOTE: "):
+            logger.info(message)
+        else:
+            logger.warning(message)
     stderr = outcome.stderr + ("\n" if outcome.stderr and not outcome.stderr.endswith("\n") else "")
     stderr += "\n".join("DiscoPoP " + message for message in messages) + "\n"
     returncode = outcome.returncode
@@ -303,6 +307,7 @@ def execute_configuration(
     dot_discopop: Optional[PATH] = None,
     result_annotations: Optional[Dict[str, Any]] = None,
     output_callback: Optional[Callable[[str], None]] = None,
+    callpath_pruning_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -341,6 +346,10 @@ def execute_configuration(
     in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
 
     ``output_callback`` receives the output of the script (stdout and stderr, line by line) while it runs.
+
+    ``callpath_pruning_environment`` is the call path pruning a ``dp`` compilation gets (the variables of
+    :func:`callpath_pruning.environment`); the builds compute it once for their fingerprint and the compilation. If
+    not given, it is computed.
     """
     # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
@@ -389,6 +398,31 @@ def execute_configuration(
         os.environ, settings, project_directories, project_copy_root_path, arguments.project_root
     )
     logger.info(describe_project_variables(my_env))
+    # call path pruning of the profiler build (only the instrumented compilation of the profiling mode reads it). The
+    # project's setting is the only source: variables from the environment or the settings file are removed
+    pruning_environment: Dict[str, str] = {}
+    pruning_warnings: List[str] = []
+    prunes_call_paths = settings_name == DP_SETTINGS and script_name.startswith("compile")
+    if prunes_call_paths:
+        ignored = [name for name in callpath_pruning.VARIABLES if name in my_env]
+        for name in ignored:
+            del my_env[name]
+        if ignored:
+            pruning_warnings.append(
+                ", ".join(ignored)
+                + " set in the environment or the settings file is ignored: call path pruning is configured in the "
+                'project (GUI: Build stage, "Call path pruning").'
+            )
+        if callpath_pruning_environment is None:
+            callpath_pruning_environment = callpath_pruning.environment(arguments, config_name)
+        pruning_environment = dict(callpath_pruning_environment)
+        my_env.update(pruning_environment)
+        for text in (
+            callpath_pruning.inactive_warning(arguments, config_name),
+            callpath_pruning.no_hotspots_warning(arguments, config_name),
+        ):
+            if text is not None:
+                pruning_warnings.append(text)
     my_env["OMP_NUM_THREADS"] = str(thread_count)
     if dot_discopop is not None:
         my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
@@ -516,8 +550,26 @@ def execute_configuration(
             mode = _INSTRUMENTED_MODES.get(settings_name)
             if mode is not None and not checks.errors:
                 record_instrumented_directories(my_env[DOT_DISCOPOP_VARIABLE], mode, project_directories)
+                if mode == "dp":
+                    callpath_pruning.record_state(
+                        my_env[DOT_DISCOPOP_VARIABLE],
+                        callpath_pruning.state_of(pruning_environment, arguments.dot_dp),
+                    )
         elif script_name == "execute.sh":
             checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
+    checks.warnings.extend(pruning_warnings)
+    if (
+        callpath_pruning.HOTSPOTS_VARIABLE in pruning_environment
+        and script_name.startswith("compile")
+        and representative.returncode == 0
+        and not representative.timeout_expired
+    ):
+        checks.notes.append(
+            callpath_pruning.pruning_note(
+                pruning_environment[callpath_pruning.HOTSPOTS_VARIABLE],
+                representative.stdout + "\n" + representative.stderr,
+            )
+        )
     warning = ignored_settings_warning(settings, settings_name)
     if warning is not None:
         checks.warnings.append(warning)

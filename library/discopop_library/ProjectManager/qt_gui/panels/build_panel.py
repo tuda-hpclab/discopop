@@ -17,6 +17,7 @@ import os
 from typing import Callable, Dict, Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
@@ -26,10 +27,12 @@ from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.build_controls import BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
+from discopop_library.ProjectManager.qt_gui.callpath_pruning_section import CallpathPruningSection
+from discopop_library.ProjectManager.qt_gui.help_dialogs import text_help_button
 from discopop_library.ProjectManager.qt_gui.shared_build import SharedBuildSection
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
-from discopop_library.ProjectManager.services import build_overview
+from discopop_library.ProjectManager.services import build_overview, callpath_pruning
 from discopop_library.ProjectManager.services.execution_run import PreparationRequest, run_preparation
 from discopop_library.ProjectManager.services.jobs import (
     StatusKind,
@@ -43,6 +46,8 @@ from discopop_library.ProjectManager.services.modes import available_modes, sett
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
+    CallpathPruningChanged,
+    HotspotsChanged,
     ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
@@ -105,11 +110,6 @@ class BuildPanel(Panel):
         self._failed = False
         self._rebuild = False
 
-        about = widgets.FormSection("What happens")
-        about_label = QLabel(WHAT_HAPPENS)
-        about_label.setWordWrap(True)
-        about.add_widget(about_label)
-
         self.mode_combo = QComboBox()
         for mode, text in MODE_TEXTS:
             self.mode_combo.addItem(text, mode)
@@ -129,6 +129,7 @@ class BuildPanel(Panel):
         target.add_widget(widgets.hbox(self.goto_setup_button, None, margins=0))
 
         self.shared_build = SharedBuildSection(arguments, project_state)
+        self.callpath_pruning = CallpathPruningSection(arguments, project_state, status)
         self.builds = BuildsAndRuns(arguments, changed=lambda: project_state.publish(ResultsChanged()), show_runs=False)
 
         self.run_button = widgets.RunStopButton(BUILD_TEXT, self._build, self._stop)
@@ -143,14 +144,14 @@ class BuildPanel(Panel):
         self.header = widgets.PanelHeader(
             "Build",
             "Compile the selected configuration into a kept build; the following stages run it.",
-            [self.rebuild_button, self.run_button],
+            [text_help_button(self, "Build", WHAT_HAPPENS), self.rebuild_button, self.run_button],
         )
 
         column = QWidget()
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.setSpacing(widgets.CARD_SPACING)
-        for section in (target, self.shared_build, about, self.builds):
+        for section in (target, self.shared_build, self.callpath_pruning, self.builds):
             column_layout.addWidget(section)
         column_layout.addStretch(1)
         options = QWidget()
@@ -174,6 +175,8 @@ class BuildPanel(Panel):
         project_state.subscribe(ConfigurationsChanged, lambda _event: self.refresh())
         project_state.subscribe(ResultsChanged, lambda _event: self.refresh())
         project_state.subscribe(ProjectDirectoriesChanged, lambda _event: self.refresh())
+        project_state.subscribe(HotspotsChanged, lambda _event: self.refresh())
+        project_state.subscribe(CallpathPruningChanged, lambda _event: self.refresh())
         self.refresh()
 
     def output_console(self) -> widgets.OutputConsole:
@@ -181,6 +184,11 @@ class BuildPanel(Panel):
 
     def is_running(self) -> bool:
         return self._job is not None
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt's name)
+        # the setting may have been changed outside the GUI meanwhile
+        self.callpath_pruning.reload()
+        super().showEvent(event)
 
     def mode(self) -> str:
         return str(self.mode_combo.currentData())
@@ -215,7 +223,12 @@ class BuildPanel(Panel):
         self.builds.refresh()
         self.shared_build.refresh(config)
         self.shared_build.setEnabled(bool(config) and not self.is_running() and not self._blocked)
+        # only the instrumented compilation of the mode dp prunes call path states
+        self.callpath_pruning.set_active(self.mode() == "dp")
         missing = self._missing_requirement()
+        pruning_warning = (
+            callpath_pruning.inactive_warning(self.arguments, config, at_setting=True) if self.mode() == "dp" else None
+        )
         self.goto_setup_button.setVisible(bool(missing) and bool(config))
         if not self.is_running():
             can_start = not missing and not self._blocked
@@ -226,6 +239,9 @@ class BuildPanel(Panel):
                 self._chip_shows_obstacle = True
             elif self._blocked:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Another stage is running")
+                self._chip_shows_obstacle = True
+            elif self.mode() == "dp" and pruning_warning is not None:
+                self.header.chip.set_status(widgets.CHIP_WARN, "Call path pruning is off", pruning_warning)
                 self._chip_shows_obstacle = True
             elif self._chip_shows_obstacle:
                 self.header.chip.set_status(widgets.CHIP_IDLE, "Ready to build")
