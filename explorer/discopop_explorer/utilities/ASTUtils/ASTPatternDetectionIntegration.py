@@ -32,8 +32,8 @@ from discopop_explorer.utilities.ASTUtils.OuterReferences import (
 )
 from discopop_library.PathManagement.PathManagement import load_file_mapping
 
-# entries (file, first line, last line) of the cache of get_referenced_names; the values are small sets of names
-REFERENCED_NAMES_CACHE_SIZE = 8192
+# entries (file, line) of the cache of get_referenced_names; the values are small sets of names
+REFERENCED_NAMES_CACHE_SIZE = 65536
 
 
 class ASTPatternDetectionHelper:
@@ -51,9 +51,9 @@ class ASTPatternDetectionHelper:
         # detection asks about the same loop header once per copy of the loop in the task graph -
         # of which there are many - so this is the difference between one scope walk per loop and
         # one per copy.
-        # memoized results of get_referenced_names, keyed by the resolved lines: the same few lines of the source are
+        # memoized results of get_referenced_names, keyed by the resolved line: the same few lines of the source are
         # asked about again and again (LULESH: 13394 calls for 349 distinct lines), bounded for large programs
-        self._referenced_names_cache: BoundedCache[Tuple[str, int, int], FrozenSet[str]] = BoundedCache(
+        self._referenced_names_cache: BoundedCache[Tuple[str, int], FrozenSet[str]] = BoundedCache(
             REFERENCED_NAMES_CACHE_SIZE
         )
         self._variables_at_location_cache: Dict[
@@ -168,16 +168,24 @@ class ASTPatternDetectionHelper:
         else:
             file_path_str = file_id
 
+        names: set[str] = set()
+        for line in range(first_line, last_line + 1):
+            names.update(self._referenced_names_of_line(file_path_str, line))
+        return frozenset(names)
+
+    def _referenced_names_of_line(self, file_path_str: str, line: int) -> FrozenSet[str]:
+        """The names the code on one line refers to; memoized (bounded): the lines of the tasks of a program overlap and
+        repeat, while every lookup in the AST is a scan."""
+
         def compute() -> FrozenSet[str]:
             names: set[str] = set()
-            for line in range(first_line, last_line + 1):
-                for node_id in ASTQueries.find_nodes_at_location(self.ast_graph, file_path_str, line):
-                    attrs = self.ast_graph.nodes[node_id]  # type: ignore[union-attr]
-                    if attrs.get("kind") == "DeclRefExpr" and attrs.get("referenced_name"):
-                        names.add(str(attrs["referenced_name"]))
+            for node_id in ASTQueries.find_nodes_at_location(self.ast_graph, file_path_str, line):  # type: ignore[arg-type]
+                attrs = self.ast_graph.nodes[node_id]  # type: ignore[union-attr]
+                if attrs.get("kind") == "DeclRefExpr" and attrs.get("referenced_name"):
+                    names.add(str(attrs["referenced_name"]))
             return frozenset(names)
 
-        return self._referenced_names_cache.get_or_compute((file_path_str, first_line, last_line), compute)
+        return self._referenced_names_cache.get_or_compute((file_path_str, line), compute)
 
     def get_variables_assigned_in_loop_at(self, file_id: Union[int, str], line: int) -> FrozenSet[str]:
         """Get the variables assigned directly inside the loop whose header is at a location.

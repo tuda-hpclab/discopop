@@ -146,7 +146,7 @@ class _Scope:
     # the parameters that are pointers (or references): what a callee writes through, the caller reads
     pointer_params: Set[str]
     # the instructions of the code of the function itself (not of its callees)
-    instructions: Set[int]
+    instructions: AbstractSet[int]
 
 
 _global_names_of: "weakref.WeakKeyDictionary[PEGraphX, Set[str]]" = weakref.WeakKeyDictionary()
@@ -163,6 +163,13 @@ def _global_names(pet: PEGraphX) -> Set[str]:
     return cached
 
 
+# entries (function) per PEGraphX of the cache of the CU part of _scope_of
+SCOPE_CACHE_SIZE = 256
+_scope_cache: "weakref.WeakKeyDictionary[PEGraphX, BoundedCache[NodeID, Tuple[FrozenSet[str], FrozenSet[int]]]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def _scope_of(
     pet: PEGraphX,
     function: FunctionNode,
@@ -172,27 +179,45 @@ def _scope_of(
 ) -> _Scope:
     """The scope of ``function``. The profiler only knows the variables that are read or written, the AST also those
     that are declared (``ast_helper``: the declarations visible at ``line``), e.g. a local that is only passed by
-    address."""
+    address. The part that comes from the CUs of the function is memoized (bounded) per function."""
     local: Set[str] = {str(v.name) for v in function.args}
     if ast_helper is not None:
         local.update(name for name, _ in ast_helper.get_variables_at_location(file_id, line))
-    instructions: Set[int] = set()
-    for cu in subtree_of_type(pet, function, CUNode):
-        local.update(v.name for v in cu.local_vars)
-        local.update(v.name for v in cu.global_vars)
-        instructions.update(cu.instruction_ids)
+    cache = _scope_cache.get(pet)
+    if cache is None:
+        cache = BoundedCache(SCOPE_CACHE_SIZE)
+        _scope_cache[pet] = cache
+
+    def compute() -> Tuple[FrozenSet[str], FrozenSet[int]]:
+        names: Set[str] = set()
+        instruction_ids: Set[int] = set()
+        for cu in subtree_of_type(pet, function, CUNode):
+            names.update(v.name for v in cu.local_vars)
+            names.update(v.name for v in cu.global_vars)
+            instruction_ids.update(cu.instruction_ids)
+        return frozenset(names), frozenset(instruction_ids)
+
+    cu_names, instructions = cache.get_or_compute(function.id, compute)
+    local.update(cu_names)
     pointers = {str(v.name) for v in function.args if "ptr" in str(v.type) or "*" in str(v.type)}
     return _Scope(local, _global_names(pet), pointers, instructions)
+
+
+_declared_global_names_of: "weakref.WeakKeyDictionary[PEGraphX, Set[str]]" = weakref.WeakKeyDictionary()
 
 
 def _declared_global_names(pet: PEGraphX) -> Set[str]:
     """The names of the variables that are declared as globals (``defLine`` ``GlobalVar``). ``_global_names`` is wider:
     it also holds what the profiler lists as the global variables of a CU, e.g. the pointer parameter ``p`` of a callee
-    that writes ``*p``, which is no name of the scope of the caller."""
-    names: Set[str] = set()
-    for cu in all_nodes(pet, CUNode):
-        names.update(v.name for v in list(cu.global_vars) + list(cu.local_vars) if v.defLine == "GlobalVar")
-    return names
+    that writes ``*p``, which is no name of the scope of the caller. Collected once per PEGraphX (relearn: it was
+    collected for each of the 3768 task groups, 469 s), the callers do not modify the set."""
+    cached = _declared_global_names_of.get(pet)
+    if cached is None:
+        cached = set()
+        for cu in all_nodes(pet, CUNode):
+            cached.update(v.name for v in list(cu.global_vars) + list(cu.local_vars) if v.defLine == "GlobalVar")
+        _declared_global_names_of[pet] = cached
+    return cached
 
 
 def _variables_of_instructions(pet: PEGraphX, instruction_ids: Iterable[int]) -> Set[str]:
