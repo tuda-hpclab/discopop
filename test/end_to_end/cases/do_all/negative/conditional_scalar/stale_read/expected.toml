@@ -1,0 +1,11 @@
+run_args = "16"
+
+# Reduced from rodinia hotspot (serial/hotspot single_iteration, chunk loop at line 70): the cells of a
+# border chunk which are not on the border of the grid take none of the branches and read the delta of
+# an earlier cell, from an earlier chunk at chunks 7, 11, ... (n = 16, BLOCK = 4). Privatizing delta changes
+# the result, so the chunk loop (13) and the loops of the border chunk (17, 18) are no do-all loops.
+# The explorer before 08f83342 did not attach the dynamic dependency to the iterations and suggested
+# all three. The twin with every path writing delta is do_all/simple/conditional_scalar/written_on_all_paths.
+[do_all]
+excludes = ["1:13", "1:17", "1:18"]
+includes = ["1:37", "1:38"]
