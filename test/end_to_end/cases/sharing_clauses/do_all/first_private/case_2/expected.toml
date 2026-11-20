@@ -1,0 +1,7 @@
+# a scalar of a typedef type which only helper functions write through its address
+[do_all]
+lines = ["1:12"]
+
+[do_all.clauses]
+first_private = ["t"]
+shared = ["x", "y", "n"]

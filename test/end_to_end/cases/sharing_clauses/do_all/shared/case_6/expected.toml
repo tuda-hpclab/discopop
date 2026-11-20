@@ -1,0 +1,6 @@
+# constants read only in the branch of an inner loop which ends with break
+[do_all]
+lines = ["1:9"]
+
+[do_all.clauses]
+shared = ["x", "y", "n", "c", "d", "V"]

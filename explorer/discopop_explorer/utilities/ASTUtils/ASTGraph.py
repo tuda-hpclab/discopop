@@ -118,6 +118,9 @@ class ClangASTGraph:
                 "mangled_name": node.get("mangledName"),
                 # "static", "extern", ... of FunctionDecl / VarDecl nodes; None if not given
                 "storage_class": node.get("storageClass"),
+                # id of the previous declaration of a VarDecl / FunctionDecl: the out-of-line definition of a static
+                # data member points at its declaration in the class
+                "previous_decl_id": node.get("previousDecl"),
                 # "tls" / "dynamic" for thread_local variables
                 "tls": node.get("tls"),
             }

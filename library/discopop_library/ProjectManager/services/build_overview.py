@@ -10,6 +10,7 @@
 
 import json
 import os
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Set, Tuple
@@ -17,9 +18,14 @@ from typing import List, Optional, Sequence, Set, Tuple
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of, members_of
 from discopop_library.ProjectManager.configurations.builds import (
+    BuildAcceptError,
+    BuildChanges,
+    BuildInUseError,
     BuildKey,
     BuildRecord,
     BuildState,
+    accept_build,
+    accepted_changes_text,
     build_status,
     build_trees_dir_of,
     delete_builds,
@@ -37,6 +43,8 @@ from discopop_library.ProjectManager.configurations.runs import (
     disk_usage,
     list_all_runs,
 )
+from discopop_library.ProjectManager.services import fingerprint_ignore
+from discopop_library.ProjectManager.services.hotspot_session import forget_build_states
 from discopop_library.ProjectManager.services.explorer_state import explorer_prerequisites_met, required_explorer_files
 from discopop_library.ProjectManager.services.modes import settings_path as mode_settings_path
 
@@ -53,21 +61,154 @@ def format_time(timestamp: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
 
 
-def build_state_of(arguments: ProjectManagerArguments, record: BuildRecord) -> str:
-    """``current``, ``stale (<why>)`` or ``missing (<why>)`` for the build of ``record``. Reads the whole project."""
+def _status_inputs(arguments: ProjectManagerArguments, record: BuildRecord) -> Optional[Tuple[BuildKey, str, str]]:
+    """The key, compile script and settings file the state of the build of ``record`` is checked with; None if its
+    configuration or the settings of its mode do not exist any more."""
     settings = mode_settings_path(arguments.project_config_dir, record.mode)
     config_dir = os.path.join(arguments.project_config_dir, record.configuration)
     if settings is None or not os.path.isdir(config_dir):
-        return "stale (the configuration or its settings do not exist any more)"
+        return None
     key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
-    status = build_status(
-        arguments, key, resolve_compile_script_path(arguments.project_config_dir, record.configuration), settings
-    )
+    return key, resolve_compile_script_path(arguments.project_config_dir, record.configuration), settings
+
+
+_GONE = "the configuration or its settings do not exist any more"
+
+
+def build_state_of(arguments: ProjectManagerArguments, record: BuildRecord) -> str:
+    """``current``, ``stale (<why>)`` or ``missing (<why>)`` for the build of ``record``. Reads the whole project."""
+    inputs = _status_inputs(arguments, record)
+    if inputs is None:
+        return "stale (" + _GONE + ")"
+    status = build_status(arguments, *inputs)
     if status.state == BuildState.CURRENT:
         return "current"
     if status.state == BuildState.NONE:
         return "missing (" + status.reason + ")"
     return "stale (" + status.reason + ")"
+
+
+@dataclass(frozen=True)
+class BuildReview:
+    """What the user sees before deciding about a stale build: rebuild, accept the changes, or ignore paths."""
+
+    build_id: str
+    state: BuildState
+    reason: str
+    changes: Optional[BuildChanges] = None
+    # ignore patterns that would leave the changed files out (top-level directories git does not track)
+    suggested_patterns: Tuple[str, ...] = ()
+    # the changes accepted for the build before, if any
+    accepted_before: str = ""
+    # the ignore patterns of the project now
+    patterns: Tuple[str, ...] = ()
+
+    def file_lines(self, limit: int = 2000) -> List[str]:
+        """One line per changed file (``M``odified, ``A``dded, ``D``eleted), at most ``limit``."""
+        files = self.changes.files if self.changes is not None else None
+        if files is None:
+            return []
+        marked = sorted(
+            [(path, "M") for path in files.modified]
+            + [(path, "A") for path in files.added]
+            + [(path, "D") for path in files.removed]
+        )
+        lines = [mark + "  " + path for path, mark in marked[:limit]]
+        if len(marked) > limit:
+            lines.append("... and " + str(len(marked) - limit) + " more")
+        return lines
+
+
+def _tracked_top_level(project_root: str) -> Optional[Set[str]]:
+    """The top-level names below which git tracks a file (the project may lie inside a larger work tree); None if
+    the project is in no git work tree."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", project_root, "ls-files", "-z", "--cached"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    names = completed.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    return {name.split("/", 1)[0] for name in names if name}
+
+
+# files that mark a build directory (CMake, Ninja, Meson, CACHEDIR.TAG of cargo and others)
+_BUILD_DIRECTORY_MARKERS = ("CMakeCache.txt", "build.ninja", "meson-info", "CACHEDIR.TAG")
+
+
+def _suggestions(arguments: ProjectManagerArguments, changes: Optional[BuildChanges]) -> Tuple[str, ...]:
+    """Top-level directories with changed files that look like build directories: git tracks nothing in them, or,
+    without git, they hold the marker of a build system. Code that git tracks is never proposed (its changes
+    matter)."""
+    if changes is None or changes.files is None or not changes.files:
+        return ()
+    tracked = _tracked_top_level(arguments.project_root)
+    suggestions: List[str] = []
+    for pattern in fingerprint_ignore.suggest_patterns(changes.files.paths):
+        if not pattern.endswith("/"):
+            continue
+        name = pattern.rstrip("/")
+        if tracked is not None:
+            if name not in tracked:
+                suggestions.append(pattern)
+        elif any(os.path.exists(os.path.join(arguments.project_root, name, m)) for m in _BUILD_DIRECTORY_MARKERS):
+            suggestions.append(pattern)
+    return tuple(suggestions)
+
+
+def review_build(arguments: ProjectManagerArguments, build_id: str) -> BuildReview:
+    """What changed since the build ``build_id``. Reads the whole project."""
+    record = next((r for r in list_builds(arguments.project_dir) if r.build_id == build_id), None)
+    if record is None:
+        return BuildReview(build_id, BuildState.NONE, "No such build.")
+    inputs = _status_inputs(arguments, record)
+    if inputs is None:
+        return BuildReview(build_id, BuildState.STALE, _GONE[0].upper() + _GONE[1:] + ".")
+    status = build_status(arguments, *inputs)
+    return BuildReview(
+        build_id,
+        status.state,
+        status.reason,
+        status.changes,
+        _suggestions(arguments, status.changes),
+        accepted_changes_text(arguments.project_dir, inputs[0]),
+        tuple(fingerprint_ignore.load_fingerprint_ignore(arguments.project_dir)),
+    )
+
+
+def accept_build_changes(arguments: ProjectManagerArguments, build_id: str) -> str:
+    """Accept the changes since the build ``build_id`` (:func:`accept_build`); returns "" or why it was not done."""
+    record = next((r for r in list_builds(arguments.project_dir) if r.build_id == build_id), None)
+    if record is None:
+        return "There is no build " + build_id + "."
+    inputs = _status_inputs(arguments, record)
+    if inputs is None:
+        return "The build cannot be checked: " + _GONE + "."
+    try:
+        status = accept_build(arguments, *inputs)
+    except BuildInUseError:
+        return "The build " + build_id + " is in use by a run or a compilation; try again when it has finished."
+    except BuildAcceptError as error:
+        return str(error)
+    finally:
+        forget_build_states()
+    if status.state == BuildState.CURRENT:
+        return "The build " + build_id + " is current: there is nothing to accept."
+    if status.state == BuildState.NONE:
+        return status.reason
+    return ""
+
+
+def ignore_and_review(arguments: ProjectManagerArguments, build_id: str, patterns: Sequence[str]) -> BuildReview:
+    """Add ``patterns`` to the ignore patterns of the project, then check the build ``build_id`` again."""
+    fingerprint_ignore.add_patterns(arguments.project_dir, patterns)
+    forget_build_states()
+    return review_build(arguments, build_id)
 
 
 def _size_text(path: str, with_sizes: bool) -> str:

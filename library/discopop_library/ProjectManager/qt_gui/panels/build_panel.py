@@ -28,6 +28,7 @@ from discopop_library.ProjectManager.qt_gui.build_controls import BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.callpath_pruning_section import CallpathPruningSection
+from discopop_library.ProjectManager.qt_gui.fingerprint_ignore_section import FingerprintIgnoreSection
 from discopop_library.ProjectManager.qt_gui.help_dialogs import text_help_button
 from discopop_library.ProjectManager.qt_gui.shared_build import SharedBuildSection
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
@@ -131,6 +132,7 @@ class BuildPanel(Panel):
         self.shared_build = SharedBuildSection(arguments, project_state)
         self.callpath_pruning = CallpathPruningSection(arguments, project_state, status)
         self.builds = BuildsAndRuns(arguments, changed=lambda: project_state.publish(ResultsChanged()), show_runs=False)
+        self.fingerprint_ignore = FingerprintIgnoreSection(arguments, project_state, status)
 
         self.run_button = widgets.RunStopButton(BUILD_TEXT, self._build, self._stop)
         self.run_button.setToolTip("Compiles the configuration unless there already is a current build of the mode.")
@@ -151,7 +153,7 @@ class BuildPanel(Panel):
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.setSpacing(widgets.CARD_SPACING)
-        for section in (target, self.shared_build, self.callpath_pruning, self.builds):
+        for section in (target, self.shared_build, self.callpath_pruning, self.builds, self.fingerprint_ignore):
             column_layout.addWidget(section)
         column_layout.addStretch(1)
         options = QWidget()
@@ -188,6 +190,7 @@ class BuildPanel(Panel):
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt's name)
         # the setting may have been changed outside the GUI meanwhile
         self.callpath_pruning.reload()
+        self.fingerprint_ignore.reload()
         super().showEvent(event)
 
     def mode(self) -> str:

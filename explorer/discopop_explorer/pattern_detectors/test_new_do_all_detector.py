@@ -523,7 +523,9 @@ def test_pointer_reaimed_in_the_loop_is_private_not_shared(
     pet, loop_ctx, loop, _ = _build_pointer_reaim_loop(make_node, build_pet_graph, build_task_graph, make_tg_node)
     ast_helper = _StubASTHelper({"rA": "FOUR_VECTOR *"}, assigned_in_loop=frozenset({"rA"}))
 
-    firstprivate, private, lastprivate, shared, _firstwritten, _init = _classify(pet, loop_ctx, loop, ast_helper)
+    firstprivate, private, lastprivate, shared, _firstwritten, _init, _notes = _classify(
+        pet, loop_ctx, loop, ast_helper
+    )
 
     assert private == {"rA"}
     assert shared == set()
@@ -543,7 +545,9 @@ def test_pointer_only_read_in_the_loop_stays_shared(
     pet, loop_ctx, loop, _ = _build_pointer_reaim_loop(make_node, build_pet_graph, build_task_graph, make_tg_node)
     ast_helper = _StubASTHelper({"rA": "FOUR_VECTOR *"}, assigned_in_loop=frozenset())
 
-    _firstprivate, private, _lastprivate, shared, _firstwritten, _init = _classify(pet, loop_ctx, loop, ast_helper)
+    _firstprivate, private, _lastprivate, shared, _firstwritten, _init, _notes = _classify(
+        pet, loop_ctx, loop, ast_helper
+    )
 
     assert shared == {"rA"}
     assert private == set()

@@ -1,0 +1,6 @@
+# a mutex is shared: a private copy would remove the mutual exclusion
+[do_all]
+lines = ["1:8"]
+
+[do_all.clauses]
+shared = ["m", "x", "y", "n"]

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 from discopop_library.ProjectManager.services.callpath_pruning import CALLPATH_PRUNING_FILE
 from discopop_library.ProjectManager.services.excluded_directories import EXCLUDED_DIRECTORIES_FILE
 from discopop_library.ProjectManager.services.included_directories import INCLUDED_DIRECTORIES_FILE
+from discopop_library.ProjectManager.services.openmp_handling import OPENMP_HANDLING_FILE
 from mcp.types import TextContent
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
@@ -719,10 +720,11 @@ class ToolContext:
         """Return the mtime of the most recently modified source file under project_path,
         excluding the .discopop subtree. Returns None if no source files are found.
 
-        The lists of included and excluded directories and the call path pruning setting count as sources: results
-        instrumented before they changed cover other code or were pruned differently."""
+        The lists of included and excluded directories, the call path pruning setting and the handling of the OpenMP
+        flags count as sources: results instrumented before they changed cover other code, were pruned differently or
+        were compiled with another OpenMP handling."""
         newest = max(ToolContext.source_mtimes(project_path).values(), default=None)
-        for name in (INCLUDED_DIRECTORIES_FILE, EXCLUDED_DIRECTORIES_FILE, CALLPATH_PRUNING_FILE):
+        for name in (INCLUDED_DIRECTORIES_FILE, EXCLUDED_DIRECTORIES_FILE, CALLPATH_PRUNING_FILE, OPENMP_HANDLING_FILE):
             try:
                 mtime = (Path(project_path) / ".discopop" / "project" / name).stat().st_mtime
             except OSError:

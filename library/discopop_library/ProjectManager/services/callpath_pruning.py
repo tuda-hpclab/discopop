@@ -175,6 +175,60 @@ def current_hotspots_file(arguments: ProjectManagerArguments, config: Optional[s
     return facts[0]
 
 
+def why_no_hotspots_file(arguments: ProjectManagerArguments, config: Optional[str]) -> str:
+    """Why :func:`current_hotspots_file` finds no current ``Hotspots.json`` (for a message; "" if it does)."""
+    facts = _hotspots_facts(arguments.dot_dp)
+    if facts is None:
+        return "there are no hotspot detection results"
+    if not facts[1] & hotness_classes(load_callpath_pruning(arguments.project_dir).hotness):
+        return "the hotspot detection results classify no region with one of the selected hot classes"
+    stale_directories = stale_directories_message(arguments.dot_dp, "hd", arguments.project_dir)
+    if stale_directories is not None:
+        return "the hotspot detection results are outdated: " + stale_directories
+    if config:
+        # imported here: the hotspot session needs the builds, which need this module
+        from discopop_library.ProjectManager.services.hotspot_build import BUILD_MISMATCH
+        from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
+
+        session = HotspotSession(arguments)
+        state, reason = session.build_state(config)
+        if state == BUILD_MISMATCH:
+            return (
+                "the hotspot detection results are outdated, as their build "
+                + str(session.serving_build_config(config))
+                + "_hd is stale ("
+                + reason.rstrip(".")
+                + ")"
+            )
+    return ""
+
+
+def change_cause(
+    arguments: ProjectManagerArguments, config: Optional[str], recorded_state: str, current_state: str
+) -> Optional[str]:
+    """Why the pruning of a ``dp`` build (:func:`state_of` when it was compiled) differs from the pruning a build
+    would get now; None if the states cannot be compared (or do not differ)."""
+    try:
+        recorded = json.loads(recorded_state)
+        current = json.loads(current_state)
+        recorded_variables = dict(recorded["variables"])
+        current_variables = dict(current["variables"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if recorded_variables and not current_variables:
+        if not load_callpath_pruning(arguments.project_dir).enabled:
+            return "call path pruning was switched off"
+        why = why_no_hotspots_file(arguments, config)
+        return "the build was pruned, but would not be now" + (": " + why if why else "")
+    if current_variables and not recorded_variables:
+        return "the build was not pruned, but would be now (pruning switched on or current hotspot results exist)"
+    if recorded_variables != current_variables:
+        return "the call path pruning settings changed"
+    if recorded.get("hotspots") != current.get("hotspots"):
+        return "the hotspot detection results changed"
+    return None
+
+
 def environment(arguments: ProjectManagerArguments, config: Optional[str]) -> Dict[str, str]:
     """The variables a ``dp`` build of ``config`` gets: empty if pruning is off or there is no current
     ``Hotspots.json``."""

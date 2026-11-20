@@ -33,7 +33,15 @@ from discopop_library.ProjectManager.qt_gui import dialogs  # noqa: E402
 
 _QT_GUI_DIR = Path(__file__).parent
 
-_QUESTIONS = {"ask_yes_no", "ask_string", "ask_choice", "ask_open_file", "ask_directory", "ask_save_file"}
+_QUESTIONS = {
+    "ask_yes_no",
+    "ask_string",
+    "ask_choice",
+    "ask_open_file",
+    "ask_directory",
+    "ask_save_file",
+    "review_build_changes",
+}
 
 
 def pytest_collection_modifyitems(items: List[pytest.Item]) -> None:

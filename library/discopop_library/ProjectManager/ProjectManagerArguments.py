@@ -57,6 +57,9 @@ class ProjectManagerArguments(GeneralArguments):
     # discopop_library.ProjectManager.configurations.project_environment.
     project_include_dirs: Optional[str] = None
     project_exclude_dirs: Optional[str] = None
+    # Overrides the stored setting whether the instrumented (dp / hd) compilations remove the OpenMP flags for this
+    # invocation; None leaves it alone. See discopop_library.ProjectManager.services.openmp_handling.
+    strip_openmp: Optional[bool] = None
     # Allows --apply-suggestions to patch files outside of the project (shared sources, see
     # discopop_library.PatchApplicator.outside_project); refused by default. Never honoured for "auto" / "prm".
     allow_patching_outside_project: bool = False

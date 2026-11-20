@@ -62,6 +62,11 @@ class ReductionInfo(PatternInfo):
         self.reduction: List[Variable] = [] if reduction is None else reduction
         self.pattern_tag = self.get_tag()
         self.collapse_level = 1
+        # see DoAllInfo.sharing_notes
+        self.sharing_notes: List[str] = []
+        # the pragma lists every variable of the loop, so default(none) can be added (the explorer option
+        # --doall-default-none, on by default, sets this)
+        self.default_none: bool = False
 
         # determine affected cu and line ids
         affected_cus = subtree_of_type(pet, node)

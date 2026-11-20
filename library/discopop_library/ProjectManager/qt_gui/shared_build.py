@@ -60,10 +60,9 @@ class SharedBuildSection(widgets.FormSection):
         self.add_row("Build from:", self.owner_combo, stretch_field=True)
         self.members_label = QLabel("Also used by:")
         self.members_list = QListWidget()
-        self.members_list.setMaximumHeight(110)
         self.members_list.itemChanged.connect(self._member_toggled)
         self.add_widget(self.members_label)
-        self.add_widget(self.members_list)
+        self.add_widget(widgets.resizable(self.members_list, 110, minimum=40, fixed=True))
 
     @property
     def _config_dir(self) -> str:

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.builds import BuildPolicy, list_builds
+from discopop_library.ProjectManager.configurations.builds import BuildPolicy, BuildState, list_builds
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.services import build_overview
@@ -39,7 +39,8 @@ POLICY_TEXTS = (
 )
 POLICY_HINT = (
     "A build is kept after it was compiled and serves further runs as long as the project files, the compile "
-    "script, the settings and the project directories are unchanged."
+    'script, the settings and the project directories are unchanged. "Show changes" in the Build stage tells '
+    "what changed."
 )
 
 
@@ -89,7 +90,6 @@ def _table(columns: tuple) -> QTableWidget:  # type: ignore[type-arg]
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.verticalHeader().setVisible(False)
     table.horizontalHeader().setStretchLastSection(True)
-    table.setMinimumHeight(110)
     return table
 
 
@@ -132,6 +132,12 @@ class BuildsAndRuns(widgets.FormSection):
             tooltip="Compares the files of the project with the build; reads the whole project, which takes a while "
             "for a large one.",
         )
+        self.review_button = widgets.create_button(
+            "Show changes...",
+            self.review_selected_build,
+            tooltip="Shows what changed since the selected build; you can ignore paths (e.g. a build directory "
+            "inside the project) or accept the build as current.",
+        )
         self.delete_builds_button = widgets.danger_outline_button("Delete selected builds", self.delete_selected_builds)
         self.activate_button = widgets.create_button(
             "Use selected run for pattern detection",
@@ -153,10 +159,12 @@ class BuildsAndRuns(widgets.FormSection):
             ),
         )
         if show_builds:
-            self.add_widget(self.build_table)
-            self.add_widget(widgets.hbox(self.check_button, self.delete_builds_button, None, margins=0))
+            self.add_widget(widgets.resizable(self.build_table, 110, minimum=60))
+            self.add_widget(
+                widgets.hbox(self.check_button, self.review_button, self.delete_builds_button, None, margins=0)
+            )
         if show_runs:
-            self.add_widget(self.run_table)
+            self.add_widget(widgets.resizable(self.run_table, 110, minimum=60))
             self.activate_button.setVisible(offer_activate)
             self.delete_runs_button.setVisible(offer_delete_runs)
             self.add_widget(
@@ -237,6 +245,7 @@ class BuildsAndRuns(widgets.FormSection):
         has_builds = has_builds and self._show_builds
         has_runs = has_runs and self._show_runs
         self.check_button.setEnabled(free and has_builds)
+        self.review_button.setEnabled(free and has_builds)
         self.delete_builds_button.setEnabled(free and has_builds)
         self.activate_button.setEnabled(free and has_runs)
         self.delete_runs_button.setEnabled(free and has_runs)
@@ -272,13 +281,129 @@ class BuildsAndRuns(widgets.FormSection):
             if error is not None:
                 self.note.setText("Checking failed: " + error)
                 return
-            for row in range(self.build_table.rowCount()):
-                item = self.build_table.item(row, 0)
-                if item is not None and item.text() in result:
-                    self.build_table.setItem(row, len(_BUILD_COLUMNS) - 1, QTableWidgetItem(result[item.text()]))
+            for build_id, state in result.items():
+                self._set_state(build_id, state)
             self.note.setText("")
 
         self._in_background("Checking the builds (this reads the whole project)...", work, finished)
+
+    def _set_state(self, build_id: str, text: str) -> None:
+        for row in range(self.build_table.rowCount()):
+            item = self.build_table.item(row, 0)
+            if item is not None and item.text() == build_id:
+                cell = QTableWidgetItem(text)
+                cell.setToolTip(text)
+                self.build_table.setItem(row, len(_BUILD_COLUMNS) - 1, cell)
+
+    def review_selected_build(self) -> None:
+        """What changed since the selected build, and the decision about it (see :meth:`_show_review`)."""
+        ids = self.selected_builds()
+        if len(ids) != 1:
+            self.note.setText("Select one build.")
+            return
+        build_id = ids[0]
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            if error is not None:
+                self.note.setText("Checking failed: " + error)
+                return
+            self._show_review(result)
+
+        self._in_background(
+            "Checking the build (this reads the whole project)...",
+            lambda: build_overview.review_build(self.arguments, build_id),
+            finished,
+        )
+
+    def _show_review(self, review: build_overview.BuildReview) -> None:
+        if review.state == BuildState.CURRENT:
+            self._set_state(review.build_id, "current")
+            self.note.setText("The build " + review.build_id + " is current.")
+            return
+        if review.state == BuildState.NONE:
+            self._set_state(review.build_id, "missing (" + review.reason + ")")
+            self.note.setText(review.reason)
+            return
+        self._set_state(review.build_id, "stale (" + review.reason + ")")
+        self.note.setText("")
+        message = review.reason
+        if review.accepted_before:
+            message += "\n\n" + review.accepted_before
+        if review.patterns:
+            message += "\n\nIgnored in the fingerprint already: " + ", ".join(review.patterns)
+        message += (
+            "\n\nThe next run compiles this build again. If the changes do not affect it (a build directory inside "
+            "the project, for example), ignore their paths or accept the build as it is."
+        )
+        answer = dialogs.review_build_changes(
+            self,
+            "Changes since the build " + review.build_id,
+            message,
+            review.file_lines(),
+            review.suggested_patterns,
+        )
+        if answer is None:
+            return
+        kind, text = answer
+        if kind == dialogs.REVIEW_IGNORE:
+            self._ignore(review.build_id, [line for line in text.splitlines() if line.strip()])
+        elif kind == dialogs.REVIEW_ACCEPT:
+            self._accept(review)
+
+    def _ignore(self, build_id: str, patterns: List[str]) -> None:
+        if not patterns:
+            self.note.setText("No pattern entered; nothing was changed.")
+            return
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            if error is not None:
+                self.note.setText("Storing the patterns failed: " + error)
+                return
+            # first: the panels refresh the table
+            self._notify()
+            if result.state == BuildState.CURRENT:
+                self._set_state(build_id, "current")
+                self.note.setText(
+                    "Ignoring " + ", ".join(patterns) + " in the fingerprint; the build " + build_id + " is current."
+                )
+                return
+            # something else changed as well: show what is left
+            self._show_review(result)
+
+        self._in_background(
+            "Storing the patterns and checking the build again...",
+            lambda: build_overview.ignore_and_review(self.arguments, build_id, patterns),
+            finished,
+        )
+
+    def _accept(self, review: build_overview.BuildReview) -> None:
+        if not dialogs.ask_yes_no(
+            self,
+            "Accept build as current",
+            "Use the build "
+            + review.build_id
+            + " for further runs although the project changed since it was compiled?\n\n"
+            + review.reason
+            + "\n\nRuns then use the code (and, for dp, the call path pruning) the build was compiled with. The "
+            "decision is noted in the build and shown whenever it is reused.",
+        ):
+            return
+
+        def finished(result: Any, error: Optional[str]) -> None:
+            problem = error if error is not None else result
+            if problem:
+                self.note.setText("Not accepted: " + str(problem))
+                return
+            # first: the panels refresh the table
+            self._notify()
+            self._set_state(review.build_id, "current (changes accepted)")
+            self.note.setText("The build " + review.build_id + " is current; the changes were accepted.")
+
+        self._in_background(
+            "Accepting the build...",
+            lambda: build_overview.accept_build_changes(self.arguments, review.build_id),
+            finished,
+        )
 
     def delete_selected_builds(self) -> None:
         ids = self.selected_builds()
