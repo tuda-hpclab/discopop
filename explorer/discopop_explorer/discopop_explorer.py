@@ -8,7 +8,6 @@
 
 import cProfile
 import json
-import logging
 import os
 import subprocess
 import sys
@@ -226,7 +225,6 @@ def __run(
 
 def run(arguments: ExplorerArguments) -> None:
     """Run the discopop_explorer with the given arguments"""
-    logger = logging.getLogger("Explorer")
 
     setup_explorer(arguments.project_path)
 
@@ -308,10 +306,11 @@ def run(arguments: ExplorerArguments) -> None:
             dump_to_gephi_file(res.pet, arguments.enable_pet_plot_file)
 
         if arguments.enable_detection_result_dump_file is not None:
-            with open(arguments.enable_detection_result_dump_file, "w+") as f:
-                f.write(res.dump_to_pickled_json())
-                f.flush()
-                f.close()
+            with stage("Writing the detection result dump"):
+                with open(arguments.enable_detection_result_dump_file, "w+") as f:
+                    f.write(res.dump_to_pickled_json())
+                    f.flush()
+                    f.close()
 
         if arguments.enable_json_file is None:
             print(str(res))
@@ -320,8 +319,9 @@ def run(arguments: ExplorerArguments) -> None:
             # print(str(res))
             # since PETGraphX is not JSON Serializable, delete the field prior to executing the serialization
             del res.pet
-            with open(arguments.enable_json_file, "w+") as f:
-                json.dump(res, f, indent=2, cls=PatternBaseSerializer)
+            with stage("Writing the patterns"):
+                with open(arguments.enable_json_file, "w+") as f:
+                    json.dump(res, f, indent=2, cls=PatternBaseSerializer)
 
         # Written after the patterns, so that a decision file older than the patterns reveals
         # patterns it does not describe. Left alone when existing patterns are loaded instead
@@ -332,9 +332,12 @@ def run(arguments: ExplorerArguments) -> None:
                 pattern_decisions.save(decisions_file)
 
         # create applicable patch files from the found suggestions
-        with stage("Generating parallelization patches"):
-            out = subprocess.check_output(["discopop_patch_generator"], cwd=arguments.project_path).decode("utf-8")
-            logger.debug("discopop_patch_generator output:\n" + out)
+        # The patch generator reports its own stages and progress bars on the console. They are not captured, and
+        # no spinner of this process is active meanwhile (both would draw on the same lines of the terminal).
+        print("Generating parallelization patches...", flush=True)
+        patches_started = time.perf_counter()
+        subprocess.run(["discopop_patch_generator"], cwd=arguments.project_path, check=True)
+        print(colored(f"✓ Generated parallelization patches ({time.perf_counter() - patches_started:.1f}s)", "green"))
 
         # print suggestions overview for users
         with stage("Printing suggestions overview"):

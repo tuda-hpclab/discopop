@@ -164,7 +164,8 @@ class PatternDetectorX(object):
 
         # detect parallel tasks
         if "*" in enable_patterns or "task" in enable_patterns:
-            res.patterns.task = detect_tasking(self.pet, task_graph, visualizer, self.ast_helper)
+            with stage("Detecting tasks"):
+                res.patterns.task = detect_tasking(self.pet, task_graph, visualizer, self.ast_helper)
 
         # the tasks of loops with independent iterations are derived from the do-all loops
         if (
@@ -173,9 +174,10 @@ class PatternDetectorX(object):
             or "reduction" in enable_patterns
             or "task" in enable_patterns
         ):
-            tmp_result = detect_do_all_and_reduction_new(
-                self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions
-            )
+            with stage("Detecting do-all and reduction patterns"):
+                tmp_result = detect_do_all_and_reduction_new(
+                    self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions
+                )
             if "*" in enable_patterns or "doall" in enable_patterns:
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]
             if "*" in enable_patterns or "reduction" in enable_patterns:
@@ -192,10 +194,12 @@ class PatternDetectorX(object):
                 loop_sources: List[LoopTaskSource] = [
                     p for p in tmp_result if isinstance(p, (DoAllInfo, ReductionInfo))
                 ]
-                loop_sources += find_cursor_loops(task_graph, {p.node_id for p in tmp_result})
-                res.patterns.task += identify_loop_tasking(
-                    self.pet, loop_sources, hotspots, first_task_group, self.ast_helper
-                )
+                with stage("Finding loops with a cursor"):
+                    loop_sources += find_cursor_loops(task_graph, {p.node_id for p in tmp_result})
+                with stage("Identifying loop tasking"):
+                    res.patterns.task += identify_loop_tasking(
+                        self.pet, loop_sources, hotspots, first_task_group, self.ast_helper
+                    )
             # only if their results are reported: the loops were analyzed for the tasks in any case
             detected_types = [t for t in ("doall", "reduction") if "*" in enable_patterns or t in enable_patterns]
             if len(detected_types) > 0:
@@ -206,7 +210,8 @@ class PatternDetectorX(object):
 
         # the autotuner selects patterns by their hotspot class
         if "*" in enable_patterns or "task" in enable_patterns:
-            attach_hotspot_information(self.pet, res.patterns.task, hotspots)
+            with stage("Attaching hotspot information"):
+                attach_hotspot_information(self.pet, res.patterns.task, hotspots)
 
         # reduction before doall!
 
