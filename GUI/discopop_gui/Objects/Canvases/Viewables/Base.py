@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QTransform
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QTransform
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QWidget
 
 from discopop_gui.Enums.ViewerMode import ViewerMode
@@ -35,6 +35,7 @@ class Base(QGraphicsView):
         self._drag_start: QPointF | None = None
         self._last_pan_position: QPointF | None = None
         self._selection_rect: QRectF | None = None
+        self._selection_color = QColor("blue")
         self._item_callbacks: dict[QGraphicsItem, dict[int, Any]] = {}
         self._popup = Popup(self.viewport())
         self._popup_hide_threshold = 50.0
@@ -79,7 +80,7 @@ class Base(QGraphicsView):
             return
 
         self._selection_rect = QRectF(self._drag_start, position).normalized()
-        self.scene().update()
+        self.viewport().update()
 
     def _apply_zoom(self, scene_position: QPointF, scale: float) -> None:
         viewport_position = self.mapFromScene(scene_position)
@@ -91,33 +92,58 @@ class Base(QGraphicsView):
         self._pan_y += delta.y()
         self._apply_view_transform()
 
+    def _selection_viewport_size(self, selection: QRectF) -> tuple[float, float]:
+        top_left = self.mapFromScene(selection.topLeft())
+        bottom_right = self.mapFromScene(selection.bottomRight())
+        return abs(bottom_right.x() - top_left.x()), abs(bottom_right.y() - top_left.y())
+
     def _zoom_in(self, selection: QRectF) -> None:
-        if self.viewport().width() <= 0 or self.viewport().height() <= 0:
+        viewport_width = self.viewport().width()
+        viewport_height = self.viewport().height()
+        if viewport_width <= 0 or viewport_height <= 0:
+            return
+
+        selection_width, selection_height = self._selection_viewport_size(selection)
+        if selection_width <= 0 or selection_height <= 0:
             return
 
         scale = max(
-            self.viewport().width() / selection.width(),
-            self.viewport().height() / selection.height(),
+            viewport_width / selection_width,
+            viewport_height / selection_height,
         )
 
         self._apply_zoom(selection.center(), scale)
 
     def _zoom_out(self, selection: QRectF) -> None:
-        if self.viewport().width() <= 0 or self.viewport().height() <= 0:
+        viewport_width = self.viewport().width()
+        viewport_height = self.viewport().height()
+        if viewport_width <= 0 or viewport_height <= 0:
             return
 
-        scale = 1.0 - (
-            selection.width() * selection.height()
-            / (self.viewport().width() * self.viewport().height())
-        )
+        selection_width, selection_height = self._selection_viewport_size(selection)
+        selection_area = selection_width * selection_height
+        viewport_area = viewport_width * viewport_height
 
+        scale = 1.0 - min(1.0, selection_area / viewport_area)
         self._apply_zoom(selection.center(), max(0.3, min(1.0, scale)))
+
+    def drawForeground(self, painter: QPainter, _: QRectF) -> None:
+        if self._selection_rect is None:
+            return
+
+        painter.save()
+        pen = QPen(self._selection_color, 1)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self._selection_rect)
+        painter.restore()
 
     def _reset_drag_state(self) -> None:
         self._drag_start = None
         self._last_pan_position = None
         self._selection_rect = None
-        self.scene().update()
+        self.viewport().update()
 
     def _pan(self, position: QPointF) -> None:
         if self._last_pan_position is None:
@@ -150,6 +176,11 @@ class Base(QGraphicsView):
             self._last_pan_position = event.position()
         elif self._viewer_mode == ViewerMode.ZOOM:
             self._drag_start = position
+            self._selection_color = (
+                QColor("blue")
+                if event.button() == Qt.MouseButton.LeftButton
+                else QColor("red")
+            )
 
         super().mousePressEvent(event)
 
@@ -172,8 +203,9 @@ class Base(QGraphicsView):
 
         if self._viewer_mode == ViewerMode.ZOOM and self._drag_start is not None:
             selection = QRectF(self._drag_start, position).normalized()
+            selection_width, selection_height = self._selection_viewport_size(selection)
 
-            if selection.width() > 5 and selection.height() > 5:
+            if selection_width > 5 and selection_height > 5:
                 if event.button() == Qt.MouseButton.LeftButton:
                     self._zoom_in(selection)
                 elif event.button() == Qt.MouseButton.RightButton:
