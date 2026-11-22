@@ -106,7 +106,7 @@ class Plottable:
 
         layout.addWidget(canvas, 1)
         layout.addWidget(toolbar)
-        return cast(Axes, axes)
+        return axes
 
     def create_plottable(self, name: str) -> CanvasViewerWithTrees:
         if self._visualizer is None:
@@ -137,7 +137,7 @@ class Plottable:
 
             layout.addWidget(canvas, 1)
             layout.addWidget(toolbar)
-            axeses.append(cast(Axes, axes))
+            axeses.append(axes)
 
         return axeses
 

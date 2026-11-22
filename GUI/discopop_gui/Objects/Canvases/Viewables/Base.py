@@ -9,9 +9,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QTransform
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QWidget
 
@@ -57,7 +57,7 @@ class Base(QGraphicsView):
         self.setTransform(transform)
 
     def _scene_position(self, event: Any) -> QPointF:
-        return self.mapToScene(event.position().toPoint())
+        return cast(QPointF, self.mapToScene(event.position().toPoint()))
 
     def _check_popup_distance(self, position: QPointF) -> None:
         if not self._popup.isVisible():
@@ -129,7 +129,7 @@ class Base(QGraphicsView):
         scale = 1.0 - min(1.0, selection_area / viewport_area)
         self._apply_zoom(selection.center(), max(0.3, min(1.0, scale)))
 
-    def drawForeground(self, painter: QPainter, _: QRectF) -> None:
+    def drawForeground(self, painter: QPainter, _: QRectF | QRect) -> None:
         if self._selection_rect is None:
             return
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
-    import tkinter as tk
+    from PySide6.QtWidgets import QWidget
 
 import pstats2  # type: ignore
 from pluginbase import PluginBase  # type: ignore
@@ -83,7 +83,7 @@ class ExplorerArguments(GeneralArguments):
     enable_task_graph_plot: bool
     enable_context_graph_plot: bool
     enable_visualizer: bool
-    visualize_on: Optional["tk.Frame"]
+    visualize_on: Optional["QWidget"]
     # None means no file, otherwise the path. Why candidates were (not) suggested, see PatternDecisions
     enable_pattern_decisions_file: Optional[str] = None
     # add default(none) to the pragmas of the do-all and reduction suggestions
@@ -138,7 +138,7 @@ def __run(
     enable_task_graph_plot: bool = False,
     enable_context_graph_plot: bool = False,
     enable_visualizer: bool = False,
-    visualize_on: Optional["tk.Frame"] = None,
+    visualize_on: Optional["QWidget"] = None,
     ignore_dependency_states: bool = False,
     pattern_decisions: Optional[PatternDecisionLog] = None,
     doall_default_none: bool = True,
@@ -155,8 +155,8 @@ def __run(
     visualizer = None
 
     if enable_visualizer:
-        # imported lazily since it requires tkinter, which may be unavailable
-        # (e.g. on a headless server) when the GUI visualizer is not requested
+        # Imported lazily because Qt GUI dependencies may be unavailable
+        # (e.g. on a headless server) when the visualizer is not requested.
         from discopop_gui.Visualizers.WithSidebar import WithSidebar as Visualizer
 
         visualizer = Visualizer(visualize_on)

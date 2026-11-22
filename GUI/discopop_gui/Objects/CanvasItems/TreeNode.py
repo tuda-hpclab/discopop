@@ -910,25 +910,37 @@ class TreeNode:
             cloned_node._higher_order_main_hide_request = self._higher_order_main_hide_request
 
             for connection_id, edge in self._lower_order_main_connections.items():
-                cloned_canvas_edge = canvas.create_visual_main_edge(
+                cloned_main_visual_edge: MainEdge[int] = canvas.create_visual_main_edge(
                     self._base_node.id,
                     connection_id,
                     state="normal" if edge.get_canvas_edge().isVisible() else "hidden",
                 )
-                cloned_node._lower_order_main_connections[connection_id] = cloned_canvas_edge
-                self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(canvas, cloned_canvas_edge)
+
+                cloned_node._lower_order_main_connections[connection_id] = cloned_main_visual_edge
+                self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(canvas, cloned_main_visual_edge)
 
             for connection_id, (canvas_edge, edges) in self._lower_order_dependency_connections.items():
-                cloned_canvas_edge = canvas.create_visual_dependency_edge(
+                cloned_dependency_visual_edge: QGraphicsLineItem = canvas.create_visual_dependency_edge(
                     self._base_node.id,
                     connection_id,
                     state="normal" if canvas_edge.isVisible() else "hidden",
                 )
 
-                cloned_edges = [edge.copy() for edge in edges]
-                cloned_node._lower_order_dependency_connections[connection_id] = (cloned_canvas_edge, cloned_edges)
+                cloned_edges: List[DependencyEdge[int]] = [edge.copy() for edge in edges]
+
+                cloned_node._lower_order_dependency_connections[connection_id] = (
+                    cloned_dependency_visual_edge,
+                    cloned_edges
+                )
+
+                cloned_dependency_connection: Tuple[QGraphicsLineItem, List[DependencyEdge[int]]] = (
+                    cloned_dependency_visual_edge,
+                    cloned_edges
+                )
+
                 self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(
-                    canvas, cloned_node._lower_order_dependency_connections[connection_id]
+                    canvas,
+                    cloned_dependency_connection
                 )
 
         if higher_order_edges is None or (isinstance(higher_order_edges, tuple) and created):
