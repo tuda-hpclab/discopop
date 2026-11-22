@@ -6,16 +6,15 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
+from PySide6.QtGui import QColor, QPainter, QPen
+
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
-
 class Magnifier(RoundedSquareButton):
-    def draw(self) -> None:
-        super().draw()
-        self.draw_magnifier()
-
-    def draw_magnifier(self) -> None:
+    def _paint_icon(self, painter: QPainter) -> None:
         color = "black"
 
-        self.create_oval(9, 8, 23, 22, outline=color, width=2)
-        self.create_line(21, 20, 29, 28, fill=color, width=3)
+        painter.setPen(QPen(QColor(color), 2))
+        painter.drawEllipse(9, 8, 14, 14)
+        painter.setPen(QPen(QColor(color), 3))
+        painter.drawLine(21, 20, 29, 28)

@@ -6,8 +6,10 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import tkinter as tk
-from typing import Any, Callable
+from typing import Any
+
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import QWidget
 
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
@@ -15,8 +17,8 @@ from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton impo
 class Plus(RoundedSquareButton):
     def __init__(
         self,
-        parent: tk.Misc,
-        command: Callable[[], None],
+        parent: QWidget | None,
+        command: Any,
         colour: str = "green",
         *args: Any,
         **kwargs: Any,
@@ -24,28 +26,19 @@ class Plus(RoundedSquareButton):
         self._colour = colour
         super().__init__(parent, command, *args, **kwargs)
 
-    def draw(self) -> None:
-        super().draw()
-        self._draw_plus()
-
-    def _draw_plus(self) -> None:
+    def _paint_icon(self, painter: QPainter) -> None:
         margin = 0.28 * self._size
         width = max(1, int(self._size * 0.08))
-
-        self.create_line(
-            self._size / 2,
-            margin,
-            self._size / 2,
-            self._size - margin,
-            fill=self._colour,
-            width=width,
+        painter.setPen(QPen(QColor(self._colour), width))
+        painter.drawLine(
+            int(self._size / 2),
+            int(margin),
+            int(self._size / 2),
+            int(self._size - margin),
         )
-
-        self.create_line(
-            margin,
-            self._size / 2,
-            self._size - margin,
-            self._size / 2,
-            fill=self._colour,
-            width=width,
+        painter.drawLine(
+            int(margin),
+            int(self._size / 2),
+            int(self._size - margin),
+            int(self._size / 2),
         )

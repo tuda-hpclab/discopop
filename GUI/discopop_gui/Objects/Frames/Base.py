@@ -6,12 +6,13 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import tkinter as tk
 from typing import Any, Dict
 
+from PySide6.QtWidgets import QWidget
 
-class Base(tk.Frame):
-    def __init__(self, parent: tk.Misc, *args: Any, **kwargs: Any) -> None:
+
+class Base(QWidget):
+    def __init__(self, parent: QWidget | None = None, *args: Any, **kwargs: Any) -> None:
         super().__init__(parent, *args, **kwargs)
 
     def serialize(self) -> Dict[str, Any]:

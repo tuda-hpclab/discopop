@@ -6,11 +6,12 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-from typing import Any, Callable, Dict, List
-import tkinter as tk
+from typing import Any, Callable, Dict, List, cast
+
 from matplotlib.axes import Axes
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk  # type: ignore
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT  # type: ignore
 from matplotlib.figure import Figure
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from discopop_gui.Visualizers.Base import Base
 from discopop_gui.Objects.Frames.Base import Base as BaseFrame
@@ -24,7 +25,7 @@ class Plottable:
         self._visualizer = visualizer
 
     def __getstate__(self) -> Dict[str, Any]:
-        # The visualizer holds the Tk widgets it draws on; a pickled or dumped graph (detection_result_dump.json)
+        # The visualizer holds Qt widgets it draws on; a pickled or dumped graph (detection_result_dump.json)
         # must not carry them, the copy is not plottable.
         state = self.__dict__.copy()
         state["_visualizer"] = None
@@ -53,16 +54,16 @@ class Plottable:
         if rows < 1 or columns < 1:
             raise ValueError("Rows and columns must be >= 1")
 
-        def frame_builder(parent: tk.Misc) -> MultiFrame:
+        def frame_builder(parent: QWidget) -> MultiFrame:
             return MultiFrame(parent)
 
         frame = self._visualizer.create_frame(name, frame_builder)
 
         for row in range(rows):
-            frame.grid_rowconfigure(row, weight=1)
+            frame._layout.setRowStretch(row, 1)
 
         for column in range(columns):
-            frame.grid_columnconfigure(column, weight=1)
+            frame._layout.setColumnStretch(column, 1)
 
         inner_frames: List[BaseFrame] = []
 
@@ -70,8 +71,7 @@ class Plottable:
             row = i // columns
             column = i % columns
 
-            inner_frame = BaseFrame(frame, borderwidth=1, relief="solid")
-            inner_frame.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
+            inner_frame = frame.create_frame(row, column, lambda parent: BaseFrame(parent))
             inner_frames.append(inner_frame)
 
         frame.initialize(inner_frames)
@@ -94,30 +94,28 @@ class Plottable:
             raise VisualizerNotDefined()
 
         frame: BaseFrame = self._visualizer.create_frame(name, BaseFrame)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         figure = Figure()
         axes = figure.add_subplot(111)
         axes.set_title("Task graph")
-        canvas = FigureCanvasTkAgg(figure, master=frame)
+        canvas = FigureCanvasQTAgg(figure)
         canvas.draw()
-        canvas.get_tk_widget().grid(row=0, sticky="nsew")
-        toolbar = NavigationToolbar2Tk(canvas, pack_toolbar=False)
-        toolbar.update()
-        toolbar.grid(row=1)
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
-        return axes
+        toolbar = NavigationToolbar2QT(canvas, frame)
+
+        layout.addWidget(canvas, 1)
+        layout.addWidget(toolbar)
+        return cast(Axes, axes)
 
     def create_plottable(self, name: str) -> CanvasViewerWithTrees:
         if self._visualizer is None:
             raise VisualizerNotDefined()
 
-        def frame_builder(parent: tk.Misc) -> CanvasViewerWithTrees:
+        def frame_builder(parent: QWidget) -> CanvasViewerWithTrees:
             return CanvasViewerWithTrees(parent)
 
         frame = self._visualizer.create_frame(name, frame_builder)
-
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
 
         return frame
 
@@ -127,18 +125,19 @@ class Plottable:
 
         for index in range(rows * columns):
             inner_frame = frame.get_from_inner(index)
+            layout = QVBoxLayout(inner_frame)
+            layout.setContentsMargins(0, 0, 0, 0)
+
             figure = Figure()
             axes = figure.add_subplot(111)
             axes.set_title(inner_plot_titles[index])
-            canvas = FigureCanvasTkAgg(figure, master=inner_frame)
+            canvas = FigureCanvasQTAgg(figure)
             canvas.draw()
-            canvas.get_tk_widget().grid(row=0, sticky="nsew")
-            toolbar = NavigationToolbar2Tk(canvas, pack_toolbar=False)
-            toolbar.update()
-            toolbar.grid(row=1)
-            inner_frame.grid_rowconfigure(0, weight=1)
-            inner_frame.grid_columnconfigure(0, weight=1)
-            axeses.append(axes)
+            toolbar = NavigationToolbar2QT(canvas, inner_frame)
+
+            layout.addWidget(canvas, 1)
+            layout.addWidget(toolbar)
+            axeses.append(cast(Axes, axes))
 
         return axeses
 

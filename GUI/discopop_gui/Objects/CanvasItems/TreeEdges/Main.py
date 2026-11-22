@@ -8,17 +8,19 @@
 
 from typing import Generic, Callable, Dict, Any
 
+from PySide6.QtWidgets import QGraphicsLineItem
+
 from discopop_gui.Types.T import T
 from discopop_gui.Objects.CanvasItems.TreeEdges.Base import Base
 
 
 class Main(Base[T], Generic[T]):
-    def __init__(self, canvas_edge_id: int, source_node_id: T, target_node_id: T):
+    def __init__(self, canvas_edge: QGraphicsLineItem, source_node_id: T, target_node_id: T):
         super().__init__(source_node_id, target_node_id)
-        self._canvas_edge_id = canvas_edge_id
+        self._canvas_edge = canvas_edge
 
-    def get_canvas_edge_id(self) -> int:
-        return self._canvas_edge_id
+    def get_canvas_edge(self) -> QGraphicsLineItem:
+        return self._canvas_edge
 
     def serialize(self) -> Dict[str, Any]:
         output = super().serialize()
