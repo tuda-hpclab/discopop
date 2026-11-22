@@ -27,6 +27,8 @@ class Base(QGraphicsView):
         self.setMouseTracking(True)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setBackgroundBrush(QBrush(QColor("white")))
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
+        self.setSceneRect(-10000, -10000, 20000, 20000)
 
         self._viewer_mode = viewer_mode
         self._zoom = 1.0
