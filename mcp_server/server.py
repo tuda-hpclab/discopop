@@ -299,7 +299,7 @@ async def _run_handler(
     A cancelled call does not end at once: a thread cannot be stopped from outside, so
     the handler is told (ctx.cancel stops the processes it started), and the limiter is
     held until it has cleaned up and returned -- the next call must not start in a
-    project the cancelled one is still restoring.
+    project the cancelled one is still cleaning up.
     """
     reporter = _progress_reporter(server)
     finished = threading.Event()

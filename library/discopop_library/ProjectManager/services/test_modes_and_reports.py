@@ -7,7 +7,11 @@
 # directory for details.
 
 from pathlib import Path
+from typing import Optional
 
+import pytest
+
+from discopop_library.ProjectManager.services import reports
 from discopop_library.ProjectManager.services.modes import (
     available_modes,
     selected_modes_in_order,
@@ -65,3 +69,29 @@ def test_execution_results(tmp_path: Path) -> None:
     assert not has_execution_results(str(tmp_path))
     results.write_text('{"tiny": {"execute.sh": {"seq_settings.json": [{"code": 0, "time": 1.5}]}}}')
     assert has_execution_results(str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [
+        (None, "—"),
+        (0.0, "0 s"),
+        (0.01234, "0.0123 s"),
+        (0.5, "0.500 s"),
+        (1.23456, "1.23 s"),
+        (12.3456, "12.3 s"),
+        (123.456, "123 s"),
+        (1234.5, "1230 s"),
+        (float("nan"), "—"),
+    ],
+)
+def test_format_seconds_has_three_significant_digits(seconds: Optional[float], expected: str) -> None:
+    assert reports.format_seconds(seconds) == expected
+
+
+def test_format_ratio_limit_and_ids() -> None:
+    assert reports.format_ratio(2.5) == "2.50" and reports.format_ratio(None) == "—"
+    assert reports.format_limit(float("inf")) == "unbounded" and reports.format_limit(3.14159) == "3.14"
+    assert reports.format_limit(None) == "—"
+    assert reports.format_suggestion_ids([3, 7]) == "3, 7"
+    assert reports.format_suggestion_ids([]) == "—" and reports.format_suggestion_ids(None) == "—"

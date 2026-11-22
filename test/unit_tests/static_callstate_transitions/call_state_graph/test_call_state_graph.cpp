@@ -79,6 +79,20 @@ TEST_F(CallStateGraphTest, testRegisterFunctionEntryState) {
   EXPECT_EQ(graph.GetFunctionEntryState(43), nullptr);
 }
 
+TEST_F(CallStateGraphTest, testFunctionEntryStatesOfIdsBelowAndAboveTheRegisteredOnes) {
+  CallStateGraph graph;
+
+  graph.RegisterFunctionEntryState(5000, 3);
+  graph.RegisterFunctionEntryState(10, 4);
+  graph.RegisterFunctionEntryState(10, 6);  // the latest registration wins
+
+  EXPECT_EQ(graph.GetFunctionEntryState(5000)->GetId(), 3);
+  EXPECT_EQ(graph.GetFunctionEntryState(10)->GetId(), 6);
+  EXPECT_EQ(graph.GetFunctionEntryState(11), nullptr);
+  EXPECT_EQ(graph.GetFunctionEntryState(5001), nullptr);
+  EXPECT_EQ(graph.GetFunctionEntryState(-1), nullptr);
+}
+
 TEST_F(CallStateGraphTest, testReadsCallpathFunctionEntriesFile) {
   char dir_template[] = "/tmp/discopop_ut_callstate_XXXXXX";
   char *dir = mkdtemp(dir_template);

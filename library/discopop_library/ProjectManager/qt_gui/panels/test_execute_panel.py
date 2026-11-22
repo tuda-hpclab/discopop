@@ -100,8 +100,8 @@ def run_and_wait(qtbot: QtBot, panel: ExecutePanel, results: List[ExecuteResult]
 
 
 def test_without_a_configuration_nothing_can_be_run(panel: ExecutePanel) -> None:
-    assert not panel.run_button.isEnabled() and not panel.prepare_pattern_detection_button.isEnabled()
-    assert not panel.stop_execution_button.isEnabled()
+    assert not panel.run_button.isEnabled()
+    assert panel.header.chip.text() == ""
     assert all(not check.isEnabled() for check in panel.mode_checks.values())
     assert panel.mode_checks["seq"].isChecked()
     assert panel.suggestions_count_label.text() == "No suggestions available"
@@ -117,7 +117,7 @@ def test_the_modes_of_the_selected_configuration_are_offered(panel: ExecutePanel
         "hd": False,
         "par": False,
     }
-    assert panel.run_button.isEnabled() and panel.prepare_pattern_detection_button.isEnabled()
+    assert panel.run_button.isEnabled()
     # a mode that gets unavailable is unchecked; a missing configuration clears the output again
     panel.mode_checks["dp"].setChecked(True)
     os.remove(Path(panel.arguments.project_config_dir, "dp_settings.json"))
@@ -256,7 +256,8 @@ def test_a_successful_run_is_reported_on_the_main_thread(qtbot: QtBot, panel: Ex
     assert panel.status.text() == "Ready" and panel.status.color == widgets.STATUS_IDLE
     assert events == ["configurations", "results"]
     assert panel.run_button.isEnabled() and panel.run_button.text() == "Run"
-    assert panel.prepare_pattern_detection_button.isEnabled() and not panel.stop_execution_button.isEnabled()
+    assert not panel.run_button.is_running()
+    assert panel.header.chip.text() == "Finished" and panel.header.chip.level == widgets.CHIP_OK
     assert not panel.inplace_check.isChecked()  # in-place has to be asked for again
 
 
@@ -274,11 +275,11 @@ def test_the_buttons_during_a_run(qtbot: QtBot, panel: ExecutePanel) -> None:
     with mock.patch.object(execution_run, "execute_configuration", blocking):
         panel.run_button.click()
         assert started.wait(20)
-        assert not panel.run_button.isEnabled() and panel.run_button.text() == "⟳ Running..."
-        assert panel.stop_execution_button.isEnabled() and not panel.prepare_pattern_detection_button.isEnabled()
+        assert panel.run_button.is_running() and panel.run_button.isEnabled() and panel.run_button.text() == "■ Stop"
+        assert panel.header.chip.text() == "Running"
         qtbot.waitUntil(lambda: panel.status.text() == "⏳ Compiling...", timeout=5000)
         select(panel)  # a change of the selection must not re-enable the buttons of a running job
-        assert not panel.run_button.isEnabled()
+        assert panel.run_button.is_running() and not panel.run_button.can_run()
         release.set()
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
     assert panel.run_button.isEnabled()
@@ -389,7 +390,7 @@ def test_a_crash_of_the_worker_does_not_leave_the_buttons_disabled(qtbot: QtBot,
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
     assert "Error: boom" in panel.console.text()
     assert panel.run_button.isEnabled() and panel.run_button.text() == "Run"
-    assert not panel.stop_execution_button.isEnabled()
+    assert not panel.run_button.is_running()
 
 
 def test_the_stop_button_cancels_the_run(qtbot: QtBot, panel: ExecutePanel) -> None:
@@ -407,11 +408,12 @@ def test_the_stop_button_cancels_the_run(qtbot: QtBot, panel: ExecutePanel) -> N
     with mock.patch.object(execution_run, "execute_configuration", blocking):
         panel.run_button.click()
         assert started.wait(20)
-        panel.stop_execution_button.click()
+        panel.run_button.click()  # the Stop button
         assert panel.status.text() == "Stopping execution..." and panel.status.color == widgets.STATUS_STOP
-        assert not panel.stop_execution_button.isEnabled()
+        assert panel.run_button.text() == "Stopping…" and not panel.run_button.isEnabled()
         release.set()
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+    assert panel.header.chip.text() == "Stopped" and panel.run_button.text() == "Run"
     output = panel.console.text()
     assert "=== SEQ mode ===" in output and "=== DP mode ===" not in output
     assert "Execution stopped by user." in output
@@ -462,62 +464,116 @@ def test_skipped_runs_are_reported(qtbot: QtBot, panel: ExecutePanel, dialog_ans
     assert panel.status.text() == "⚠ Suggestion application failed" and panel.status.color == widgets.STATUS_FAIL
 
 
-# ── preparing the pattern detection ──────────────────────────────────────────
+# ── blocked by the Profiling stage ───────────────────────────────────────────
 
 
-def test_prepare_pattern_detection_runs_dp_in_place(qtbot: QtBot, panel: ExecutePanel) -> None:
+def test_no_run_while_the_profiling_stage_runs(panel: ExecutePanel) -> None:
     select(panel)
-    results: List[ExecuteResult] = [(0, 0.5, "", ""), (0, 1.0, "", "")]
-    published: List[str] = []
-    panel.project_state.subscribe(ResultsChanged, lambda _e: published.append("results"))
-    calls: List[Tuple[Any, ...]] = []
-
-    def fake(*args: Any, **_kwargs: Any) -> ExecuteResult:
-        calls.append(args)
-        return results.pop(0)
-
-    with mock.patch.object(execution_run, "execute_configuration", fake):
-        panel.prepare_pattern_detection_button.click()
-        assert panel.prepare_pattern_detection_button.text() == "⟳ Preparing..."
-        assert not panel.run_button.isEnabled() and panel.stop_execution_button.isEnabled()
-        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
-    output = panel.console.text()
-    assert "Compiling in 'dp' mode with inplace execution..." in output
-    assert output.rstrip().endswith("=== Pattern detection preparation complete ===")
-    assert calls[0][1] == panel.arguments.project_root and calls[0][3].endswith("dp_settings.json")
-    assert calls[0][0].execute_inplace is True and calls[0][0].log_level == "INFO"
-    assert panel.prepare_pattern_detection_button.text() == "Prepare Pattern Detection"
-    assert panel.run_button.isEnabled() and panel.status.text() == "Ready"
-    assert published == ["results"]
-
-
-def test_a_failing_preparation_is_reported(qtbot: QtBot, panel: ExecutePanel) -> None:
+    panel.set_blocked(True)
+    assert not panel.run_button.isEnabled() and "Profiling" in panel.run_button.toolTip()
     select(panel)
-    with mock.patch.object(execution_run, "execute_configuration", lambda *a, **k: (1, 0.1, "", "")):
-        panel.prepare_pattern_detection_button.click()
-        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
-    assert "Compilation failed (return code: 1)" in panel.console.text()
-    assert "=== Pattern detection preparation failed ===" in panel.console.text()
-    assert panel.status.text() == "Pattern detection preparation failed"
-    assert panel.status.color == widgets.STATUS_FAIL
-    assert panel.run_button.isEnabled()
+    assert not panel.run_button.isEnabled()
+    panel.set_blocked(False)
+    assert panel.run_button.isEnabled() and panel.run_button.toolTip() == ""
 
 
-def test_the_preparation_can_be_stopped(qtbot: QtBot, panel: ExecutePanel) -> None:
+# ── the layout ───────────────────────────────────────────────────────────────
+
+
+def test_the_console_goes_to_the_output_pane_and_a_run_requests_it(qtbot: QtBot, panel: ExecutePanel) -> None:
+    assert panel.output_console() is panel.console and panel.output_title == "Execute"
     select(panel)
-    started = threading.Event()
-    release = threading.Event()
+    requested: List[str] = []
+    panel.output_requested.connect(lambda: requested.append("pane"))
+    run_and_wait(qtbot, panel, [(0, 0.1, "", "")])
+    assert requested == ["pane"]
 
-    def blocking(*_args: Any, **_kwargs: Any) -> ExecuteResult:
-        started.set()
-        release.wait(20)
-        return (0, 0.1, "", "")
 
-    with mock.patch.object(execution_run, "execute_configuration", blocking):
-        panel.prepare_pattern_detection_button.click()
-        assert started.wait(20)
-        panel.stop_execution_button.click()
-        release.set()
+def test_the_advanced_settings_are_collapsed(panel: ExecutePanel) -> None:
+    assert not panel.advanced_section.is_expanded()
+    assert panel.header.title_label.text() == "Execute"
+
+
+def add_outside_patch(panel: ExecutePanel, suggestion_id: str, tmp_path: Path) -> None:
+    """A suggestion whose patch targets a file outside the project (the project is ``tmp_path``)."""
+    add_patches(panel, suggestion_id)
+    patches = Path(panel.arguments.dot_dp, "patch_generator", suggestion_id)
+    (patches / "p.patch").unlink()
+    (patches / "2.patch").write_text("diff")
+    (Path(panel.arguments.dot_dp) / "FileMapping.txt").write_text(
+        f"1\t{tmp_path}/a.c\n2\t{tmp_path.parent}/shared_outside/a.c\n"
+    )
+
+
+def start_manual_run(qtbot: QtBot, panel: ExecutePanel, ids: List[str]) -> List[Any]:
+    select(panel)
+    panel.project_state.publish(PatternsChanged())
+    panel.set_suggestions_mode("manual")
+    panel.execute_suggestion_selector.set_selected_ids(ids)
+    seen: List[Any] = []
+    with mock.patch.object(execute_panel_module, "run_execution", recording_run(seen)):
+        panel.run_button.click()
         qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
-    assert "preparation stopped by user" in panel.console.text()
-    assert panel.status.text() == "Ready"
+    return seen
+
+
+def test_suggestions_outside_the_project_need_a_confirmation_of_their_own(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder, tmp_path: Path
+) -> None:
+    add_patches(panel, "1")
+    add_outside_patch(panel, "2", tmp_path)
+    dialog_answers.answer("ask_yes_no", True)
+    seen = start_manual_run(qtbot, panel, ["1", "2"])
+    assert dialog_answers.titles("ask_yes_no") == ["Files outside the project"]
+    message = dialog_answers.messages("ask_yes_no")[0]
+    assert "shared_outside/a.c" in message and "modified in place" in message and "restored" in message
+    assert seen[0].suggestion_ids == ("1", "2") and seen[0].allow_patching_outside_project is True
+
+
+def test_declining_the_confirmation_cancels_the_run(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder, tmp_path: Path
+) -> None:
+    add_outside_patch(panel, "2", tmp_path)
+    dialog_answers.answer("ask_yes_no", False)
+    seen = start_manual_run(qtbot, panel, ["2"])
+    assert seen == [] and not panel.is_running()
+    assert dialog_answers.titles("ask_yes_no") == ["Files outside the project"]
+
+
+def test_nothing_outside_the_project_means_no_confirmation(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder
+) -> None:
+    add_patches(panel, "1")
+    seen = start_manual_run(qtbot, panel, ["1"])
+    assert dialog_answers.titles("ask_yes_no") == []
+    assert seen[0].allow_patching_outside_project is False
+
+
+def test_the_autotuner_selection_never_carries_the_permission(
+    qtbot: QtBot, panel: ExecutePanel, dialog_answers: DialogRecorder
+) -> None:
+    select(panel)
+    write_autotuner_results(panel, ["3"])
+    panel.project_state.publish(AutotuningFinished())
+    panel.set_suggestions_mode("autotuner")
+    seen: List[Any] = []
+    with mock.patch.object(execute_panel_module, "run_execution", recording_run(seen)):
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+    assert dialog_answers.titles("ask_yes_no") == [] and seen[0].allow_patching_outside_project is False
+
+
+def test_the_build_options_reach_the_execution_request(qtbot: QtBot, panel: ExecutePanel) -> None:
+    select(panel)
+    panel.build_options.policy_combo.setCurrentIndex(2)
+    panel.build_options.build_only_check.setChecked(True)
+    seen: List[Any] = []
+
+    def fake_run(arguments: Any, request: Any, ctx: Any) -> List[Any]:
+        seen.append(request)
+        return []
+
+    with mock.patch.object(execute_panel_module, "run_execution", fake_run):
+        panel.run_button.click()
+        qtbot.waitUntil(lambda: not panel.is_running(), timeout=20000)
+    assert (seen[0].build_policy, seen[0].build_only) == ("reuse", True)

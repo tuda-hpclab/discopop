@@ -56,7 +56,7 @@ std::uint32_t __dp_bb_state() {
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
   std::lock_guard<std::mutex> guard(pthread_compatibility_mutex);
 #endif
-  return static_cast<std::uint32_t>(current_callpath_state->GetId()) + 1;
+  return current_callpath_state_id + 1;
 }
 }
 

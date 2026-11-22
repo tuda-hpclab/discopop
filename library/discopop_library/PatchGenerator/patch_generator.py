@@ -12,6 +12,7 @@ from discopop_library.JSONHandler.JSONHandler import read_patterns_from_json_to_
 from discopop_library.PatchGenerator.PatchGeneratorArguments import PatchGeneratorArguments
 from discopop_library.PatchGenerator.from_json_patterns import from_json_patterns
 from discopop_library.PathManagement.PathManagement import load_file_mapping
+from discopop_library.StatusReporting.console import stage
 
 
 def run(arguments: PatchGeneratorArguments) -> None:
@@ -41,17 +42,19 @@ def run(arguments: PatchGeneratorArguments) -> None:
             + file_mapping_path
         )
 
-    if arguments.verbose:
-        print("Loading file mapping...")
-    file_mapping = load_file_mapping(file_mapping_path)
+    with stage("Loading file mapping and patterns", 1, total=2):
+        if arguments.verbose:
+            print("Loading file mapping...")
+        file_mapping = load_file_mapping(file_mapping_path)
 
-    if arguments.verbose:
-        print("Loading patterns...")
-    patterns_by_type = read_patterns_from_json_to_json(pattern_file_path, [])
-    if arguments.verbose:
-        print("Patterns: ", patterns_by_type)
+        if arguments.verbose:
+            print("Loading patterns...")
+        patterns_by_type = read_patterns_from_json_to_json(pattern_file_path, [])
+        if arguments.verbose:
+            print("Patterns: ", patterns_by_type)
 
-    from_json_patterns(arguments, patterns_by_type, file_mapping, patch_generator_dir)
+    with stage("Generating patches", 2, total=2):
+        from_json_patterns(arguments, patterns_by_type, file_mapping, patch_generator_dir)
 
     if arguments.verbose:
         print("Done.")

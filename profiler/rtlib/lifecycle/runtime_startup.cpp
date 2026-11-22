@@ -12,22 +12,41 @@
 
 #include "runtime_startup.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include "DPTypes.hpp"
 #include "debug_print.hpp"
+#include "dot_discopop_default.hpp"
 #include "injected_functions/dp_finalize.hpp"
 #include "output_paths.hpp"
 #include "runtimeFunctions.hpp"
 #include "runtimeFunctionsGlobals.hpp"
 #include "static_callstate_transitions/utils.hpp"
 #include "timer.hpp"
+
+// The path of the .discopop directory the pass recorded in the instrumented program (dot_discopop_default.hpp); the
+// symbol is missing (null) in a program no module of which the pass instrumented.
+extern "C" const char __dp_dot_discopop_default[] __attribute__((weak));
+static_assert(std::string_view(kDotDiscopopDefaultSymbol) == "__dp_dot_discopop_default",
+              "the name of the symbol the pass defines");
+
+namespace {
+
+// The recorded path, or nullptr. (The address of a weak symbol is null if there is no definition; the compiler knows
+// that only for a comparison with a pointer.)
+const char* RecordedDotDiscopop() {
+  const char* const address = &__dp_dot_discopop_default[0];
+  return reinterpret_cast<std::uintptr_t>(address) != 0 ? address : nullptr;
+}
+
+}  // namespace
 
 namespace dp {
 
@@ -61,24 +80,40 @@ void __dp_init() {
   // hybrid analysis
   all_deps = new DepMap();
   out_put_deps = new StringDepMap();
-  bb_list = new ReportedBBRecorder();
   // End HA
 
   // This is the first thing to run in an instrumented program, so it is also where the output
   // directory is pinned down. Everything in the runtime that writes a result file reaches it
   // through profiler_output_path() afterwards, see output_paths.hpp.
-  if (std::getenv("DOT_DISCOPOP") == nullptr) {
-    setenv("DOT_DISCOPOP", ".discopop", 1);
+  // DOT_DISCOPOP if it is set; else the directory the pass recorded in the program (the static data is there);
+  // else .discopop below the current directory. It is set in the environment, so that processes the program starts
+  // use the same directory.
+  const char* dot_discopop_source = "the environment variable DOT_DISCOPOP";
+  if (std::getenv("DOT_DISCOPOP") == nullptr || std::getenv("DOT_DISCOPOP")[0] == '\0') {
+    const char* const recorded = RecordedDotDiscopop();
+    dot_discopop_source = recorded != nullptr ? "the path recorded at compile time" : "the default";
+    setenv("DOT_DISCOPOP", recorded != nullptr ? recorded : ".discopop", 1);
   }
   const std::string profiler_directory = std::string(std::getenv("DOT_DISCOPOP")) + "/profiler";
   setenv("DOT_DISCOPOP_PROFILER", profiler_directory.c_str(), 1);
 
   out->open(ProfilerOutputPath("dynamic_dependencies.txt").c_str(), std::ios::out);
-  assert(out->is_open() && "Cannot open a file to output dependences.\n");
+  if (!out->is_open()) {
+    // Without it, the run would end with "done" and no results: the static data of the build lives in
+    // another directory (DOT_DISCOPOP unset or relative when the program was started from elsewhere).
+    std::cerr << "DiscoPoP ERROR: cannot write the profiling results to "
+              << std::filesystem::absolute(ProfilerOutputPath("dynamic_dependencies.txt")).string() << " (from "
+              << dot_discopop_source << ").\n"
+              << "DiscoPoP ERROR: set DOT_DISCOPOP to the absolute path of the .discopop directory of the build.\n";
+    std::_Exit(EXIT_FAILURE);
+  }
 
   // Static callPath tracing
   call_state_graph = new CallStateGraph();
   InitializeCurrentCallpathState();
+  // hybrid analysis: after the callpath states are known, for which the caches of the reports are sized
+  bb_list = new ReportedBBRecorder(static_cast<std::size_t>(bb_report_cache_mb) << 20,
+                                   call_state_graph->StateIdBound());
 
   if (dp_debug) {
     std::cout << "DP initialized." << std::endl;

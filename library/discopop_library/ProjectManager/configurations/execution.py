@@ -26,6 +26,25 @@ from discopop_library.ProjectManager.configurations.execution_time import (
     TIME_SOURCE_WALL_CLOCK,
     extract_execution_time,
 )
+from discopop_library.ProjectManager.configurations.instrumentation_checks import (
+    DP_SETTINGS,
+    HD_SETTINGS,
+    CheckResult,
+    Snapshot,
+    check_build,
+    check_profiling_run,
+    take_snapshot,
+)
+from discopop_library.ProjectManager.configurations.project_environment import (
+    DOT_DISCOPOP_VARIABLE,
+    ProjectDirectories,
+    build_environment,
+    describe_project_variables,
+    ignored_settings_warning,
+    project_directories_of,
+    record_instrumented_directories,
+)
+from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -101,6 +120,35 @@ class _RunOutcome(NamedTuple):
     timeout_expired: bool
 
 
+def _communicate_streaming(p: "subprocess.Popen[bytes]", output_callback: Callable[[str], None]) -> Tuple[bytes, bytes]:
+    """Like ``p.communicate()``, but pass every line of stdout and stderr to ``output_callback`` as it appears."""
+    import threading
+
+    collected: Dict[str, List[bytes]] = {"stdout": [], "stderr": []}
+    lock = threading.Lock()
+
+    def pump(name: str, pipe: Any) -> None:
+        for line in iter(pipe.readline, b""):
+            collected[name].append(line)
+            try:
+                with lock:
+                    output_callback(line.decode("utf-8", errors="replace"))
+            except Exception as error:  # a failing display must not stop the build
+                logger.debug("output callback failed: " + str(error))
+        pipe.close()
+
+    threads = [
+        threading.Thread(target=pump, args=("stdout", p.stdout), daemon=True),
+        threading.Thread(target=pump, args=("stderr", p.stderr), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    p.wait()
+    for thread in threads:
+        thread.join()
+    return b"".join(collected["stdout"]), b"".join(collected["stderr"])
+
+
 def _run_once(
     script_path: PATH,
     project_copy_root_path: PATH,
@@ -109,6 +157,7 @@ def _run_once(
     timeout: Optional[float],
     execution_time_regex: Optional[str],
     process_started_callback: Optional[Callable[["subprocess.Popen[bytes]"], None]],
+    output_callback: Optional[Callable[[str], None]] = None,
 ) -> _RunOutcome:
     """Run the script once and report what it took.
 
@@ -140,7 +189,10 @@ def _run_once(
         if process_started_callback is not None:
             process_started_callback(p)
 
-        stdout, stderr = p.communicate()
+        if output_callback is None:
+            stdout, stderr = p.communicate()
+        else:
+            stdout, stderr = _communicate_streaming(p, output_callback)
 
     except subprocess.TimeoutExpired:
         timeout_expired = True
@@ -205,6 +257,39 @@ def _path_in_copy(path: PATH, project_root: PATH, project_copy_root_path: PATH) 
     return os.path.join(project_copy_root_path, os.path.relpath(absolute_path, absolute_root))
 
 
+def project_directories_of_arguments(arguments: ProjectManagerArguments) -> ProjectDirectories:
+    """The project directories of the runs of ``arguments``: the stored ones, each list replaced by the one given on
+    the command line (``--project-include-dirs`` / ``--project-exclude-dirs``)."""
+    return project_directories_of(
+        arguments.project_dir, arguments.project_root, arguments.project_include_dirs, arguments.project_exclude_dirs
+    )
+
+
+# The settings files of the instrumented modes, and the modes' names.
+_INSTRUMENTED_MODES = {DP_SETTINGS: "dp", HD_SETTINGS: "hd"}
+
+# What makes a script that succeeded fail its instrumentation checks.
+INSTRUMENTATION_CHECK_FAILED_RETURN_CODE = 1
+
+
+def _apply_instrumentation_checks(outcome: _RunOutcome, checks: CheckResult) -> _RunOutcome:
+    """``outcome`` with the messages of ``checks`` appended to its stderr; a failed check fails it."""
+    messages = checks.messages()
+    if not messages:
+        return outcome
+    for message in messages:
+        if message.startswith("NOTE: "):
+            logger.info(message)
+        else:
+            logger.warning(message)
+    stderr = outcome.stderr + ("\n" if outcome.stderr and not outcome.stderr.endswith("\n") else "")
+    stderr += "\n".join("DiscoPoP " + message for message in messages) + "\n"
+    returncode = outcome.returncode
+    if checks.errors and returncode == 0:
+        returncode = INSTRUMENTATION_CHECK_FAILED_RETURN_CODE
+    return outcome._replace(stderr=stderr, returncode=returncode)
+
+
 def execute_configuration(
     arguments: ProjectManagerArguments,
     project_copy_root_path: PATH,
@@ -219,6 +304,10 @@ def execute_configuration(
     repetitions: int = SINGLE_MEASUREMENT,
     should_abort: Optional[Callable[[], bool]] = None,
     store_result: bool = True,
+    dot_discopop: Optional[PATH] = None,
+    result_annotations: Optional[Dict[str, Any]] = None,
+    output_callback: Optional[Callable[[str], None]] = None,
+    callpath_pruning_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -250,6 +339,17 @@ def execute_configuration(
     ``store_result=False`` runs the script without recording it in
     ``execution_results.json`` (and leaves ``measurement`` alone): a test
     compilation of the GUI belongs to no configuration and measures nothing.
+
+    ``dot_discopop`` replaces the ``.discopop`` directory of the run root as ``DOT_DISCOPOP`` of the script, which
+    is where an instrumented program reads its static data from and writes its results to (see
+    :mod:`discopop_library.ProjectManager.configurations.runs`). ``result_annotations`` are stored with the record
+    in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
+
+    ``output_callback`` receives the output of the script (stdout and stderr, line by line) while it runs.
+
+    ``callpath_pruning_environment`` is the call path pruning a ``dp`` compilation gets (the variables of
+    :func:`callpath_pruning.environment`); the builds compute it once for their fingerprint and the compilation. If
+    not given, it is computed.
     """
     # Checked before anything else is done, so that an invalid request fails early.
     repetition_error = validate_repetitions(repetitions)
@@ -291,12 +391,53 @@ def execute_configuration(
     # The process-wide working directory is deliberately left alone: this function runs in
     # worker threads, and os.chdir would change the directory of every other thread.
     # The script is started with cwd=project_copy_root_path instead (see _run_once).
-    my_env: Dict[str, str] = os.environ.copy()
-    for key in settings:
-        my_env[key] = settings[key]
-    my_env["DP_PROJECT_ROOT_DIR"] = project_copy_root_path
-    my_env["DOT_DISCOPOP"] = project_copy_dp_path
+    # what is project code (the included and excluded directories of the Project Setup stage): the excluded ones
+    # become absolute paths in the copy; entries set in the settings are kept
+    project_directories = project_directories_of_arguments(arguments)
+    my_env: Dict[str, str] = build_environment(
+        os.environ, settings, project_directories, project_copy_root_path, arguments.project_root
+    )
+    logger.info(describe_project_variables(my_env))
+    # call path pruning of the profiler build (only the instrumented compilation of the profiling mode reads it). The
+    # project's setting is the only source: variables from the environment or the settings file are removed
+    pruning_environment: Dict[str, str] = {}
+    pruning_warnings: List[str] = []
+    prunes_call_paths = settings_name == DP_SETTINGS and script_name.startswith("compile")
+    if prunes_call_paths:
+        ignored = [name for name in callpath_pruning.VARIABLES if name in my_env]
+        for name in ignored:
+            del my_env[name]
+        if ignored:
+            pruning_warnings.append(
+                ", ".join(ignored)
+                + " set in the environment or the settings file is ignored: call path pruning is configured in the "
+                'project (GUI: Build stage, "Call path pruning").'
+            )
+        if callpath_pruning_environment is None:
+            callpath_pruning_environment = callpath_pruning.environment(arguments, config_name)
+        pruning_environment = dict(callpath_pruning_environment)
+        my_env.update(pruning_environment)
+        for text in (
+            callpath_pruning.inactive_warning(arguments, config_name),
+            callpath_pruning.no_hotspots_warning(arguments, config_name),
+        ):
+            if text is not None:
+                pruning_warnings.append(text)
+    # OpenMP flags of an instrumented compilation: kept with a warning unless the project says otherwise. The
+    # project's setting is the only source, as for the pruning
+    openmp_warnings: List[str] = []
+    instrumented_compilation = settings_name in _INSTRUMENTED_MODES and script_name.startswith("compile")
+    if instrumented_compilation:
+        ignored_openmp = tuple(name for name in openmp_handling.VARIABLES if name in my_env)
+        for name in ignored_openmp:
+            del my_env[name]
+        text = openmp_handling.ignored_variables_warning(ignored_openmp)
+        if text is not None:
+            openmp_warnings.append(text)
+        my_env.update(openmp_handling.environment(arguments))
     my_env["OMP_NUM_THREADS"] = str(thread_count)
+    if dot_discopop is not None:
+        my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
 
     # Ensure the PATH includes the directory where discopop tools are found
     import sys
@@ -321,6 +462,15 @@ def execute_configuration(
     # for key in my_env:
     #    print("--> ", key, " : ", my_env[key])
 
+    # Only the instrumented modes are checked; the others need no marker in .discopop.
+    snapshot = (
+        take_snapshot(my_env[DOT_DISCOPOP_VARIABLE])
+        if settings_name in _INSTRUMENTED_MODES
+        else Snapshot(started=time.time())
+    )
+    if instrumented_compilation:
+        # the wrappers only report the first sighting of a build: forget the one of an earlier compilation
+        openmp_handling.clear_flags_seen(my_env[DOT_DISCOPOP_VARIABLE])
     outcomes: List[_RunOutcome] = []
     for repetition in range(repetitions):
         if repetitions > 1:
@@ -333,6 +483,7 @@ def execute_configuration(
             timeout,
             execution_time_regex,
             process_started_callback,
+            output_callback,
         )
         outcomes.append(outcome)
         # Asked between repetitions so that stopping a repeated run does not have
@@ -400,6 +551,57 @@ def execute_configuration(
             + ")"
         )
 
+    # An instrumented build or run can succeed without producing what DiscoPoP needs; see instrumentation_checks.
+    checks = CheckResult()
+    if representative.returncode == 0 and not representative.timeout_expired:
+        if script_name.startswith("compile"):
+            checks = check_build(
+                snapshot,
+                settings_name,
+                project_copy_root_path,
+                my_env[DOT_DISCOPOP_VARIABLE],
+                project_directories.included,
+            )
+            mode = _INSTRUMENTED_MODES.get(settings_name)
+            if mode is not None and not checks.errors:
+                record_instrumented_directories(my_env[DOT_DISCOPOP_VARIABLE], mode, project_directories)
+                openmp_handling.record_state(
+                    my_env[DOT_DISCOPOP_VARIABLE], mode, my_env.get(openmp_handling.STRIP_VARIABLE) == "1"
+                )
+                if mode == "dp":
+                    callpath_pruning.record_state(
+                        my_env[DOT_DISCOPOP_VARIABLE],
+                        callpath_pruning.state_of(pruning_environment, arguments.dot_dp),
+                    )
+        elif script_name == "execute.sh":
+            checks = check_profiling_run(snapshot, settings_name, my_env[DOT_DISCOPOP_VARIABLE])
+    checks.warnings.extend(pruning_warnings)
+    checks.warnings.extend(openmp_warnings)
+    if instrumented_compilation and representative.returncode == 0 and not representative.timeout_expired:
+        openmp_warning, openmp_note = openmp_handling.outcome_message(my_env[DOT_DISCOPOP_VARIABLE])
+        if openmp_warning is not None:
+            checks.warnings.append(openmp_warning)
+        if openmp_note is not None:
+            checks.notes.append(openmp_note)
+    if (
+        callpath_pruning.HOTSPOTS_VARIABLE in pruning_environment
+        and script_name.startswith("compile")
+        and representative.returncode == 0
+        and not representative.timeout_expired
+    ):
+        checks.notes.append(
+            callpath_pruning.pruning_note(
+                pruning_environment[callpath_pruning.HOTSPOTS_VARIABLE],
+                representative.stdout + "\n" + representative.stderr,
+            )
+        )
+    warning = ignored_settings_warning(settings, settings_name)
+    if warning is not None:
+        checks.warnings.append(warning)
+    representative = _apply_instrumentation_checks(representative, checks)
+    if checks.errors and time_aggregate != TIME_AGGREGATE_FAILED_RUN:
+        time_aggregate = TIME_AGGREGATE_FAILED_RUN
+
     if not store_result:
         return (
             representative.returncode,
@@ -426,6 +628,7 @@ def execute_configuration(
             "time_source": representative.time_source,
             "thread_count": thread_count,
             "executed": True,
+            **(result_annotations or {}),
             "repetitions": len(outcomes),
             "repetition_times": [outcome.time for outcome in outcomes],
             "repetition_wall_clock_times": [outcome.wall_clock_time for outcome in outcomes],
@@ -434,6 +637,12 @@ def execute_configuration(
             # recorded but excluded from the choice above.
             "repetition_time_sources": [outcome.time_source for outcome in outcomes],
             "time_aggregate": time_aggregate,
+            # what was project code in this run (included directories absolute, excluded ones relative to the
+            # project root)
+            "project_directories": {
+                "included": list(project_directories.included),
+                "excluded": list(project_directories.excluded),
+            },
         },
     )
     if measurement is not None:

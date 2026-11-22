@@ -36,7 +36,7 @@ Both variants create the folder `.discopop` in the directory the compiler was st
 The outputs below come from the direct variant. With the CMake variant, the patches currently lack the clause `firstprivate(N)`; both versions of the patches are valid.
 
 {: .note }
-The build prints a warning that `DP_PROJECT_ROOT_DIR` is not set. Without it, library functions may be instrumented as well, which increases the profiling time. See [Environment variables](../setup/environment_variables.md).
+The build prints a warning that `DP_PROJECT_ROOT_DIR` is not set. Without it, library functions may be instrumented as well, which increases the profiling time. It also warns that `DOT_DISCOPOP` is not set and that no `.discopop` directory exists: harmless here, as the program is compiled in one directory and started from it. Create the directory in the root of your project (`mkdir .discopop`) and every compiler call below it, and the program, use it without the variable (and `DP_PROJECT_ROOT_DIR` becomes the project root); a build compiling in several directories outside of such a project needs the same absolute `DOT_DISCOPOP` for every compiler call. See [Environment variables](../setup/environment_variables.md).
 
 ## Step 2: Run the instrumented program
 Run the program as usual. The profiler writes the dependencies it observes to `.discopop/profiler`.

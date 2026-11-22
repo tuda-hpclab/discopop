@@ -68,7 +68,7 @@ def test_the_request_is_a_private_copy_with_the_timeouts(tmp_path: Path) -> None
     request = session.make_request("cfg", needs_compile=True, repetitions=2, timeouts=(1.0, 2.0, 3.0))
     assert (request.arguments.timeout_execution, request.arguments.timeout_compilation) == (1.0, 2.0)
     assert request.arguments.timeout_validation == 3.0
-    assert request.arguments.execute_inplace and not request.arguments.skip_cleanup
+    assert not request.arguments.execute_inplace and not request.arguments.skip_cleanup
     assert request.arguments.apply_suggestions is None and request.arguments.label_prefix == ""
     assert session.arguments.skip_cleanup and session.arguments.timeout_execution is None
     assert request.config_path == os.path.join(session.arguments.project_config_dir, "cfg")
@@ -81,13 +81,6 @@ def test_the_log_round_trips_and_a_missing_one_is_empty(tmp_path: Path) -> None:
     log = MeasurementLog(compile_script="/x/compile.sh", runs=[MeasurementRun(0, "c", "t", 1.0, 0, {"k": 1.0})])
     session.save_log(log)
     assert session.load_log() == log
-
-
-def test_a_different_compile_script_needs_its_own_build(tmp_path: Path) -> None:
-    session = make_session(tmp_path)
-    assert not session.compile_script_differs("cfg")
-    session.save_log(MeasurementLog(compile_script=str(tmp_path / "other.sh")))
-    assert session.compile_script_differs("cfg") and not session.compile_script_differs(None)
 
 
 def test_a_run_resolves_to_region_keys_and_drops_idle_regions(tmp_path: Path) -> None:

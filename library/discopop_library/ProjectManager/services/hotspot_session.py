@@ -43,19 +43,36 @@ import json
 import logging
 import os
 import shutil
+import time
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
+from discopop_library.ProjectManager.configurations.builds import (
+    BuildKey,
+    BuildPolicy,
+    BuildState,
+    build_status,
+)
+from discopop_library.ProjectManager.configurations.building import (
+    BuildLockAborted,
+    BuildResult,
+    build_lock,
+    ensure_build,
+)
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
-from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.plots import demangle, hotspot_data
 from discopop_library.ProjectManager.plots.hotspot_data import HotspotRegion, MeasurementLog, MeasurementRun
 from discopop_library.ProjectManager.services.commands import (
     environment_with_interpreter_on_path,
     hotspot_analyzer_command,
 )
-from discopop_library.ProjectManager.services.hotspot_build import hotspot_build_state
+from discopop_library.ProjectManager.services import measurement_queue
+from discopop_library.ProjectManager.services import hotspot_import
+from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT, BUILD_MISMATCH, BUILD_NONE
+from discopop_library.ProjectManager.services.execution_run import OutputStream, report_compilation_failure
 from discopop_library.ProjectManager.services.jobs import JobSpec, StatusKind, WorkContext
 from discopop_library.ProjectManager.services.text import clean_ansi_output
 
@@ -63,7 +80,22 @@ logger = logging.getLogger("HotspotPanel")
 
 HOTSPOT_ANALYZER = "discopop_hotspot_analyzer"
 
+# the build state reads the whole project; within this many seconds the last answer is reused
+BUILD_STATE_MAX_AGE_S = 5.0
+_build_states: Dict[Tuple[str, str], Tuple[float, Tuple[str, str]]] = {}
+
+
+def forget_build_states() -> None:
+    """Drop the cached states of the hd builds (call after a build or a measurement)."""
+    _build_states.clear()
+
+
 Timeouts = Tuple[Optional[float], Optional[float], Optional[float]]
+
+# what HotspotSession.measure returns when the user stopped it
+STOPPED_REASON = "stopped"
+# the start of the reason HotspotSession.measure returns when the instrumented build failed
+INSTRUMENTATION_FAILED = "instrumentation failed"
 
 
 @dataclass(frozen=True)
@@ -76,8 +108,11 @@ class HotspotRunRequest:
     settings_path: str
     # a private copy of the arguments with the timeouts and execution settings of the measurement
     arguments: ProjectManagerArguments
+    # compile again even if the build is current (otherwise: only if there is no current build)
     needs_compile: bool
     repetitions: int
+    # the configuration whose build (mode hd) the runs execute in: configurations with the same compile script share it
+    build_config: str = ""
 
 
 @dataclass(frozen=True)
@@ -160,21 +195,43 @@ class HotspotSession:
         keys = self.load_region_keys()
         return hotspot_data.region_fingerprint(keys.values()) if keys else None
 
-    def compile_script_differs(self, current_config: Optional[str]) -> bool:
-        """Whether the selected configuration needs its own instrumented build."""
-        log = self.load_log()
-        if not current_config or not log.compile_script:
-            return False
-        expected = resolve_compile_script_path(self.arguments.project_config_dir, current_config)
-        return os.path.abspath(expected) != os.path.abspath(log.compile_script)
+    def serving_build_config(self, config_name: Optional[str]) -> Optional[str]:
+        """The configuration whose hd build serves ``config_name``: its declared build owner (see
+        :mod:`~discopop_library.ProjectManager.configurations.build_sharing`), else itself."""
+        if not config_name:
+            return None
+        return build_owner_of(self.arguments.project_config_dir, config_name)
 
     def build_state(self, current_config: Optional[str]) -> Tuple[str, str]:
-        """Whether the current build can serve another run directly, and why not."""
-        return hotspot_build_state(
-            hotspot_data.cs_id_path(self.arguments.dot_dp),
-            self.arguments.project_root,
-            lambda: self.compile_script_differs(current_config),
+        """Whether the hd build that serves the configuration can run it directly, and why not.
+
+        The state is cached for a few seconds (it reads the whole project); :func:`forget_build_states` drops it.
+        """
+        build_config = self.serving_build_config(current_config)
+        if build_config is None:
+            return (BUILD_NONE, "No instrumented build yet.")
+        key = (self.arguments.dot_dp, build_config)
+        cached = _build_states.get(key)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < BUILD_STATE_MAX_AGE_S:
+            return cached[1]
+        config_dir = self.arguments.project_config_dir
+        status = build_status(
+            self.arguments,
+            BuildKey(build_config, "hd", ()),
+            resolve_compile_script_path(config_dir, build_config),
+            os.path.join(config_dir, "hd_settings.json"),
         )
+        if status.state == BuildState.CURRENT:
+            state: Tuple[str, str] = (BUILD_CURRENT, "")
+        elif status.state == BuildState.NONE:
+            state = (BUILD_NONE, "No instrumented build yet.")
+        else:
+            # anything that changed what a compilation produces (sources, compile script, settings, directories):
+            # the build is compiled again, and runs of the old one may refer to other lines
+            state = (BUILD_MISMATCH, status.reason)
+        _build_states[key] = (now, state)
+        return state
 
     def has_data(self) -> bool:
         return os.path.isdir(hotspot_data.hotspot_dir(self.arguments.dot_dp))
@@ -186,7 +243,7 @@ class HotspotSession:
     ) -> HotspotRunRequest:
         """The request of one measurement; the timeouts are those of the Execute tab."""
         args_copy = copy.copy(self.arguments)
-        args_copy.execute_inplace = True
+        args_copy.execute_inplace = False
         args_copy.skip_cleanup = False
         args_copy.label_prefix = ""
         args_copy.apply_suggestions = None
@@ -195,11 +252,14 @@ class HotspotSession:
         return HotspotRunRequest(
             config_name=config_name,
             config_path=os.path.join(self.arguments.project_config_dir, config_name),
-            compile_sh=resolve_compile_script_path(self.arguments.project_config_dir, config_name),
+            compile_sh=resolve_compile_script_path(
+                self.arguments.project_config_dir, self.serving_build_config(config_name) or config_name
+            ),
             settings_path=os.path.join(self.arguments.project_config_dir, "hd_settings.json"),
             arguments=args_copy,
             needs_compile=needs_compile,
             repetitions=repetitions,
+            build_config=self.serving_build_config(config_name) or config_name,
         )
 
     def run(self, ctx: WorkContext, request: HotspotRunRequest) -> bool:
@@ -207,132 +267,205 @@ class HotspotSession:
 
         Runs on a worker thread; it reports through ``ctx`` and touches no widget.
         """
-        dot_dp = self.arguments.dot_dp
+        if self.measure(ctx, request) is not None:
+            return False
+        return self.invoke_analyzer(ctx)
+
+    def measure(self, ctx: WorkContext, request: HotspotRunRequest) -> Optional[str]:
+        """Build if needed and execute ``request.repetitions`` runs in the build, without the analysis.
+
+        The instrumented build is a kept build of the mode hd (``configurations/builds.py``, shared with the Build
+        stage, the command line and the MCP server); each run executes in it with a run directory of its own, and its
+        result is then stored in the data of the project (``services/hotspot_import.py``).
+
+        None if it succeeded, else a short reason (the output has the details); a stop returns ``STOPPED_REASON``.
+        """
         args_copy = request.arguments
         config_name = request.config_name
-        config_path = request.config_path
         settings_path = request.settings_path
+        config_dir = self.arguments.project_config_dir
+        build_config = request.build_config or config_name
 
         if not os.path.exists(settings_path):
             ctx.output(f"hd_settings.json not found at {settings_path}\n")
-            return False
+            return "hd_settings.json not found"
 
         log = self.load_log()
+        key = BuildKey(build_config, "hd", ())
+        build_compile_sh = resolve_compile_script_path(config_dir, build_config)
+        policy = BuildPolicy.REBUILD if request.needs_compile else BuildPolicy.AUTO
+        if policy == BuildPolicy.REBUILD and log.runs:
+            # The accumulated runs are deliberately kept: their regions are stored by source location, so nothing
+            # that the previous runs refer to is overwritten. The analysis joins them by source location.
+            ctx.output(f"Keeping the {len(log.runs)} accumulated run(s); they will be combined.\n")
 
-        if request.needs_compile:
-            # The accumulated runs are deliberately kept. The pass appends to
-            # cs_id.txt and resumes numbering from temp.txt, so the new build's
-            # regions get fresh ids alongside the old ones and the runtime picks the
-            # next free hotspot_result_<N>.txt -- nothing that the previous runs
-            # refer to is overwritten. The analysis joins them by source location.
-            if log.runs:
-                ctx.output(f"Keeping the {len(log.runs)} accumulated run(s); they will be combined.\n")
-
-            ctx.status("⏳ Instrumenting...", StatusKind.BUSY)
-            ctx.output(f"Compiling '{config_name}' in 'hd' mode (inplace)...\n")
-            result = execute_configuration(
+        ctx.status("⏳ Building...", StatusKind.BUSY)
+        try:
+            with build_lock(
                 args_copy,
-                self.arguments.project_root,
-                config_path,
-                settings_path,
-                request.compile_sh,
-                1,
-                args_copy.timeout_compilation,
-                process_started_callback=ctx.register_process,
-            )
-            ctx.clear_process()
-            if result is None or result[0] != 0:
-                code = result[0] if result else "None"
-                ctx.output(f"Instrumentation failed (return code: {code})\n")
-                return False
-            _code, elapsed, stdout, stderr = result
-            ctx.output(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
-            if stdout:
-                ctx.output(f"stdout: {stdout}\n")
-            if stderr:
-                ctx.output(f"stderr: {stderr}\n")
-
-            fingerprint = self.current_region_fingerprint()
-            if fingerprint is None:
-                ctx.output(
-                    "Warning: no code regions were instrumented (cs_id.txt is missing or empty).\n"
-                    "Check that the configuration compiles with the hotspot detection wrappers.\n"
+                key,
+                should_abort=ctx.cancel_event.is_set,
+                on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
+            ):
+                compile_stream = OutputStream(ctx)
+                build = ensure_build(
+                    args_copy,
+                    key,
+                    os.path.join(config_dir, build_config),
+                    settings_path,
+                    build_compile_sh,
+                    1,
+                    policy,
+                    args_copy.timeout_compilation,
+                    process_started_callback=ctx.register_process,
+                    message=ctx.output,
+                    output_callback=compile_stream,
                 )
-            log.region_fingerprint = fingerprint
-            log.instrumented_at = timestamp()
-            log.compile_script = os.path.abspath(request.compile_sh)
-            self.save_log(log)
+                ctx.clear_process()
+                if build.result == BuildResult.COMPILE_FAILED:
+                    code = build.compile_result[0] if build.compile_result else "None"
+                    report_compilation_failure(ctx, build.compile_result, streamed=True)
+                    return f"{INSTRUMENTATION_FAILED} (return code {code})"
+                if not build.usable or build.record is None:
+                    ctx.output((build.message or "The build failed.") + "\n")
+                    return f"{INSTRUMENTATION_FAILED} ({build.message or 'no build'})"
+                record = build.record
+                if build.result == BuildResult.BUILT and build.compile_result is not None:
+                    _code, elapsed, stdout, stderr = build.compile_result
+                    ctx.output(f"Instrumentation succeeded ({elapsed:.2f}s)\n")
+                    compile_stream.show(stdout, stderr)
+                else:
+                    ctx.output(f"Using the current build {key.build_id}.\n")
 
-        if ctx.cancel_event.is_set():
-            ctx.output("Stopped by user.\n")
-            return False
-
-        keys = self.load_region_keys()
-        private = hotspot_data.private_dir(dot_dp)
-        repetitions = request.repetitions
-
-        for repetition in range(repetitions):
-            if ctx.cancel_event.is_set():
-                ctx.output("Stopped by user.\n")
-                return False
-
-            label = f" ({repetition + 1}/{repetitions})" if repetitions > 1 else ""
-            ctx.status("⏳ Measuring...", StatusKind.BUSY)
-            ctx.output(f"\nExecuting '{config_name}'{label}...\n")
-
-            before = set(hotspot_data.result_file_indices(private))
-            result = execute_configuration(
-                args_copy,
-                self.arguments.project_root,
-                config_path,
-                settings_path,
-                os.path.join(config_path, "execute.sh"),
-                1,
-                args_copy.timeout_execution,
-                process_started_callback=ctx.register_process,
-            )
-            ctx.clear_process()
-            if result is None:
-                ctx.output("Execution failed (no result)\n")
-                return False
-            code, elapsed, stdout, stderr = result
-            if code != 0:
-                ctx.output(f"Execution failed (return code: {code})\n")
-                if stderr:
-                    ctx.output(f"stderr: {stderr}\n")
-                return False
-            ctx.output(f"Execution succeeded ({elapsed:.2f}s)\n")
-            if stdout:
-                ctx.output(f"stdout: {stdout}\n")
-
-            after = set(hotspot_data.result_file_indices(private))
-            new_indices = sorted(after - before)
-            if not new_indices:
-                ctx.output(
-                    "Warning: the binary ran but produced no hotspot_result_*.txt file.\n"
-                    "It is probably not instrumented -- use Re-instrument.\n"
-                )
-                return False
-
-            for index in new_indices:
-                log.runs.append(
-                    MeasurementRun(
-                        index=index,
-                        config=config_name,
-                        timestamp=timestamp(),
-                        time=elapsed,
-                        code=code,
-                        regions=self.resolve_run_regions(private, index, keys),
+                keys = hotspot_import.build_region_keys(record.tree, os.path.abspath(self.arguments.project_root))
+                fingerprint = hotspot_data.region_fingerprint(keys.values()) if keys else None
+                if fingerprint is None:
+                    ctx.output(
+                        "Warning: no code regions were instrumented (cs_id.txt is missing or empty).\n"
+                        "Check that the configuration compiles with the hotspot detection wrappers.\n"
                     )
-                )
-                ctx.output(f"Recorded run {index}.\n")
-            self.save_log(log)
+                log.region_fingerprint = fingerprint
+                log.instrumented_at = timestamp()
+                log.compile_script = os.path.abspath(build_compile_sh)
+                self.save_log(log)
+
+                if ctx.cancel_event.is_set():
+                    ctx.output("Stopped by user.\n")
+                    return STOPPED_REASON
+
+                repetitions = request.repetitions
+                for repetition in range(repetitions):
+                    if ctx.cancel_event.is_set():
+                        ctx.output("Stopped by user.\n")
+                        return STOPPED_REASON
+
+                    label = f" ({repetition + 1}/{repetitions})" if repetitions > 1 else ""
+                    ctx.status("⏳ Measuring...", StatusKind.BUSY)
+                    ctx.output(f"\nExecuting '{config_name}'{label}...\n")
+                    stream = OutputStream(ctx)
+                    result, run = execute_in_build(
+                        args_copy,
+                        record,
+                        os.path.join(config_dir, config_name),
+                        settings_path,
+                        1,
+                        args_copy.timeout_execution,
+                        None,
+                        1,
+                        process_started_callback=ctx.register_process,
+                        should_abort=ctx.cancel_event.is_set,
+                        output_callback=stream,
+                    )
+                    ctx.clear_process()
+                    if result is None:
+                        ctx.output("Execution failed (no result)\n")
+                        return "execution failed (no result)"
+                    code, elapsed, stdout, stderr = result
+                    if code != 0:
+                        ctx.output(f"Execution failed (return code: {code})\n")
+                        stream.show("", stderr)
+                        return f"execution failed (return code {code})"
+                    ctx.output(f"Execution succeeded ({elapsed:.2f}s)\n")
+                    stream.show(stdout, "")
+
+                    imported = (
+                        hotspot_import.import_run(
+                            self.arguments.project_root, self.arguments.dot_dp, record.tree, run.dot_discopop
+                        )
+                        if run is not None
+                        else []
+                    )
+                    if not imported:
+                        ctx.output(
+                            "Warning: the binary ran but produced no hotspot_result_*.txt file.\n"
+                            "It is probably not instrumented -- use Re-instrument.\n"
+                        )
+                        return "no hotspot result written (not instrumented?)"
+                    for item in imported:
+                        log.runs.append(
+                            MeasurementRun(
+                                index=item.index,
+                                config=config_name,
+                                timestamp=timestamp(),
+                                time=elapsed,
+                                code=code,
+                                regions=item.regions,
+                            )
+                        )
+                        ctx.output(f"Recorded run {item.index}.\n")
+                    self.save_log(log)
+        except BuildLockAborted:
+            ctx.output("Stopped by user.\n")
+            return STOPPED_REASON
 
         if ctx.cancel_event.is_set():
             ctx.output("Stopped by user.\n")
-            return False
+            return STOPPED_REASON
+        return None
 
-        return self.invoke_analyzer(ctx)
+    def run_batch(self, ctx: WorkContext, configs: List[str], *, repetitions: int, timeouts: Timeouts) -> bool:
+        """Measure every configuration of ``configs`` in turn, then analyze all runs once.
+
+        Each configuration runs in the hd build of its compile script, which is compiled when there is no current
+        one. A failing configuration does not stop the batch; Stop ends it. The states of the configurations
+        are reported as ``ctx.progress(name, state, detail)`` (``services/measurement_queue.py``). True if every
+        configuration was measured and the analysis succeeded.
+        """
+        measured_any = False
+        all_measured = True
+        total = len(configs)
+        for position, name in enumerate(configs, start=1):
+            if ctx.cancel_event.is_set():
+                break
+            ctx.progress(name, measurement_queue.RUNNING, f"{position}/{total}")
+            ctx.output(f"\n=== {name} ({position}/{total}) ===\n")
+            # a build that is not current is compiled (once: the next configuration of the same compile script uses it)
+            request = self.make_request(name, needs_compile=False, repetitions=repetitions, timeouts=timeouts)
+            reason = self.measure(ctx, request)
+            if reason == STOPPED_REASON or ctx.cancel_event.is_set():
+                ctx.progress(name, measurement_queue.STOPPED)
+                all_measured = False
+                break
+            if reason is None:
+                measured_any = True
+                ctx.progress(name, measurement_queue.MEASURED)
+            else:
+                all_measured = False
+                ctx.progress(name, measurement_queue.FAILED, reason)
+        if ctx.cancel_event.is_set():
+            # the configurations after the stopped one never ran; Stop means stop, so the runs recorded before are not
+            # analyzed now -- Re-run Analysis does that
+            if measured_any:
+                ctx.output(
+                    "\nStopped: the analysis is skipped. The runs recorded so far are kept; "
+                    "use Re-run Analysis in the ⋯ menu to analyze them.\n"
+                )
+            return False
+        if not measured_any:
+            ctx.output("\nNo configuration was measured; the analysis is skipped.\n")
+            return False
+        ctx.output("\n=== Analysis ===\n")
+        return self.invoke_analyzer(ctx) and all_measured
 
     def resolve_run_regions(
         self, private: str, index: int, keys: Dict[int, hotspot_data.RegionKey]

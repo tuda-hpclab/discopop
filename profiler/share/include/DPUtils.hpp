@@ -65,7 +65,9 @@
 #endif
 
 #include <assert.h>
+#include <cerrno>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <fstream>
@@ -87,6 +89,16 @@ namespace dputil {
 inline std::string GetEnvOrDefault(const char* name, const char* fallback) {
   const char* value = getenv(name);
   return std::string(value != nullptr ? value : fallback);
+}
+
+inline std::string ProfilerLockPath(const std::string& profiler_directory, const std::string& name) {
+  const std::string locking_directory = profiler_directory + "/locking_files";
+
+  if (mkdir(locking_directory.c_str(), 0777) == -1 && errno != EEXIST && errno != ENOENT) {
+    throw std::runtime_error("Could not create profiler locking directory: " + locking_directory);
+  }
+
+  return locking_directory + "/" + name;
 }
 
 inline std::string DecodeLid(int64_t lid) {
@@ -121,6 +133,29 @@ inline bool FileExists(const std::string& filename) {
   }
   return true;
 }
+
+// Whether path lies in the project: it contains DP_PROJECT_ROOT_DIR ("/" if unset) or one of the directories of
+// DP_PROJECT_INCLUDE_DIRS (project code outside the root) followed by a '/' (so that "src" does not take in "src2"),
+// as given or with its symbolic links resolved, but none of the directories of DP_PROJECT_EXCLUDE_DIRS, also in both
+// spellings. Both lists are separated by ':', their entries are absolute or relative to the project root, e.g.
+// "build/_deps:third_party"; an excluded directory may lie below an included one. A checkout reached through a
+// symbolic link (/home/<user>/git -> /mnt/storage/...) is named either way, depending on whether $PWD or
+// realpath()/getcwd() produced the path. Excluded files are neither instrumented nor mapped. The hotspot detection
+// pass (hotspot_detection/HotspotDetection) and the AST export (ast_export.cpp, filter_ast_dump.py) implement the same
+// rule and must agree.
+bool IsInProjectRoot(const std::string& path);
+
+// The nearest directory named ".discopop" in start_directory or one of its ancestors (symbolic links resolved), as an
+// absolute path; empty if there is none. Used when DOT_DISCOPOP is not set, so that the compiler calls of any build (in
+// the project directory, a build directory below it or a subdirectory) and the instrumented program write to the same
+// directory. A ".discopop" without a "project" subdirectory (what an earlier build that wrote to its current directory
+// left) is still the nearest one; if a farther one holds the project configuration of discopop_project_manager
+// --init, its path is stored in *shadowed (if given). scripts/dp_environment.sh implements the same rule and must agree.
+std::string FindDotDiscopop(const std::string& start_directory, std::string* shadowed = nullptr);
+
+// FindDotDiscopop from the current directory and, if there is none, from the directory of source_file (a build outside
+// of the project directory); empty if there is none.
+std::string DiscoverDotDiscopop(const std::string& source_file, std::string* shadowed = nullptr);
 
 int32_t GetFileId(const std::string& file_mapping, const std::string& full_path_name);
 

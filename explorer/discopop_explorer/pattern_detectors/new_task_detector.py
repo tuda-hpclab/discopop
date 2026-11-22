@@ -44,7 +44,7 @@ from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import 
 from discopop_explorer.pattern_detectors.task_hotspots import function_files
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
-from discopop_library.StatusReporting.console import stage
+from discopop_library.StatusReporting.console import progress, stage
 
 try:
     from discopop_gui.Visualizers.Base import Base as Visualizer
@@ -68,9 +68,10 @@ def run_detection(
         simplification_result = context_task_graph.simplify_graph()
 
     # result += identify_simple_taskloop(pet, task_graph)
-    result += identify_simple_tasking(
-        context_task_graph, simplification_result, observed_dependences(task_graph), ast_helper
-    )
+    with stage("Identifying task groups"):
+        result += identify_simple_tasking(
+            context_task_graph, simplification_result, observed_dependences(task_graph), ast_helper
+        )
     if visualizer:
         show_all_plots(context_task_graph)
 
@@ -291,7 +292,7 @@ def identify_simple_tasking(
     # is reported once per (parent node, line ranges and instructions of its tasks)
     seen_groups: Set[Tuple[NodeID, Tuple[Tuple[int, int, Tuple[int, ...]], ...]]] = set()
 
-    for tpc in simplification_results:
+    for tpc in progress(simplification_results, desc="Task groups"):
 
         if tpc.parent_context is None:
             continue
@@ -543,7 +544,7 @@ def identify_loop_tasking(
 
     task_group_num = first_task_group
     calls = CallStructure(pet)
-    for do_all, loop_node, body_lines, header_lines in candidates:
+    for do_all, loop_node, body_lines, header_lines in progress(candidates, desc="Loops (task dataflow)"):
         if innermost[(loop_node.file_id, min(body_lines), max(body_lines))] is not do_all:
             continue
         loop_line = str(loop_node.start_position())

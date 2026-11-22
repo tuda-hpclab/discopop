@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from unittest import mock
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
@@ -56,6 +57,9 @@ def write_results(panel: ReportPanel) -> None:
 
 def test_without_results_the_table_is_empty_and_no_report_can_be_generated(panel: ReportPanel) -> None:
     assert panel.table.rowCount() == 0
+    # an empty table is replaced by a caption saying what to do
+    assert panel.table_stack.currentWidget() is panel.empty_label
+    assert panel.empty_label.text().startswith("No execution results yet")
     assert not panel.generate_report_button.isEnabled() and not panel.view_report_button.isEnabled()
     # one chart of every type is open next to the table, the first of them shown
     titles = [panel.notebook.tabText(i) for i in range(panel.notebook.count())]
@@ -72,6 +76,26 @@ def test_results_changed_refreshes_the_table(panel: ReportPanel) -> None:
     # repeated values are left out
     assert first_row == ["tiny", "execute.sh", "seq"] and second_row == ["", "", "par"]
     assert panel.generate_report_button.isEnabled()
+    assert panel.table_stack.currentWidget() is panel.table
+
+
+def test_the_table_formats_its_values(panel: ReportPanel) -> None:
+    write_results(panel)
+    panel.project_state.publish(ResultsChanged())
+
+    def row(index: int) -> List[str]:
+        return [panel.table.item(index, column).text() for column in range(13)]  # type: ignore[union-attr]
+
+    # label, applied, not applied, threads, status, time, speedup, efficiency, Amdahl ceiling, Amdahl limit
+    assert row(0)[3:] == ["—", "—", "—", "1", "✓ valid", "10.0 s", "1.00", "1.00", "—", "—"]
+    assert row(1)[3:8] == ["auto", "3, 7", "—", "8", "✓ valid"] and row(1)[8:11] == ["4.00 s", "2.50", "0.31"]
+    for index in range(3):
+        assert not any(text in ("[]", "None") or "[" in text for text in row(index))
+    item = panel.table.item(1, 8)
+    assert item is not None and item.textAlignment() & Qt.AlignmentFlag.AlignRight
+    # the last column does not stretch: the label column takes the spare width
+    header = panel.table.horizontalHeader()
+    assert not header.stretchLastSection()
 
 
 def test_chart_tabs_are_added_from_the_menu_and_closed(panel: ReportPanel) -> None:
@@ -131,15 +155,14 @@ def test_view_report_opens_the_newest_pdf_or_says_there_is_none(
     assert open_file.call_args.args[0].endswith("full_report.pdf")
 
 
-def test_reset_asks_first_and_publishes_results_changed(panel: ReportPanel, dialog_answers: DialogRecorder) -> None:
+def test_the_report_follows_results_changed(panel: ReportPanel) -> None:
     write_results(panel)
     panel.project_state.publish(ResultsChanged())
-    dialog_answers.answer("ask_yes_no", False, True)
-    panel.reset_results_button.click()
     assert panel.table.rowCount() == 3
-    panel.reset_results_button.click()
-    assert panel.table.rowCount() == 0
-    assert panel.status.text() == "Execution results reset successfully"
+    # a reset in Project Setup deletes the results and the reports
+    Path(panel.arguments.project_dir, "execution_results.json").unlink()
+    panel.project_state.publish(ResultsChanged())
+    assert panel.table.rowCount() == 0 and not panel.view_report_button.isEnabled()
 
 
 def test_3d_tab_has_hide_failed_and_fit_view(panel: ReportPanel) -> None:

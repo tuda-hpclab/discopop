@@ -120,9 +120,12 @@ def test_defaults(panel: PatchRepairPanel) -> None:
     assert (panel.timeout_spin.value(), panel.prompts_spin.value(), panel.retries_spin.value()) == (300, 2, 2)
     assert panel.log_level_combo.currentText() == "INFO"
     assert not panel.dry_run_check.isChecked()
-    assert panel.config_label.text() == "(none selected)"
-    assert panel.summary_label.text() == "(not run yet)"
-    assert not panel.run_button.isEnabled() and not panel.stop_button.isEnabled()
+    assert panel.header.chip.text() == "Not run yet" and panel.header.chip.level == widgets.CHIP_IDLE
+    assert not panel.run_button.isEnabled() and not panel.run_button.is_running()
+    assert list(panel.hotspot_checks) == ["yes", "maybe", "no"]
+    assert panel.output_console() is panel.console and panel.output_title == "Patch Repair"
+    assert not panel._advanced.is_expanded()
+    assert panel.results_stack.currentWidget() is panel.empty_label and panel.empty_label.text() == "No repair run yet."
     assert panel.budget_label.text() == "At most 2 x (1 + 2) = 6 agent calls per suggestion."
     assert [panel.backend_combo.itemText(i) for i in range(panel.backend_combo.count())] == ["alpha", "beta"]
     assert panel.backend_combo.currentText() == "alpha"
@@ -213,7 +216,6 @@ def test_the_run_button_needs_patches_and_a_configuration(panel: PatchRepairPane
     state = panel.project_state
     state.current_config = "tiny"
     state.publish(ConfigChanged("tiny"))
-    assert panel.config_label.text() == "tiny"
     assert not panel.run_button.isEnabled()  # no patches
     add_patches(panel, "1", "2")
     state.publish(PatternsChanged())
@@ -221,7 +223,6 @@ def test_the_run_button_needs_patches_and_a_configuration(panel: PatchRepairPane
     assert panel.selector.get_available_ids() == ["1", "2"]
     state.current_config = None
     state.publish(ConfigChanged(None))
-    assert panel.config_label.text() == "(none selected)"
     assert not panel.run_button.isEnabled()
 
 
@@ -296,17 +297,19 @@ def test_a_successful_run(qtbot: QtBot, panel: PatchRepairPanel, dialog_answers:
         'print(\'@@PR_PROGRESS {"event": "done", "repaired": 1, "failed": 0, "considered": 1}\')'
     )
     run_with(panel, code)
-    assert panel.running and panel.run_button.text() == "⟳ Running..." and panel.stop_button.isEnabled()
+    assert panel.running and panel.run_button.is_running() and panel.run_button.isEnabled()
+    assert panel.run_button.text() == "■ Stop"
     qtbot.waitUntil(lambda: not panel.running, timeout=20000)
     console = panel.console.text()
     assert "Starting patch repair..." in console and "hello" in console and "Patch repair completed." in console
     assert "@@PR_PROGRESS" not in console
-    assert panel.summary_label.text() == "1 repaired, 0 not repaired, 1 considered."
-    assert panel.table.rowCount() == 1
+    assert panel.header.chip.text() == "1 repaired, 0 not repaired, 1 considered."
+    assert panel.header.chip.level == widgets.CHIP_OK
+    assert panel.table.rowCount() == 1 and panel.results_stack.currentWidget() is panel.table
     assert [panel.table.item(0, c).text() for c in range(6)] == ["1", "", "Repaired", "1 / 1", "2", ""]  # type: ignore[union-attr]
     assert status_text(panel) == "Patch repair completed - 1 patch set(s) repaired"
     assert panel.run_button.text() == "Run Patch Repair" and panel.run_button.isEnabled()
-    assert not panel.stop_button.isEnabled()
+    assert not panel.run_button.is_running()
     assert [type(event) for event in published] == [AutotuningChanged, ResultsChanged]
     assert panel._job is None
 
@@ -337,8 +340,9 @@ def test_stopping_a_run_is_no_failure(qtbot: QtBot, panel: PatchRepairPanel) -> 
     panel.project_state.subscribe(ResultsChanged, published.append)
     run_with(panel, "import time; print('ready', flush=True); time.sleep(60)")
     qtbot.waitUntil(lambda: "ready" in panel.console.text(), timeout=20000)
-    panel.stop_button.click()
-    assert status_text(panel) == "Stopping patch repair..." and not panel.stop_button.isEnabled()
+    panel.run_button.click()
+    assert status_text(panel) == "Stopping patch repair..." and not panel.run_button.isEnabled()
+    assert panel.run_button.text() == "Stopping…"
     qtbot.waitUntil(lambda: not panel.running, timeout=20000)
     console = panel.console.text()
     assert "Patch repair stopped." in console and "Error" not in console
@@ -423,21 +427,22 @@ def test_the_selection_is_not_refreshed_while_running(panel: PatchRepairPanel) -
 
 def test_the_discovery_event_sets_the_summary(panel: PatchRepairPanel) -> None:
     panel._on_progress({"event": "discovery", "built": ["1"], "failing": ["2", "3"]})
-    assert panel.summary_label.text() == "1 compile, 2 do not — repairing 2..."
-    assert widgets.STATUS_BUSY in panel.summary_label.styleSheet()
+    assert panel.header.chip.text() == "1 compile, 2 do not — repairing 2..."
+    assert panel.header.chip.level == widgets.CHIP_BUSY
     panel._on_progress({"event": "discovery", "built": [], "failing": [], "reference_built": False})
-    assert panel.summary_label.text().startswith("The project does not build")
-    assert widgets.STATUS_FAIL in panel.summary_label.styleSheet()
+    assert panel.header.chip.text().startswith("The project does not build")
+    assert panel.header.chip.detail() == "Fix the build first."
+    assert panel.header.chip.level == widgets.CHIP_ERROR
 
 
 def test_the_done_event_colors_the_summary(panel: PatchRepairPanel) -> None:
     panel._on_progress({"event": "done", "repaired": 0, "failed": 2, "considered": 2})
-    assert panel.summary_label.text() == "0 repaired, 2 not repaired, 2 considered."
-    assert widgets.STATUS_FAIL in panel.summary_label.styleSheet()
+    assert panel.header.chip.text() == "0 repaired, 2 not repaired, 2 considered."
+    assert panel.header.chip.level == widgets.CHIP_ERROR
     panel._on_progress({"event": "done", "repaired": 2, "failed": 0, "considered": 2})
-    assert widgets.STATUS_OK in panel.summary_label.styleSheet()
+    assert panel.header.chip.level == widgets.CHIP_OK
     panel._on_progress({"event": "done", "repaired": 1, "failed": 1, "considered": 2})
-    assert widgets.STATUS_IDLE in panel.summary_label.styleSheet()
+    assert panel.header.chip.level == widgets.CHIP_IDLE
 
 
 # ── the results ──────────────────────────────────────────────────────────────
@@ -540,3 +545,10 @@ def test_results_of_an_earlier_session_are_shown_when_the_panel_opens(qtbot: QtB
     write_results(first, {"1": {"status": "failed", "first_error": "bad"}})
     second = make_panel(qtbot, tmp_path)
     assert row_texts(second) == [["1", "", "Not repaired", "-", "0", "bad"]]
+
+
+def test_a_run_opens_the_output_pane(qtbot: QtBot, panel: PatchRepairPanel) -> None:
+    with qtbot.waitSignal(panel.output_requested, timeout=5000):
+        run_with(panel, "print('x')")
+    qtbot.waitUntil(lambda: not panel.running, timeout=20000)
+    assert panel.header.chip.level == widgets.CHIP_OK and panel.header.chip.text() == "Completed"

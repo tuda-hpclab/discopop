@@ -26,6 +26,10 @@ from discopop_library.HostpotLoader.HotspotLoaderArguments import HotspotLoaderA
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
 from discopop_library.HostpotLoader.utilities import get_patterns_by_hotspot_type
+from discopop_library.PatchApplicator.outside_project import (
+    find_outside_project_targets,
+    log_skipped_outside_suggestions,
+)
 from discopop_library.PatchRepair.PatchRepairArguments import PatchRepairArguments
 from discopop_library.result_classes.DetectionResult import DetectionResult
 
@@ -102,13 +106,20 @@ def collect_candidates(
         logger.warning("No patches found in " + arguments.patch_generator_path + ".")
         return []
 
+    # a repair applies and rolls back the patches of a suggestion again and again, which must not touch files
+    # outside the project: such suggestions are skipped, and logged
+    generated = with_patches
+    outside_project = find_outside_project_targets(arguments.dot_dp_path, with_patches)
+    log_skipped_outside_suggestions(logger, "Patch repair", outside_project)
+    with_patches = [suggestion_id for suggestion_id in with_patches if str(suggestion_id) not in outside_project]
+
     by_suggestion = hotspot_type_by_suggestion(arguments, detection_result)
 
     explicit = arguments.explicit_suggestion_ids()
     if explicit is not None:
         # An explicitly named id is repaired whatever its hotspot type says: the caller
         # has already decided it is worth the effort.
-        missing = [suggestion_id for suggestion_id in explicit if suggestion_id not in with_patches]
+        missing = [suggestion_id for suggestion_id in explicit if suggestion_id not in generated]
         if missing:
             logger.warning("No patch was generated for the requested suggestions: " + str(sorted(missing)))
         return [

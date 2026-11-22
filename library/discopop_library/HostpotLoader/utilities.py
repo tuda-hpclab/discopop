@@ -10,10 +10,14 @@
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
 from discopop_library.HostpotLoader.hostpot_loader import AVERAGE_RUNTIME, FILEID, NAME, STARTLINE
-from discopop_library.result_classes.DetectionResult import DetectionResult
 
 
-from typing import Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+
+if TYPE_CHECKING:
+    # only for the annotation: importing it loads the explorer (and with it the Tk GUI's classes), which the
+    # toolkit-free services of the ProjectManager GUI (services/suggestions.py) must not do
+    from discopop_library.result_classes.DetectionResult import DetectionResult
 
 
 def applicable_on_its_own(pattern: Any) -> bool:
@@ -23,7 +27,7 @@ def applicable_on_its_own(pattern: Any) -> bool:
 
 
 def get_patterns_by_hotspot_type(
-    detection_result: DetectionResult,
+    detection_result: "DetectionResult",
     hotspot_information: Dict[HotspotType, List[Tuple[FILEID, STARTLINE, HotspotNodeType, NAME, AVERAGE_RUNTIME]]],
 ) -> Dict[HotspotType, List[int]]:
     yes_hotspot_loops: List[Tuple[FILEID, STARTLINE]] = []

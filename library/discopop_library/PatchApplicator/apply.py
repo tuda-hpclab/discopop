@@ -15,6 +15,7 @@ from typing import Dict, List
 from discopop_library.LineMapping.diff_modifications import apply_line_mapping_modifications_from_files
 from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult
 from discopop_library.PatchApplicator.PatchApplicatorArguments import PatchApplicatorArguments
+from discopop_library.PatchApplicator.outside_project import describe_outside_targets, find_outside_project_targets
 
 
 def apply_patches(
@@ -28,7 +29,9 @@ def apply_patches(
 
     A requested suggestion can miss the code in two ways: ``patch`` rejects its
     patch (e.g. the source no longer matches), or no patch was generated for the id
-    at all. Both are recorded, so callers can tell an unmodified code base apart
+    at all. A third one is the refusal to patch files outside the project (see
+    :mod:`discopop_library.PatchApplicator.outside_project`; ``cwd`` is the ``.discopop`` directory, as for
+    the whole applicator). All are recorded, so callers can tell an unmodified code base apart
     from a successful application -- see :class:`PatchApplicationResult`.
     """
     result = PatchApplicationResult(requested=list(apply))
@@ -48,6 +51,19 @@ def apply_patches(
             result.already_applied.append(suggestion_id)
             continue
         if suggestion_id in applicable_suggestions:
+            # the safety net for every caller: files outside the project are only patched on explicit request
+            if not arguments.allow_outside_project:
+                outside = find_outside_project_targets(os.getcwd(), [suggestion_id])
+                if outside:
+                    print(
+                        "Refusing to apply suggestion",
+                        suggestion_id,
+                        "- it patches files outside the project (nothing was patched):\n"
+                        + describe_outside_targets(outside)
+                        + "\nAllow it with --allow-outside-project.",
+                    )
+                    result.refused.append(suggestion_id)
+                    continue
             if arguments.verbose:
                 print("Applying suggestion ", suggestion_id)
             successful = __apply_file_patches(file_mapping, suggestion_id, patch_generator_dir, arguments)

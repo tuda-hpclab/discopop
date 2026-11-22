@@ -84,7 +84,7 @@ void* ProcessFirstAccessQueue(void* arg) {
     // check if chunk aquired
     if (current) {
       // process chunk
-      AbstractShadow* smem = new PerfectShadow2();
+      PerfectShadow2* smem = new PerfectShadow2();
       std::vector<AccessInfo>* entry_condition_accesses = new std::vector<AccessInfo>();
       std::unordered_set<DeferredAccess, DeferredAccessHash> already_deferred;
       // Given up once the chunk turns out not to repeat its accesses.
@@ -136,9 +136,15 @@ void* ProcessFirstAccessQueue(void* arg) {
           AnalyzeSingleAccess(smem, access);
         }
       }
+      // The second queue needs only the end state of each address, not the shadow, and gets it together with the
+      // entry accesses of the address, so that it looks the address up once: grouping them here, on one of several
+      // workers, takes that work and the freeing of the shadow off the single consumer thread.
+      std::vector<AddressRecord>* records =
+          new std::vector<AddressRecord>(GroupEntryAccessesByAddress(*entry_condition_accesses, *smem));
       // publish the values of the promises in the current chunk
       current->entry_boundary_first_addr_accesses.set_value(entry_condition_accesses);
-      current->exit_boundary_smem.set_value(smem);
+      current->exit_boundary_summary.set_value(records);
+      delete smem;
 
       // the thread's dependencies stay in myMap across chunks, deduplicated, and are merged into
       // allDeps once when the thread ends: merging (and freeing) them per chunk allocated and freed
@@ -181,7 +187,9 @@ void* ProcessSecondAccessQueue(void* arg) {
   my_map = new DepMap();
 
   SecondAccessQueueElement* current = nullptr;
-  AbstractShadow* smem = new PerfectShadow2();
+  // the last read and the last write of every address in one bucket, see AnalyzeChunkOnSlots
+  HashMap<std::int64_t, ShadowSlot> shadow;
+  shadow.reserve(1024);
 
   while (true) {
     // get chunk from queue
@@ -189,33 +197,15 @@ void* ProcessSecondAccessQueue(void* arg) {
 
     // check if chunk aquired
     if (current) {
-      // check entry boundary conditions for data dependencies
+      // check entry boundary conditions for data dependencies and bring the persistent shadow up to the end state of
+      // the chunk, address by address (the first queue worker skipped the unused entries of its buffer)
       auto promised_first_accesses_vector_ptr = current->entry_boundary_first_addr_accesses.get();
-      for (auto& entry_accesses : *(promised_first_accesses_vector_ptr)) {
-        // ignore unused entries of the vector
-        if (!(entry_accesses.addr || entry_accesses.lid)) {
-          continue;
-        }
-        AnalyzeSingleAccess(smem, entry_accesses);
-      }
-
-      // update persistent SMem with exit boundary conditions (aka merge the local into the persistent shadow memories)
-      AbstractShadow* promised_last_smem_ptr = current->exit_boundary_smem.get();
-
-      auto sig_read = static_cast<PerfectShadow2*>(promised_last_smem_ptr)->GetSigRead();
-      auto sig_write = static_cast<PerfectShadow2*>(promised_last_smem_ptr)->GetSigWrite();
-
-      // identify required updates to SMem
-      // iterate over addresses to be merged
-      for (auto it = promised_first_accesses_vector_ptr->begin(); it < promised_first_accesses_vector_ptr->end();
-           ++it) {
-        smem->UpdateInRead(it->addr, sig_read->at(it->addr));
-        smem->UpdateInWrite(it->addr, sig_write->at(it->addr));
-      }
+      std::vector<AddressRecord>* promised_exit_summary_ptr = current->exit_boundary_summary.get();
+      AnalyzeChunkOnSlots(shadow, *promised_first_accesses_vector_ptr, *promised_exit_summary_ptr);
 
       // cleanup promises
       delete promised_first_accesses_vector_ptr;
-      delete promised_last_smem_ptr;
+      delete promised_exit_summary_ptr;
 
       delete current;
 
@@ -237,7 +227,6 @@ void* ProcessSecondAccessQueue(void* arg) {
     }
   }
 
-  delete smem;
   MergeDeps();
   // the dependencies are merged into allDeps; the map itself belongs to this thread
   delete my_map;

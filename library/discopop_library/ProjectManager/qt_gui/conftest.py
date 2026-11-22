@@ -33,7 +33,15 @@ from discopop_library.ProjectManager.qt_gui import dialogs  # noqa: E402
 
 _QT_GUI_DIR = Path(__file__).parent
 
-_QUESTIONS = {"ask_yes_no", "ask_string", "ask_choice", "ask_open_file", "ask_directory", "ask_save_file"}
+_QUESTIONS = {
+    "ask_yes_no",
+    "ask_string",
+    "ask_choice",
+    "ask_open_file",
+    "ask_directory",
+    "ask_save_file",
+    "review_build_changes",
+}
 
 
 def pytest_collection_modifyitems(items: List[pytest.Item]) -> None:
@@ -84,6 +92,29 @@ def dialog_answers(monkeypatch: pytest.MonkeyPatch) -> Iterator[DialogRecorder]:
     monkeypatch.setattr(QDialog, "exec", _no_modal_exec)
     monkeypatch.setattr(QMessageBox, "exec", _no_modal_exec)
     yield recorder
+
+
+@pytest.fixture(autouse=True)
+def no_double_click_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests click Run and Stop in quick succession; the guard against double clicks is tested on its own."""
+    from discopop_library.ProjectManager.qt_gui import widgets
+
+    monkeypatch.setattr(widgets, "SWITCH_GUARD_S", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def theme_settings_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qapp: QApplication) -> Iterator[None]:
+    """The color theme is stored in a temporary file (never in the user's settings); a test that switched the theme
+    leaves the desktop's palette behind."""
+    from PySide6.QtCore import QSettings
+
+    from discopop_library.ProjectManager.qt_gui import theme
+
+    path = str(tmp_path / "theme_settings.ini")
+    monkeypatch.setattr(theme, "settings_factory", lambda: QSettings(path, QSettings.Format.IniFormat))
+    yield
+    if theme.current_theme() != theme.THEME_SYSTEM:
+        theme.apply_theme(qapp, theme.THEME_SYSTEM)
 
 
 @pytest.fixture(autouse=True)

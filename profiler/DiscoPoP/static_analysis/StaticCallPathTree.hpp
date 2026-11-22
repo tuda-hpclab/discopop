@@ -30,6 +30,9 @@ class StaticCallPathTreeNode {
       successors;  // use vectors due to the assumption, that a single path generally has only a small number of
                    // successors. Save time and space for creating and managing a hashset or similar.
   StaticCallPathTreeNode* prefix;
+  // path steps that are still kept below this node although they cannot lead to a hot function (see
+  // HotspotRelevance); only used while the paths are enumerated
+  std::int32_t hot_budget = 0;
 
   StaticCallPathTreeNode(std::uint32_t path_id, StaticCalltreeNode* base_node)
       : base_node(base_node), path_id(path_id), prefix(nullptr) {}

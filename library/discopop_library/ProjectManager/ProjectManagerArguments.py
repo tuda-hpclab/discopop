@@ -52,6 +52,33 @@ class ProjectManagerArguments(GeneralArguments):
     # Which toolkit draws the window of --gui: "qt" (PySide6, the default) or "tk" (the original GUI).
     # Both use the same services.
     gui_toolkit: str = "qt"
+    # Override the stored included / excluded directories (what is project code besides the project root) for this
+    # invocation, ':' separated; None leaves the stored list alone. See
+    # discopop_library.ProjectManager.configurations.project_environment.
+    project_include_dirs: Optional[str] = None
+    project_exclude_dirs: Optional[str] = None
+    # Overrides the stored setting whether the instrumented (dp / hd) compilations remove the OpenMP flags for this
+    # invocation; None leaves it alone. See discopop_library.ProjectManager.services.openmp_handling.
+    strip_openmp: Optional[bool] = None
+    # Allows --apply-suggestions to patch files outside of the project (shared sources, see
+    # discopop_library.PatchApplicator.outside_project); refused by default. Never honoured for "auto" / "prm".
+    allow_patching_outside_project: bool = False
+    # When a run compiles (see discopop_library.ProjectManager.configurations.builds.BuildPolicy): "auto" compiles
+    # when there is no current build of the configuration and mode, "rebuild" always, "reuse" never.
+    build_policy: str = "auto"
+    # Compile only, do not run execute.sh.
+    build_only: bool = False
+    # List the builds of the project / delete the given ones (comma separated ids, "all" for every build) and stop.
+    # Let a configuration build from another one ("MEMBER:OWNER") / build for itself again ("MEMBER") and stop.
+    share_build: Optional[str] = None
+    unshare_build: Optional[str] = None
+    list_builds: bool = False
+    delete_builds: Optional[str] = None
+    # List the runs of the builds / delete the given ones (comma separated ids, "all") / put one into the project's
+    # .discopop (an id, "latest" for the latest successful dp run) and stop.
+    list_runs: bool = False
+    delete_runs: Optional[str] = None
+    activate_run: Optional[str] = None
     # derived values
     dot_dp: str = ""
     project_dir: str = ""

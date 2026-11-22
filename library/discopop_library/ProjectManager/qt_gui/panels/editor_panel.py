@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.build_sharing import declared_owner_of, members_of
 from discopop_library.ProjectManager.configurations.compile_script import (
     get_per_config_compile_script_path,
     get_per_config_validation_compile_script_path,
@@ -41,7 +42,6 @@ from discopop_library.ProjectManager.configurations.execution_time import (
 )
 from discopop_library.ProjectManager.configurations.validation import has_validate_script
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.ProjectManager.qt_gui.compilation_editor import CompilationEditor
 from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_EDITOR
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
@@ -119,7 +119,6 @@ class EditorPanel(Panel):
         self._loaded_config: Optional[str] = None
         # the files of the loaded configuration as they were on disk when loaded or saved
         self._loaded_state: Tuple[Tuple[str, Optional[str]], ...] = ()
-        self._compilation_editor: Optional[CompilationEditor] = None
 
         self.editors: Dict[str, widgets.ScriptEditor] = {name: widgets.ScriptEditor() for name in FILES}
         for editor in self.editors.values():
@@ -153,9 +152,14 @@ class EditorPanel(Panel):
             self.notebook.addTab(page, BASE_LABELS[name])
 
         self.save_button = widgets.primary_button("Save (Ctrl+S)", self._save_clicked)
+        self.header = widgets.PanelHeader(
+            "Configuration Setup",
+            "The scripts of the selected configuration: how it is built, run and validated.",
+            [self.save_button],
+        )
         layout = QVBoxLayout(self)
+        layout.addWidget(self.header)
         layout.addWidget(self.notebook, 1)
-        layout.addLayout(widgets.hbox(self.save_button, None, margins=5))
 
         project_state.subscribe(ConfigChanged, lambda _event: self._on_config_changed())
 
@@ -389,7 +393,12 @@ class EditorPanel(Panel):
             label = self.sub_tab_labels[name]
             self.notebook.setTabText(index, f"{label} *" if modified else label)
         # imported here: the main window imports the panels, so a module level import would be circular
-        self.tabs.set_tab_title(TAB_EDITOR, "Editor *" if self.has_unsaved_changes() else "Editor")
+        unsaved = self.has_unsaved_changes()
+        self.tabs.set_tab_title(TAB_EDITOR, "Editor *" if unsaved else "Editor")
+        if unsaved:
+            self.header.chip.set_status(widgets.CHIP_WARN, "Unsaved changes", "Save with Ctrl+S.")
+        else:
+            self.header.chip.set_status(widgets.CHIP_IDLE, "")
 
     # ── add / remove the optional files ─────────────────────────────────────
 
@@ -415,11 +424,36 @@ class EditorPanel(Panel):
             os.remove(path)
             message = "Removed compile.sh override for this configuration"
         else:
+            if self._refuse_for_shared_build(config, "compile.sh"):
+                return
             write_script_file(path, self._read(get_shared_compile_script_path(self.arguments.project_config_dir)))
             message = "Added compile.sh override for this configuration"
         self._load_compile_override()
         self.project_state.publish(ConfigurationsChanged())
         self.status.set(message, widgets.STATUS_OK, reset_ms=2000)
+
+    def _refuse_for_shared_build(self, config: str, file_name: str) -> bool:
+        """Whether adding ``file_name`` to ``config`` is refused because of a shared build (and says why)."""
+        config_dir = self.arguments.project_config_dir
+        owner = declared_owner_of(config_dir, config)
+        if owner is not None:
+            dialogs.show_warning(
+                self,
+                "Shared Build",
+                config + " builds from " + owner + ", so a " + file_name + " of its own would be ignored.\n\n"
+                "Edit it in " + owner + ", or let " + config + " build for itself first (Build stage).",
+            )
+            return True
+        if file_name == "compile_validate.sh" and members_of(config_dir, config):
+            dialogs.show_warning(
+                self,
+                "Shared Build",
+                "Other configurations build from " + config + ". A separate validation build changes the build "
+                "tree and would make the build stale after every validation.\n\n"
+                "Let them build for themselves first (Build stage).",
+            )
+            return True
+        return False
 
     def _toggle_validate_script(self) -> None:
         if not self.project_state.current_config:
@@ -459,6 +493,8 @@ class EditorPanel(Panel):
             os.remove(path)
             message = "Removed compile_validate.sh override for this configuration"
         else:
+            if self._refuse_for_shared_build(config, "compile_validate.sh"):
+                return
             if not has_validate_script(self._config_path()):
                 dialogs.show_warning(
                     self,
@@ -541,21 +577,3 @@ class EditorPanel(Panel):
         if dialogs.ask_yes_no(self, "Unsaved Changes", "You have unsaved changes. Save before switching?"):
             return self.save()
         return True
-
-    def save_shortcut(self) -> None:
-        """Ctrl+S: saves what the window in front shows (the compilation editor, or the Editor tab)."""
-        editor = self._compilation_editor
-        if editor is not None and editor.isVisible() and editor.isActiveWindow():
-            editor.save()
-        elif self.tabs.current_tab() == TAB_EDITOR:
-            self.save()
-
-    def open_compilation_editor(self) -> None:
-        """Open the compilation editor window (shared compile.sh and settings), or bring it to the front."""
-        if self._compilation_editor is None:
-            self._compilation_editor = CompilationEditor(self.arguments, self.project_state, self.status, self)
-        self._compilation_editor.open()
-
-    def cancel_jobs(self) -> None:
-        if self._compilation_editor is not None:
-            self._compilation_editor.cancel_jobs()

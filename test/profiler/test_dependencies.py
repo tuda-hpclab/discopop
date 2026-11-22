@@ -82,8 +82,10 @@ def profiled(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
         if getattr(item, "cls", None) is request.cls
     ]
     work_root = tmp_path_factory.mktemp(request.cls.CATEGORY)
-    # all cores also when pytest-xdist runs the classes at the same time: the cases are short, idle cores cost more
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+    # all cores also when pytest-xdist runs the classes at the same time: the cases are short, idle cores cost more;
+    # DP_TEST_WORKERS (the CI sets it) bounds the threads of every class, as memory scales with them
+    max_workers = int(os.environ.get("DP_TEST_WORKERS") or os.cpu_count() or 1)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         errors = pool.map(lambda case: _profile(case, work_root / case.name), selected)
         return {case: (work_root / case.name, error) for case, error in zip(selected, errors)}
 

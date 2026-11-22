@@ -9,9 +9,10 @@
 """Lookup of the reports the ProjectManager generated below ``<project_dir>/reports``."""
 
 import json
+import math
 import os
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 REPORT_PDF_NAME = "full_report.pdf"
 
@@ -54,3 +55,41 @@ def has_execution_results(project_dir: str) -> bool:
         )
         for scripts in results.values()
     )
+
+
+# ── formatting of the values of the result table ──────────────────────────────
+
+NO_VALUE = "—"
+
+
+def format_seconds(seconds: Optional[float]) -> str:
+    """A time with three significant digits and its unit ("0.123 s", "12.3 s", "123 s", "1230 s"); "—" if missing."""
+    if seconds is None or not math.isfinite(seconds):
+        return NO_VALUE
+    if seconds == 0:
+        return "0 s"
+    decimals = 2 - math.floor(math.log10(abs(seconds)))
+    if decimals > 0:
+        return f"{seconds:.{decimals}f} s"
+    return f"{round(seconds, decimals):.0f} s"
+
+
+def format_ratio(value: Optional[float]) -> str:
+    """A speedup, efficiency or Amdahl bound with two decimals; "—" if missing."""
+    if value is None or not math.isfinite(value):
+        return NO_VALUE
+    return f"{value:.2f}"
+
+
+def format_limit(limit: Optional[float]) -> str:
+    """An Amdahl limit: "unbounded" for infinity, otherwise like :func:`format_ratio`."""
+    if limit is not None and limit == math.inf:
+        return "unbounded"
+    return format_ratio(limit)
+
+
+def format_suggestion_ids(ids: Optional[Sequence[Any]]) -> str:
+    """Suggestion ids as "3, 7"; "—" for none."""
+    if not ids:
+        return NO_VALUE
+    return ", ".join(str(sid) for sid in ids)

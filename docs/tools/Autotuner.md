@@ -107,6 +107,9 @@ To use the result, apply the selected suggestions with the [patch applicator](Pa
 Due to the empirical nature of the optimization approach described above, varying sets of input data might yield differing selected configurations.
 For this reason it is important, that the used input data (typically specified in `execute.sh`) is representative for a production run of the software and large enough to allow for beneficial parallelizations.
 
+## Suggestions outside of the project
+The tuner works in several copies of the project at once, which do not isolate files outside of the project directory. Suggestions that patch such files are therefore not part of the search space; the tuner logs which suggestions it skips and the files concerned. They can only be applied manually (see [Patch applicator](Patch_applicator.md#files-outside-of-the-project)).
+
 ## Invocation from the GUI
 The *Autotuning* tab of the [GUI](GUI.md) runs the tuner and shows a live plot of the measurements.
 

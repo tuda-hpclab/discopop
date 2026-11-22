@@ -43,11 +43,11 @@ class DetailBar(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(widgets.heading_label(title))
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        layout.addWidget(line)
+        layout.addWidget(widgets.divider())
 
         self._scroll = QScrollArea()
+        # no box of its own: the fields lie on the pane like the title above them
+        self._scroll.setObjectName(widgets.CLEAR_SCROLL_NAME)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -105,6 +105,8 @@ class DetailBar(QWidget):
             item = self._body_layout.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
+                # deleteLater alone leaves the old widget visible until the event loop delivers the deletion
+                widget.hide()
                 widget.deleteLater()
 
     def _update_actions(self) -> None:

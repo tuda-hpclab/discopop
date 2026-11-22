@@ -85,3 +85,56 @@ def test_the_summary_counts_regions_and_external_runs(tmp_path: Path) -> None:
     summary = hotspot_view.measurement_summary(BUILD_CURRENT, "", [MeasurementRun(0), MeasurementRun(1, "c")], REGIONS)
     assert summary.runs_text == "Accumulated runs: 2 (1 external)"
     assert summary.hotness_text == "Code regions: 2   YES 1 / MAYBE 0 / NO 1"
+
+
+@pytest.mark.parametrize(
+    "seconds, text",
+    [
+        (None, "—"),
+        (float("nan"), "—"),
+        (0.0, "0 s"),
+        (0.000609, "609 µs"),
+        (0.0000123, "12.3 µs"),
+        (0.0123456, "12.3 ms"),
+        (1.2, "1.20 s"),
+        (123.456, "123 s"),
+        (4567.0, "4567 s"),
+    ],
+)
+def test_durations_have_three_significant_digits_and_a_unit(seconds: float, text: str) -> None:
+    assert hotspot_view.format_duration(seconds) == text
+
+
+def test_region_cells_are_readable() -> None:
+    cells = hotspot_view.region_cells(REGIONS[0])
+    assert cells == (
+        "● YES",
+        hotspot_data.KIND_LOOP,
+        "a.cpp:1",
+        "—",
+        "3.00 s",
+        "75 %",
+        "1.00 s",
+        "5.00 s",
+        "0.500",
+        "2",
+    )
+    assert len(cells) == len(hotspot_view.REGION_HEADERS) == len(hotspot_view.REGION_COLUMNS)
+
+
+def test_the_status_is_one_short_text_with_the_explanation_as_detail() -> None:
+    one = [MeasurementRun(0, "c")]
+    two = [MeasurementRun(0, "c"), MeasurementRun(1, "c")]
+    status = hotspot_view.measurement_status(BUILD_NONE, "", [], [])
+    assert (status.level, status.text) == (hotspot_view.LEVEL_IDLE, "No measurement yet") and status.detail
+    assert status.facts == "Accumulated runs: 0 · Code regions: no analysis results yet"
+    status = hotspot_view.measurement_status(BUILD_CURRENT, "", one, REGIONS)
+    assert (status.level, status.text) == (hotspot_view.LEVEL_WARN, "Only one run")
+    assert "every ratio is 0.5" in status.detail and status.facts.endswith("Code regions: 2 (YES 1 / MAYBE 0 / NO 1)")
+    status = hotspot_view.measurement_status(BUILD_CURRENT, "", two, REGIONS)
+    assert (status.level, status.text, status.detail) == (hotspot_view.LEVEL_OK, "Up to date", "")
+    status = hotspot_view.measurement_status(BUILD_MISMATCH, "Sources changed.", one, REGIONS)
+    assert (status.level, status.text) == (hotspot_view.LEVEL_WARN, "Build stale — will be recompiled")
+    assert (
+        status.detail.startswith("Sources changed. The 1 recorded run(s) are kept") and "ratio is 0.5" in status.detail
+    )

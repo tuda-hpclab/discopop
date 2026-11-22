@@ -12,10 +12,17 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 import logging
 
 from discopop_library.ProjectManager.reports.full import generate_full_report
+from discopop_library.ProjectManager.utilities.CLI.builds import (
+    change_build_sharing,
+    delete_builds_from_cli,
+    show_builds,
+)
+from discopop_library.ProjectManager.utilities.CLI.runs import activate_run_from_cli, delete_runs_from_cli, show_runs
 from discopop_library.ProjectManager.utilities.CLI.listConfiguration import (
     show_configurations_with_execution,
     show_configurations_without_execution,
 )
+from discopop_library.ProjectManager.configurations.project_environment import migrate_settings_files
 from discopop_library.ProjectManager.utilities.deriveSettingsFiles import derive_settings_files
 from discopop_library.ProjectManager.utilities.initializeDirectories import initialize_directories
 from discopop_library.ProjectManager.utilities.initializeFiles import initialize_configuration_files
@@ -39,6 +46,10 @@ def run(arguments: ProjectManagerArguments) -> None:
         if not arguments.gui:
             return
 
+    if os.path.isdir(arguments.project_config_dir):
+        for message in migrate_settings_files(arguments.project_config_dir):
+            print("NOTE: " + message)
+
     if arguments.gui:
         # Checked before the project is touched and before the GUI is imported:
         # this branch can only ever end in a window, so a host that cannot show
@@ -61,6 +72,25 @@ def run(arguments: ProjectManagerArguments) -> None:
         return
 
     derive_settings_files(arguments.project_config_dir)
+
+    if arguments.share_build is not None or arguments.unshare_build is not None:
+        change_build_sharing(arguments)
+        return
+    if arguments.list_builds:
+        show_builds(arguments)
+        return
+    if arguments.delete_builds is not None:
+        delete_builds_from_cli(arguments)
+        return
+    if arguments.list_runs:
+        show_runs(arguments)
+        return
+    if arguments.delete_runs is not None:
+        delete_runs_from_cli(arguments)
+        return
+    if arguments.activate_run is not None:
+        activate_run_from_cli(arguments)
+        return
 
     if arguments.list:
         show_configurations_without_execution(arguments)

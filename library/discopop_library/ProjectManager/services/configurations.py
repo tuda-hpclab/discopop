@@ -18,6 +18,7 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+from discopop_library.ProjectManager.configurations.build_sharing import detach_members, repoint_members
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import get_per_config_validation_compile_script_path
 from discopop_library.ProjectManager.utilities.initializeFiles import (
@@ -87,11 +88,16 @@ def copy_configuration_directory(config_dir: str, source: str, new_name: str) ->
 def rename_configuration(config_dir: str, current: str, new_name: str) -> str:
     new_name = _checked_new_name(config_dir, new_name, current=current)
     os.rename(os.path.join(config_dir, current), os.path.join(config_dir, new_name))
+    # the configurations that build from it follow (its builds carry the old name and are compiled again)
+    repoint_members(config_dir, current, new_name)
     return new_name
 
 
-def delete_configuration_directory(config_dir: str, name: str) -> None:
+def delete_configuration_directory(config_dir: str, name: str) -> List[str]:
+    """Delete the configuration; the configurations that built from it build for themselves from now on (returned)."""
+    detached = detach_members(config_dir, name)
     shutil.rmtree(os.path.join(config_dir, name))
+    return detached
 
 
 @dataclass

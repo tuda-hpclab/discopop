@@ -30,7 +30,7 @@ uint32_t DiscoPoP::GetNextBBDepId() {
     if (bb_dep_count % kBBDepIdRangeSize == 0) {
         const std::string profiler_directory = dputil::GetEnvOrDefault("DOT_DISCOPOP_PROFILER", ".discopop/profiler");
         const std::string counter_file = profiler_directory + "/DP_BBDepCounter.txt";
-        const std::string lock_file = profiler_directory + "/DP_BBDepCounter.lock";
+        const std::string lock_file = dputil::ProfilerLockPath(profiler_directory, "DP_BBDepCounter.lock");
         const int lock = open(lock_file.c_str(), O_CREAT | O_RDWR, 0666);
 
         if (lock == -1) {

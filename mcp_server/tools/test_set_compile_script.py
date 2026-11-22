@@ -101,6 +101,55 @@ class TestSetCompileScript(unittest.TestCase):
             data = json.loads(result[0].text)
             self.assertEqual(data["status"], "error")
 
+    def _stored(self, name: str) -> Any:
+        with open(os.path.join(self.project_path, ".discopop", "project", name + "_directories.json")) as f:
+            return json.load(f)[name + "_directories"]
+
+    def test_project_directories_are_stored(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "build", "_deps"))
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        shared = os.path.realpath(outside.name)
+        data = self._handle(excluded_directories=["./build/_deps/"], included_directories=[shared])
+        self.assertEqual(
+            data["project_directories"], {"included": [shared], "excluded": ["build/_deps"], "warnings": []}
+        )
+        self.assertEqual(self._stored("excluded"), ["build/_deps"])
+        self.assertEqual(self._stored("included"), [shared])
+
+    def test_unusable_entries_are_dropped_with_warnings(self) -> None:
+        data = self._handle(excluded_directories=["/abs", "later"], included_directories=["rel", self.project_path])
+        self.assertEqual(data["project_directories"]["excluded"], ["later"])
+        self.assertEqual(data["project_directories"]["included"], [])
+        self.assertEqual(len(data["project_directories"]["warnings"]), 4)
+        # the script is still written
+        self.assertTrue(os.path.exists(data["path"]))
+
+    def test_unchanged_lists_do_not_rewrite_the_files(self) -> None:
+        # the files' mtimes mark the analysis as stale, so unchanged lists must not touch them
+        os.makedirs(os.path.join(self.project_path, "src"))
+        self._handle(excluded_directories=["src"])
+        stored = os.path.join(self.project_path, ".discopop", "project", "excluded_directories.json")
+        os.utime(stored, (1000.0, 1000.0))
+        self._handle(excluded_directories=["./src/"])
+        self.assertEqual(os.path.getmtime(stored), 1000.0)
+
+    def test_omitted_lists_are_left_alone(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        self._handle(excluded_directories=["src"])
+        data = self._handle()
+        self.assertNotIn("project_directories", data)
+        self.assertEqual(self._stored("excluded"), ["src"])
+        self.assertFalse(
+            os.path.exists(os.path.join(self.project_path, ".discopop", "project", "included_directories.json"))
+        )
+
+    def test_project_directories_with_config_name_apply_project_wide(self) -> None:
+        os.makedirs(os.path.join(self.project_path, "src"))
+        data = self._handle(config_name="default", excluded_directories=["src"])
+        self.assertEqual(data["config_name"], "default")
+        self.assertEqual(self._stored("excluded"), ["src"])
+
 
 if __name__ == "__main__":
     unittest.main()

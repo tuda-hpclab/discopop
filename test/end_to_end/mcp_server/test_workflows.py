@@ -112,9 +112,16 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
                 "instrumentation",
                 "profiling",
                 "pattern_detection",
-                "build_restore",
             ):
                 self.assertEqual(data["steps"][step]["status"], "success", (step, data["steps"][step]))
+            # nothing is compiled in the project: the builds are next to it, and the project holds no program, so
+            # building and running it by hand cannot meet an instrumented binary
+            self.assertNotIn("build_restore", data["steps"])
+            self.assertFalse((Path(project) / "prog").exists())
+            builds = Path(project + "_discopop_builds")
+            self.addCleanup(shutil.rmtree, builds, True)
+            for build in ("small_hd", "small_dp"):
+                self.assertTrue((builds / build / "prog").is_file(), build)
             self.assertGreaterEqual(data["suggestions_found"], 1)
             self.assertIn("get_parallelization_suggestions", data["next_step"])
             self.assertNotIn("warning", data)
@@ -133,6 +140,8 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
             for step in ("instrumentation", "profiling", "pattern_detection"):
                 self.assertEqual(result.data["steps"][step]["status"], "skipped", (step, result.data["steps"]))
             self.assertNotIn("build_restore", result.data["steps"])
+            # two builds and two runs are what the call works with, which is no reason to warn
+            self.assertNotIn("warning", result.data)
 
             # --- the suggestion for the loop
             result = await server.call("get_parallelization_suggestions", {"project_path": project})
@@ -207,7 +216,9 @@ class TestHappyPath(unittest.IsolatedAsyncioTestCase):
             result = await server.call("get_project_status", {"project_path": project})
             self.assertFalse(result.is_error, result)
             pipeline = result.data["pipeline"]
-            self.assertEqual(pipeline["hotspot_detection"], {"done": False}, pipeline)
+            # the data of the project stays when a build fails (a run replaces it only when it succeeded), and is
+            # stale as the sources changed
+            self.assertTrue(pipeline["hotspot_detection"]["stale"], pipeline)
             self.assertTrue(pipeline["instrumentation"]["stale"], pipeline)
             self.assertTrue(pipeline["pattern_detection"]["stale"], pipeline)
             self.assertIn("sources changed after the last analysis", result.data["next_step"])

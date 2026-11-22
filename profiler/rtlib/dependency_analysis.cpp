@@ -10,7 +10,9 @@
  *
  */
 
+#include <cstdint>
 #include <iostream>
+#include <vector>
 
 #include "lid_utils.hpp"
 #include "runtimeFunctions.hpp"
@@ -110,6 +112,96 @@ void AnalyzeSingleAccess(dp::AbstractShadow* smem, dp::AccessInfo& access) {
         AddDep(kWaw, access.lid, last_write, access.var, access.aa_var, access.addr);
       }
     }
+  }
+}
+
+void AnalyzeAccessOnSlot(ShadowSlot& slot, const AccessInfo& access) {
+  // the same decisions as AnalyzeSingleAccess, on the values its shadow lookups would return
+  if (access.is_read) {
+    if (access.skip) {
+      slot.last_read = access.lid;
+      return;
+    }
+    const SigElement last_write = slot.last_write;
+    slot.last_read = access.lid;
+    if (last_write != 0 && last_write != 1) {
+      AddDep(kRaw, access.lid, last_write, access.var, access.aa_var, access.addr);
+    }
+    return;
+  }
+
+  const SigElement last_write = slot.last_write;
+  slot.last_write = access.lid;
+  if (access.skip) {
+    return;
+  }
+  const SigElement last_read = slot.last_read;
+  if (last_write == 0 || last_write == 1) {
+    AddDep(kInit, access.lid, 0, access.var, access.aa_var, access.addr);
+    if (last_read != 0 && last_read != 1) {
+      AddDep(kWar, access.lid, last_read, access.var, access.aa_var, access.addr);
+      slot.last_read = 0;
+    }
+  } else if (last_read != 0 && last_read != 1) {
+    AddDep(kWar, access.lid, last_read, access.var, access.aa_var, access.addr);
+    slot.last_read = 0;
+  } else {
+    AddDep(kWaw, access.lid, last_write, access.var, access.aa_var, access.addr);
+  }
+}
+
+std::vector<AddressRecord> GroupEntryAccessesByAddress(std::vector<AccessInfo>& entry_accesses,
+                                                       const PerfectShadow2& chunk_shadow) {
+  std::vector<AddressRecord> records;
+  HashMap<std::int64_t, std::uint32_t> record_of_address;
+  record_of_address.reserve(entry_accesses.size());
+  std::vector<std::uint32_t> record_of_access;
+  record_of_access.reserve(entry_accesses.size());
+  for (const auto& access : entry_accesses) {
+    const auto inserted = record_of_address.try_emplace(access.addr, static_cast<std::uint32_t>(records.size()));
+    if (inserted.second) {
+      records.push_back(AddressRecord{access.addr, 0, 0, 0});
+    }
+    const std::uint32_t record = inserted.first->second;
+    ++records[record].num_entry_accesses;
+    record_of_access.push_back(record);
+  }
+
+  // a stable counting sort by record
+  std::vector<std::uint32_t> next_position(records.size());
+  std::uint32_t position = 0;
+  for (std::size_t record = 0; record < records.size(); ++record) {
+    next_position[record] = position;
+    position += records[record].num_entry_accesses;
+  }
+  std::vector<AccessInfo> grouped(entry_accesses.size());
+  for (std::size_t access = 0; access < entry_accesses.size(); ++access) {
+    grouped[next_position[record_of_access[access]]++] = entry_accesses[access];
+  }
+  entry_accesses.swap(grouped);
+
+  const auto* reads = chunk_shadow.GetSigRead();
+  const auto* writes = chunk_shadow.GetSigWrite();
+  for (auto& record : records) {
+    const auto read = reads->find(record.addr);
+    record.last_read = read == reads->end() ? 0 : read->second;
+    const auto write = writes->find(record.addr);
+    record.last_write = write == writes->end() ? 0 : write->second;
+  }
+  return records;
+}
+
+void AnalyzeChunkOnSlots(HashMap<std::int64_t, ShadowSlot>& shadow, const std::vector<AccessInfo>& entry_accesses,
+                         const std::vector<AddressRecord>& records) {
+  std::size_t next_access = 0;
+  for (const auto& record : records) {
+    ShadowSlot& slot = shadow[record.addr];
+    for (std::uint32_t i = 0; i < record.num_entry_accesses; ++i) {
+      AnalyzeAccessOnSlot(slot, entry_accesses[next_access++]);
+    }
+    // the chunk's last accesses replace whatever the entry accesses left, as merging its shadow did
+    slot.last_read = record.last_read;
+    slot.last_write = record.last_write;
   }
 }
 

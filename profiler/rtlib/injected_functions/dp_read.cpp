@@ -44,10 +44,12 @@ void __dp_read(LID lid, ADDR addr, const char* var) {
 
   function_manager->ResetCall(lid);
 
+#ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
   if (dp_debug) {
     std::cout << "instLoad at encoded LID " << std::dec << dputil::DecodeLid(lid) << " and addr " << std::hex << addr
               << std::endl;
   }
+#endif
 
 #if defined DP_NUM_WORKERS && DP_NUM_WORKERS == 0
   AccessInfo current;
@@ -65,7 +67,7 @@ void __dp_read(LID lid, ADDR addr, const char* var) {
 #endif
   current.is_read = true;
   // add current call path state identifier to lid for later retrieval
-  current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state->GetId()) << 32);
+  current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state_id) << 32);
   current.var = var;
   current.aa_var = reinterpret_cast<std::int64_t>(var);
 

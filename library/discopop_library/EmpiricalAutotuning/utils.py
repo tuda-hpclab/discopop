@@ -5,9 +5,14 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-from typing import List, Set
+import logging
+from typing import Dict, List, Set
 
 from discopop_library.EmpiricalAutotuning.Types import SUGGESTION_ID
+from discopop_library.PatchApplicator.outside_project import (
+    find_outside_project_targets,
+    log_skipped_outside_suggestions,
+)
 from discopop_library.result_classes.DetectionResult import DetectionResult
 
 
@@ -37,3 +42,28 @@ def restrict_patterns_to_ids(dtres: DetectionResult, allowed_ids: Set[int]) -> L
         dtres.patterns.__dict__[pattern_type] = remaining
         kept.extend(pattern.pattern_id for pattern in remaining)
     return sorted(kept)
+
+
+def exclude_outside_project_patterns(
+    dtres: DetectionResult, dot_dp_path: str, logger: logging.Logger
+) -> Dict[str, List[str]]:
+    """Prune the in-memory pattern storage of every suggestion that patches files outside the project.
+
+    The autotuner works in several copies of the project at once, which do not isolate files outside of it: such
+    a suggestion would modify the shared original concurrently and nothing would restore it. They are skipped (and
+    logged), a manual application is the only way to apply them. Returns the skipped suggestions with their outside
+    targets. Like :func:`restrict_patterns_to_ids`, this changes only the in-memory ``dtres``.
+    """
+    all_ids = [
+        str(pattern.pattern_id)
+        for pattern_type in dtres.patterns.__dict__
+        for pattern in dtres.patterns.__dict__[pattern_type]
+    ]
+    outside = find_outside_project_targets(dot_dp_path, all_ids)
+    if outside:
+        log_skipped_outside_suggestions(logger, "Autotuner", outside)
+        for pattern_type in dtres.patterns.__dict__:
+            dtres.patterns.__dict__[pattern_type] = [
+                pattern for pattern in dtres.patterns.__dict__[pattern_type] if str(pattern.pattern_id) not in outside
+            ]
+    return outside

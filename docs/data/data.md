@@ -8,7 +8,7 @@ nav_order: 7
 
 # Data
 
-All tools of DiscoPoP exchange their data through one directory, `.discopop`. The instrumented program and the tools create it in the project directory, or at the path in the environment variable `DOT_DISCOPOP` (see [Environment variables](../setup/environment_variables.md)). The pages of this section describe the files in it.
+All tools of DiscoPoP exchange their data through one directory, `.discopop`. The instrumented program and the tools use the `.discopop` directory of the project (the nearest one from the current directory upwards, created by `discopop_project_manager --init`), or the one at the path in the environment variable `DOT_DISCOPOP` (see [Environment variables](../setup/environment_variables.md)). The pages of this section describe the files in it.
 
 ```text
 .discopop/

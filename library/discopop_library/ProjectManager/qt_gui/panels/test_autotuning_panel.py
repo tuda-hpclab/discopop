@@ -72,8 +72,7 @@ def program(code: str) -> List[str]:
     return [sys.executable, "-u", "-c", code]
 
 
-@pytest.fixture
-def fixture(qtbot: QtBot, tmp_path: Path) -> Fixture:
+def make_fixture(qtbot: QtBot, tmp_path: Path) -> Fixture:
     status = StatusLine()
     qtbot.addWidget(status)
     tabs = FakeTabs()
@@ -82,6 +81,19 @@ def fixture(qtbot: QtBot, tmp_path: Path) -> Fixture:
     panel = AutotuningPanel(make_arguments(tmp_path), state, status, tabs)
     qtbot.addWidget(panel)
     return Fixture(panel, tabs, status)
+
+
+@pytest.fixture
+def fixture(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Fixture:
+    """A panel whose prerequisites count as met (the tests of the runs need no profiling data on disk)."""
+    monkeypatch.setattr(autotuning_panel, "autotuning_missing", lambda _dot_dp: None)
+    return make_fixture(qtbot, tmp_path)
+
+
+@pytest.fixture
+def unready(qtbot: QtBot, tmp_path: Path) -> Fixture:
+    """A panel of a project without profiling data and suggestions."""
+    return make_fixture(qtbot, tmp_path)
 
 
 def add_patches(fixture: Fixture, *ids: str) -> None:
@@ -100,30 +112,51 @@ def run_with(fixture: Fixture, qtbot: QtBot, code: str, finished: bool = True) -
 
 def test_defaults(fixture: Fixture) -> None:
     panel = fixture.panel
-    assert panel.run_button.isEnabled() and not panel.stop_button.isEnabled()
+    assert panel.run_button.isEnabled() and not panel.run_button.is_running()
+    assert list(panel.hotspot_type_checks) == ["yes", "maybe", "no"]
+    assert panel.output_console() is panel.console and panel.output_title == "Autotuning"
+    assert panel.plot_stack.currentWidget() is panel.plot_empty_label
+    assert panel.plot_empty_label.text() == "Run the autotuner to see its progress here."
     assert panel.threads.value() == widgets.THREAD_AUTO and panel.repetitions.value() == 1
     assert [t for t, check in panel.hotspot_type_checks.items() if check.isChecked()] == ["yes"]
     assert panel.algorithm_combo.currentText() == "Hotspot-guided region descent"
     assert panel.log_level.currentText() == "WARNING"
     assert panel.mode() == "search"
-    assert panel.config_label.text() == "tiny"
-    assert panel.suggestions_label.text() == "Autotuner not yet executed"
+    assert panel.header.chip.text() == "Autotuner not yet executed"
     assert panel.suggestions_count_label.text() == "No suggestions available"
     assert not panel.browse_button.isEnabled()
 
 
-def test_the_tab_is_enabled_by_profiling_data_and_patches(fixture: Fixture) -> None:
-    fixture.panel.update_tab_state()
-    assert fixture.tabs.enabled[-1] == ("Autotuning", False, autotuning_panel.TAB_DISABLED_TOOLTIP)
-    assert "Pattern Detection needs to be executed first" in fixture.tabs.enabled[-1][2]
-    (fixture.dot_dp / "profiler").mkdir()
-    fixture.panel.project_state.publish(PatternsChanged())
-    assert fixture.tabs.enabled[-1][1] is False
-    add_patches(fixture, "1")
-    fixture.panel.project_state.publish(PatternsChanged())
-    assert fixture.tabs.enabled[-1] == ("Autotuning", True, "")
-    fixture.panel.project_state.publish(HotspotsChanged())
-    assert fixture.tabs.enabled[-1][1] is True
+def test_missing_prerequisites_are_shown_on_the_page(unready: Fixture, dialog_answers: DialogRecorder) -> None:
+    panel = unready.panel
+    panel.show()
+    # the stage stays reachable; the page says what is missing and where to get it
+    assert unready.tabs.enabled[-1] == ("Autotuning", True, "")
+    assert panel.prerequisites_banner.isVisible() and "no profiling data" in panel.prerequisites_banner.title()
+    assert "Profiling stage" in panel.prerequisites_banner.text()
+    assert panel.goto_profiling_button.isVisible() and not panel.goto_pattern_detection_button.isVisible()
+    assert not panel.run_button.isEnabled()
+    panel.run()
+    assert dialog_answers.titles("show_error") == ["Prerequisites Not Met"] and not panel.running
+
+    (unready.dot_dp / "profiler").mkdir()
+    panel.project_state.publish(PatternsChanged())
+    assert "no parallelization suggestions" in panel.prerequisites_banner.title()
+    assert panel.goto_pattern_detection_button.isVisible() and not panel.goto_profiling_button.isVisible()
+    assert not panel.run_button.isEnabled()
+
+    add_patches(unready, "1")
+    panel.project_state.publish(PatternsChanged())
+    assert not panel.prerequisites_banner.isVisible() and panel.run_button.isEnabled()
+    assert unready.tabs.enabled[-1] == ("Autotuning", True, "")
+
+
+def test_the_buttons_of_the_warning_open_the_stages(unready: Fixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    shown: List[str] = []
+    monkeypatch.setattr(unready.tabs, "show_tab", shown.append)
+    unready.panel.goto_profiling_button.click()
+    unready.panel.goto_pattern_detection_button.click()
+    assert shown == ["Profiling", "Pattern Detection"]
 
 
 def test_the_algorithm_hint_follows_the_hotspot_results(fixture: Fixture) -> None:
@@ -181,14 +214,12 @@ def test_the_autotuner_results_are_shown_and_follow_the_configuration(fixture: F
     results.write_text(json.dumps({"tiny": {"applied_suggestions": [10, 2]}, "other": {"applied_suggestions": []}}))
     fixture.listen(AutotuningChanged)
     panel.project_state.publish(AutotuningFinished())
-    assert panel.suggestions_label.text() == "2, 10"
+    assert panel.header.chip.text() == "Best combination: 2, 10" and panel.header.chip.detail() == "2, 10"
     panel.project_state.current_config = "other"
     panel.project_state.publish(ConfigChanged("other"))
-    assert panel.config_label.text() == "other"
-    assert panel.suggestions_label.text() == "No suggestions selected"
+    assert panel.header.chip.text() == "No suggestions selected"
     panel.project_state.current_config = None
     panel.project_state.publish(ConfigChanged(None))
-    assert panel.config_label.text() == "(none selected)"
 
 
 def test_the_request_is_read_from_the_widgets(fixture: Fixture) -> None:
@@ -253,8 +284,8 @@ def test_success_and_progress(fixture: Fixture, qtbot: QtBot) -> None:
     )
     with mock.patch.object(panel, "_on_progress", progress):
         run_with(fixture, qtbot, code, finished=False)
-        assert not panel.run_button.isEnabled() and panel.run_button.text() == "⟳ Running..."
-        assert panel.stop_button.isEnabled()
+        assert panel.run_button.is_running() and panel.run_button.isEnabled()
+        assert panel.header.chip.level == widgets.CHIP_BUSY
         qtbot.waitUntil(lambda: not panel.running, timeout=20000)
     console = panel.console.text()
     assert "Starting autotuning..." in console and "  Repetitions: 2" in console
@@ -265,7 +296,8 @@ def test_success_and_progress(fixture: Fixture, qtbot: QtBot) -> None:
     assert fixture.events == [AutotuningFinished()]
     assert fixture.status.text() == "Autotuning completed successfully" and fixture.status.color == widgets.STATUS_OK
     assert panel.run_button.isEnabled() and panel.run_button.text() == "Run Autotuning"
-    assert not panel.stop_button.isEnabled()
+    assert not panel.run_button.is_running()
+    assert panel.plot_stack.currentWidget() is not panel.plot_empty_label
 
 
 def test_failure(fixture: Fixture, qtbot: QtBot) -> None:
@@ -334,9 +366,9 @@ def test_stop(fixture: Fixture, qtbot: QtBot) -> None:
     with mock.patch.object(panel, "_on_job_event", watching):
         run_with(fixture, qtbot, code, finished=False)
         qtbot.waitUntil(ready.is_set, timeout=20000)
-        panel.stop_button.click()
+        panel.run_button.click()
         assert fixture.status.text() == "Stopping autotuning..." and fixture.status.color == widgets.STATUS_STOP
-        assert not panel.stop_button.isEnabled()
+        assert not panel.run_button.isEnabled() and panel.run_button.text() == "Stopping…"
         qtbot.waitUntil(lambda: not panel.running, timeout=20000)
     console = panel.console.text()
     assert "Autotuning stopped." in console and "Error" not in console
@@ -373,7 +405,7 @@ def test_a_run_keeps_the_run_button_disabled_when_the_project_changes(fixture: F
         run_with(fixture, qtbot, code, finished=False)
         qtbot.waitUntil(ready.is_set, timeout=20000)
         panel.project_state.publish(PatternsChanged())
-        assert not panel.run_button.isEnabled()
+        assert panel.run_button.is_running() and not panel.run_button.can_run()
         panel.cancel_jobs()
         qtbot.waitUntil(lambda: not panel.running, timeout=20000)
 
@@ -381,3 +413,22 @@ def test_a_run_keeps_the_run_button_disabled_when_the_project_changes(fixture: F
 def test_cancel_jobs_without_a_job_does_nothing(fixture: Fixture) -> None:
     fixture.panel.cancel_jobs()
     assert not fixture.panel.running
+
+
+def test_a_run_opens_the_output_pane_and_waits_for_the_first_measurement(fixture: Fixture, qtbot: QtBot) -> None:
+    panel = fixture.panel
+    with qtbot.waitSignal(panel.output_requested, timeout=5000):
+        run_with(fixture, qtbot, "import sys; sys.exit(3)", finished=False)
+    assert panel.plot_empty_label.text() == "Waiting for the first measurement…"
+    qtbot.waitUntil(lambda: not panel.running, timeout=20000)
+    assert panel.plot_empty_label.text() == "Run the autotuner to see its progress here."
+
+
+def test_a_long_combination_is_summarized_in_the_chip(fixture: Fixture) -> None:
+    panel = fixture.panel
+    results = fixture.dot_dp / "auto_tuner" / "results.json"
+    results.parent.mkdir()
+    results.write_text(json.dumps({"tiny": {"applied_suggestions": list(range(8))}}))
+    panel.project_state.publish(AutotuningFinished())
+    assert panel.header.chip.text() == "Best combination: 8 suggestions"
+    assert panel.header.chip.detail() == "0, 1, 2, 3, 4, 5, 6, 7"

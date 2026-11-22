@@ -24,7 +24,7 @@ It is not suitable when the project cannot be built and run locally, for other l
 ## Prepared results
 The query tools (`get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects`) only read the results in `.discopop`, so they are cheap: the profiling run is the only expensive step. You can run it beforehand, with `gather_data` or by hand (`discopop_cxx`, the profiled run, `discopop_explorer`), and the agent then starts with `get_project_status`, finds the results and queries them without any wait. This needs no `initialize_discopop_directory` and no configuration; start the server with `--tools analysis` to offer just the analysis tools. A repeated `gather_data` call is cheap too, as it skips every step whose outputs are current.
 
-Results are current while no source file is newer than them (modification time); otherwise `get_project_status` reports them as stale. They hold for the inputs that were profiled.
+Results are current while no source file is newer than them (modification time), and the [excluded and included directories](Project_manager.md#project-directories) have not changed since; otherwise `get_project_status` reports them as stale. They hold for the inputs that were profiled.
 
 ## Installation
 The server is part of `pip install discopop`. Activate the environment and check the command:
@@ -57,12 +57,12 @@ The server offers 12 tools. In workflow order:
 | Tool | Purpose |
 |------|---------|
 | `initialize_discopop_directory` | Create the `.discopop` structure of a project (once per project). `reset=true` removes the analysis results and keeps the configuration. |
-| `set_compile_script` | Write the build script `compile.sh` (shared, or per configuration). |
+| `set_compile_script` | Write the build script `compile.sh` (shared, or per configuration). Optionally sets the project's [excluded and included directories](Project_manager.md#project-directories) (`excluded_directories`, e.g. `["build/_deps"]`, and `included_directories`, absolute paths outside the project), which `get_project_status` reports. |
 | `create_execution_configuration` | Create a named configuration with an `execute.sh` (and optional `validate.sh`). |
 | `delete_execution_configuration` | Delete a configuration; its recorded results are kept. |
 | `get_configurations` | Show the build scripts and configurations of a project. |
 | `get_project_status` | Show which steps have run, whether they are stale and which call comes next. |
-| `gather_data` | Run the pipeline: hotspot detection (`hotspot_config_names`), instrumentation, profiling and pattern detection. Rebuilds the project plainly afterwards. A failing hotspot step fails the call. The pattern detection covers doall, reduction and task parallelism; results which do not list all three in `enabled_patterns` of `patterns.json` are detected again. |
+| `gather_data` | Run the pipeline: hotspot detection (`hotspot_config_names`), instrumentation, profiling and pattern detection. Compiles in builds next to the project (`<project>_discopop_builds`), which are kept and reused while nothing they were compiled from changed, so the project itself is never touched; warns with the number and storage of builds and runs once they pile up. A failing hotspot step fails the call. The pattern detection covers doall, reduction and task parallelism; results which do not list all three in `enabled_patterns` of `patterns.json` are detected again. |
 | `get_hotspots` | List the hotspots, longest running first, with their runtime and share of the program's. |
 | `get_parallelization_suggestions` | List the suggestions, hottest first (10 by default, `limit` shows more, `file_path` restricts them to one file), with the pragma to add. Task parallelism is a task group instead (see [Task groups](#task-groups)): it names no pragmas, the agent places them. |
 | `explain_parallelization` | Explain in a text why code at given lines was or was not suggested for parallelization, e.g. which dependency prevents it. For lines inside the parallel region of a task group it names the group and points to its suggestion; the task detection does not record why other code is not part of a group, and the answer says so. |

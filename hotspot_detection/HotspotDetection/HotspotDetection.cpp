@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <filesystem>
 #include "llvm/Pass.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 // #include "llvm/LoopPass.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/raw_ostream.h"
@@ -295,6 +297,208 @@ long int UID = 0;
 
 namespace
 {
+  // The nearest directory named ".discopop" in start or one of its ancestors (symbolic links resolved); empty if there
+  // is none. A ".discopop" without a "project" subdirectory is still the nearest one; a farther one with a project
+  // directory is stored in *shadowed. The same rule as dputil::FindDotDiscopop of the profiler and of
+  // scripts/dp_environment.sh (the packages are built independently).
+  std::string findDotDiscopop(const std::string &start, std::string *shadowed)
+  {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    fs::path directory = fs::canonical(start.empty() ? "." : start, error);
+    if (error)
+    {
+      return "";
+    }
+    std::string nearest;
+    while (true)
+    {
+      const fs::path candidate = directory / ".discopop";
+      if (fs::is_directory(candidate, error))
+      {
+        const bool hasProject = fs::is_directory(candidate / "project", error);
+        if (nearest.empty())
+        {
+          nearest = candidate.string();
+          if (hasProject)
+          {
+            break;
+          }
+        }
+        else if (hasProject)
+        {
+          if (shadowed != nullptr)
+          {
+            *shadowed = candidate.string();
+          }
+          break;
+        }
+      }
+      if (!directory.has_parent_path() || directory.parent_path() == directory)
+      {
+        break;
+      }
+      directory = directory.parent_path();
+    }
+    return nearest;
+  }
+
+  // From the current directory and, if there is none, from the directory of the source file.
+  std::string discoverDotDiscopop(const std::string &sourceFile, std::string *shadowed)
+  {
+    std::error_code error;
+    std::string found = findDotDiscopop(std::filesystem::current_path(error).string(), shadowed);
+    if (found.empty() && !sourceFile.empty())
+    {
+      const std::filesystem::path source = std::filesystem::absolute(sourceFile, error);
+      if (!error)
+      {
+        found = findDotDiscopop(source.parent_path().string(), shadowed);
+      }
+    }
+    return found;
+  }
+
+  // The runtime of the instrumented program uses the directory recorded here when DOT_DISCOPOP is not set (the name is
+  // the one of the profiler's runtime: no program is instrumented by both).
+  void recordDotDiscopop(Module &M, const std::string &directory)
+  {
+    static const char *const symbol = "__dp_dot_discopop_default";
+    if (M.getNamedGlobal(symbol) != nullptr)
+    {
+      return;
+    }
+    Constant *const value = ConstantDataArray::getString(M.getContext(), directory, true);
+    auto *const variable = new GlobalVariable(M, value->getType(), true, GlobalValue::LinkOnceODRLinkage, value, symbol);
+    variable->setVisibility(GlobalValue::HiddenVisibility);
+    appendToUsed(M, {variable});
+  }
+}
+
+namespace
+{
+  // Whether path lies in the project. This package cannot link the profiler's DPUtils, so the rule of
+  // dputil::IsInProjectRoot (profiler/share/lib/DPUtils.cpp) is repeated here and the two must agree: the path
+  // contains DP_PROJECT_ROOT_DIR or one of the directories of DP_PROJECT_INCLUDE_DIRS (project code outside the
+  // root), each followed by a '/' and as given or with its symbolic links resolved, but none of the directories of
+  // DP_PROJECT_EXCLUDE_DIRS (same spellings). Both lists are separated by ':', entries are absolute or relative to
+  // DP_PROJECT_ROOT_DIR.
+  std::vector<std::string> projectDirectorySpellings(const std::string &directory)
+  {
+    std::vector<std::string> spellings;
+    auto add = [&spellings](std::string spelling) {
+      while (spelling.size() > 1 && spelling.back() == '/')
+      {
+        spelling.pop_back();
+      }
+      if (spelling.empty())
+      {
+        return;
+      }
+      spelling = spelling == "/" ? spelling : spelling + "/";
+      if (std::find(spellings.begin(), spellings.end(), spelling) == spellings.end())
+      {
+        spellings.push_back(spelling);
+      }
+    };
+    add(directory);
+    std::error_code ec;
+    std::filesystem::path real = std::filesystem::canonical(directory, ec);
+    if (!ec)
+    {
+      add(real.string());
+    }
+    return spellings;
+  }
+
+  std::vector<std::string> projectDirectoryList(const char *variable, const std::vector<std::string> &roots)
+  {
+    std::vector<std::string> directories;
+    const char *value = getenv(variable);
+    if (value == nullptr)
+    {
+      return directories;
+    }
+    std::stringstream entries(value);
+    std::string entry;
+    while (std::getline(entries, entry, ':'))
+    {
+      if (entry.empty())
+      {
+        continue;
+      }
+      std::vector<std::string> candidates;
+      if (entry.front() == '/')
+      {
+        candidates.push_back(entry);
+      }
+      else
+      {
+        for (const std::string &root : roots)
+        {
+          candidates.push_back(root + entry);
+        }
+      }
+      for (const std::string &candidate : candidates)
+      {
+        for (const std::string &spelling : projectDirectorySpellings(candidate))
+        {
+          if (std::find(directories.begin(), directories.end(), spelling) == directories.end())
+          {
+            directories.push_back(spelling);
+          }
+        }
+      }
+    }
+    return directories;
+  }
+
+  // The directories of the three variables, prepared again only when one of them changes: resolving them takes
+  // file system calls, and the check runs for every function of a module.
+  struct ProjectDirectories
+  {
+    std::string variables;
+    bool prepared = false;
+    std::vector<std::string> roots;
+    std::vector<std::string> excluded;
+  };
+
+  std::string environmentValue(const char *variable)
+  {
+    const char *value = getenv(variable);
+    return value == nullptr ? std::string() : std::string(value);
+  }
+
+  bool isInProjectRoot(const std::string &path)
+  {
+    static ProjectDirectories directories;
+    const char *rootVariable = getenv("DP_PROJECT_ROOT_DIR");
+    const std::string root = rootVariable == nullptr ? "/" : rootVariable;
+    const std::string variables = root + '\n' + environmentValue("DP_PROJECT_INCLUDE_DIRS") + '\n' +
+                                  environmentValue("DP_PROJECT_EXCLUDE_DIRS");
+    if (!directories.prepared || variables != directories.variables)
+    {
+      directories.prepared = true;
+      directories.variables = variables;
+      directories.roots = projectDirectorySpellings(root);
+      const std::vector<std::string> projectRoots = directories.roots;
+      for (const std::string &included : projectDirectoryList("DP_PROJECT_INCLUDE_DIRS", projectRoots))
+      {
+        if (std::find(directories.roots.begin(), directories.roots.end(), included) == directories.roots.end())
+        {
+          directories.roots.push_back(included);
+        }
+      }
+      directories.excluded = projectDirectoryList("DP_PROJECT_EXCLUDE_DIRS", projectRoots);
+    }
+    auto contains = [&path](const std::string &part) { return path.find(part) != std::string::npos; };
+    return std::any_of(directories.roots.begin(), directories.roots.end(), contains) &&
+           std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
+  }
+} // namespace
+
+namespace
+{
 
   class HotspotPass // : public FunctionPass
   {
@@ -312,9 +516,35 @@ namespace
     {
       // prepare environment variables
       char const * tmp = getenv("DOT_DISCOPOP");
+      if(tmp != NULL && tmp[0] == '\0'){
+          tmp = NULL;  // an empty value is no value
+      }
       if(tmp == NULL){
-          // DOT_DISCOPOP needs to be initialized
-          setenv("DOT_DISCOPOP", ".discopop", 1);
+          // the .discopop directory of the project (the nearest one from the current directory or the source file upwards)
+          std::string shadowed;
+          const std::string found = discoverDotDiscopop(M.getSourceFileName(), &shadowed);
+          if(!found.empty()){
+              setenv("DOT_DISCOPOP", found.c_str(), 1);
+              if(getenv("DP_PROJECT_ROOT_DIR") == NULL){
+                  setenv("DP_PROJECT_ROOT_DIR", std::filesystem::path(found).parent_path().c_str(), 1);
+              }
+              if(!shadowed.empty()){
+                  std::cerr << "\nDiscoPoP: WARNING: using " << found << ", which holds no project configuration, although "
+                            << shadowed << " does.\n"
+                            << "          Remove the former if an earlier build left it behind, or set DOT_DISCOPOP.\n\n";
+              }
+          }
+          else{
+              // DOT_DISCOPOP needs to be initialized
+              std::cerr << "\nWARNING: DOT_DISCOPOP is not set and no .discopop directory exists in the current directory or above,\n"
+                        << "         so DiscoPoP writes to .discopop below the current directory.\n"
+                        << "         Create the directory in the root of the project (discopop_project_manager --init does)\n"
+                        << "         or set DOT_DISCOPOP to the same absolute path for every compiler call and the program.\n\n";
+              setenv("DOT_DISCOPOP", ".discopop", 1);
+          }
+      }
+      if(getenv("DOT_DISCOPOP")[0] == '/'){
+          recordDotDiscopop(M, getenv("DOT_DISCOPOP"));
       }
 
       // prepare .discopop directory if not present
@@ -392,7 +622,6 @@ namespace
 
       // avoid instrumenting functions which are defined outside the scope of the
       // project
-      std::string dp_project_dir(getenv("DP_PROJECT_ROOT_DIR"));
       SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
       F.getAllMetadata(MDs);
       bool funcDefinedInProject = false;
@@ -405,7 +634,7 @@ namespace
               fullFileName += "/";
             }
             fullFileName += subProgram->getFilename().str();
-            if (fullFileName.find(dp_project_dir) != string::npos) // function defined inside project
+            if (isInProjectRoot(fullFileName)) // function defined inside project
             {
               funcDefinedInProject = true;
             }

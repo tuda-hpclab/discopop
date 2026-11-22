@@ -17,9 +17,9 @@ The wrappers build the instrumented version of your sequential program. They cal
 
 1. selects the compiler: the first of `clang-22`, `clang-21`, `clang-20` and `clang-19` found on the `PATH` (with the matching `clang++-<N>` for C++), otherwise a plain `clang` / `clang++`; on macOS also the Homebrew `llvm@<N>` installations. The wrapper stops with an error if no clang 19 to 22 is found;
 2. runs the compiler with your `<arguments>` and the additional flags `-g -O0 -fno-discard-value-names -fPIC`, loads the pass (`-fpass-plugin`), and links `libDiscoPoP_RT.a` and `pthread`. Optimization is therefore always off;
-3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below the project root) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
+3. runs the compiler a second time with `-fsyntax-only -Xclang -ast-dump=json` and appends the AST of your project's sources (filtered to the files below `DP_PROJECT_ROOT_DIR`, or below the directory holding `.discopop` if it is not set) to `.discopop/profiler/ast_dump.json`. The Explorer uses it for the pattern detection.
 
-The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default `.discopop` in the current directory. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
+The `.discopop` directory is the one given by [`DOT_DISCOPOP`](../setup/environment_variables.md), by default the nearest `.discopop` directory of the current directory and its parents (the wrappers and the pass find it, so a build that compiles in several directories writes to one; the instrumented program remembers it, so it needs no variable). Without such a directory, the default is `.discopop` in the current directory and the pass warns: a build that compiles in several directories then spreads its data over several `.discopop` directories that do not fit together. Create `.discopop` in the root of the project to avoid this. Functions of library code are only skipped if `DP_PROJECT_ROOT_DIR` is set; see [Environment variables and runtime settings](../setup/environment_variables.md) for these and the other variables that influence the wrappers and the runtime.
 
 {: .note }
 The profiler must be installed without `-e` (`pip install ./profiler`): the wrappers locate the pass and the runtime relative to their own location, and refuse to run from the source tree.
@@ -32,7 +32,7 @@ discopop_cxx example.cpp -o a.out
 ./a.out
 ```
 
-The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. Run the program from the project directory, or set `DOT_DISCOPOP` so that it finds the `.discopop` directory. Afterwards, continue with the [Explorer](Explorer.md).
+The compilation creates `.discopop/FileMapping.txt` and the static analysis results in `.discopop/profiler`. Running `./a.out` completes the profiling data in the same directory. The program writes to the `.discopop` directory it was compiled for from any directory, unless `DOT_DISCOPOP` is set when it starts; if it cannot create its results there, the program stops at its start with an error and exit code 1. Afterwards, continue with the [Explorer](Explorer.md).
 
 ### Makefile projects
 Pass the wrappers as compilers:
@@ -62,8 +62,34 @@ The directory `discopop-profiler.libs` contains further scripts that are not ins
 | `LINKER_wrapper.sh` | Links objects with the DiscoPoP runtime (`-lDiscoPoP_RT`), without instrumenting |
 | `MPI_CC_wrapper.sh`, `MPI_CXX_wrapper.sh`, `MPI_LINKER_wrapper.sh` | Variants for MPI programs; need the MPI compiler wrappers on the `PATH` (compile with `MPI_CC_wrapper.sh` / `MPI_CXX_wrapper.sh`, link with `MPI_LINKER_wrapper.sh`) |
 | `CMAKE_wrapper.sh` | Calls `cmake` with `CC_wrapper.sh` / `CXX_wrapper.sh` as compilers |
-| `filter_ast_dump.py` | Used by the wrappers to filter the AST dump |
+| `filter_ast_dump.py` | Used by the wrappers to reduce the AST: keeps the declarations of the files in `FileMapping.txt` (below the project directory without one) and drops the type nodes |
+| `dp_environment.sh` | Sourced by `CC_wrapper.sh` and `CXX_wrapper.sh`: if `DOT_DISCOPOP` is not set, exports the nearest `.discopop` directory (and `DP_PROJECT_ROOT_DIR`, if unset, as the directory holding it) |
+| `dump_ast.sh` | Sourced by `CC_wrapper.sh` and `CXX_wrapper.sh`: writes the AST of a translation unit, with the AST export plugin if there is one, otherwise by filtering clang's complete dump |
+| `DiscoPoPASTExport-<clang version>.so` | The AST export plugin (only built if the Clang development files are installed, see below) |
 | `dp-fmap` | Creates a [file mapping](../data/Filemapping.md) by hand. This is not necessary anymore since the instrumentation creates `FileMapping.txt`. |
+
+### OpenMP flags
+A program that is compiled with `-fopenmp` is profiled with its OpenMP pragmas active: the threads are instrumented as concurrent code, the dependences found depend on the thread schedule, the pattern detection does not know that a loop is parallel already, and the runtime may need `DP_PTHREAD_COMPATIBILITY_MODE` (see [Build options](../setup/build_options.md)). The wrappers therefore keep the flags (nothing changes for the compilation) and print one warning per build that names the ways to remove them:
+
+- `DP_STRIP_OPENMP=1` in the environment of `discopop_cc` / `discopop_cxx` (also the MPI, linker and hotspot detection wrappers),
+- `--strip-openmp` of `discopop_project_manager`, or
+- the check box *Remove OpenMP flags* in the *Project Setup* stage of the project manager GUI.
+
+With the flags removed, the pragmas are ignored and the sequential code is profiled; code that calls `omp_*` functions needs `#ifdef _OPENMP` guards, as it no longer links against the OpenMP runtime. Builds for the parallel version (`par`) and the validation are not affected. See [Environment variables](../setup/environment_variables.md) and [Project manager](Project_manager.md).
+
+MPI calls are ordinary external calls for DiscoPoP: nothing models message passing, and DiscoPoP is not suitable for distributed memory programs.
+
+### AST export plugin
+The explorer reads `ast_dump.json`, but only the nodes of the files in `FileMapping.txt`. Clang's complete JSON dump contains every declaration of the included headers as well, which is tens of GB for a single translation unit of a template heavy project. If the Clang development files (`libclang-<version>-dev` on Debian and Ubuntu) were installed when the profiler was built, the build also creates the clang plugin `DiscoPoPASTExport-<clang version>.so`. The wrappers then let clang write only the declarations of the mapped files (a few seconds instead of minutes, and a few hundred MB instead of tens of GB per translation unit). Without the plugin, or if it fails, the wrappers filter the complete dump while it is written: the result is the same, but slower and needing more disk throughput.
+
+- `DP_AST_NO_PLUGIN=1` uses the filtered dump even if the plugin exists.
+- The declarations of the excluded directories (`DP_PROJECT_EXCLUDE_DIRS`, see [Environment variables](../setup/environment_variables.md)) are left out by both, also before a `FileMapping.txt` exists. A dependency fetched below the project directory (`build/_deps`) should be excluded: otherwise it is project code, instrumented and kept in the AST.
+- The directories of `DP_PROJECT_INCLUDE_DIRS` (project code outside of `DP_PROJECT_ROOT_DIR`) count as project code there as well: before a `FileMapping.txt` exists their declarations are kept like those below the project directory, and the pass instruments and maps their files.
+- `filter_ast_dump.py` reports on stderr which files it keeps, how it is doing (every 10 s on long runs) and, when done, how much it read, wrote and dropped, so each translation unit adds two lines to the build log; `DP_AST_QUIET=1` silences them.
+- `-DDP_AST_EXPORT=OFF` (or `REQUIRED`) at build time never builds the plugin (or fails if it cannot be built). With pip, pass it as `CMAKE_ARGS=-DDP_AST_EXPORT=OFF pip install ./profiler`.
+- The packages of [apt.llvm.org](https://apt.llvm.org) install Clang's CMake files with `clang-<version>`, but the libraries and headers they refer to only with `libclang-<version>-dev`. Without the latter, the build reports the missing files and leaves the plugin out.
+- The plugin only runs with the clang of the version it was built for (the version is part of its file name).
+- Namespaces are not part of the exported AST, their declarations are, and neither are type aliases and the documentation comments of declarations; the explorer does not use them.
 
 <!-- UNVERIFIED: the MPI wrappers and LINKER_wrapper.sh were not run. -->
 

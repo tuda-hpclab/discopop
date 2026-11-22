@@ -46,6 +46,7 @@ from discopop_explorer.side_effects.schema import (
     dependency_file_info,
     save_export,
 )
+from discopop_library.StatusReporting.console import progress, stage
 from discopop_library.global_data.version.utils import get_version
 
 if TYPE_CHECKING:
@@ -126,84 +127,90 @@ def build_export(
     ast_helper: Optional[ASTPatternDetectionHelper],
     file_mapping: Optional[str] = None,
 ) -> SideEffectExport:
-    files = _read_file_mapping(file_mapping or os.path.join(discopop_dir, "FileMapping.txt"))
-    pet_functions = sorted(all_nodes(pet, FunctionNode), key=lambda f: (f.file_id, f.start_line, str(f.id)))
-    file_ids = _function_file_ids(pet, pet_functions, files)
-    pet_functions.sort(key=lambda f: (file_ids[f], f.start_line, str(f.id)))
+    with stage("Reading functions and files", 1, total=6):
+        files = _read_file_mapping(file_mapping or os.path.join(discopop_dir, "FileMapping.txt"))
+        pet_functions = sorted(all_nodes(pet, FunctionNode), key=lambda f: (f.file_id, f.start_line, str(f.id)))
+        file_ids = _function_file_ids(pet, pet_functions, files)
+        pet_functions.sort(key=lambda f: (file_ids[f], f.start_line, str(f.id)))
 
-    instances, work_contexts, context_ids = _collect_instances(task_graph, pet_functions)
-    mapped_records = task_graph.map_dynamic_dependency_records()
+    with stage("Collecting function instances", 2, total=6):
+        instances, work_contexts, context_ids = _collect_instances(task_graph, pet_functions)
+    with stage("Mapping dynamic dependency records", 3, total=6):
+        mapped_records = task_graph.map_dynamic_dependency_records()
 
     line_to_function = _LineToFunction(pet_functions, file_ids)
     records: List[Record] = []
     instruction_names: Dict[str, List[str]] = {}
     unmapped: Dict[str, int] = {}
-    for mapped in mapped_records:
-        first_instr, first_state, first_line = mapped.first
-        names = instruction_names.setdefault(str(first_instr), [])
-        if mapped.var_name not in names:
-            names.append(mapped.var_name)
-        ends = [(first_line, mapped.first_contexts)]
-        if mapped.other is not None:
-            ends.append((mapped.other[2], mapped.other_contexts))
-        for line, contexts in ends:
-            if not any(c in context_ids for c in contexts):
-                function_id = line_to_function.lookup(line)
-                if function_id is not None:
-                    unmapped[function_id] = unmapped.get(function_id, 0) + 1
-        record: Record = {
-            "type": mapped.dep_type,
-            "var": mapped.var_name,
-            "first": (first_instr, first_state, str(first_line) if first_line is not None else ""),
-            "other": (
-                (mapped.other[0], mapped.other[1], str(mapped.other[2]) if mapped.other[2] is not None else "")
-                if mapped.other is not None
-                else None
-            ),
-            "pairs": [
-                (context_ids[first], context_ids[other])
-                for first, other in mapped.pairs
-                if first in context_ids and other in context_ids
-            ],
-            "first_contexts": [context_ids[c] for c in mapped.first_contexts if c in context_ids],
-            "other_contexts": [context_ids[c] for c in mapped.other_contexts if c in context_ids],
-        }
-        if len(record["first_contexts"]) == 0 and len(record["other_contexts"]) == 0:
-            # neither end could be attributed to a calling context of an exported instance;
-            # the record carries nothing the analysis could use but the instruction's name
-            continue
-        records.append(record)
-    for names in instruction_names.values():
-        names.sort()
-
-    executed_calls = _read_executed_calls(task_graph.dynamic_dependency_file, pet_functions, line_to_function)
-    executed_functions = {call["callee"] for call in executed_calls}
-
-    ast_facts = _AstFacts(ast_helper, files, pet_functions)
-    ast_facts.file_ids_of_functions = file_ids
-    display_names = _demangle([str(f.name) for f in pet_functions])
-    functions: List[Function] = []
-    for function in pet_functions:
-        facts = ast_facts.function_facts(function)
-        functions.append(
-            {
-                "id": str(function.id),
-                "name": str(function.name),
-                "display_name": display_names.get(str(function.name), facts.display_name or str(function.name)),
-                "file_id": file_ids[function],
-                "start_line": int(function.start_line),
-                "end_line": int(function.end_line),
-                "ast_facts": facts.found,
-                "params": facts.params,
-                "locals": facts.locals,
-                "member_accesses": facts.member_accesses,
-                "performs_file_io": _performs_file_io(pet, function),
-                "static_callees": _static_callees(pet, function),
-                "unprofiled_calls": ast_facts.unprofiled_calls(facts),
-                "global_refs": facts.global_refs,
-                "executed": str(function.id) in executed_functions,
+    with stage("Attributing records to function instances", 4, total=6):
+        for mapped in progress(mapped_records, desc="Records"):
+            first_instr, first_state, first_line = mapped.first
+            names = instruction_names.setdefault(str(first_instr), [])
+            if mapped.var_name not in names:
+                names.append(mapped.var_name)
+            ends = [(first_line, mapped.first_contexts)]
+            if mapped.other is not None:
+                ends.append((mapped.other[2], mapped.other_contexts))
+            for line, contexts in ends:
+                if not any(c in context_ids for c in contexts):
+                    function_id = line_to_function.lookup(line)
+                    if function_id is not None:
+                        unmapped[function_id] = unmapped.get(function_id, 0) + 1
+            record: Record = {
+                "type": mapped.dep_type,
+                "var": mapped.var_name,
+                "first": (first_instr, first_state, str(first_line) if first_line is not None else ""),
+                "other": (
+                    (mapped.other[0], mapped.other[1], str(mapped.other[2]) if mapped.other[2] is not None else "")
+                    if mapped.other is not None
+                    else None
+                ),
+                "pairs": [
+                    (context_ids[first], context_ids[other])
+                    for first, other in mapped.pairs
+                    if first in context_ids and other in context_ids
+                ],
+                "first_contexts": [context_ids[c] for c in mapped.first_contexts if c in context_ids],
+                "other_contexts": [context_ids[c] for c in mapped.other_contexts if c in context_ids],
             }
-        )
+            if len(record["first_contexts"]) == 0 and len(record["other_contexts"]) == 0:
+                # neither end could be attributed to a calling context of an exported instance;
+                # the record carries nothing the analysis could use but the instruction's name
+                continue
+            records.append(record)
+        for names in instruction_names.values():
+            names.sort()
+
+    with stage("Reading executed calls", 5, total=6):
+        executed_calls = _read_executed_calls(task_graph.dynamic_dependency_file, pet_functions, line_to_function)
+        executed_functions = {call["callee"] for call in executed_calls}
+
+    with stage("Collecting facts of the functions", 6, total=6):
+        ast_facts = _AstFacts(ast_helper, files, pet_functions)
+        ast_facts.file_ids_of_functions = file_ids
+        display_names = _demangle([str(f.name) for f in pet_functions])
+        functions: List[Function] = []
+        for function in progress(pet_functions, desc="Functions"):
+            facts = ast_facts.function_facts(function)
+            functions.append(
+                {
+                    "id": str(function.id),
+                    "name": str(function.name),
+                    "display_name": display_names.get(str(function.name), facts.display_name or str(function.name)),
+                    "file_id": file_ids[function],
+                    "start_line": int(function.start_line),
+                    "end_line": int(function.end_line),
+                    "ast_facts": facts.found,
+                    "params": facts.params,
+                    "locals": facts.locals,
+                    "member_accesses": facts.member_accesses,
+                    "performs_file_io": _performs_file_io(pet, function),
+                    "static_callees": _static_callees(pet, function),
+                    "unprofiled_calls": ast_facts.unprofiled_calls(facts),
+                    "global_refs": facts.global_refs,
+                    "executed": str(function.id) in executed_functions,
+                }
+            )
 
     dependency_file = task_graph.dynamic_dependency_file
     return {

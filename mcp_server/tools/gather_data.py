@@ -12,13 +12,31 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.configurations.building import (
+    BuildLockAborted,
+    BuildResult,
+    build_lock,
+    ensure_build,
+)
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, build_tree_path_of
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
-from discopop_library.ProjectManager.configurations.execution import execute_configuration
+from discopop_library.ProjectManager.configurations.running import execute_in_build
+from discopop_library.ProjectManager.configurations.runs import (
+    ActivationError,
+    RunRecord,
+    activate_run,
+    activate_runs,
+    active_runs,
+)
+from discopop_library.ProjectManager.services.build_overview import storage_warning
 from mcp_server.tools.helpers import (
     ToolContext,
     invalid_configuration_name,
@@ -31,8 +49,9 @@ logger = logging.getLogger("discopop-mcp")
 
 TOOL = Tool(
     name="gather_data",
-    # Overwrites the previous analysis results and rebuilds the project in place. A
-    # repeated call skips every step whose outputs are current, hence idempotent.
+    # Overwrites the previous analysis results (the compilations happen in builds next to the project, the
+    # project's sources are not touched). A repeated call skips every step whose outputs are current, hence
+    # idempotent.
     annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True, openWorldHint=False),
     description=(
         "Run the complete DiscoPoP data collection pipeline and detect parallelization patterns. "
@@ -58,11 +77,14 @@ TOOL = Tool(
         "Each step is automatically skipped when its outputs are already current "
         "relative to the source files. Use force=true to re-run all steps unconditionally. "
         "\n\n"
-        "Steps 1 and 4 compile in the project itself, so the project's build directory is "
-        "rebuilt plainly (par_settings.json) before this tool returns: a build left over "
-        "from instrumentation produces binaries that are orders of magnitude slower than "
-        "the program and may abort, so building and running the program by hand afterwards "
-        "is safe. "
+        "Steps 1 and 4 compile in a copy of the project, a build in <project>_discopop_builds, which stays and is "
+        "used again as long as nothing it was compiled from changed (sources, compile script, settings): "
+        "the project's own build directory is never touched, so building and running the program by hand is "
+        "safe at any time, and a repeated call does not compile again. Each profiling run writes its results "
+        "to a run directory of its own, which is then put into the project's .discopop. Builds and runs are "
+        "never deleted automatically; if they pile up, the result carries a warning with their number and "
+        "the storage they occupy, which the user can act on (discopop_project_manager --list-builds, "
+        "--delete-builds, --list-runs, --delete-runs). "
         "\n\n"
         "A step that succeeded lists the warnings of its build or run under 'warnings'; a step that failed "
         "carries the end of its error output under 'stderr'. "
@@ -142,10 +164,190 @@ def _profiled_configurations(hotspot_dir: Path) -> list[str]:
     return [str(n) for n in names] if isinstance(names, list) else []
 
 
-def _record_profiled_configuration(hotspot_dir: Path, config_name: str) -> None:
-    names = _profiled_configurations(hotspot_dir)
-    if config_name not in names:
-        (hotspot_dir / PROFILED_CONFIGURATIONS_FILE).write_text(json.dumps(names + [config_name]))
+@dataclass
+class _PipelineState:
+    """What the steps of one call hand on to each other."""
+
+    # The configuration whose build the hotspot runs use (the runs of the other hotspot configurations execute
+    # their own execute.sh in it).
+    build_config: str = ""
+    # False once a step has produced new data for the project: what is there is then not the result of an earlier
+    # call, and the steps that follow must not take it for a current result.
+    hotspot_data_is_current: bool = True
+    dp_data_is_current: bool = True
+    # the hotspot runs of this call (configuration, run): they are put into the project together
+    hotspot_runs: list[tuple[str, RunRecord]] = field(default_factory=list)
+
+
+def _from_other_configuration(project_path: str, mode: str, config_name: str) -> bool:
+    """Whether the ``mode`` data in the project comes from a run of another configuration than ``config_name``.
+
+    Data without a record (made by hand or before the runs were recorded) is taken as the configuration's.
+    """
+    entry = active_runs(str(Path(project_path) / ".discopop")).get(mode, {})
+    configuration = entry.get("configuration")
+    return isinstance(configuration, str) and configuration != config_name
+
+
+def _build_arguments(project_path: str, timeout_seconds: int, ctx: ToolContext) -> ProjectManagerArguments:
+    """The arguments for builds: compiled in a copy of the project, never in the project itself."""
+    arguments = ctx.make_pm_args(project_path, timeout_seconds)
+    arguments.execute_inplace = False
+    arguments.skip_cleanup = False
+    arguments.apply_suggestions = None
+    return arguments
+
+
+def _log_message(project_path: str, ctx: ToolContext) -> Callable[[str], None]:
+    def log(text: str) -> None:
+        if text.strip():
+            ctx.log_action(project_path, "gather_data", text.strip())
+
+    return log
+
+
+def _compile_in_build(
+    project_path: str,
+    config_name: str,
+    mode: str,
+    label: str,
+    timeout_seconds: int,
+    force: bool,
+    ctx: ToolContext,
+) -> dict[str, Any]:
+    """Compile ``config_name`` in ``mode`` in its build, unless a current build exists (``force``: in any case).
+
+    The build is a copy of the project in ``<project>_discopop_builds``, so the project itself is never touched and
+    a build that is still current is not compiled again.
+    """
+    configs_dir = Path(project_path) / ".discopop" / "project" / "configs"
+    # a configuration that builds from another one is compiled in the build of that one
+    config_name = build_owner_of(str(configs_dir), config_name)
+    compile_sh = resolve_compile_script_path(str(configs_dir), config_name)
+    key = BuildKey(config_name, mode, ())
+    arguments = _build_arguments(project_path, timeout_seconds, ctx)
+    log = _log_message(project_path, ctx)
+    ctx.log_action(
+        project_path,
+        "gather_data",
+        f"{label}: {compile_sh} via {mode}_settings, config='{config_name}', timeout={timeout_seconds}s, "
+        + ("rebuild" if force else "compiled unless a current build exists"),
+    )
+    original_cwd = os.getcwd()
+    try:
+        with build_lock(
+            arguments,
+            key,
+            should_abort=lambda: ctx.cancelled,
+            on_wait=lambda: log(f"Waiting for another process that uses the build {key.build_id}"),
+        ):
+            outcome = ensure_build(
+                arguments,
+                key,
+                str(configs_dir / config_name),
+                str(configs_dir / f"{mode}_settings.json"),
+                compile_sh,
+                1,
+                BuildPolicy.REBUILD if force else BuildPolicy.AUTO,
+                float(timeout_seconds),
+                process_started_callback=ctx.track_process,
+                message=log,
+            )
+    except BuildLockAborted:
+        return {"status": "error", "message": f"Cancelled while waiting for the build {key.build_id}."}
+    finally:
+        os.chdir(original_cwd)
+
+    if outcome.result == BuildResult.REUSED:
+        ctx.log_action(project_path, "gather_data", f"{label}: the build {key.build_id} is current, not compiled")
+        return {"status": "skipped", "reason": "build_is_current", "build_id": key.build_id}
+    if outcome.result == BuildResult.BUILT and outcome.compile_result is not None:
+        _returncode, elapsed, stdout, stderr = outcome.compile_result
+        _log_stdout(project_path, label.lower().replace(" ", "_"), stdout, ctx)
+        ctx.log_action(project_path, "gather_data", f"{label} succeeded in {elapsed}s ({key.build_id})")
+        return {
+            "status": "success",
+            "elapsed_time": elapsed,
+            "build_id": key.build_id,
+            **warning_fields(stdout, stderr),
+        }
+    if outcome.result == BuildResult.COMPILE_FAILED and outcome.compile_result is not None:
+        returncode, elapsed, stdout, stderr = outcome.compile_result
+        _log_stdout(project_path, label.lower().replace(" ", "_"), stdout, ctx)
+        return {
+            "status": "error",
+            "message": f"{label} failed (rc={returncode}).",
+            "returncode": returncode,
+            "elapsed_time": elapsed,
+            **_stderr_fields(stderr),
+        }
+    return {"status": "error", "message": outcome.message or f"{label} failed: no build {key.build_id}."}
+
+
+def _run_in_build(
+    project_path: str,
+    build_config: str,
+    run_config: str,
+    mode: str,
+    timeout_seconds: int,
+    ctx: ToolContext,
+) -> tuple[Optional[tuple[int, float, str, str]], Optional[RunRecord], str]:
+    """Run the ``execute.sh`` of ``run_config`` in the build of ``build_config``; its results go to a run of their own.
+
+    Returns what the script returned, the run and an error text for a build that is not available. The build is
+    checked again under its lock (the project may have changed since it was compiled; a build that is not current
+    any more is an error, never compiled here), which also refreshes the scripts in its tree.
+    """
+    configs_dir = Path(project_path) / ".discopop" / "project" / "configs"
+    key = BuildKey(build_config, mode, ())
+    arguments = _build_arguments(project_path, timeout_seconds, ctx)
+    settings = str(configs_dir / f"{mode}_settings.json")
+    log = _log_message(project_path, ctx)
+    original_cwd = os.getcwd()
+    try:
+        with build_lock(
+            arguments,
+            key,
+            should_abort=lambda: ctx.cancelled,
+            on_wait=lambda: log(f"Waiting for another process that uses the build {key.build_id}"),
+        ):
+            outcome = ensure_build(
+                arguments,
+                key,
+                str(configs_dir / build_config),
+                settings,
+                resolve_compile_script_path(str(configs_dir), build_config),
+                1,
+                # the build of the step before: one that changed meanwhile (the sources were edited during a long run)
+                # is no reason to compile silently, and the runs of one call have to come from one binary
+                BuildPolicy.REUSE,
+                float(timeout_seconds),
+                process_started_callback=ctx.track_process,
+                message=log,
+            )
+            if not outcome.usable or outcome.record is None:
+                return (
+                    None,
+                    None,
+                    (outcome.message or f"The build {key.build_id} is not available.")
+                    + " Call gather_data again (force=true compiles anew).",
+                )
+            result, run = execute_in_build(
+                arguments,
+                outcome.record,
+                str(configs_dir / run_config),
+                settings,
+                1,
+                float(timeout_seconds),
+                None,
+                1,
+                process_started_callback=ctx.track_process,
+            )
+    except BuildLockAborted:
+        return None, None, f"Cancelled while waiting for the build {key.build_id}."
+    finally:
+        os.chdir(original_cwd)
+    return result, run, ""
 
 
 def _hotspot_instrument(
@@ -156,6 +358,7 @@ def _hotspot_instrument(
     force: bool,
     ctx: ToolContext,
     source_mtime: Optional[float],
+    state: Optional[_PipelineState] = None,
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -167,17 +370,20 @@ def _hotspot_instrument(
     if not config_dir.exists():
         return {"status": "error", "message": unknown_configuration_message(configs_dir, config_name)}
     # honours a per-configuration compile.sh override, falling back to the shared script
-    compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
+    compile_sh = Path(resolve_compile_script_path(str(configs_dir), build_owner_of(str(configs_dir), config_name)))
     if not compile_sh.exists():
         return {"status": "error", "message": "compile.sh not found. Run set_compile_script first."}
     if not hd_settings.exists():
         return {"status": "error", "message": "hd_settings.json not found. Run initialize_discopop_directory first."}
 
-    # Skipped only when the results cover exactly the requested configurations: the plain
-    # rebuild at the end of every call leaves no instrumented binary behind, so profiling a
-    # configuration that is missing needs this step, and re-instrumenting clears the results
-    # of every other configuration as well.
-    if not force and private_dir.exists() and set(_profiled_configurations(hotspot_dir)) == set(hotspot_config_names):
+    # Skipped only when the results cover exactly the requested configurations: the data of the project is
+    # replaced by the runs of all of them together, so a configuration that is missing needs every run again.
+    if (
+        not force
+        and private_dir.exists()
+        and set(_profiled_configurations(hotspot_dir)) == set(hotspot_config_names)
+        and not _from_other_configuration(project_path, "hd", config_name)
+    ):
         result_files = list(private_dir.glob("hotspot_result_*.txt"))
         if result_files:
             last_run_mtime = max(f.stat().st_mtime for f in result_files)
@@ -189,57 +395,10 @@ def _hotspot_instrument(
                     "num_runs_accumulated": len(result_files),
                 }
 
-    if hotspot_dir.exists():
-        shutil.rmtree(str(hotspot_dir))
-        ctx.log_action(project_path, "gather_data", "Deleted stale .discopop/hotspot_detection/")
-
-    pm_args = ctx.make_pm_args(project_path, timeout_seconds)
-    ctx.log_action(
-        project_path,
-        "gather_data",
-        f"Hotspot instrumentation: {compile_sh} via hd_settings, config='{config_name}', "
-        f"timeout={timeout_seconds}s",
-    )
-    original_cwd = os.getcwd()
-    try:
-        exec_result = execute_configuration(
-            arguments=pm_args,
-            project_copy_root_path=project_path,
-            config_path=str(config_dir),
-            settings_path=str(hd_settings),
-            script_path=str(compile_sh),
-            thread_count=1,
-            timeout=float(timeout_seconds),
-            process_started_callback=ctx.track_process,
-        )
-    finally:
-        os.chdir(original_cwd)
-
-    # From here on the project's own build directory has been reconfigured for
-    # instrumentation, whatever the outcome -- which is what `_restore_plain_build`
-    # has to know, and cannot tell from a status alone: a pre-flight error never
-    # touched the build, a failed compile did.
-    if exec_result is None:
-        return {
-            "status": "error",
-            "message": "execute_configuration returned None for hd_settings.json.",
-            "compiled_in_place": True,
-        }
-
-    returncode, elapsed, stdout, stderr = exec_result
-    _log_stdout(project_path, "hotspot_instrument", stdout, ctx)
-
-    if returncode != 0:
-        return {
-            "status": "error",
-            "message": f"Hotspot instrumentation failed (rc={returncode}).",
-            "returncode": returncode,
-            "elapsed_time": elapsed,
-            **_stderr_fields(stderr),
-            "compiled_in_place": True,
-        }
-    ctx.log_action(project_path, "gather_data", f"Hotspot instrumentation succeeded in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True, **warning_fields(stdout, stderr)}
+    # the runs that follow produce the data of the project anew, even where the build is reused
+    if state is not None:
+        state.hotspot_data_is_current = False
+    return _compile_in_build(project_path, config_name, "hd", "Hotspot instrumentation", timeout_seconds, force, ctx)
 
 
 def _hotspot_profiling_single(
@@ -249,6 +408,7 @@ def _hotspot_profiling_single(
     force: bool,
     ctx: ToolContext,
     source_mtime: Optional[float],
+    state: Optional[_PipelineState] = None,
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -256,13 +416,21 @@ def _hotspot_profiling_single(
     execute_sh = configs_dir / config_name / "execute.sh"
     hotspot_dir = p / ".discopop" / "hotspot_detection"
     private_dir = hotspot_dir / "private"
+    state = state if state is not None else _PipelineState()
 
     if not execute_sh.exists():
         return {"status": "error", "message": f"execute.sh not found for configuration '{config_name}'."}
     if not hd_settings.exists():
         return {"status": "error", "message": "hd_settings.json not found."}
+    if any(name == config_name for name, _run in state.hotspot_runs):
+        return {"status": "skipped", "reason": "already_profiled_in_this_call"}
 
-    if not force and private_dir.exists() and config_name in _profiled_configurations(hotspot_dir):
+    if (
+        not force
+        and state.hotspot_data_is_current
+        and private_dir.exists()
+        and config_name in _profiled_configurations(hotspot_dir)
+    ):
         existing = list(private_dir.glob("hotspot_result_*.txt"))
         if existing:
             last_run_mtime = max(f.stat().st_mtime for f in existing)
@@ -273,38 +441,20 @@ def _hotspot_profiling_single(
                     "num_runs_accumulated": len(existing),
                 }
 
-    results_before = set(private_dir.glob("hotspot_result_*.txt")) if private_dir.exists() else set()
-    pm_args = ctx.make_pm_args(project_path, timeout_seconds)
     ctx.log_action(
         project_path,
         "gather_data",
         f"Hotspot profiling: execute.sh for config='{config_name}', timeout={timeout_seconds}s",
     )
-    original_cwd = os.getcwd()
-    try:
-        exec_result = execute_configuration(
-            arguments=pm_args,
-            project_copy_root_path=project_path,
-            config_path=str(configs_dir / config_name),
-            settings_path=str(hd_settings),
-            script_path=str(execute_sh),
-            thread_count=1,
-            timeout=float(timeout_seconds),
-            process_started_callback=ctx.track_process,
-        )
-    finally:
-        os.chdir(original_cwd)
-
-    if exec_result is None:
-        return {"status": "error", "message": "execute_configuration returned None."}
+    exec_result, run, unavailable = _run_in_build(
+        project_path, state.build_config or config_name, config_name, "hd", timeout_seconds, ctx
+    )
+    if exec_result is None or run is None:
+        return {"status": "error", "message": unavailable or "The hotspot profiling run did not start."}
 
     returncode, elapsed, stdout, stderr = exec_result
     _log_stdout(project_path, f"hotspot_profiling[{config_name}]", stdout, ctx)
-    result_files = sorted(private_dir.glob("hotspot_result_*.txt")) if private_dir.exists() else []
-
     if returncode != 0:
-        for added in set(result_files) - results_before:
-            _discard_partial_output(added, project_path, ctx)
         return {
             "status": "error",
             "message": f"Hotspot profiling failed for '{config_name}' (rc={returncode}).",
@@ -312,7 +462,8 @@ def _hotspot_profiling_single(
             "elapsed_time": elapsed,
             **_stderr_fields(stderr),
         }
-    if not result_files:
+    results = list((Path(run.dot_discopop) / "hotspot_detection" / "private").glob("hotspot_result_*.txt"))
+    if not results:
         return {
             "status": "error",
             "message": (
@@ -323,13 +474,43 @@ def _hotspot_profiling_single(
             "elapsed_time": elapsed,
             **_stderr_fields(stderr),
         }
-    _record_profiled_configuration(hotspot_dir, config_name)
-    ctx.log_action(
-        project_path,
-        "gather_data",
-        f"Hotspot profiling done in {elapsed}s: {len(result_files)} run(s) accumulated",
-    )
-    return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
+    state.hotspot_runs.append((config_name, run))
+    ctx.log_action(project_path, "gather_data", f"Hotspot profiling done in {elapsed}s: run {run.run_id}")
+    return {"status": "success", "elapsed_time": elapsed, "run_id": run.run_id, **warning_fields(stderr)}
+
+
+def _hotspot_activate(
+    project_path: str, timeout_seconds: int, ctx: ToolContext, state: _PipelineState
+) -> dict[str, Any]:
+    """Put the hotspot runs of this call into the project, where the analysis reads them.
+
+    The runs replace the hotspot data of the project together (their results accumulate for the classification);
+    nothing of the project changes if that fails. Without runs, the data of the project is current already.
+    """
+    if not state.hotspot_runs:
+        return {"status": "skipped", "reason": "results_are_current"}
+    if ctx.cancelled:
+        return {"status": "error", "message": "Cancelled before the hotspot runs were put into the project."}
+    arguments = _build_arguments(project_path, timeout_seconds, ctx)
+    runs = [run for _name, run in state.hotspot_runs]
+    try:
+        activate_runs(arguments, runs)
+    except ActivationError as error:
+        return {
+            "status": "error",
+            "message": (
+                f"The hotspot runs could not be put into the project: {error}. "
+                "Call gather_data with force=true to compile and profile again."
+            ),
+        }
+    hotspot_dir = Path(project_path) / ".discopop" / "hotspot_detection"
+    names: list[str] = []
+    for name, _run in state.hotspot_runs:
+        if name not in names:
+            names.append(name)
+    (hotspot_dir / PROFILED_CONFIGURATIONS_FILE).write_text(json.dumps(names))
+    ctx.log_action(project_path, "gather_data", f"Put the hotspot runs {[run.run_id for run in runs]} into the project")
+    return {"status": "success", "run_ids": [run.run_id for run in runs]}
 
 
 def _hotspot_analysis(
@@ -415,6 +596,7 @@ def _instrument_project(
     force: bool,
     ctx: ToolContext,
     source_mtime: Optional[float],
+    state: Optional[_PipelineState] = None,
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
@@ -426,18 +608,20 @@ def _instrument_project(
     if not config_dir.exists():
         return {"status": "error", "message": unknown_configuration_message(configs_dir, config_name)}
     # honours a per-configuration compile.sh override, falling back to the shared script
-    compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
+    compile_sh = Path(resolve_compile_script_path(str(configs_dir), build_owner_of(str(configs_dir), config_name)))
     if not compile_sh.exists():
         return {"status": "error", "message": "compile.sh not found. Run set_compile_script first."}
     if not dp_settings.exists():
         return {"status": "error", "message": "dp_settings.json not found. Run initialize_discopop_directory first."}
 
-    # Skipped only when the profiling output is current as well. If profiling still has
-    # to run, it needs the instrumented binary -- and a previous call restored the plain
-    # build before returning (`_restore_plain_build`), so skipping here would have
-    # profiling run an uninstrumented program that never writes its dependencies.
+    # Skipped only when the profiling output is current as well: if profiling still has to run, it needs the build.
     dyn_deps = profiler_dir / "dynamic_dependencies.txt"
-    if not force and data_xml.exists() and dyn_deps.exists():
+    if (
+        not force
+        and data_xml.exists()
+        and dyn_deps.exists()
+        and not _from_other_configuration(project_path, "dp", config_name)
+    ):
         result_mtime = min(data_xml.stat().st_mtime, dyn_deps.stat().st_mtime)
         if source_mtime is None or source_mtime <= result_mtime:
             return {
@@ -446,63 +630,23 @@ def _instrument_project(
                 "last_run": ToolContext.fmt_ts(result_mtime),
             }
 
-    if profiler_dir.exists():
-        shutil.rmtree(str(profiler_dir))
-        ctx.log_action(project_path, "gather_data", "Deleted stale .discopop/profiler/")
-
-    pm_args = ctx.make_pm_args(project_path, timeout_seconds)
-    ctx.log_action(
-        project_path,
-        "gather_data",
-        f"Instrumentation: {compile_sh} via dp_settings, config='{config_name}', timeout={timeout_seconds}s",
-    )
-    original_cwd = os.getcwd()
-    try:
-        exec_result = execute_configuration(
-            arguments=pm_args,
-            project_copy_root_path=project_path,
-            config_path=str(config_dir),
-            settings_path=str(dp_settings),
-            script_path=str(compile_sh),
-            thread_count=1,
-            timeout=float(timeout_seconds),
-            process_started_callback=ctx.track_process,
+    # the run that follows produces the data of the project anew, even where the build is reused
+    if state is not None:
+        state.dp_data_is_current = False
+    result = _compile_in_build(project_path, config_name, "dp", "Instrumentation", timeout_seconds, force, ctx)
+    if result["status"] in ("success", "skipped"):
+        built_data_xml = (
+            Path(build_tree_path_of(project_path, BuildKey(build_owner_of(str(configs_dir), config_name), "dp", ())))
+            / ".discopop"
         )
-    finally:
-        os.chdir(original_cwd)
-
-    # See the note in `_hotspot_instrument`: past this point the build directory
-    # is instrumented regardless of how the step ends.
-    if exec_result is None:
-        return {
-            "status": "error",
-            "message": "execute_configuration returned None for dp_settings.json.",
-            "compiled_in_place": True,
-        }
-
-    returncode, elapsed, stdout, stderr = exec_result
-    _log_stdout(project_path, "instrument_project", stdout, ctx)
-
-    if returncode != 0:
-        return {
-            "status": "error",
-            "message": f"Instrumentation failed (rc={returncode}).",
-            "returncode": returncode,
-            "elapsed_time": elapsed,
-            **_stderr_fields(stderr),
-            "compiled_in_place": True,
-        }
-    if not data_xml.exists():
-        return {
-            "status": "error",
-            "message": "Compilation succeeded but Data.xml was not created. Ensure discopop_cxx is on PATH.",
-            "returncode": returncode,
-            "elapsed_time": elapsed,
-            **_stderr_fields(stderr),
-            "compiled_in_place": True,
-        }
-    ctx.log_action(project_path, "gather_data", f"Instrumentation succeeded in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed, "compiled_in_place": True, **warning_fields(stdout, stderr)}
+        if not (built_data_xml / "profiler" / "Data.xml").exists():
+            return {
+                "status": "error",
+                "message": "Compilation succeeded but Data.xml was not created. Ensure discopop_cxx is on PATH.",
+                "returncode": 0,
+                "elapsed_time": result.get("elapsed_time"),
+            }
+    return result
 
 
 def _discard_partial_output(path: Path, project_path: str, ctx: ToolContext) -> None:
@@ -525,22 +669,21 @@ def _run_profiling(
     force: bool,
     ctx: ToolContext,
     source_mtime: Optional[float],
+    state: Optional[_PipelineState] = None,
 ) -> dict[str, Any]:
     p = Path(project_path)
     configs_dir = p / ".discopop" / "project" / "configs"
     dp_settings = configs_dir / "dp_settings.json"
     execute_sh = configs_dir / config_name / "execute.sh"
-    data_xml = p / ".discopop" / "profiler" / "Data.xml"
     dyn_deps = p / ".discopop" / "profiler" / "dynamic_dependencies.txt"
+    data_is_current = state is None or state.dp_data_is_current
 
     if not execute_sh.exists():
         return {"status": "error", "message": f"execute.sh not found for configuration '{config_name}'."}
-    if not data_xml.exists():
-        return {"status": "error", "message": "profiler/Data.xml not found — instrumentation step must have failed."}
     if not dp_settings.exists():
         return {"status": "error", "message": "dp_settings.json not found."}
 
-    if not force and dyn_deps.exists():
+    if not force and data_is_current and dyn_deps.exists():
         result_mtime = dyn_deps.stat().st_mtime
         if source_mtime is None or source_mtime <= result_mtime:
             return {
@@ -549,35 +692,21 @@ def _run_profiling(
                 "last_run": ToolContext.fmt_ts(result_mtime),
             }
 
-    pm_args = ctx.make_pm_args(project_path, timeout_seconds)
     ctx.log_action(
         project_path,
         "gather_data",
         f"Profiling: execute.sh for config='{config_name}', timeout={timeout_seconds}s",
     )
-    original_cwd = os.getcwd()
-    try:
-        exec_result = execute_configuration(
-            arguments=pm_args,
-            project_copy_root_path=project_path,
-            config_path=str(configs_dir / config_name),
-            settings_path=str(dp_settings),
-            script_path=str(execute_sh),
-            thread_count=1,
-            timeout=float(timeout_seconds),
-            process_started_callback=ctx.track_process,
-        )
-    finally:
-        os.chdir(original_cwd)
-
-    if exec_result is None:
-        return {"status": "error", "message": "execute_configuration returned None."}
+    exec_result, run, unavailable = _run_in_build(
+        project_path, build_owner_of(str(configs_dir), config_name), config_name, "dp", timeout_seconds, ctx
+    )
+    if exec_result is None or run is None:
+        return {"status": "error", "message": unavailable or "The profiling run did not start."}
 
     returncode, elapsed, stdout, stderr = exec_result
     _log_stdout(project_path, "run_profiling", stdout, ctx)
 
     if returncode != 0:
-        _discard_partial_output(dyn_deps, project_path, ctx)
         return {
             "status": "error",
             "message": f"Profiling failed (rc={returncode}).",
@@ -585,7 +714,7 @@ def _run_profiling(
             "elapsed_time": elapsed,
             **_stderr_fields(stderr),
         }
-    if not dyn_deps.exists():
+    if not (Path(run.dot_discopop) / "profiler" / "dynamic_dependencies.txt").exists():
         return {
             "status": "error",
             "message": (
@@ -595,8 +724,28 @@ def _run_profiling(
             "elapsed_time": elapsed,
             **_stderr_fields(stderr),
         }
-    ctx.log_action(project_path, "gather_data", f"Profiling complete in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed, **warning_fields(stderr)}
+    if ctx.cancelled:
+        return {"status": "error", "message": "Cancelled before the run was put into the project."}
+    try:
+        activate_run(_build_arguments(project_path, timeout_seconds, ctx), run)
+    except ActivationError as error:
+        return {
+            "status": "error",
+            "message": (
+                f"The profiling run succeeded, but its data could not be put into the project: {error}. "
+                "Call gather_data with force=true to compile and profile again."
+            ),
+            "elapsed_time": elapsed,
+        }
+    # The static files of the run carry the time of the compilation. The data is as current as this run: a source
+    # newer than the build (but not newer than the run) must not make the next call (and get_project_status)
+    # take the instrumentation for outdated again.
+    try:
+        os.utime(p / ".discopop" / "profiler" / "Data.xml", None)
+    except OSError:
+        pass
+    ctx.log_action(project_path, "gather_data", f"Profiling complete in {elapsed}s (run {run.run_id})")
+    return {"status": "success", "elapsed_time": elapsed, "run_id": run.run_id, **warning_fields(stderr)}
 
 
 # the pattern types gather_data detects
@@ -679,116 +828,6 @@ def _run_pattern_detection(
     return {"status": "success"}
 
 
-def _compiled_in_place(steps: dict[str, Any]) -> bool:
-    """Whether any step of this call reconfigured the project's own build.
-
-    Read off the ``compiled_in_place`` marker the two instrumentation steps set
-    once their ``execute_configuration`` call has run, rather than guessed from
-    a status: a step that failed its pre-flight checks never touched the build,
-    while one whose compilation failed left it instrumented and half-built --
-    the case most in need of restoring, and the one a status cannot tell apart.
-    """
-    return any(
-        isinstance(steps.get(key), dict) and bool(steps[key].get("compiled_in_place"))
-        for key in ("hotspot_instrumentation", "instrumentation")
-    )
-
-
-def _restore_plain_build(
-    project_path: str,
-    config_name: str,
-    timeout_seconds: int,
-    ctx: ToolContext,
-) -> dict[str, Any]:
-    """Rebuild the project plainly, undoing what the instrumented builds left.
-
-    The instrumentation steps above run *in place* (``execute_inplace=True``,
-    ``project_copy_root_path=project_path``) rather than in the sibling copy the
-    ProjectManager flow uses -- the profiling output has to land in this
-    project's ``.discopop``. A compile script normally configures a build
-    directory of its own, so when the last thing that ran was ``dp_settings``
-    or ``hd_settings``, whatever it left behind is pinned to ``discopop_cc`` /
-    ``discopop_cxx``: an ordinary ``make`` in it produces an instrumented
-    binary, and running that binary is orders of magnitude slower than the
-    program and may abort outright.
-
-    Nobody asked for that state and nothing announces it, so an agent (or a
-    person) who builds and runs the program to check their own work measures
-    DiscoPoP's instrumentation instead and reads the crash as their bug. One
-    observed run lost six minutes to three such executions and then discarded a
-    working parallelization because of them. So the build is put back before
-    this tool returns, with ``par_settings.json`` -- the configuration the
-    parallelized code is measured with, so a hand-run of the program now agrees
-    with what the auto-tuner reports -- falling back to ``seq_settings.json``.
-
-    Best effort by design: the data this tool exists to produce is already on
-    disk by the time this runs, so a failed rebuild is reported and logged, but
-    never turns a successful pipeline into a failed one.
-    """
-    p = Path(project_path)
-    configs_dir = p / ".discopop" / "project" / "configs"
-    config_dir = configs_dir / config_name
-    compile_sh = Path(resolve_compile_script_path(str(configs_dir), config_name))
-
-    settings = configs_dir / "par_settings.json"
-    if not settings.exists():
-        settings = configs_dir / "seq_settings.json"
-    if not settings.exists():
-        return {"status": "skipped", "reason": "no_plain_settings_file"}
-    if not compile_sh.exists() or not config_dir.exists():
-        return {"status": "skipped", "reason": "compile_script_or_configuration_missing"}
-
-    pm_args = ctx.make_pm_args(project_path, timeout_seconds)
-    ctx.log_action(
-        project_path,
-        "gather_data",
-        f"Restoring plain build: {compile_sh} via {settings.name}, config='{config_name}'",
-    )
-    original_cwd = os.getcwd()
-    try:
-        exec_result = execute_configuration(
-            arguments=pm_args,
-            project_copy_root_path=project_path,
-            config_path=str(config_dir),
-            settings_path=str(settings),
-            script_path=str(compile_sh),
-            thread_count=1,
-            timeout=float(timeout_seconds),
-            # not registered: the rebuild undoes the instrumented builds after a cancel, too
-            process_started_callback=None,
-        )
-    except Exception as error:  # a cleanup step may not take the pipeline down
-        ctx.log_action(project_path, "gather_data", f"Plain rebuild raised: {error}")
-        return {"status": "error", "message": f"Plain rebuild raised: {error}", "settings": settings.name}
-    finally:
-        os.chdir(original_cwd)
-
-    if exec_result is None:
-        return {"status": "error", "message": "execute_configuration returned None.", "settings": settings.name}
-
-    returncode, elapsed, stdout, stderr = exec_result
-    _log_stdout(project_path, "restore_plain_build", stdout, ctx)
-    if returncode != 0:
-        ctx.log_action(
-            project_path,
-            "gather_data",
-            f"Plain rebuild failed (rc={returncode}); the build directory may still be instrumented",
-        )
-        return {
-            "status": "error",
-            "message": (
-                f"Plain rebuild failed (rc={returncode}). The build directory may still hold an "
-                "instrumented binary -- rebuild from scratch before running the program by hand."
-            ),
-            "returncode": returncode,
-            "elapsed_time": elapsed,
-            "settings": settings.name,
-            **_stderr_fields(stderr),
-        }
-    ctx.log_action(project_path, "gather_data", f"Plain build restored in {elapsed}s")
-    return {"status": "success", "elapsed_time": elapsed, "settings": settings.name}
-
-
 def _progress(step: int, total: int, label: str, ctx: ToolContext) -> None:
     # Steps completed so far, so the client sees the fraction that is done.
     ctx.report_progress(step - 1, total, f"[{step}/{total}] {label}")
@@ -830,12 +869,13 @@ def _failed_hotspot_step(steps: dict[str, Any]) -> str:
         return "hotspot_instrumentation"
     if any(run["status"] not in ("success", "skipped") for run in steps.get("hotspot_profiling", [])):
         return "hotspot_profiling"
+    if steps.get("hotspot_activation", {}).get("status") == "error":
+        return "hotspot_activation"
     return "hotspot_analysis"
 
 
 def _cancelled_result(project_path: str, steps: dict[str, Any]) -> dict[str, Any]:
-    """The result of a call the client cancelled; the steps that ran are kept, since the
-    plain rebuild after the pipeline depends on knowing what was compiled in place."""
+    """The result of a call the client cancelled; the steps that ran are kept."""
     return {
         "status": "error",
         "message": "Cancelled by the client.",
@@ -854,17 +894,26 @@ def _pipeline(
 ) -> dict[str, Any]:
     """The data collection pipeline itself, as a result dict.
 
-    Separated from :func:`handle` so that the build directory the instrumented
-    steps reconfigure is restored on *every* exit path: the early returns below
-    for a failed instrumentation, profiling or detection all leave a project
-    whose build produces instrumented binaries, and those are exactly the cases
-    where the caller is most likely to go and run the program by hand.
+    Separated from :func:`handle`, which adds what belongs to every exit path of the pipeline
+    (the early returns below for a failed instrumentation, profiling or detection).
     """
     steps: dict[str, Any] = {}
     hotspot_ok = True
+    state = _PipelineState(
+        build_config=build_owner_of(str(Path(project_path) / ".discopop" / "project" / "configs"), config_name)
+    )
 
     # Compute source mtime once and reuse across all staleness checks.
     source_mtime = ToolContext.newest_source_mtime(project_path)
+    # an edited execute.sh (another input) means the runs are due again, which does not compile again: the build
+    # does not depend on it
+    configs_dir = Path(project_path) / ".discopop" / "project" / "configs"
+    for name in {config_name, *hotspot_config_names}:
+        try:
+            mtime = (configs_dir / name / "execute.sh").stat().st_mtime
+        except OSError:
+            continue
+        source_mtime = mtime if source_mtime is None else max(source_mtime, mtime)
 
     total_steps = 6  # 3 hotspot steps, instrument + profile + detect
     step = 0
@@ -873,7 +922,7 @@ def _pipeline(
     step += 1
     _progress(step, total_steps, "Hotspot instrumentation", ctx)
     hd_instr = _hotspot_instrument(
-        project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, source_mtime
+        project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx, source_mtime, state
     )
     steps["hotspot_instrumentation"] = hd_instr
 
@@ -884,17 +933,27 @@ def _pipeline(
         for hd_config in hotspot_config_names:
             if ctx.cancelled:
                 break
-            run_res = _hotspot_profiling_single(project_path, hd_config, timeout_seconds, force, ctx, source_mtime)
+            run_res = _hotspot_profiling_single(
+                project_path, hd_config, timeout_seconds, force, ctx, source_mtime, state
+            )
             profiling_runs.append({"config": hd_config, **run_res})
         steps["hotspot_profiling"] = profiling_runs
 
         if not ctx.cancelled and all(r["status"] in ("success", "skipped") for r in profiling_runs):
+            # the runs of all hotspot configurations are put into the project together
+            activation = _hotspot_activate(project_path, timeout_seconds, ctx, state)
+            if activation.get("status") != "skipped":
+                steps["hotspot_activation"] = activation
             step += 1
-            _progress(step, total_steps, "Hotspot analysis", ctx)
-            hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx, source_mtime)
-            steps["hotspot_analysis"] = hd_analysis
-            if hd_analysis["status"] not in ("success", "skipped"):
+            if activation["status"] in ("success", "skipped"):
+                _progress(step, total_steps, "Hotspot analysis", ctx)
+                hd_analysis = _hotspot_analysis(project_path, timeout_seconds, force, ctx, source_mtime)
+                steps["hotspot_analysis"] = hd_analysis
+                if hd_analysis["status"] not in ("success", "skipped"):
+                    hotspot_ok = False
+            else:
                 hotspot_ok = False
+                steps["hotspot_analysis"] = {"status": "not_run", "reason": "hotspot_activation_failed"}
         else:
             step += 1
             hotspot_ok = False
@@ -908,6 +967,17 @@ def _pipeline(
     # The suggestions are ranked by the hotspots, so there is nothing to continue with.
     if ctx.cancelled:
         return _cancelled_result(project_path, steps)
+    if not hotspot_ok and _failed_hotspot_step(steps) == "hotspot_activation":
+        return {
+            "status": "error",
+            "message": "Hotspot detection failed. See steps.hotspot_activation for details.",
+            "steps": steps,
+            "next_step": (
+                "The hotspot runs succeeded, but their data could not be put into the project (see "
+                "steps.hotspot_activation.message). Call gather_data again with force=true, which compiles and "
+                "profiles anew."
+            ),
+        }
     if not hotspot_ok:
         failed_step = _failed_hotspot_step(steps)
         return {
@@ -925,7 +995,7 @@ def _pipeline(
     # === Required: instrument project ===
     step += 1
     _progress(step, total_steps, "DiscoPoP instrumentation (compile)", ctx)
-    instr = _instrument_project(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
+    instr = _instrument_project(project_path, config_name, timeout_seconds, force, ctx, source_mtime, state)
     steps["instrumentation"] = instr
     # a cancel stops the running step, which then fails; that failure is not the answer
     if ctx.cancelled:
@@ -952,7 +1022,7 @@ def _pipeline(
         return _cancelled_result(project_path, steps)
     step += 1
     _progress(step, total_steps, "Profiling (run instrumented binary)", ctx)
-    prof = _run_profiling(project_path, config_name, timeout_seconds, force, ctx, source_mtime)
+    prof = _run_profiling(project_path, config_name, timeout_seconds, force, ctx, source_mtime, state)
     steps["profiling"] = prof
     if ctx.cancelled:
         return _cancelled_result(project_path, steps)
@@ -1010,6 +1080,23 @@ def _pipeline(
     return result
 
 
+def _storage_warning(project_path: str, config_name: str, ctx: ToolContext) -> Optional[str]:
+    """The warning about the builds and runs of the project (see ``storage_warning``); never fails the call."""
+    if not (Path(project_path) / ".discopop").is_dir():
+        return None  # the arguments of the project manager exit the process for a project without one
+    try:
+        expected = [
+            BuildKey(
+                build_owner_of(str(Path(project_path) / ".discopop" / "project" / "configs"), config_name), mode, ()
+            ).build_id
+            for mode in ("hd", "dp")
+        ]
+        return storage_warning(ctx.make_pm_args(project_path), expected)
+    except Exception as error:
+        logger.warning("The storage of the builds could not be determined: %s", error)
+        return None
+
+
 def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
     try:
         project_path = arguments.get("project_path", "")
@@ -1026,22 +1113,10 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         with ctx.heartbeat():
             result = _pipeline(project_path, config_name, hotspot_config_names, timeout_seconds, force, ctx)
 
-            # Leave the project buildable by hand again. Only when something was
-            # actually compiled in place: a call that skipped every instrumentation
-            # step because its results were current found -- and leaves -- the build
-            # the previous call already restored, and a rebuild would be waste.
-            steps = result.get("steps") or {}
-            if _compiled_in_place(steps):
-                # After the last step: report_progress keeps the value increasing.
-                ctx.report_progress(0, None, "Rebuilding the project without instrumentation")
-                restore = _restore_plain_build(project_path, config_name, timeout_seconds, ctx)
-                steps["build_restore"] = restore
-                result["steps"] = steps
-                if restore.get("status") == "error":
-                    # Reported, never fatal: the data this tool exists to produce is
-                    # already on disk.
-                    warning = str(restore.get("message") or "The plain rebuild failed.")
-                    result["warning"] = f"{result['warning']} {warning}" if result.get("warning") else warning
+            # builds and runs pile up: say how much they occupy, once there are more than the call works with
+            warning = _storage_warning(project_path, config_name, ctx)
+            if warning:
+                result["warning"] = f"{result['warning']} {warning}" if result.get("warning") else warning
 
         ctx.log_response("gather_data", result, project_path)
         return [TextContent(type="text", text=json.dumps(result))]

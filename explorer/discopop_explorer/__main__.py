@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 from pathlib import Path
 from typing import List, Optional
 from discopop_library.GlobalLogger.setup import setup_logger
@@ -138,6 +138,13 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "--plot-context-graph", action="store_true", help="Enables interactive plotting of the context graph."
     )
     parser.add_argument("--visualize", action="store_true", help="Enable the visualizer.")
+    parser.add_argument(
+        "--doall-default-none", action=BooleanOptionalAction, default=True,
+        help="Add default(none) to the pragmas of the do-all and reduction suggestions (default). Every variable the "
+        "loop refers to is then listed in a clause, so the compiler rejects the pragma if the analysis missed one. "
+        "--no-doall-default-none leaves it out, e.g. for loops which use globals of system headers (std::cout), which "
+        "default(none) would require to be named.",
+    )
     # fmt: on
 
     arguments = parser.parse_args(argv)
@@ -198,6 +205,7 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         enable_context_graph_plot=arguments.plot_context_graph,
         enable_visualizer=arguments.visualize,
         visualize_on=None,
+        doall_default_none=arguments.doall_default_none,
         enable_pattern_decisions_file=arguments.pattern_decisions,
     )
 

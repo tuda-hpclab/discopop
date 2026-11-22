@@ -83,6 +83,7 @@ class TestRunValidationPhase(unittest.TestCase):
             thread_count: int,
             timeout: Optional[float] = None,
             process_started_callback: Any = None,
+            output_callback: Any = None,
         ) -> Tuple[int, float, str, str]:
             self.executed.append(os.path.basename(script_path))
             return (self.return_codes.get(os.path.basename(script_path), 0), 1.0, "", "")

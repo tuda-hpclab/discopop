@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from discopop_library.ProjectManager.configurations.compile_script import (
@@ -224,8 +225,10 @@ def _build_run_validate(
     # --- build
     build_diagnostics: list[str] = []
     if rebuild:
-        compile_sh = resolve_compile_script_path(str(configs_dir), config_name)
-        built = _run(ctx, project_path, config_dir, settings, compile_sh, 1, timeout_seconds)
+        # a configuration that builds from another one is compiled with the files of that one
+        owner = build_owner_of(str(configs_dir), config_name)
+        compile_sh = resolve_compile_script_path(str(configs_dir), owner)
+        built = _run(ctx, project_path, configs_dir / owner, settings, compile_sh, 1, timeout_seconds)
         if built is None:
             return f"{header}: the build could not be started ({settings.name} is missing)."
         returncode, _, stdout, stderr = built

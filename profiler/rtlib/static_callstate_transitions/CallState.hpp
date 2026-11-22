@@ -11,14 +11,18 @@
  */
 
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 
 class CallState {
  private:
   std::int32_t id_;
-  std::unordered_map<int32_t, CallState*> transitions_;
+  // (trigger instruction, target), sorted by the trigger instruction: a state has few transitions, which a binary
+  // search of a contiguous array finds faster than a hash map
+  std::vector<std::pair<int32_t, CallState*>> transitions_;
   CallState* implicit_return_transition_target_ = nullptr;
   // instruction id of the __dp_func_entry call of the function this state lies in, if the state
   // is the entry state of a function instance (see callpath_function_entries.txt), else 0
@@ -39,15 +43,28 @@ class CallState {
   explicit CallState(int32_t id_arg) : id_(id_arg) {}
   void RegisterTransition(int32_t trigger_instruction, CallState* target_state);
   void RegisterImplicitReturnTransition(CallState* target_state);
-  int32_t GetId() const;
-  CallState* GetTransitionTarget(int32_t trigger_instruction) const;
-  CallState* GetImplicitReturnTransitionTarget() const;
+  // the getters run in the callbacks, so they are defined here, to be inlined into them
+  int32_t GetId() const { return id_; }
+  CallState* GetTransitionTarget(int32_t trigger_instruction) const {
+    const auto pos = std::lower_bound(transitions_.begin(), transitions_.end(), trigger_instruction, TriggerBefore);
+    if (pos == transitions_.end() || pos->first != trigger_instruction) {
+      return nullptr;
+    }
+    return pos->second;
+  }
+  CallState* GetImplicitReturnTransitionTarget() const { return implicit_return_transition_target_; }
   void SetFunctionEntryId(int32_t function_entry_id_arg) { function_entry_id_ = function_entry_id_arg; }
   int32_t GetFunctionEntryId() const { return function_entry_id_; }
   // The target of this state's own fall-through transition, or nullptr if it has none.
-  CallState* GetFallthroughTransitionTarget() const;
+  CallState* GetFallthroughTransitionTarget() const { return fallthrough_transition_target_; }
   // Where leaving a function from this state leads: the transition registered under
   // kReturnTrigger if there is one, the implicit return target otherwise, nullptr if neither
   // exists.
-  CallState* GetReturnTransitionTarget() const;
+  CallState* GetReturnTransitionTarget() const { return return_transition_target_; }
+
+ private:
+  // orders the transitions by their trigger instruction
+  static bool TriggerBefore(const std::pair<int32_t, CallState*>& transition, int32_t trigger_instruction) {
+    return transition.first < trigger_instruction;
+  }
 };

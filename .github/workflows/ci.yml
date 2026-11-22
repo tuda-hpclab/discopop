@@ -38,6 +38,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.ref != 'refs/heads/master' && github.ref != 'refs/heads/new_explorer') }}
 
+# upper bound of the parallel test processes (pytest-xdist workers and the profiling threads of test/profiler): `-n auto`
+# starts one worker per core, which ran a 48 thread / 64 GB host out of memory (every worker builds and profiles
+# programs and runs the explorer), and two runners share that host. Raise it only together with the RAM of the runner.
+env:
+  DP_TEST_WORKERS: 4
+
 jobs:
 # used for eventual multiple operating system testing
 # the full matrix runs when merging into master; other pushes only test debian trixie with LLVM 21
@@ -105,10 +111,10 @@ jobs:
 
           # clang-tools provides clang-scan-deps: CMake 3.28 scans the C++20 sources of a Ninja build with it, and without it
           # the C++ OpenMP probe of the profiler build fails ("Could NOT find OpenMP_CXX", CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS-NOTFOUND)
-          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.11 ubuntu:24.04 python3.11 "$apt_common && $apt_install software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && $apt_install python3.11 python3.11-venv python3.11-tk python3.11-dev && $apt_install llvm-19-dev clang-19 clang-tools-19 libomp-19-dev")"
-          e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && $apt_install llvm-20-dev clang-20 clang-tools-20 libomp-20-dev")"
-          e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && $apt_llvm_org && $apt_install llvm-21-dev clang-21 clang-tools-21 libomp-21-dev")"
-          e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && $apt_install llvm-22-dev clang-22 clang-tools-22 libomp-22-dev")"
+          e_llvm19="$(entry ubuntu-24-04-llvm-19-python-3.11 ubuntu:24.04 python3.11 "$apt_common && $apt_install software-properties-common && add-apt-repository -y ppa:deadsnakes/ppa && $apt_install python3.11 python3.11-venv python3.11-tk python3.11-dev && $apt_install llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev")"
+          e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && $apt_install llvm-20-dev clang-20 clang-tools-20 libclang-20-dev libomp-20-dev")"
+          e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && $apt_llvm_org && $apt_install llvm-21-dev clang-21 clang-tools-21 libclang-21-dev libomp-21-dev")"
+          e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && $apt_install llvm-22-dev clang-22 clang-tools-22 libclang-22-dev libomp-22-dev")"
           # the sanitized unit tests and the coverage (no venv needed); llvm-19 provides llvm-cov and llvm-profdata,
           # libclang-rt-19-dev the sanitizer and profile runtimes (only recommended by clang-19)
           e_tools="$(entry ubuntu-24-04-llvm-19-tools ubuntu:24.04 python3 "$apt_common && $apt_install llvm-19 llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev")"
@@ -457,19 +463,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -v -n auto --dist loadgroup test/instrumentation
+          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/instrumentation
 
       - name: Profiler gold standard tests
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -v -n auto --dist loadgroup test/profiler
+          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/profiler
 
       - name: Python end-to-end tests
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -v -n auto --dist loadgroup test/end_to_end
+          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/end_to_end
 
   # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
   # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's

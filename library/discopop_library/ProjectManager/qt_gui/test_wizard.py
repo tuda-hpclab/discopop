@@ -20,6 +20,8 @@ from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
 from discopop_library.ProjectManager.qt_gui.wizard import ConfigurationWizard, PlaceholderScriptEditor
 from discopop_library.ProjectManager.services.configurations import has_real_configuration
+from discopop_library.ProjectManager.services.excluded_directories import load_excluded_directories
+from discopop_library.ProjectManager.services.included_directories import load_included_directories
 
 
 @pytest.fixture
@@ -56,22 +58,22 @@ def go_to(wizard: ConfigurationWizard, step: int) -> None:
 
 def test_the_steps_are_titled_like_the_tk_wizard(wizard: ConfigurationWizard) -> None:
     assert wizard.currentId() == 0
-    assert wizard.windowTitle() == "Configuration Assistant - Step 1 of 8: Welcome"
-    assert wizard.currentPage().title() == "Step 1 of 8: Welcome"
+    assert wizard.windowTitle() == "Configuration Assistant - Step 1 of 9: Welcome"
+    assert wizard.currentPage().title() == "Step 1 of 9: Welcome"
     assert wizard.button(wizard.WizardButton.BackButton).text() == "< Back"
     assert wizard.button(wizard.WizardButton.NextButton).text() == "Next >"
     wizard.next()
-    assert wizard.windowTitle() == "Configuration Assistant - Step 2 of 8: Write Permissions Check"
+    assert wizard.windowTitle() == "Configuration Assistant - Step 2 of 9: Write Permissions Check"
     wizard.back()
     assert wizard.currentId() == 0
-    go_to(wizard, 7)
+    go_to(wizard, 8)
     assert wizard.button(wizard.WizardButton.FinishButton).text() == "Finish"
 
 
 def test_the_compile_script_starts_with_a_placeholder_that_goes_at_the_first_key(
     qtbot: QtBot, wizard: ConfigurationWizard
 ) -> None:
-    go_to(wizard, 2)
+    go_to(wizard, 3)
     editor = wizard.compile_sh_text
     assert isinstance(editor, PlaceholderScriptEditor)
     assert editor.text() == "#!/bin/bash\n$CXX your_code.cpp -o a.out"
@@ -83,14 +85,14 @@ def test_the_compile_script_starts_with_a_placeholder_that_goes_at_the_first_key
 def test_leaving_the_compile_script_without_compiler_variables_asks(
     wizard: ConfigurationWizard, dialog_answers: DialogRecorder
 ) -> None:
-    go_to(wizard, 2)
+    go_to(wizard, 3)
     wizard.compile_sh_text.setPlainText("#!/bin/bash\ngcc a.c\n")
     dialog_answers.answer("ask_yes_no", False, True)
     wizard.next()
-    assert wizard.currentId() == 2
+    assert wizard.currentId() == 3
     assert dialog_answers.titles("ask_yes_no") == ["Missing Compiler Variables"]
     wizard.next()
-    assert wizard.currentId() == 3
+    assert wizard.currentId() == 4
     compile_sh = Path(wizard.arguments.project_config_dir, "compile.sh")
     assert compile_sh.read_text() == "#!/bin/bash\ngcc a.c\n" and os.access(compile_sh, os.X_OK)
 
@@ -102,7 +104,7 @@ def test_an_edited_compile_script_of_an_earlier_run_is_offered_again(
     Path(arguments.project_config_dir, "compile.sh").write_text("#!/bin/bash\n$CC mine.c\n")
     Path(arguments.project_config_dir, "seq_settings.json").write_text(json.dumps({"CC": "gcc", "CXXFLAGS": "-O2"}))
     created = make_wizard(arguments)
-    go_to(created, 2)
+    go_to(created, 3)
     assert not isinstance(created.compile_sh_text, PlaceholderScriptEditor)
     assert created.compile_sh_text.text() == "#!/bin/bash\n$CC mine.c\n"
     created.next()
@@ -119,7 +121,7 @@ def test_the_write_access_step_reports_the_parent_folder(wizard: ConfigurationWi
 
 
 def test_the_compilation_settings_are_written_and_derived(wizard: ConfigurationWizard) -> None:
-    go_to(wizard, 2)
+    go_to(wizard, 3)
     wizard.compile_sh_text.setPlainText("#!/bin/bash\n$CXX a.cpp\n")
     wizard.next()
     wizard.cc_entry.setText("gcc")
@@ -141,26 +143,26 @@ def test_the_compilation_settings_are_written_and_derived(wizard: ConfigurationW
 def test_invalid_derived_settings_keep_the_wizard_on_the_step(
     wizard: ConfigurationWizard, dialog_answers: DialogRecorder
 ) -> None:
-    go_to(wizard, 5)
+    go_to(wizard, 6)
     wizard.hd_settings_text.setPlainText("{not json")
     wizard.next()
-    assert wizard.currentId() == 5
+    assert wizard.currentId() == 6
     assert dialog_answers.titles("show_error") == ["Invalid JSON"]
     assert not Path(wizard.arguments.project_config_dir, "dp_settings.json").exists()
     wizard.hd_settings_text.setPlainText("{}")
     wizard.next()
-    assert wizard.currentId() == 6
+    assert wizard.currentId() == 7
     assert json.loads(Path(wizard.arguments.project_config_dir, "hd_settings.json").read_text()) == {}
 
 
 def test_test_compilation_runs_the_compile_script_and_shows_the_outcome(
     qtbot: QtBot, wizard: ConfigurationWizard
 ) -> None:
-    go_to(wizard, 2)
+    go_to(wizard, 3)
     wizard.compile_sh_text.setPlainText("#!/bin/bash\necho compiling $CXX\n")
     wizard.next()
     wizard.next()
-    assert wizard.currentId() == 4
+    assert wizard.currentId() == 5
     next_button = wizard.button(wizard.WizardButton.NextButton)
     wizard.run_test_button.click()
     assert wizard.test_status_label.text() == "Running..."
@@ -176,7 +178,7 @@ def test_test_compilation_runs_the_compile_script_and_shows_the_outcome(
 
 
 def test_a_failing_test_compilation_shows_the_exit_code(qtbot: QtBot, wizard: ConfigurationWizard) -> None:
-    go_to(wizard, 2)
+    go_to(wizard, 3)
     wizard.compile_sh_text.setPlainText("#!/bin/bash\n# $CXX\necho broken >&2\nexit 3\n")
     wizard.next()
     wizard.next()
@@ -187,17 +189,17 @@ def test_a_failing_test_compilation_shows_the_exit_code(qtbot: QtBot, wizard: Co
 
 
 def test_the_configuration_needs_a_name(wizard: ConfigurationWizard, dialog_answers: DialogRecorder) -> None:
-    go_to(wizard, 6)
+    go_to(wizard, 7)
     wizard.config_name_entry.setText("  ")
     wizard.next()
-    assert wizard.currentId() == 6
+    assert wizard.currentId() == 7
     assert dialog_answers.titles("show_error") == ["Invalid Configuration Name"]
 
 
 def test_finishing_writes_the_configuration(qtbot: QtBot, wizard: ConfigurationWizard) -> None:
-    go_to(wizard, 2)
+    go_to(wizard, 3)
     wizard.compile_sh_text.setPlainText("#!/bin/bash\n$CXX a.cpp\n")
-    go_to(wizard, 6)
+    go_to(wizard, 7)
     wizard.config_name_entry.setText(" mine ")
     qtbot.keyClick(wizard.execute_sh_text, Qt.Key.Key_A)
     wizard.execute_sh_text.setPlainText("#!/bin/bash\n./a.out 5\n")
@@ -215,7 +217,7 @@ def test_finishing_writes_the_configuration(qtbot: QtBot, wizard: ConfigurationW
 def test_finishing_without_a_changed_execute_script_keeps_the_placeholder_line(
     qtbot: QtBot, wizard: ConfigurationWizard
 ) -> None:
-    go_to(wizard, 7)
+    go_to(wizard, 8)
     with qtbot.waitSignal(wizard.finished):
         wizard.accept()
     assert wizard.result_name == "default"
@@ -234,7 +236,7 @@ def test_a_failure_while_writing_is_reported_and_keeps_the_wizard_open(
         raise OSError("disk full")
 
     monkeypatch.setattr(wizard_module, "write_wizard_configuration", broken)
-    go_to(wizard, 7)
+    go_to(wizard, 8)
     wizard.accept()
     assert wizard.result_name is None and wizard.isVisible()
     assert dialog_answers.messages("show_error") == ["Failed to create configuration: disk full"]
@@ -249,3 +251,24 @@ def test_cancel_asks_for_confirmation(
     with qtbot.waitSignal(wizard.finished):
         wizard.reject()
     assert wizard.result_name is None and not wizard.isVisible()
+
+
+def test_the_project_directories_step_saves_at_once(
+    wizard: ConfigurationWizard, dialog_answers: DialogRecorder, tmp_path: Path
+) -> None:
+    assert wizard.windowTitle() == "Configuration Assistant - Step 1 of 9: Welcome"
+    Path(wizard.arguments.project_root, "third_party").mkdir()
+    wizard.excluded_directories.reload()
+    go_to(wizard, 2)
+    assert wizard.currentPage().title() == "Step 3 of 9: Project Directories"
+    item = wizard.excluded_directories.topLevelItem(0)
+    assert item is not None and item.text(0) == "third_party"
+    item.setCheckState(0, Qt.CheckState.Checked)
+    assert load_excluded_directories(wizard.arguments.project_dir) == ["third_party"]
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    dialog_answers.answer("ask_directory", str(shared))
+    wizard.included_directories.add_button.click()
+    assert load_included_directories(wizard.arguments.project_dir) == [str(shared)]
+    wizard.next()
+    assert wizard.currentId() == 3

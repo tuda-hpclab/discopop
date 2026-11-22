@@ -24,6 +24,31 @@
 
 namespace dp {
 
+// The state one chunk leaves behind for one address: what the second access queue has to write into
+// its persistent shadow once it has analyzed the chunk's entry accesses. 0 means "no access of this kind".
+struct ShadowSummaryEntry {
+  std::int64_t addr;
+  SigElement last_read;
+  SigElement last_write;
+};
+
+// What a first queue worker hands the second access queue per address of its chunk: the state the chunk leaves
+// behind (as ShadowSummaryEntry) and how many of the chunk's entry accesses, grouped by address in the order of the
+// records, belong to the address. The consumer analyzes them and stores the exit state with one lookup per address.
+struct AddressRecord {
+  std::int64_t addr;
+  SigElement last_read;
+  SigElement last_write;
+  std::uint32_t num_entry_accesses;
+};
+
+// The persistent shadow of the second access queue's consumer: the last read and the last write of an address in one
+// bucket, so that a single lookup serves the analysis and the update of an address. 0 means "no access of this kind".
+struct ShadowSlot {
+  SigElement last_read = 0;
+  SigElement last_write = 0;
+};
+
 class PerfectShadow : public AbstractShadow {
  public:
   PerfectShadow(int /*slot_size*/, int /*size*/, int /*num_hash*/) : PerfectShadow() {}
@@ -198,6 +223,24 @@ class PerfectShadow2 : public AbstractShadow {
     }
 
     return result;
+  }
+
+  // One entry per address of the shadow, in no particular order; 0 for the kind of access an address has no entry for.
+  // In a first queue worker's shadow every address is a key of write_cache_ (the first access to an address asks
+  // TestInWrite, which inserts it), so the second loop finds nothing there.
+  std::vector<ShadowSummaryEntry> Summarize() const {
+    std::vector<ShadowSummaryEntry> summary;
+    summary.reserve(write_cache_.size());
+    for (const auto& write : write_cache_) {
+      const auto read = read_cache_.find(write.first);
+      summary.push_back({write.first, read == read_cache_.end() ? 0 : read->second, write.second});
+    }
+    for (const auto& read : read_cache_) {
+      if (!write_cache_.contains(read.first)) {
+        summary.push_back({read.first, read.second, 0});
+      }
+    }
+    return summary;
   }
 
   const HashMap<int64_t, SigElement>* GetSigRead() const noexcept { return &read_cache_; }

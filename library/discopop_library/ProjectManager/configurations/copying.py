@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.PatchApplicator.PatchApplicationResult import (
     PatchApplicationResult,
@@ -19,6 +19,11 @@ from discopop_library.PatchApplicator.PatchApplicationResult import (
     read_application_result,
 )
 from discopop_library.PatchApplicator.PatchApplicatorArguments import PatchApplicatorArguments
+from discopop_library.PatchApplicator.outside_project import (
+    find_outside_project_targets,
+    log_skipped_outside_suggestions,
+    split_by_outside_project,
+)
 from discopop_library.PatchApplicator.patch_applicator import run_with_result as apply_suggestions
 
 PATH = str
@@ -39,12 +44,65 @@ def get_application_result(project_copy_path: PATH) -> Optional[PatchApplication
     return read_application_result(patch_applicator_dir_of(project_copy_path))
 
 
+def resolve_requested_suggestions(
+    arguments: ProjectManagerArguments, dp_folder_path: PATH, log_skipped: bool = True
+) -> List[str]:
+    """The ids of the suggestions a run applies: the list of ``--apply-suggestions``, or the selection of the
+    autotuner ("auto") or the parallel region merger ("prm") stored in ``dp_folder_path``.
+
+    ``log_skipped`` logs the suggestions that an automatic selection leaves out because they patch files outside of
+    the project.
+    """
+    suggestions: List[str] = []
+    if arguments.apply_suggestions is None:
+        return suggestions
+    if arguments.apply_suggestions == "auto":
+        auto_tuner_results_path = os.path.join(dp_folder_path, "auto_tuner", "results.json")
+        if os.path.exists(auto_tuner_results_path):
+            with open(auto_tuner_results_path, "r") as f:
+                auto_tuner_results = json.load(f)
+            for configuration in auto_tuner_results:
+                for sugg in auto_tuner_results[configuration]["applied_suggestions"]:
+                    if sugg not in suggestions:
+                        suggestions.append(sugg)
+    elif arguments.apply_suggestions == "prm":
+        prm_results_path = os.path.join(dp_folder_path, "parallel_region_merger", "results.json")
+        if os.path.exists(prm_results_path):
+            with open(prm_results_path, "r") as f:
+                prm_results = json.load(f)
+            for configuration in prm_results:
+                for sugg in prm_results[configuration]["applied_suggestions"]:
+                    if sugg not in suggestions:
+                        suggestions.append(sugg)
+    else:
+        suggestions = arguments.apply_suggestions.split(",")
+
+    # Suggestions that patch files outside the project are never part of an automatic selection ("auto", "prm"):
+    # the copy does not isolate those files. An explicit list reaches the patch applicator, which refuses them
+    # unless the caller allowed it (a visible failure of the run, see PatchApplicationResult.refused).
+    if arguments.apply_suggestions in ("auto", "prm"):
+        suggestions, outside = split_by_outside_project(dp_folder_path, suggestions)
+        if log_skipped:
+            log_skipped_outside_suggestions(logger, "Project manager (" + arguments.apply_suggestions + ")", outside)
+
+    return suggestions
+
+
 def copy_configuration(
     arguments: ProjectManagerArguments,
     config_path: PATH,
     settings_path: PATH,
     configuration_id: Optional[int] = None,
+    destination: Optional[PATH] = None,
+    leave_out_of_dot_discopop: Sequence[str] = (),
 ) -> PATH:
+    """Copy the project for one run (or one build) of a configuration and apply the requested suggestions.
+
+    ``destination`` is the directory of the copy; by default it is named after the configuration and the settings
+    file and lies next to the project root. An existing directory of that name is replaced.
+    ``leave_out_of_dot_discopop`` names directories of the project's ``.discopop`` that are not copied (the data of
+    earlier profiling runs, which a build must not start with).
+    """
 
     config_name = os.path.basename(config_path)
     settings_name = os.path.basename(settings_path)
@@ -54,9 +112,20 @@ def copy_configuration(
     if configuration_id is not None:
         project_copy_folder_name += "_" + str(configuration_id)
     project_copy_path = os.path.join(Path(arguments.project_root).parent.absolute(), project_copy_folder_name)
+    if destination is not None:
+        project_copy_path = os.path.abspath(destination)
+        os.makedirs(os.path.dirname(project_copy_path), exist_ok=True)
     if os.path.exists(project_copy_path):
         shutil.rmtree(project_copy_path)
-    shutil.copytree(arguments.project_root, project_copy_path)
+    ignore = None
+    if leave_out_of_dot_discopop:
+        left_out = os.path.join(os.path.abspath(arguments.project_root), ".discopop")
+
+        def ignore(directory: str, names: List[str]) -> List[str]:  # type: ignore[misc]
+            return list(leave_out_of_dot_discopop) if os.path.abspath(directory) == left_out else []
+
+    # a symbolic link that points nowhere (submodules of large codes have some) is skipped instead of failing the copy
+    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore, ignore_dangling_symlinks=True)
     # correct paths in Filemapping.txt
     fmap_path = os.path.join(project_copy_path, ".discopop", "FileMapping.txt")
     if os.path.exists(fmap_path):
@@ -64,36 +133,24 @@ def copy_configuration(
         with open(fmap_path, "r") as f:
             fmap_lines = f.readlines()
         for idx, line in enumerate(fmap_lines):
-            if arguments.project_root in line:
-                fmap_lines[idx] = fmap_lines[idx].replace(arguments.project_root, project_copy_path)
+            # only paths below the project root move into the copy; a plain substring replacement would also
+            # rewrite a directory outside the project that merely starts with the root ("/p/proj2" for "/p/proj")
+            file_id, separator, file_path = line.partition("\t")
+            stripped_path = file_path.rstrip("\n")
+            line_ending = file_path[len(stripped_path) :]
+            if separator and (
+                stripped_path == arguments.project_root or stripped_path.startswith(arguments.project_root + os.sep)
+            ):
+                moved_path = project_copy_path + stripped_path[len(arguments.project_root) :]
+                fmap_lines[idx] = file_id + separator + moved_path + line_ending
         with open(fmap_path, "w") as f:
             for line in fmap_lines:
                 f.write(line)
 
     # apply the specified parallelization suggestions if requested
     if arguments.apply_suggestions is not None:
-        suggestions: List[str] = []
         dp_folder_path = os.path.join(project_copy_path, ".discopop")
-        if arguments.apply_suggestions == "auto":
-            auto_tuner_results_path = os.path.join(dp_folder_path, "auto_tuner", "results.json")
-            if os.path.exists(auto_tuner_results_path):
-                with open(auto_tuner_results_path, "r") as f:
-                    auto_tuner_results = json.load(f)
-                for configuration in auto_tuner_results:
-                    for sugg in auto_tuner_results[configuration]["applied_suggestions"]:
-                        if sugg not in suggestions:
-                            suggestions.append(sugg)
-        elif arguments.apply_suggestions == "prm":
-            prm_results_path = os.path.join(dp_folder_path, "parallel_region_merger", "results.json")
-            if os.path.exists(prm_results_path):
-                with open(prm_results_path, "r") as f:
-                    prm_results = json.load(f)
-                for configuration in prm_results:
-                    for sugg in prm_results[configuration]["applied_suggestions"]:
-                        if sugg not in suggestions:
-                            suggestions.append(sugg)
-        else:
-            suggestions = arguments.apply_suggestions.split(",")
+        suggestions = resolve_requested_suggestions(arguments, dp_folder_path)
 
         pa_args = PatchApplicatorArguments(
             verbose=False,
@@ -104,6 +161,8 @@ def copy_configuration(
             list=False,
             log_level=arguments.log_level,
             write_log=arguments.write_log,
+            allow_outside_project=arguments.allow_patching_outside_project
+            and arguments.apply_suggestions not in ("auto", "prm"),
         )
         home_dir = os.getcwd()
         os.chdir(dp_folder_path)
@@ -123,3 +182,62 @@ def copy_configuration(
         clear_application_result(patch_applicator_dir_of(project_copy_path))
 
     return project_copy_path
+
+
+def restore_outside_patches(project_copy_path: PATH) -> List[str]:
+    """Roll back the suggestions applied to ``project_copy_path`` that patched files outside the project.
+
+    The copy isolates only the files below the project root; an outside target of a manually allowed suggestion was
+    patched in place. Call this after the run of a copy -- also when it failed or was stopped, and before the copy is
+    deleted (its ``.discopop`` holds the patches the rollback needs). Returns the rolled back suggestions.
+
+    The rollback is per suggestion: the files of such a suggestion inside the copy are restored as well. It is
+    idempotent (a rolled back suggestion is not applied any more and is skipped).
+    """
+    application_result = get_application_result(project_copy_path)
+    if application_result is None:
+        return []
+    dp_folder_path = os.path.join(project_copy_path, ".discopop")
+    if not os.path.isdir(dp_folder_path):
+        return []
+    # only what is applied still: a suggestion that was rolled back already (or never applied) is left alone
+    applied_file = os.path.join(patch_applicator_dir_of(project_copy_path), "applied_suggestions.json")
+    try:
+        with open(applied_file, "r") as f:
+            still_applied = {str(sugg) for sugg in json.load(f)["applied"]}
+    except (OSError, ValueError, KeyError):
+        return []
+    outside = find_outside_project_targets(
+        dp_folder_path, [sugg for sugg in application_result.applied if sugg in still_applied]
+    )
+    if not outside:
+        return []
+    suggestions = sorted(outside)
+    pa_args = PatchApplicatorArguments(
+        verbose=False,
+        apply=[],
+        rollback=suggestions,
+        clear=False,
+        load=False,
+        list=False,
+        log_level="WARNING",
+        write_log=False,
+    )
+    home_dir = os.getcwd()
+    os.chdir(dp_folder_path)
+    try:
+        retval, _ = apply_suggestions(pa_args)
+    finally:
+        os.chdir(home_dir)
+    if retval not in (0, 3):
+        logger.error(
+            "Rolling back the suggestions "
+            + ", ".join(suggestions)
+            + " failed (return code "
+            + str(retval)
+            + "); these files outside the project may still be modified: "
+            + ", ".join(sorted({t for targets in outside.values() for t in targets}))
+        )
+    else:
+        logger.info("Restored the files outside the project of the suggestions " + ", ".join(suggestions))
+    return suggestions

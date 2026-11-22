@@ -483,11 +483,13 @@ def compile_to_ir(
     directory: str,
     name: str = "test.cpp",
     extra_arguments: Sequence[str] = (),
+    project_root: Optional[str] = None,
 ) -> InstrumentedProgram:
     """Compile ``source`` with the instrumentation pass and return the resulting IR.
 
-    ``directory`` becomes the project root, so that the pass treats the program as project code
-    rather than as a library, and it holds the ``.discopop`` directory the pass writes to.
+    ``directory`` becomes the project root (unless ``project_root`` names another spelling of it),
+    so that the pass treats the program as project code rather than as a library, and it holds the
+    ``.discopop`` directory the pass writes to.
     """
     wrapper = shutil.which("discopop_cxx")
     if wrapper is None:
@@ -502,7 +504,7 @@ def compile_to_ir(
 
     environment = dict(os.environ)
     environment["DOT_DISCOPOP"] = os.path.join(directory, ".discopop")
-    environment["DP_PROJECT_ROOT_DIR"] = directory
+    environment["DP_PROJECT_ROOT_DIR"] = directory if project_root is None else project_root
 
     output = "instrumented.ll"
     result = subprocess.run(

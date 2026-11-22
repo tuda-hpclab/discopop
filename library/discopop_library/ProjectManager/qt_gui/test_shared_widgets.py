@@ -52,7 +52,9 @@ def test_selector_persists_the_deselection_and_selects_new_ids(qtbot: QtBot, tmp
     assert changes
 
     # a click on a checkbox counts as well
-    selector.list.item(0).setCheckState(Qt.CheckState.Unchecked)
+    selector.table.model.setData(
+        selector.table.model.index(0, 0), Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole
+    )
     assert selector.get_selected_ids() == ["10"]
 
     write_patches(tmp_path, ["3"])
@@ -84,9 +86,10 @@ def test_browser_lists_suggestions_numerically_and_saves_an_edited_patch(
     browser = SuggestionBrowserDialog(None, str(tmp_path))
     qtbot.addWidget(browser)
     assert browser.suggestion_ids() == ["2", "10"]
-    first = browser.tree.topLevelItem(0)
-    patch_item = first.child(0) if first is not None else None
-    assert patch_item is not None and patch_item.text(0) == "main.c"
+    assert browser.table.select_id("2")
+    patch_item = browser.file_list.item(1)
+    assert browser.file_list.item(0).text() == "All patches" and patch_item.text() == "main.c"
+    assert browser.editor.isReadOnly() and "#pragma omp parallel for" in browser.editor.toPlainText()
 
     browser.show_suggestion("2")
     assert browser.editor.isReadOnly() and not browser.save_button.isEnabled()

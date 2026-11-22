@@ -120,6 +120,9 @@ def _suggestion_facts(dot_discopop: Path) -> dict[str, dict[str, Any]]:
                 pass
             if isinstance(pattern.get("collapse_level"), int) and pattern["collapse_level"] > 1:
                 entry["collapse"] = pattern["collapse_level"]
+            # variables whose data sharing was decided without evidence from the profile
+            if isinstance(pattern.get("sharing_notes"), list) and pattern["sharing_notes"]:
+                entry["notes"] = [str(note) for note in pattern["sharing_notes"]]
             facts[str(pattern.get("pattern_id"))] = entry
     return facts
 
@@ -237,6 +240,8 @@ def _describe(suggestion: dict[str, Any], hotspot: Optional[HotspotRegionInfo], 
         text += f"; nested in suggestion {', '.join(suggestion['nested_in'])}"
     if "same_region" in suggestion:
         text += f"; alternative to suggestion {', '.join(suggestion['same_region'])}"
+    for note in suggestion.get("notes", []):
+        text += f"\n  flag: {note}"
     return text
 
 
@@ -318,6 +323,8 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 }
                 if region is not None:
                     suggestion["end_line"] = region[2]
+                if fact.get("notes"):
+                    suggestion["notes"] = fact["notes"]
                 suggestion.update(_relations(pid, regions))
                 kind = suggestion["kind"].lower()
                 hotspot = (

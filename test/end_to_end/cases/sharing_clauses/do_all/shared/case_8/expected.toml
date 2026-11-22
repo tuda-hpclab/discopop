@@ -1,0 +1,6 @@
+# a global of the translation unit is listed: default(none) requires it
+[do_all]
+lines = ["1:8"]
+
+[do_all.clauses]
+shared = ["x", "y", "n", "g_scale"]

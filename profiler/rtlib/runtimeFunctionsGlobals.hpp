@@ -125,11 +125,19 @@ extern AbstractShadow* single_threaded_execution_smem;
 extern int32_t num_workers;
 extern int32_t first_access_queue_chunks_per_worker;
 extern int32_t second_access_queue_elements_per_worker;
+// allowance of the caches in front of the recorded basic block reports in MiB, adjustable via dp.conf
+// (BB_REPORT_CACHE_MB) and the environment variable DP_BB_REPORT_CACHE_MB, which takes precedence (0 turns the
+// caches off), see ReportedBBRecorder
+constexpr int kDefaultBbReportCacheMb = 50;
+extern int32_t bb_report_cache_mb;
 
 extern thread_local DepMap* my_map;
 
 // see static_callstate_transitions/utils.hpp
 extern CallState* current_callpath_state;
+// the id of current_callpath_state (0 without one), read by every access and basic block report; both are set
+// together by SetCurrentCallpathState
+extern std::uint32_t current_callpath_state_id;
 extern CallStateGraph* call_state_graph;
 
 // statistics

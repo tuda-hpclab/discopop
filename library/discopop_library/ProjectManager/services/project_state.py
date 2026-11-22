@@ -47,6 +47,17 @@ class HotspotsChanged:
 
 
 @dataclass(frozen=True)
+class ProjectDirectoriesChanged:
+    """The included or excluded directories of the project (what is project code) or the handling of its OpenMP flags
+    (``services/openmp_handling.py``) were saved: instrumented builds and data of another setting are not current."""
+
+
+@dataclass(frozen=True)
+class CallpathPruningChanged:
+    """The call path pruning setting of the profiler build (``services/callpath_pruning.py``) was saved."""
+
+
+@dataclass(frozen=True)
 class AutotuningChanged:
     """The autotuner's suggestions, or what it can work on, changed."""
 

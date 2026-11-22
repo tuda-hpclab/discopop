@@ -19,14 +19,22 @@ import os
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
-from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
+from discopop_library.PatchApplicator.PatchApplicationResult import PatchApplicationResult, clear_application_result
+from discopop_library.ProjectManager.configurations.building import (
+    BuildLockAborted,
+    BuildResult,
+    build_lock,
+    ensure_build,
+)
+from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for, stale_declaration_problems
+from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
+from discopop_library.ProjectManager.configurations.running import execute_in_build
+from discopop_library.ProjectManager.configurations.runs import ActivationError, activate_run
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
 from discopop_library.ProjectManager.configurations.copying import (
-    copy_configuration,
-    get_application_result,
     patch_applicator_dir_of,
+    resolve_requested_suggestions,
 )
-from discopop_library.ProjectManager.configurations.deletion import delete_configuration
 from discopop_library.ProjectManager.configurations.execution import execute_configuration, record_skipped_execution
 from discopop_library.ProjectManager.configurations.execution_time import (
     EXECUTION_TIME_DISABLED,
@@ -61,6 +69,12 @@ class ExecutionRequest:
     repetitions: int
     log_level: str
     suggestion_ids: Tuple[str, ...]
+    # the user confirmed that suggestions patching files outside the project may be applied (and are restored
+    # after the run); see services/outside_patches.py
+    allow_patching_outside_project: bool = False
+    # when a run compiles (see configurations/builds.py: auto, rebuild, reuse); only compile, do not execute
+    build_policy: str = "auto"
+    build_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,6 +88,55 @@ class PreparationRequest:
     timeout_execution: int
     timeout_compilation: int
     timeout_validation: int
+    # compile in the project root and run there, as before builds existed: no build is kept, the data of the run is
+    # written to the .discopop of the project
+    inplace: bool = False
+    # when the preparation compiles (see configurations/builds.py: auto, rebuild, reuse); only compile, do not run
+    build_policy: str = "auto"
+    build_only: bool = False
+
+
+class OutputStream:
+    """The live output of the scripts of one phase, which :meth:`show` completes from the final result.
+
+    Pass the object as ``output_callback`` of a script run: every line is shown while the script runs.
+    :meth:`show` prints the collected output of the finished script only if nothing was shown live, so that the
+    output appears exactly once (a runner that does not stream still reports it).
+    """
+
+    def __init__(self, ctx: WorkContext) -> None:
+        self._ctx = ctx
+        self.received = False
+
+    def __call__(self, text: str) -> None:
+        self.received = True
+        self._ctx.output(text)
+
+    def show(self, stdout: str, stderr: str) -> None:
+        if self.received:
+            return
+        if stdout:
+            self._ctx.output(f"stdout: {stdout}\n")
+        if stderr:
+            self._ctx.output(f"stderr: {stderr}\n")
+
+
+def report_compilation_failure(
+    ctx: WorkContext, compile_result: Optional[Tuple[int, float, str, str]], streamed: bool = False
+) -> None:
+    """Report a failed compilation with everything the compile script printed: that is what the user needs to find
+    out why it failed (the build tree of a failed compilation is removed, so nothing else keeps it)."""
+    if compile_result is None:
+        ctx.output("Compilation failed (no result: the script did not run to completion)\n")
+        return
+    ret_code, _elapsed, stdout, stderr = compile_result
+    ctx.output(f"Compilation failed (return code: {ret_code})\n")
+    if streamed:  # the output was shown while the script ran
+        return
+    if stdout:
+        ctx.output(f"stdout: {stdout}\n")
+    if stderr:
+        ctx.output(f"stderr: {stderr}\n")
 
 
 def suggestion_ids_to_apply(
@@ -138,6 +201,7 @@ def run_execution(
     args_copy.execution_repetitions = request.repetitions
     args_copy.log_level = request.log_level
     args_copy.apply_suggestions = ",".join(request.suggestion_ids) if request.suggestion_ids else None
+    args_copy.allow_patching_outside_project = request.allow_patching_outside_project
 
     # modes whose run was skipped because their patches could not be applied
     application_failures: List[Tuple[str, Any]] = []
@@ -149,7 +213,123 @@ def run_execution(
     if inplace and args_copy.apply_suggestions:
         ctx.output("Note: Apply suggestions is ignored in inplace mode.\n")
 
-    compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
+    inputs = build_inputs_for(arguments.project_config_dir, current_config)
+    build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    for problem in stale_declaration_problems(arguments.project_config_dir, current_config):
+        ctx.output("Warning: shared build of " + current_config + ": " + problem + ".\n")
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
+
+    def execute_and_validate(
+        project_copy_path: str, settings_path: str, mode: str, build: Optional[BuildRecord] = None
+    ) -> bool:
+        """Run execute.sh (and validate.sh) in the compiled tree; False if the user stopped the run before it."""
+        if ctx.cancel_event.is_set():
+            ctx.output("Execution stopped by user.\n")
+            return False
+
+        ctx.status("⏳ Executing...", StatusKind.BUSY)
+        ctx.output("Executing...\n")
+        stream = OutputStream(ctx)
+        repetitions = repetitions_for_mode(mode, args_copy.execution_repetitions)
+        if build is None:
+            # in place: the project root is compiled and executed, no build is involved
+            execute_result = execute_configuration(
+                args_copy,
+                project_copy_path,
+                config_path,
+                settings_path,
+                os.path.join(config_path, "execute.sh"),
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_execution,
+                process_started_callback=ctx.register_process,
+                execution_time_regex=execution_time_regex,
+                # Which modes are repeated is decided in one place, shared with
+                # the command line, so the two cannot drift apart.
+                repetitions=repetitions,
+                should_abort=ctx.cancel_event.is_set,
+                output_callback=stream,
+            )
+        else:
+            execute_result, _run = execute_in_build(
+                args_copy,
+                build,
+                config_path,
+                settings_path,
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_execution,
+                execution_time_regex,
+                repetitions,
+                process_started_callback=ctx.register_process,
+                should_abort=ctx.cancel_event.is_set,
+                on_run=lambda run: ctx.output(f"Run {run.run_id}: results in {run.dot_discopop}\n"),
+                output_callback=stream,
+            )
+        ctx.clear_process()
+
+        if execute_result is None or execute_result[0] != 0:
+            ret_code = execute_result[0] if execute_result else "None"
+            ctx.output(f"Execution failed (return code: {ret_code})\n")
+            return True
+        ret_code, elapsed, stdout, stderr = execute_result
+        described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
+        ctx.output(f"Execution succeeded ({described})\n")
+        stream.show(stdout, stderr)
+
+        # optional output validation (auto-run when validate.sh exists),
+        # applied only to the "real" runs (seq/par) — matching the CLI.
+        if mode in ("seq", "par") and has_validate_script(config_path):
+
+            def report_step(status: str, message: str) -> None:
+                ctx.status(status, StatusKind.BUSY)
+                ctx.output(message)
+
+            validation_stream = OutputStream(ctx)
+            validation = run_validation_phase(
+                args_copy,
+                project_copy_path,
+                config_path,
+                settings_path,
+                1 if mode == "seq" else thread_count,
+                timeout_compilation=args_copy.timeout_compilation,
+                timeout_validation=args_copy.timeout_validation,
+                process_started_callback=ctx.register_process,
+                on_compile_start=lambda _script: report_step(
+                    "⏳ Compiling for validation...", "Compiling for validation...\n"
+                ),
+                on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
+                should_abort=ctx.cancel_event.is_set,
+                output_callback=validation_stream,
+            )
+            ctx.clear_process()
+
+            if validation.compile_required and build is not None:
+                # the validation build overwrote the build of the tree: the next run has to compile again
+                invalidate_build(
+                    args_copy.project_dir, BuildKey(build.configuration, build.mode, tuple(build.suggestions))
+                )
+            if validation.compile_required:
+                if validation.compile_successful:
+                    assert validation.compile_result is not None
+                    _, c_elapsed, c_stdout, c_stderr = validation.compile_result
+                    ctx.output(f"Validation build succeeded ({c_elapsed:.2f}s)\n")
+                    validation_stream.show(c_stdout, c_stderr)
+                else:
+                    c_rc = validation.compile_result[0] if validation.compile_result else "None"
+                    ctx.output(f"Validation build FAILED (return code: {c_rc})\n")
+
+            if validation.aborted:
+                ctx.output("Execution stopped by user.\n")
+            elif validation.compile_required and not validation.compile_successful:
+                ctx.output("Validation skipped: its build failed.\n")
+            elif not validation.validate_successful:
+                v_rc = validation.validate_result[0] if validation.validate_result else "None"
+                ctx.output(f"Validation FAILED (return code: {v_rc})\n")
+            else:
+                assert validation.validate_result is not None
+                _, v_elapsed, v_stdout, v_stderr = validation.validate_result
+                ctx.output(f"Validation succeeded ({v_elapsed:.2f}s)\n")
+                validation_stream.show(v_stdout, v_stderr)
+        return True
 
     for mode in request.modes:
         if ctx.cancel_event.is_set():
@@ -165,179 +345,250 @@ def run_execution(
 
         if inplace:
             project_copy_path = arguments.project_root
-        else:
-            ctx.output("Copying project...\n")
-            try:
-                project_copy_path = copy_configuration(args_copy, config_path, settings_path)
-            except Exception as e:
-                ctx.output(f"Error copying project: {e}\n")
+            ctx.status("⏳ Compiling...", StatusKind.BUSY)
+            ctx.output("Compiling...\n")
+            compile_stream = OutputStream(ctx)
+            compile_result = execute_configuration(
+                args_copy,
+                project_copy_path,
+                build_config_path,
+                settings_path,
+                compile_sh,
+                1 if mode == "seq" else thread_count,
+                args_copy.timeout_compilation,
+                process_started_callback=ctx.register_process,
+                output_callback=compile_stream,
+            )
+            ctx.clear_process()
+            if compile_result is None or compile_result[0] != 0:
+                report_compilation_failure(ctx, compile_result, streamed=True)
                 continue
-
-            # A failed patch application leaves the copy holding the ORIGINAL
-            # code. Compiling and running it would produce a measurement that
-            # looks like a parallel configuration without a speedup, so the run
-            # is skipped and recorded as such instead.
-            application_result = get_application_result(project_copy_path)
-            if application_result is not None and application_result.failure:
-                summary = application_result.summary()
-                failed_ids = ", ".join(application_result.unapplied)
-                ctx.output(
-                    "\n⚠ SUGGESTION APPLICATION FAILED for: "
-                    + failed_ids
-                    + "\n  "
-                    + summary
-                    + "\n  Skipping this run: executing the copy would measure the UNMODIFIED code.\n"
-                )
-                try:
-                    record_skipped_execution(
-                        args_copy,
-                        project_copy_path,
-                        config_path,
-                        settings_path,
-                        os.path.join(config_path, "execute.sh"),
-                        1 if mode == "seq" else thread_count,
-                        application_result,
-                    )
-                except Exception as e:
-                    ctx.output(f"Error recording skipped run: {e}\n")
-                application_failures.append((mode, application_result))
-                if not skip_cleanup:
-                    try:
-                        delete_configuration(args_copy, project_copy_path)
-                    except Exception:
-                        pass
+            ret_code, elapsed, stdout, stderr = compile_result
+            ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
+            compile_stream.show(stdout, stderr)
+            if request.build_only:
                 continue
-
-        ctx.status("⏳ Compiling...", StatusKind.BUSY)
-        ctx.output("Compiling...\n")
-        compile_result = execute_configuration(
-            args_copy,
-            project_copy_path,
-            config_path,
-            settings_path,
-            compile_sh,
-            1 if mode == "seq" else thread_count,
-            args_copy.timeout_compilation,
-            process_started_callback=ctx.register_process,
-        )
-        ctx.clear_process()
-
-        if compile_result is None or compile_result[0] != 0:
-            ret_code = compile_result[0] if compile_result else "None"
-            ctx.output(f"Compilation failed (return code: {ret_code})\n")
-            if not inplace and not skip_cleanup:
-                try:
-                    delete_configuration(args_copy, project_copy_path)
-                except Exception:
-                    pass
+            if not execute_and_validate(project_copy_path, settings_path, mode):
+                break
             continue
 
-        ret_code, elapsed, stdout, stderr = compile_result
-        ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-        if stdout:
-            ctx.output(f"stdout: {stdout}\n")
-        if stderr:
-            ctx.output(f"stderr: {stderr}\n")
-
-        if ctx.cancel_event.is_set():
-            ctx.output("Execution stopped by user.\n")
-            break
-
-        ctx.status("⏳ Executing...", StatusKind.BUSY)
-        ctx.output("Executing...\n")
-        execute_result = execute_configuration(
-            args_copy,
-            project_copy_path,
-            config_path,
-            settings_path,
-            os.path.join(config_path, "execute.sh"),
-            1 if mode == "seq" else thread_count,
-            args_copy.timeout_execution,
-            process_started_callback=ctx.register_process,
-            execution_time_regex=execution_time_regex,
-            # Which modes are repeated is decided in one place, shared with
-            # the command line, so the two cannot drift apart.
-            repetitions=repetitions_for_mode(mode, args_copy.execution_repetitions),
-            should_abort=ctx.cancel_event.is_set,
+        # The build of the mode: kept between runs, compiled only when there is no current one (or the user asks
+        # for it), see configurations/builds.py. Its tree is a copy of the project that holds the applied suggestions.
+        key = BuildKey(
+            inputs.build_config,
+            mode,
+            tuple(resolve_requested_suggestions(args_copy, arguments.dot_dp, log_skipped=False)),
         )
-        ctx.clear_process()
 
-        if execute_result is None or execute_result[0] != 0:
-            ret_code = execute_result[0] if execute_result else "None"
-            ctx.output(f"Execution failed (return code: {ret_code})\n")
-        else:
-            ret_code, elapsed, stdout, stderr = execute_result
-            described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
-            ctx.output(f"Execution succeeded ({described})\n")
-            if stdout:
-                ctx.output(f"stdout: {stdout}\n")
-            if stderr:
-                ctx.output(f"stderr: {stderr}\n")
-
-            # optional output validation (auto-run when validate.sh exists),
-            # applied only to the "real" runs (seq/par) — matching the CLI.
-            if mode in ("seq", "par") and has_validate_script(config_path):
-
-                def report_step(status: str, message: str) -> None:
-                    ctx.status(status, StatusKind.BUSY)
-                    ctx.output(message)
-
-                validation = run_validation_phase(
+        def report_application_failure(tree: str, application_result: PatchApplicationResult, mode: str = mode) -> None:
+            # A failed patch application leaves the copy holding the ORIGINAL code. Compiling and running it would
+            # produce a measurement that looks like a parallel configuration without a speedup, so the run is
+            # skipped and recorded as such instead.
+            ctx.output(
+                "\n⚠ SUGGESTION APPLICATION FAILED for: "
+                + ", ".join(application_result.unapplied)
+                + "\n  "
+                + application_result.summary()
+                + "\n  Skipping this run: executing the copy would measure the UNMODIFIED code.\n"
+            )
+            try:
+                record_skipped_execution(
                     args_copy,
-                    project_copy_path,
+                    tree,
                     config_path,
                     settings_path,
+                    os.path.join(config_path, "execute.sh"),
                     1 if mode == "seq" else thread_count,
-                    timeout_compilation=args_copy.timeout_compilation,
-                    timeout_validation=args_copy.timeout_validation,
+                    application_result,
+                )
+            except Exception as e:
+                ctx.output(f"Error recording skipped run: {e}\n")
+            application_failures.append((mode, application_result))
+
+        ctx.status("⏳ Building...", StatusKind.BUSY)
+        try:
+            with build_lock(
+                args_copy,
+                key,
+                should_abort=ctx.cancel_event.is_set,
+                on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
+            ):
+                compile_stream = OutputStream(ctx)
+                build = ensure_build(
+                    args_copy,
+                    key,
+                    build_config_path,
+                    settings_path,
+                    compile_sh,
+                    1 if mode == "seq" or inputs.build_is_shared else thread_count,
+                    BuildPolicy(request.build_policy),
+                    args_copy.timeout_compilation,
                     process_started_callback=ctx.register_process,
-                    on_compile_start=lambda _script: report_step(
-                        "⏳ Compiling for validation...", "Compiling for validation...\n"
-                    ),
-                    on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
-                    should_abort=ctx.cancel_event.is_set,
+                    message=ctx.output,
+                    output_callback=compile_stream,
+                    on_application_failure=report_application_failure,
                 )
                 ctx.clear_process()
 
-                if validation.compile_required:
-                    if validation.compile_successful:
-                        assert validation.compile_result is not None
-                        _, c_elapsed, c_stdout, c_stderr = validation.compile_result
-                        ctx.output(f"Validation build succeeded ({c_elapsed:.2f}s)\n")
-                        if c_stdout:
-                            ctx.output(f"stdout: {c_stdout}\n")
-                        if c_stderr:
-                            ctx.output(f"stderr: {c_stderr}\n")
-                    else:
-                        c_rc = validation.compile_result[0] if validation.compile_result else "None"
-                        ctx.output(f"Validation build FAILED (return code: {c_rc})\n")
-
-                if validation.aborted:
-                    ctx.output("Execution stopped by user.\n")
-                elif validation.compile_required and not validation.compile_successful:
-                    ctx.output("Validation skipped: its build failed.\n")
-                elif not validation.validate_successful:
-                    v_rc = validation.validate_result[0] if validation.validate_result else "None"
-                    ctx.output(f"Validation FAILED (return code: {v_rc})\n")
-                else:
-                    assert validation.validate_result is not None
-                    _, v_elapsed, v_stdout, v_stderr = validation.validate_result
-                    ctx.output(f"Validation succeeded ({v_elapsed:.2f}s)\n")
-                    if v_stdout:
-                        ctx.output(f"stdout: {v_stdout}\n")
-                    if v_stderr:
-                        ctx.output(f"stderr: {v_stderr}\n")
-
-        if not inplace and not skip_cleanup:
-            try:
-                delete_configuration(args_copy, project_copy_path)
-            except Exception:
-                pass
+                if build.result == BuildResult.COMPILE_FAILED:
+                    report_compilation_failure(ctx, build.compile_result, streamed=True)
+                    continue
+                if build.result in (BuildResult.UNAVAILABLE, BuildResult.COPY_FAILED):
+                    ctx.output(build.message + "\n")
+                    continue
+                if not build.usable or build.tree is None:
+                    continue
+                if build.result == BuildResult.BUILT and build.compile_result is not None:
+                    _, elapsed, stdout, stderr = build.compile_result
+                    ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
+                    compile_stream.show(stdout, stderr)
+                if request.build_only:
+                    continue
+                if not execute_and_validate(build.tree, settings_path, mode, build.record):
+                    break
+        except BuildLockAborted:
+            ctx.output("Execution stopped by user.\n")
+            break
 
     return application_failures
 
 
 def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequest, ctx: WorkContext) -> bool:
+    """Profile ``request.configuration`` in ``request.mode`` and make the result the data of the project; True if it
+    worked.
+
+    The default compiles in a build that later preparations reuse as long as it is current, runs in a run directory
+    of its own and puts the result into the ``.discopop`` of the project (see
+    :mod:`~discopop_library.ProjectManager.configurations.runs`). ``request.inplace`` compiles and runs in the
+    project root instead.
+    """
+    if request.inplace:
+        return _run_preparation_inplace(arguments, request, ctx)
+    mode = request.mode
+    status_noun = request.status_noun
+    current_config = request.configuration
+    config_path = os.path.join(arguments.project_config_dir, current_config)
+    args_copy = copy.copy(arguments)
+    args_copy.execute_inplace = False
+    args_copy.skip_cleanup = False
+    args_copy.label_prefix = ""
+    args_copy.timeout_execution = request.timeout_execution
+    args_copy.timeout_compilation = request.timeout_compilation
+    args_copy.timeout_validation = request.timeout_validation
+    args_copy.log_level = "INFO"
+    args_copy.apply_suggestions = None
+
+    logger = logging.getLogger(f"Prepare {status_noun.title()}")
+    logger.info(f"Starting {status_noun} preparation for: {current_config}")
+    inputs = build_inputs_for(arguments.project_config_dir, current_config)
+    build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    for problem in stale_declaration_problems(arguments.project_config_dir, current_config):
+        ctx.output("Warning: shared build of " + current_config + ": " + problem + ".\n")
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
+    shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
+    key = BuildKey(inputs.build_config, mode, ())
+
+    success = False
+    ctx.status("⏳ Building...", StatusKind.BUSY)
+    try:
+        with build_lock(
+            args_copy,
+            key,
+            should_abort=ctx.cancel_event.is_set,
+            on_wait=lambda: ctx.output(f"Waiting for another run that uses the build {key.build_id}...\n"),
+        ):
+            compile_stream = OutputStream(ctx)
+            build = ensure_build(
+                args_copy,
+                key,
+                build_config_path,
+                shared_settings,
+                compile_sh,
+                1,
+                BuildPolicy(request.build_policy),
+                args_copy.timeout_compilation,
+                process_started_callback=ctx.register_process,
+                message=ctx.output,
+                output_callback=compile_stream,
+            )
+            ctx.clear_process()
+            if build.result == BuildResult.COMPILE_FAILED:
+                report_compilation_failure(ctx, build.compile_result, streamed=True)
+            elif not build.usable or build.record is None:
+                ctx.output((build.message or "The build failed.") + "\n")
+            else:
+                if build.result == BuildResult.BUILT and build.compile_result is not None:
+                    _, elapsed, stdout, stderr = build.compile_result
+                    ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
+                    compile_stream.show(stdout, stderr)
+                if request.build_only:
+                    success = True
+                elif ctx.cancel_event.is_set():
+                    ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
+                else:
+                    success = _profile_in_build(
+                        arguments, args_copy, request, ctx, build.record, config_path, shared_settings
+                    )
+    except BuildLockAborted:
+        ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
+
+    if not ctx.cancel_event.is_set():
+        outcome = "complete" if success else "failed"
+        ctx.output(f"\n=== {status_noun.capitalize()} preparation {outcome} ===\n")
+    return success
+
+
+def _profile_in_build(
+    arguments: ProjectManagerArguments,
+    args_copy: ProjectManagerArguments,
+    request: PreparationRequest,
+    ctx: WorkContext,
+    build: BuildRecord,
+    config_path: str,
+    settings_path: str,
+) -> bool:
+    """Run the configuration in ``build`` and activate the run; True if both worked."""
+    ctx.status("⏳ Executing...", StatusKind.BUSY)
+    ctx.output("Executing...\n")
+    stream = OutputStream(ctx)
+    execution_time_regex = resolve_execution_time_regex(config_path, arguments.execution_time_regex)
+    execute_result, run = execute_in_build(
+        args_copy,
+        build,
+        config_path,
+        settings_path,
+        1,
+        args_copy.timeout_execution,
+        execution_time_regex,
+        1,
+        process_started_callback=ctx.register_process,
+        on_run=lambda started: ctx.output(f"Run {started.run_id}: results in {started.dot_discopop}\n"),
+        output_callback=stream,
+    )
+    ctx.clear_process()
+    if execute_result is None or execute_result[0] != 0:
+        ret_code = execute_result[0] if execute_result else "None"
+        ctx.output(f"Execution failed (return code: {ret_code})\n")
+        return False
+    _, elapsed, stdout, stderr = execute_result
+    described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
+    ctx.output(f"Execution succeeded ({described})\n")
+    stream.show(stdout, stderr)
+    if run is None:
+        return True
+    if ctx.cancel_event.is_set():
+        ctx.output("Stopped: the run is not put into the project (see Builds and runs).\n")
+        return False
+    try:
+        replaced = activate_run(arguments, run)
+    except ActivationError as error:
+        ctx.output(f"The run could not be put into the project: {error}\n")
+        return False
+    ctx.output(f"Activated the run {run.run_id}: {', '.join(replaced)} of {arguments.dot_dp} replaced.\n")
+    return True
+
+
+def _run_preparation_inplace(arguments: ProjectManagerArguments, request: PreparationRequest, ctx: WorkContext) -> bool:
     """Compile and execute ``request.configuration`` in ``request.mode`` in place; True if both succeeded."""
     mode = request.mode
     status_noun = request.status_noun
@@ -359,41 +610,44 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
     # this always runs inplace; see the note in run_execution
     clear_application_result(patch_applicator_dir_of(arguments.project_root))
 
-    compile_sh = resolve_compile_script_path(arguments.project_config_dir, current_config)
+    inputs = build_inputs_for(arguments.project_config_dir, current_config)
+    build_config_path = os.path.join(arguments.project_config_dir, inputs.build_config)
+    for problem in stale_declaration_problems(arguments.project_config_dir, current_config):
+        ctx.output("Warning: shared build of " + current_config + ": " + problem + ".\n")
+    compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
     shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
 
     ctx.status("⏳ Compiling...", StatusKind.BUSY)
     ctx.output("Compiling...\n")
 
+    compile_stream = OutputStream(ctx)
     compile_result = execute_configuration(
         args_copy,
         arguments.project_root,
-        config_path,
+        build_config_path,
         shared_settings,
         compile_sh,
         1,
         args_copy.timeout_compilation,
         process_started_callback=ctx.register_process,
+        output_callback=compile_stream,
     )
     ctx.clear_process()
 
     success = False
     if compile_result is None or compile_result[0] != 0:
-        ret_code = compile_result[0] if compile_result else "None"
-        ctx.output(f"Compilation failed (return code: {ret_code})\n")
+        report_compilation_failure(ctx, compile_result, streamed=True)
     else:
         ret_code, elapsed, stdout, stderr = compile_result
         ctx.output(f"Compilation succeeded ({elapsed:.2f}s)\n")
-        if stdout:
-            ctx.output(f"stdout: {stdout}\n")
-        if stderr:
-            ctx.output(f"stderr: {stderr}\n")
+        compile_stream.show(stdout, stderr)
 
         if ctx.cancel_event.is_set():
             ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
         else:
             ctx.status("⏳ Executing...", StatusKind.BUSY)
             ctx.output("Executing...\n")
+            stream = OutputStream(ctx)
 
             execution_time_regex = resolve_execution_time_regex(config_path, arguments.execution_time_regex)
             execute_result = execute_configuration(
@@ -406,20 +660,18 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
                 args_copy.timeout_execution,
                 process_started_callback=ctx.register_process,
                 execution_time_regex=execution_time_regex,
+                output_callback=stream,
             )
             ctx.clear_process()
 
             if execute_result is None or execute_result[0] != 0:
-                ret_code = execute_result[0] if execute_result else "None"
-                ctx.output(f"Execution failed (return code: {ret_code})\n")
+                execute_code = execute_result[0] if execute_result else "None"
+                ctx.output(f"Execution failed (return code: {execute_code})\n")
             else:
                 ret_code, elapsed, stdout, stderr = execute_result
                 described = describe_execution_time(elapsed, stdout, stderr, execution_time_regex)
                 ctx.output(f"Execution succeeded ({described})\n")
-                if stdout:
-                    ctx.output(f"stdout: {stdout}\n")
-                if stderr:
-                    ctx.output(f"stderr: {stderr}\n")
+                stream.show(stdout, stderr)
                 success = True
 
     if not ctx.cancel_event.is_set():

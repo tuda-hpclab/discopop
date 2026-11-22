@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from discopop_library.ProjectManager.configurations.compile_script import (
@@ -47,7 +48,8 @@ TOOL = Tool(
         "  - settings: contents of seq_settings.json and dp_settings.json, if present\n"
         "  - configurations: list of named configurations, each with its execute.sh content plus\n"
         "    any per-configuration overrides — compile_script_override, validate_script and\n"
-        "    validation_compile_script, each null when the configuration does not define it\n"
+        "    validation_compile_script, each null when the configuration does not define it;\n"
+        "    build_from names the configuration whose build it shares (only present if it does)\n"
         "\n"
         "Example output:\n"
         '  {"compile_script":"#!/bin/bash\\n$CXX $CXXFLAGS main.cpp -o myapp\\n",'
@@ -97,6 +99,11 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                         "validate_script": __read_if_present(config_dir / VALIDATE_SCRIPT_NAME),
                         "validation_compile_script": __read_if_present(config_dir / VALIDATION_COMPILE_SCRIPT_NAME),
                     }
+                    | (
+                        {"build_from": build_owner_of(str(configs_dir), config_dir.name)}
+                        if build_owner_of(str(configs_dir), config_dir.name) != config_dir.name
+                        else {}
+                    )
                 )
 
         result = {

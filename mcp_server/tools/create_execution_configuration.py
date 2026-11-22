@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from discopop_library.ProjectManager.configurations.build_sharing import BuildSharingError, set_build_from
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from discopop_library.ProjectManager.configurations.validation import VALIDATE_SCRIPT_NAME
@@ -52,7 +53,8 @@ TOOL = Tool(
         "may become impractically slow under instrumentation. "
         "\n\n"
         "The execute.sh script is executed from the project root with the same environment "
-        "variables as compile.sh: $CC, $CXX, $CFLAGS, $CXXFLAGS, $DP_PROJECT_ROOT_DIR, "
+        "variables as compile.sh: $CC, $CXX, $CFLAGS, $CXXFLAGS, $DP_PROJECT_ROOT_DIR (project root), "
+        "$DP_PROJECT_ORIGINAL_DIR (original project, never a copy), "
         "$DOT_DISCOPOP, $OMP_NUM_THREADS. The script must exit 0 on success. "
         "\n\n"
         "Examples for script_body:\n"
@@ -96,6 +98,17 @@ TOOL = Tool(
                     "out.txt reference.txt'"
                 ),
             },
+            "build_from": {
+                "type": "string",
+                "description": (
+                    "Optional. Name of another configuration whose build this configuration shares: the "
+                    "program is compiled once (compile.sh and settings of that configuration) and this "
+                    "configuration only runs its own execute.sh in that build. Use it for configurations that "
+                    "differ in input or arguments only. Refused if this configuration has files of its own "
+                    "that change the build (e.g. a compile.sh override) or the other one has a validation "
+                    "compile script. Pass an empty string to build for itself again."
+                ),
+            },
         },
         "required": ["project_path", "config_name", "script_body"],
         "additionalProperties": False,
@@ -109,6 +122,7 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         config_name = arguments.get("config_name", "")
         script_body = arguments.get("script_body", "")
         validate_script_body = arguments.get("validate_script_body")
+        build_from = arguments.get("build_from")
 
         name_error = invalid_configuration_name(config_name)
         if name_error is not None:
@@ -155,6 +169,14 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 f"Wrote validate.sh for config '{config_name}' ({len(validate_script_body)} bytes)",
             )
             result["validate_script_path"] = validate_sh
+
+        if build_from is not None:
+            try:
+                set_build_from(str(configs_dir), config_name, build_from or None)
+            except BuildSharingError as error:
+                result["build_from_error"] = str(error)
+            else:
+                result["build_from"] = build_from or None
 
         result["next_step"] = setup_next_step(configs_dir)
         ctx.log_response("create_execution_configuration", result, project_path)

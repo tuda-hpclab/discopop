@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <set>
 #include <sstream>
+#include <string>
 
 #include "functions/FunctionManager.hpp"
 
@@ -121,6 +123,69 @@ TEST_F(FunctionManagerTest, testTheSameFunctionEndIsReportedOnce) {
   const auto first = out.str().find(line);
   ASSERT_NE(first, std::string::npos);
   EXPECT_EQ(out.str().find(line, first + 1), std::string::npos);
+}
+
+// The manager keeps a small cache of the entries and returns it recorded recently. Many distinct entries and returns,
+// which share the cache's slots, repeated and interleaved, must give the output of each one recorded once.
+TEST_F(FunctionManagerTest, testManyRepeatedEntriesAndReturnsGiveTheOutputOfSingleOnes) {
+  auto repeated = dp::FunctionManager{};
+  auto single = dp::FunctionManager{};
+  for (int round = 0; round < 3; ++round) {
+    for (LID entry = 1; entry <= 10000; ++entry) {
+      repeated.LogCall(entry % 7, static_cast<std::int32_t>(entry % 3));
+      repeated.RegisterFunctionStart(entry % 5000);
+      repeated.RegisterFunctionEnd(entry % 6000);
+      if (round == 0 && entry <= 5000) {
+        single.LogCall(entry % 7, static_cast<std::int32_t>(entry % 3));
+        single.RegisterFunctionStart(entry % 5000);
+        single.RegisterFunctionEnd(entry % 6000);
+      }
+    }
+  }
+  for (LID entry = 5001; entry <= 6000; ++entry) {
+    single.RegisterFunctionEnd(entry % 6000);
+  }
+  for (LID entry = 5001; entry <= 10000; ++entry) {
+    single.LogCall(entry % 7, static_cast<std::int32_t>(entry % 3));
+    single.RegisterFunctionStart(entry % 5000);
+  }
+
+  std::ostringstream repeated_out;
+  std::ostringstream single_out;
+  repeated.OutputFunctions(repeated_out);
+  single.OutputFunctions(single_out);
+  std::multiset<std::string> repeated_lines;
+  std::multiset<std::string> single_lines;
+  std::istringstream repeated_in(repeated_out.str());
+  std::istringstream single_in(single_out.str());
+  for (std::string line; std::getline(repeated_in, line);) {
+    repeated_lines.insert(line);
+  }
+  for (std::string line; std::getline(single_in, line);) {
+    single_lines.insert(line);
+  }
+  EXPECT_EQ(repeated_lines.size(), 10000u + 6000u);
+  EXPECT_EQ(repeated_lines, single_lines);
+}
+
+// one function entered from more call sites than the cache has slots: each call site is reported
+TEST_F(FunctionManagerTest, testAFunctionEnteredFromManyCallSitesIsReportedForEach) {
+  auto fm = dp::FunctionManager{};
+  for (LID call_site = 1; call_site <= 20000; ++call_site) {
+    fm.LogCall(call_site, 1);
+    fm.RegisterFunctionStart(77);
+    fm.LogCall(call_site, 2);
+    fm.RegisterFunctionStart(77);
+  }
+
+  std::ostringstream out;
+  fm.OutputFunctions(out);
+  std::istringstream in(out.str());
+  std::set<std::string> lines;
+  for (std::string line; std::getline(in, line);) {
+    lines.insert(line);
+  }
+  EXPECT_EQ(lines.size(), 40000u);
 }
 
 // reset_call is what __dp_read/__dp_write/__dp_func_exit call on every access: it drops the pending

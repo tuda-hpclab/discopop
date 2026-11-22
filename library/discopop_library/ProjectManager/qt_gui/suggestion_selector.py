@@ -8,27 +8,27 @@
 
 """Picks a subset of the parallelization suggestions by ID.
 
-The control shows only the suggestion IDs (the suggestion browser shows the patches), a Select all / Deselect all
-toggle and an entry for comma-separated IDs and ranges (``1,3,5-8``). It is embedded in several places (the Execute
-tab, the search space and the evaluation of the Autotuning tab); each instance has its own ``storage_key``, and all
-of them persist the set of *de-selected* IDs in ``suggestion_selections.json``, so a newly detected suggestion is
-selected by default.
+The control shows the suggestions as a table (ID, type, location, function, hotness) with a check box per row, a
+Select all / Deselect all toggle and an entry for comma-separated IDs and ranges (``1,3,5-8``). It is embedded in
+several places (the Execute tab, the search space and the evaluation of the Autotuning tab); each instance has its own
+``storage_key``, and all of them persist the set of *de-selected* IDs in ``suggestion_selections.json``, so a newly
+detected suggestion is selected by default. The filters of the table only change what is shown, never what is selected.
 """
 
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from discopop_library.ProjectManager.qt_gui import widgets
-from discopop_library.ProjectManager.services.patches import discover_suggestion_ids
+from discopop_library.ProjectManager.qt_gui.suggestion_table import COLUMNS, SuggestionTable
 from discopop_library.ProjectManager.services.selections import load_deselected, parse_id_ranges, save_deselected
+from discopop_library.ProjectManager.services.suggestions import load_suggestions
 
 NO_SUGGESTIONS = "No suggestions available."
 
 
 class SuggestionSelector(QWidget):
-    """A checkbox list of suggestion IDs with select-all and range-entry helpers."""
+    """A table of suggestions with check boxes, select-all and range-entry helpers."""
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class SuggestionSelector(QWidget):
         on_change: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
         *,
-        list_height: int = 130,
+        list_height: int = 170,
     ) -> None:
         super().__init__(parent)
         self._dot_dp_path = dot_dp_path
@@ -51,43 +51,36 @@ class SuggestionSelector(QWidget):
         self.entry.returnPressed.connect(self._on_apply_entry)
         self.apply_button = widgets.create_button("Apply", self._on_apply_entry)
         self.toggle_button: QPushButton = widgets.create_button("Deselect all", self._on_toggle_all)
-        self.list = QListWidget()
-        self.list.setMinimumHeight(list_height)
-        self.list.itemChanged.connect(self._on_item_changed)
+        self.table = SuggestionTable(checkable=True, empty_text=NO_SUGGESTIONS)
+        self.table.setMinimumHeight(list_height)
+        # it sits in narrow forms: the function and the pragma are shown by the Pattern Detection stage and the browser
+        for name in ("Function", "Pragma"):
+            self.table.view.setColumnHidden(self.table.model.offset + COLUMNS.index(name), True)
+        self.table.checks_changed.connect(self._on_checks_changed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(widgets.hbox(QLabel("Select IDs:"), self.entry, self.apply_button))
-        layout.addLayout(widgets.hbox(self.toggle_button, None))
-        layout.addWidget(self.list, 1)
+        layout.addLayout(widgets.hbox(QLabel("Select IDs:"), self.entry, self.apply_button, self.toggle_button))
+        layout.addWidget(self.table, 1)
         self.refresh()
 
     # ── public API ───────────────────────────────────────────────────────────
 
     def refresh(self) -> None:
-        """Re-scan the available IDs and rebuild the list; the stored de-selection is applied again."""
+        """Re-scan the available suggestions and rebuild the table; the stored de-selection is applied again."""
         deselected = load_deselected(self._dot_dp_path, self._storage_key)
-        self._ids = discover_suggestion_ids(self._dot_dp_path)
+        infos = load_suggestions(self._dot_dp_path)
+        self._ids = [info.id for info in infos]
         self._updating = True
         try:
-            self.list.clear()
-            if not self._ids:
-                placeholder = QListWidgetItem(NO_SUGGESTIONS)
-                placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-                self.list.addItem(placeholder)
-            for sid in self._ids:
-                item = QListWidgetItem(f"Suggestion {sid}")
-                item.setData(Qt.ItemDataRole.UserRole, sid)
-                item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-                item.setCheckState(Qt.CheckState.Unchecked if sid in deselected else Qt.CheckState.Checked)
-                self.list.addItem(item)
+            self.table.set_suggestions(infos, {info.id for info in infos if info.id not in deselected})
         finally:
             self._updating = False
         self._update_toggle_label()
 
     def get_selected_ids(self) -> List[str]:
         """The checked suggestion IDs, numerically sorted."""
-        return [sid for sid, checked in self._states() if checked]
+        return self.table.checked_ids()
 
     def get_available_ids(self) -> List[str]:
         """All suggestion IDs currently offered, numerically sorted."""
@@ -95,7 +88,7 @@ class SuggestionSelector(QWidget):
 
     def is_all_selected(self) -> bool:
         """True if every available ID is selected (or there are none)."""
-        return all(checked for _, checked in self._states())
+        return len(self.table.checked_ids()) == len(self._ids)
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable the whole control."""
@@ -107,22 +100,11 @@ class SuggestionSelector(QWidget):
 
     # ── internals ────────────────────────────────────────────────────────────
 
-    def _items(self) -> List[QListWidgetItem]:
-        items = [self.list.item(row) for row in range(self.list.count())]
-        return [item for item in items if item.data(Qt.ItemDataRole.UserRole) is not None]
-
-    def _states(self) -> List[tuple[str, bool]]:
-        return [
-            (str(item.data(Qt.ItemDataRole.UserRole)), item.checkState() == Qt.CheckState.Checked)
-            for item in self._items()
-        ]
-
     def _set_checked(self, selected: "set[str]") -> None:
+        # the model reports a change itself; an unchanged selection is still persisted and reported, as before
         self._updating = True
         try:
-            for item in self._items():
-                sid = str(item.data(Qt.ItemDataRole.UserRole))
-                item.setCheckState(Qt.CheckState.Checked if sid in selected else Qt.CheckState.Unchecked)
+            self.table.set_checked_ids(selected)
         finally:
             self._updating = False
         self._after_change()
@@ -134,13 +116,14 @@ class SuggestionSelector(QWidget):
     def _on_apply_entry(self) -> None:
         self._set_checked(set(parse_id_ranges(self.entry.text(), self._ids)))
 
-    def _on_item_changed(self, _item: QListWidgetItem) -> None:
+    def _on_checks_changed(self) -> None:
         if not self._updating:
             self._after_change()
 
     def _after_change(self) -> None:
         self._update_toggle_label()
-        save_deselected(self._dot_dp_path, self._storage_key, (sid for sid, checked in self._states() if not checked))
+        selected = set(self.table.checked_ids())
+        save_deselected(self._dot_dp_path, self._storage_key, (sid for sid in self._ids if sid not in selected))
         if self._on_change is not None:
             self._on_change()
 

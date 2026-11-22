@@ -46,7 +46,7 @@ from discopop_library.EmpiricalAutotuning.output.progress import (
     set_active_reporter,
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
-from discopop_library.EmpiricalAutotuning.utils import restrict_patterns_to_ids
+from discopop_library.EmpiricalAutotuning.utils import exclude_outside_project_patterns, restrict_patterns_to_ids
 from discopop_library.FolderStructure.setup import setup_auto_tuner
 from discopop_library.HostpotLoader.HotspotLoaderArguments import HotspotLoaderArguments
 from discopop_library.HostpotLoader.HotspotType import HotspotType
@@ -207,6 +207,8 @@ def run(arguments: AutotunerArguments) -> None:
         tmp_str = f.read()
     detection_result: DetectionResult = jsonpickle.decode(tmp_str, keys=True)
     logger.debug("loaded suggestions")
+    # suggestions that patch files outside the project cannot be tried in isolated copies: skipped, and logged
+    skipped_outside_project = exclude_outside_project_patterns(detection_result, arguments.dot_dp_path, logger)
     # Amdahl bounds for the progress events; never allowed to disturb the search
     try:
         progress_reporter.set_regions(build_regions(detection_result, load_detailed_hotspots(arguments.dot_dp_path)))
@@ -330,7 +332,7 @@ def run(arguments: AutotunerArguments) -> None:
             timeout_after,
             debug_stats,
             get_unique_configuration_id,
-            [int(s) for s in arguments.suggestions.split(",")],
+            [int(s) for s in arguments.suggestions.split(",") if s not in skipped_outside_project],
         )
 
     optimization_time_s = time.time() - optimization_start_time

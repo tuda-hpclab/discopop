@@ -41,6 +41,11 @@ def parse_args() -> PatchApplicatorArguments:
     parser.add_argument('-l', '--list', action="store_true", help="Show the list of applied suggestions."
                                                                   "If set, nothing else will be done.")
 
+    parser.add_argument("--allow-outside-project", action="store_true",
+                        help="Allow applying suggestions that patch files outside of the project (the directory "
+                             "containing the .discopop directory). Such files are modified in place, may be used by "
+                             "other projects and are NOT restored automatically; refused by default.")
+
     parser.add_argument("--log", type=str, default="WARNING", help="Specify log level: DEBUG, INFO, WARNING, ERROR, "
     "CRITICAL")
     parser.add_argument("--write-log", action="store_true", help="Create Logfile.")
@@ -56,6 +61,7 @@ def parse_args() -> PatchApplicatorArguments:
         clear=arguments.clear,
         load=arguments.load,
         list=arguments.list,
+        allow_outside_project=arguments.allow_outside_project,
         log_level=arguments.log.upper(),
         write_log=arguments.write_log,
     )

@@ -216,6 +216,15 @@ class WorkNotice:
 
 
 @dataclass(frozen=True)
+class WorkProgress:
+    """The state of one item of a piece of work that handles several (e.g. one configuration of a batch)."""
+
+    key: str
+    state: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class WorkFinished:
     """The last event of a piece of work: its return value, or the exception that ended it."""
 
@@ -223,7 +232,7 @@ class WorkFinished:
     error: Optional[str]
 
 
-WorkEvent = Union[WorkOutput, WorkStatus, WorkNotice, WorkFinished]
+WorkEvent = Union[WorkOutput, WorkStatus, WorkNotice, WorkProgress, WorkFinished]
 
 
 class WorkContext:
@@ -249,6 +258,9 @@ class WorkContext:
 
     def notify(self, title: str, message: str) -> None:
         self._events.put(WorkNotice(title, message))
+
+    def progress(self, key: str, state: str, detail: str = "") -> None:
+        self._events.put(WorkProgress(key, state, detail))
 
     def register_process(self, process: "subprocess.Popen[Any]", policy: CancelPolicy = CancelPolicy.TERMINATE) -> None:
         """Make ``cancel`` stop ``process`` (a process started by a library function that reports it)."""

@@ -8,7 +8,6 @@
 
 import cProfile
 import json
-import logging
 import os
 import subprocess
 import sys
@@ -87,6 +86,8 @@ class ExplorerArguments(GeneralArguments):
     visualize_on: Optional["tk.Frame"]
     # None means no file, otherwise the path. Why candidates were (not) suggested, see PatternDecisions
     enable_pattern_decisions_file: Optional[str] = None
+    # add default(none) to the pragmas of the do-all and reduction suggestions
+    doall_default_none: bool = True
 
     def __post_init__(self) -> None:
         self.__validate()
@@ -140,6 +141,7 @@ def __run(
     visualize_on: Optional["tk.Frame"] = None,
     ignore_dependency_states: bool = False,
     pattern_decisions: Optional[PatternDecisionLog] = None,
+    doall_default_none: bool = True,
 ) -> DetectionResult:
     """pattern_decisions, if given, receives which candidates the pattern detection considered and
     why it rejected them. It stays empty when existing patterns are loaded."""
@@ -210,6 +212,7 @@ def __run(
             enable_context_graph_plot,
             visualizer,
             ignore_dependency_states=ignore_dependency_states,
+            doall_default_none=doall_default_none,
         )
 
     for plugin_name in plugins:
@@ -222,7 +225,6 @@ def __run(
 
 def run(arguments: ExplorerArguments) -> None:
     """Run the discopop_explorer with the given arguments"""
-    logger = logging.getLogger("Explorer")
 
     setup_explorer(arguments.project_path)
 
@@ -283,6 +285,7 @@ def run(arguments: ExplorerArguments) -> None:
                 visualize_on=arguments.visualize_on,
                 ignore_dependency_states=arguments.ignore_dependency_states,
                 pattern_decisions=pattern_decisions,
+                doall_default_none=arguments.doall_default_none,
             )
 
         end = time.time()
@@ -303,10 +306,11 @@ def run(arguments: ExplorerArguments) -> None:
             dump_to_gephi_file(res.pet, arguments.enable_pet_plot_file)
 
         if arguments.enable_detection_result_dump_file is not None:
-            with open(arguments.enable_detection_result_dump_file, "w+") as f:
-                f.write(res.dump_to_pickled_json())
-                f.flush()
-                f.close()
+            with stage("Writing the detection result dump"):
+                with open(arguments.enable_detection_result_dump_file, "w+") as f:
+                    f.write(res.dump_to_pickled_json())
+                    f.flush()
+                    f.close()
 
         if arguments.enable_json_file is None:
             print(str(res))
@@ -315,8 +319,9 @@ def run(arguments: ExplorerArguments) -> None:
             # print(str(res))
             # since PETGraphX is not JSON Serializable, delete the field prior to executing the serialization
             del res.pet
-            with open(arguments.enable_json_file, "w+") as f:
-                json.dump(res, f, indent=2, cls=PatternBaseSerializer)
+            with stage("Writing the patterns"):
+                with open(arguments.enable_json_file, "w+") as f:
+                    json.dump(res, f, indent=2, cls=PatternBaseSerializer)
 
         # Written after the patterns, so that a decision file older than the patterns reveals
         # patterns it does not describe. Left alone when existing patterns are loaded instead
@@ -327,9 +332,12 @@ def run(arguments: ExplorerArguments) -> None:
                 pattern_decisions.save(decisions_file)
 
         # create applicable patch files from the found suggestions
-        with stage("Generating parallelization patches"):
-            out = subprocess.check_output(["discopop_patch_generator"], cwd=arguments.project_path).decode("utf-8")
-            logger.debug("discopop_patch_generator output:\n" + out)
+        # The patch generator reports its own stages and progress bars on the console. They are not captured, and
+        # no spinner of this process is active meanwhile (both would draw on the same lines of the terminal).
+        print("Generating parallelization patches...", flush=True)
+        patches_started = time.perf_counter()
+        subprocess.run(["discopop_patch_generator"], cwd=arguments.project_path, check=True)
+        print(colored(f"✓ Generated parallelization patches ({time.perf_counter() - patches_started:.1f}s)", "green"))
 
         # print suggestions overview for users
         with stage("Printing suggestions overview"):
