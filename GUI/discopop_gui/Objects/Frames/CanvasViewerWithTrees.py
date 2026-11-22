@@ -56,17 +56,20 @@ class CanvasViewerWithTrees(Base):
         self._canvas_container = QStackedWidget(self._top_container)
         self._top_container.addWidget(self._canvas_container)
 
-        self._saved_canvases_loaders_container = QWidget(self._top_container)
+        self._saved_canvases_loaders_container = QWidget(self)
         saved_container_layout = QVBoxLayout(self._saved_canvases_loaders_container)
-        saved_container_layout.setContentsMargins(0, 0, 0, 0)
+        saved_container_layout.setContentsMargins(4, 2, 4, 2)
+        self._saved_canvases_loaders_container.setFixedHeight(44)
         saved_scroll_area = QScrollArea(self._saved_canvases_loaders_container)
         saved_scroll_area.setWidgetResizable(True)
         self._saved_canvases_loaders_frame = QWidget()
         self._saved_canvases_loaders_layout = QHBoxLayout(self._saved_canvases_loaders_frame)
         self._saved_canvases_loaders_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         saved_scroll_area.setWidget(self._saved_canvases_loaders_frame)
+        saved_scroll_area.setFixedHeight(38)
         saved_container_layout.addWidget(saved_scroll_area)
-        self._top_container.addWidget(self._saved_canvases_loaders_container)
+        root_layout.addWidget(self._saved_canvases_loaders_container)
+        self._saved_canvases_loaders_container.setVisible(False)
 
         self._bottom_container = QWidget(self)
         bottom_layout = QHBoxLayout(self._bottom_container)
@@ -103,9 +106,7 @@ class CanvasViewerWithTrees(Base):
 
     def _on_toggle_addable_canvases(self) -> None:
         self._tab_visible = not self._tab_visible
-        self._top_container.setCurrentWidget(
-            self._saved_canvases_loaders_container if self._tab_visible else self._canvas_container
-        )
+        self._saved_canvases_loaders_container.setVisible(self._tab_visible)
 
     def _on_saved_canvas_loader_clicked(self, index: int) -> None:
         canvas_data = self._saved_canvases[index]
@@ -204,7 +205,6 @@ class CanvasViewerWithTrees(Base):
     def show_canvas(self, canvas_id: str) -> None:
         if canvas_id in self._canvases:
             self._canvas_container.setCurrentWidget(self._canvases[canvas_id])
-            self._top_container.setCurrentWidget(self._canvas_container)
             self._active_canvas_id = canvas_id
             self._canvases[canvas_id].set_viewer_mode(self._selected_option)
 
