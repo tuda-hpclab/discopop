@@ -331,17 +331,13 @@ class TreeNode:
 
         return None
 
-    def get_higher_order_dependency_canvas_edge(
-        self, base_node_id: int
-    ) -> QGraphicsLineItem | None:
+    def get_higher_order_dependency_canvas_edge(self, base_node_id: int) -> QGraphicsLineItem | None:
         if self._higher_order_dependency_connections.get(base_node_id) is not None:
             return self._higher_order_dependency_connections[base_node_id][0]
 
         return None
 
-    def get_lower_order_dependency_canvas_edge(
-        self, base_node_id: int
-    ) -> QGraphicsLineItem | None:
+    def get_lower_order_dependency_canvas_edge(self, base_node_id: int) -> QGraphicsLineItem | None:
         if self._lower_order_dependency_connections.get(base_node_id) is not None:
             return self._lower_order_dependency_connections[base_node_id][0]
 
@@ -930,17 +926,16 @@ class TreeNode:
 
                 cloned_node._lower_order_dependency_connections[connection_id] = (
                     cloned_dependency_visual_edge,
-                    cloned_edges
+                    cloned_edges,
                 )
 
                 cloned_dependency_connection: Tuple[QGraphicsLineItem, List[DependencyEdge[int]]] = (
                     cloned_dependency_visual_edge,
-                    cloned_edges
+                    cloned_edges,
                 )
 
                 self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(
-                    canvas,
-                    cloned_dependency_connection
+                    canvas, cloned_dependency_connection
                 )
 
         if higher_order_edges is None or (isinstance(higher_order_edges, tuple) and created):

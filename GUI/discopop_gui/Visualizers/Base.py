@@ -30,7 +30,7 @@ class Base(ABC):
                 self._application = existing_application
             else:
                 raise RuntimeError("A QApplication is required before creating a standalone visualizer.")
-            
+
             self._window = QMainWindow()
             self._window.setWindowTitle("DiscoPoP")
             self._root = QWidget(self._window)
@@ -97,7 +97,7 @@ class Base(ABC):
 
         if self._window is None or self._application is None:
             raise RuntimeError("A standalone visualizer has no application window.")
-        
+
         self._window.show()
         self._application.exec()
 

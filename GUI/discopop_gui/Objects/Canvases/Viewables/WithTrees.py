@@ -214,9 +214,7 @@ class WithTrees(Base):
 
         return VisualMainEdge[int](edge, from_id, to_id)
 
-    def create_visual_dependency_edge(
-        self, from_id: int, to_id: int, state: str = "hidden"
-    ) -> QGraphicsLineItem:
+    def create_visual_dependency_edge(self, from_id: int, to_id: int, state: str = "hidden") -> QGraphicsLineItem:
         from_node = self.get_visual_node(from_id)
         to_node = self.get_visual_node(to_id)
         x1, y1 = from_node.get_location()

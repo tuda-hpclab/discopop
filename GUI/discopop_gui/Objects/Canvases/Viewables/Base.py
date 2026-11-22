@@ -178,11 +178,7 @@ class Base(QGraphicsView):
             self._last_pan_position = event.position()
         elif self._viewer_mode == ViewerMode.ZOOM:
             self._drag_start = position
-            self._selection_color = (
-                QColor("blue")
-                if event.button() == Qt.MouseButton.LeftButton
-                else QColor("red")
-            )
+            self._selection_color = QColor("blue") if event.button() == Qt.MouseButton.LeftButton else QColor("red")
 
         super().mousePressEvent(event)
 

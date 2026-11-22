@@ -117,7 +117,7 @@ class CanvasViewerWithTrees(Base):
                 canvas_viewer,
                 canvas_viewer_mode,
                 nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies
+                highest_managed_dependencies=highest_managed_dependencies,
             )
         )
 
@@ -165,7 +165,9 @@ class CanvasViewerWithTrees(Base):
     ) -> str:
         self._canvas_id_counter += 1
         canvas_id = str(self._canvas_id_counter)
-        new_canvas = canvas_builder(self._canvas_container, self, self._selected_option, self._nodes, self._highest_managed_dependencies)
+        new_canvas = canvas_builder(
+            self._canvas_container, self, self._selected_option, self._nodes, self._highest_managed_dependencies
+        )
         self._canvases[canvas_id] = new_canvas
         self._canvas_container.addWidget(new_canvas)
 
@@ -213,7 +215,7 @@ class CanvasViewerWithTrees(Base):
 
         if self._active_canvas_id:
             self.get_canvas(self._active_canvas_id).set_viewer_mode(self._selected_option)
-            
+
         self._update_toolbar()
 
     def select_magnifier(self) -> None:
@@ -255,7 +257,7 @@ class CanvasViewerWithTrees(Base):
                 canvas_viewer,
                 canvas_viewer_mode,
                 nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies
+                highest_managed_dependencies=highest_managed_dependencies,
             )
         )
 
@@ -343,7 +345,7 @@ class CanvasViewerWithTrees(Base):
                 canvas_viewer,
                 canvas_viewer_mode,
                 nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies
+                highest_managed_dependencies=highest_managed_dependencies,
             )
         )
 

@@ -101,33 +101,23 @@ class WithSidebar(Base):
         if data is None:
             return
 
-        file_path, _ = QFileDialog.getSaveFileName(
-            self._root,
-            "Save Frame",
-            "",
-            "JSON files (*.json);;All files (*)"
-        )
+        file_path, _ = QFileDialog.getSaveFileName(self._root, "Save Frame", "", "JSON files (*.json);;All files (*)")
 
         if not file_path:
             return
 
-        with open(file_path, "w", encoding = "utf-8") as file:
-            json.dump(data, file, indent = 4)
+        with open(file_path, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=4)
 
     def _load_frame(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self._root,
-            "Load Frame",
-            "",
-            "JSON files (*.json);;All files (*)"
-        )
+        file_path, _ = QFileDialog.getOpenFileName(self._root, "Load Frame", "", "JSON files (*.json);;All files (*)")
 
         if not file_path:
             return
 
         with open(file_path, "r", encoding="utf-8") as file:
             data = json.load(file)
-            
+
             match FrameType(data["type"]):
                 case FrameType.CANVAS_VIEWER_WITH_TREES:
                     canvas_frame_with_trees = self.create_frame(data["frame_name"], CanvasViewerWithTrees)
