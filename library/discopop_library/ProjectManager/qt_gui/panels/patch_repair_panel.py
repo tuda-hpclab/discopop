@@ -386,7 +386,7 @@ class PatchRepairPanel(Panel):
         self.run_button.set_running(True)
         self.set_busy(True)
         self.output_requested.emit()
-        self.status.set("⏳ Patch repair in progress...", widgets.STATUS_BUSY)
+        self.status.set("Patch repair in progress...", widgets.STATUS_BUSY)
 
         self.console.clear()
         self._records = {}

@@ -75,7 +75,7 @@ _PLOT_TYPES: Dict[str, Dict[str, Any]] = {
     "bars": {"label": "Top-N runtime bars", "stem": "Bars"},
     "profile": {"label": "Per-region run profile", "stem": "Profile"},
 }
-_ADD_TAB_TEXT = "  ＋  "
+_ADD_TAB_TEXT = "  +  "
 _DETAIL_BAR_WIDTH = 300
 _DETAIL_PLACEHOLDER = hotspot_view.DETAIL_PLACEHOLDER
 
@@ -720,7 +720,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         if self.hotspot_stop_button is not None:
             self.hotspot_stop_button.config(state="normal")
         self._clear_hotspot_output()
-        self.status_label.config(text="⏳ Hotspot measurement in progress...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text="Hotspot measurement in progress...", foreground=widgets.STATUS_BUSY)
 
         session = self._hotspot_session()
         request = session.make_request(
@@ -744,7 +744,7 @@ class HotspotPanelMixin(ConfigManagerMixinBase):
         if self.hotspot_stop_button is not None:
             self.hotspot_stop_button.config(state="normal")
         self._clear_hotspot_output()
-        self.status_label.config(text="⏳ Hotspot analysis in progress...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text="Hotspot analysis in progress...", foreground=widgets.STATUS_BUSY)
 
         self._run_hotspot_job(self._hotspot_session().invoke_analyzer)
 

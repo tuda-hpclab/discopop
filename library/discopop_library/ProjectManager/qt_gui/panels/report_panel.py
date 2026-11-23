@@ -212,7 +212,7 @@ class ReportPanel(Panel):
             table_close.resize(0, 0)
             table_close.hide()
         self.add_plot_button = QToolButton()
-        self.add_plot_button.setText("＋")
+        self.add_plot_button.setText("+")
         self.add_plot_button.setToolTip("Add a chart")
         self.add_plot_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.add_plot_button)

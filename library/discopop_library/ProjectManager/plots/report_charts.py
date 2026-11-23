@@ -102,7 +102,7 @@ def record_status_text(record: ExecutionRecord) -> str:
         return "⚠ not applied"
     if record.valid:
         return "✓ valid"
-    return "⧗ timeout" if record.timeout else "✗ failed"
+    return "timeout" if record.timeout else "✗ failed"
 
 
 def _format_record_tooltip(record: ExecutionRecord) -> str:

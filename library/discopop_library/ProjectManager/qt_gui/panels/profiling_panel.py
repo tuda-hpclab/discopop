@@ -314,7 +314,7 @@ class ProfilingPanel(Panel):
         self.run_button.set_running(True)
         self.builds_and_runs.set_blocked(True)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Profiling")
-        self.status.set("⏳ Preparing pattern detection...", widgets.STATUS_BUSY)
+        self.status.set("Preparing pattern detection...", widgets.STATUS_BUSY)
         self.console.clear()
         self.output_requested.emit()
         self.set_busy(True)
