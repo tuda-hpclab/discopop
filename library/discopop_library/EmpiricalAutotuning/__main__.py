@@ -154,6 +154,8 @@ def main() -> None:
     try:
         run(arguments)
     except ReferenceConfigurationFailed as e:
+        # the compiler output it refers to is on stdout: make it precede the error in a combined log
+        sys.stdout.flush()
         print("ERROR: " + str(e), file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
