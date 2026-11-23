@@ -104,22 +104,29 @@ class CanvasViewerWithTrees(Base):
         self._update_toolbar()
         self._update_switcher_visibility()
 
+    def _build_canvas(
+        self,
+        parent: QWidget,
+        canvas_viewer: "CanvasViewerWithTrees",
+        canvas_viewer_mode: ViewerMode,
+        nodes: Dict[int, TreeNode],
+        highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]],
+    ) -> ViewableCanvasWithTrees:
+        return ViewableCanvasWithTrees(
+            parent,
+            canvas_viewer,
+            canvas_viewer_mode,
+            nodes=nodes,
+            highest_managed_dependencies=highest_managed_dependencies,
+        )
+
     def _on_toggle_addable_canvases(self) -> None:
         self._tab_visible = not self._tab_visible
         self._saved_canvases_loaders_container.setVisible(self._tab_visible)
 
     def _on_saved_canvas_loader_clicked(self, index: int) -> None:
         canvas_data = self._saved_canvases[index]
-
-        canvas_id = self.add_canvas(
-            lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(
-                parent,
-                canvas_viewer,
-                canvas_viewer_mode,
-                nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies,
-            )
-        )
+        canvas_id = self.add_canvas(self._build_canvas)
 
         self.get_canvas(canvas_id).deserialize(canvas_data)
         self._on_toggle_addable_canvases()
@@ -251,15 +258,7 @@ class CanvasViewerWithTrees(Base):
         for node1_id, node2_id in data["highest_managed_dependencies"]:
             self._highest_managed_dependencies.append((self._nodes[node1_id], self._nodes[node2_id]))
 
-        canvas_id = self.add_canvas(
-            lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(
-                parent,
-                canvas_viewer,
-                canvas_viewer_mode,
-                nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies,
-            )
-        )
+        canvas_id = self.add_canvas(self._build_canvas)
 
         self.get_canvas(canvas_id).build_initial()
         self._update_saved_canvases_loaders()
@@ -339,14 +338,6 @@ class CanvasViewerWithTrees(Base):
                     (self._nodes[source_node_id], self._nodes[destination_node_id])
                 )
 
-        canvas_id = self.add_canvas(
-            lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(
-                parent,
-                canvas_viewer,
-                canvas_viewer_mode,
-                nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies,
-            )
-        )
+        canvas_id = self.add_canvas(self._build_canvas)
 
         self.get_canvas(canvas_id).build_initial()
