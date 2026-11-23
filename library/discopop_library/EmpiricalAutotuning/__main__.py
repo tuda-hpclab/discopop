@@ -11,7 +11,7 @@ import os
 import sys
 from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArguments
 from discopop_library.GlobalLogger.setup import setup_logger
-from discopop_library.EmpiricalAutotuning.Autotuner import run
+from discopop_library.EmpiricalAutotuning.Autotuner import ReferenceConfigurationFailed, run
 from discopop_library.ProjectManager.configurations.execution_time import (
     DEFAULT_EXECUTION_TIME_REGEX,
     DEFAULT_EXECUTION_TIME_TAG,
@@ -153,6 +153,9 @@ def main() -> None:
     arguments.log()
     try:
         run(arguments)
+    except ReferenceConfigurationFailed as e:
+        print("ERROR: " + str(e), file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         # The search loops end on Ctrl+C (or the GUI's Stop) and keep what they measured; an interrupt outside them,
         # e.g. during the baseline measurement, has nothing to keep and is no error worth a traceback.

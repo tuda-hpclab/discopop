@@ -61,6 +61,8 @@ PATH = str
 # record carries no measurement, and treating it as a successful run would report the
 # unmodified sequential code as a parallel configuration without a speedup.
 NOT_EXECUTED_RETURN_CODE = -1
+# the exit status of coreutils' ``timeout`` when it stopped the command
+TIMEOUT_EXIT_CODE = 124
 
 logger = logging.getLogger("ConfigurationManager")
 
@@ -199,6 +201,15 @@ def _run_once(
         os.killpg(os.getpgid(p.pid), signal.SIGTERM)
         print("KILLED PROCESS: ", p.pid)
 
+    # The limit is enforced by coreutils' ``timeout``, which ends the script and exits with 124; the Python side never
+    # sees a TimeoutExpired. A script exiting with 124 by itself is indistinguishable from it, which is acceptable: it
+    # failed either way.
+    if timeout is not None and p.returncode == TIMEOUT_EXIT_CODE:
+        timeout_expired = True
+        logger.warning(
+            os.path.basename(script_path) + " was stopped after the timeout of " + str(timeout) + " s expired."
+        )
+
     # Microseconds, not milliseconds: a run shorter than half a millisecond used to
     # be recorded as 0.0s, which every consumer reads as "no measurement" (and a
     # speedup over it is a division by zero).
@@ -228,8 +239,9 @@ def _run_once(
             time_source = TIME_SOURCE_CONSOLE
             logger.debug("-> execution time reported by the program: " + str(elapsed) + "s")
 
-    decoded_stdout = stdout.decode("utf-8") if not timeout_expired else ""
-    decoded_stderr = stderr.decode("utf-8") if not timeout_expired else ""
+    # what a script printed before its timeout expired tells how far it got: kept
+    decoded_stdout = stdout.decode("utf-8", errors="replace")
+    decoded_stderr = stderr.decode("utf-8", errors="replace")
 
     logger.debug("-> return code: " + str(p.returncode))
     logger.debug("-> thread count: " + str(thread_count))
