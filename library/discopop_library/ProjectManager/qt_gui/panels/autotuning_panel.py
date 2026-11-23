@@ -508,7 +508,7 @@ class AutotuningPanel(Panel):
         self.run_button.set_running(True)
         self.set_busy(True)
         self.output_requested.emit()
-        self.status.set("⏳ Autotuning in progress...", widgets.STATUS_BUSY)
+        self.status.set("Autotuning in progress...", widgets.STATUS_BUSY)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Tuning…")
         self.console.set_text("")
 

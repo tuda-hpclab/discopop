@@ -292,7 +292,7 @@ class BuildPanel(Panel):
         self.builds.set_blocked(True)
         self.shared_build.setEnabled(False)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Building")
-        self.status.set("⏳ Building...", widgets.STATUS_BUSY)
+        self.status.set("Building...", widgets.STATUS_BUSY)
         self.console.clear()
         self.output_requested.emit()
         self.set_busy(True)

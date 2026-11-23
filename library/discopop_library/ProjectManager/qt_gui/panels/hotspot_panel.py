@@ -194,7 +194,7 @@ class HotspotPanel(Panel):
                 button.resize(0, 0)
                 button.hide()
         self.add_plot_button = QToolButton()
-        self.add_plot_button.setText("＋")
+        self.add_plot_button.setText("+")
         self.add_plot_button.setToolTip("Add a chart")
         self.add_plot_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.add_plot_button)
@@ -783,7 +783,7 @@ class HotspotPanel(Panel):
         self.update_ui()
         self.output.clear()
         self.output_requested.emit()
-        self.status.set("⏳ Hotspot measurement in progress...", widgets.STATUS_BUSY)
+        self.status.set("Hotspot measurement in progress...", widgets.STATUS_BUSY)
         self._run_job(lambda ctx: self.session.run_batch(ctx, configs, repetitions=repetitions, timeouts=timeouts))
 
     def reinstrument(self) -> None:
@@ -815,7 +815,7 @@ class HotspotPanel(Panel):
         self.update_ui()
         self.output.clear()
         self.output_requested.emit()
-        self.status.set("⏳ Hotspot measurement in progress...", widgets.STATUS_BUSY)
+        self.status.set("Hotspot measurement in progress...", widgets.STATUS_BUSY)
         self._run_job(lambda ctx: self.session.run(ctx, request))
 
     def rerun_analysis(self) -> None:
@@ -828,7 +828,7 @@ class HotspotPanel(Panel):
         self.update_ui()
         self.output.clear()
         self.output_requested.emit()
-        self.status.set("⏳ Hotspot analysis in progress...", widgets.STATUS_BUSY)
+        self.status.set("Hotspot analysis in progress...", widgets.STATUS_BUSY)
         self._run_job(self.session.invoke_analyzer)
 
     def _on_work_complete(self, success: bool, cancelled: bool) -> None:

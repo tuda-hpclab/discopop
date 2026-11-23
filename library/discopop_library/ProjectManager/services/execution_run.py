@@ -227,7 +227,7 @@ def run_execution(
             ctx.output("Execution stopped by user.\n")
             return False
 
-        ctx.status("⏳ Executing...", StatusKind.BUSY)
+        ctx.status("Executing...", StatusKind.BUSY)
         ctx.output("Executing...\n")
         stream = OutputStream(ctx)
         repetitions = repetitions_for_mode(mode, args_copy.execution_repetitions)
@@ -294,9 +294,9 @@ def run_execution(
                 timeout_validation=args_copy.timeout_validation,
                 process_started_callback=ctx.register_process,
                 on_compile_start=lambda _script: report_step(
-                    "⏳ Compiling for validation...", "Compiling for validation...\n"
+                    "Compiling for validation...", "Compiling for validation...\n"
                 ),
-                on_validate_start=lambda _script: report_step("⏳ Validating...", "Validating output...\n"),
+                on_validate_start=lambda _script: report_step("Validating...", "Validating output...\n"),
                 should_abort=ctx.cancel_event.is_set,
                 output_callback=validation_stream,
             )
@@ -345,7 +345,7 @@ def run_execution(
 
         if inplace:
             project_copy_path = arguments.project_root
-            ctx.status("⏳ Compiling...", StatusKind.BUSY)
+            ctx.status("Compiling...", StatusKind.BUSY)
             ctx.output("Compiling...\n")
             compile_stream = OutputStream(ctx)
             compile_result = execute_configuration(
@@ -405,7 +405,7 @@ def run_execution(
                 ctx.output(f"Error recording skipped run: {e}\n")
             application_failures.append((mode, application_result))
 
-        ctx.status("⏳ Building...", StatusKind.BUSY)
+        ctx.status("Building...", StatusKind.BUSY)
         try:
             with build_lock(
                 args_copy,
@@ -489,7 +489,7 @@ def run_preparation(arguments: ProjectManagerArguments, request: PreparationRequ
     key = BuildKey(inputs.build_config, mode, ())
 
     success = False
-    ctx.status("⏳ Building...", StatusKind.BUSY)
+    ctx.status("Building...", StatusKind.BUSY)
     try:
         with build_lock(
             args_copy,
@@ -548,7 +548,7 @@ def _profile_in_build(
     settings_path: str,
 ) -> bool:
     """Run the configuration in ``build`` and activate the run; True if both worked."""
-    ctx.status("⏳ Executing...", StatusKind.BUSY)
+    ctx.status("Executing...", StatusKind.BUSY)
     ctx.output("Executing...\n")
     stream = OutputStream(ctx)
     execution_time_regex = resolve_execution_time_regex(config_path, arguments.execution_time_regex)
@@ -617,7 +617,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
     compile_sh = resolve_compile_script_path(arguments.project_config_dir, inputs.build_config)
     shared_settings = os.path.join(arguments.project_config_dir, request.settings_filename)
 
-    ctx.status("⏳ Compiling...", StatusKind.BUSY)
+    ctx.status("Compiling...", StatusKind.BUSY)
     ctx.output("Compiling...\n")
 
     compile_stream = OutputStream(ctx)
@@ -645,7 +645,7 @@ def _run_preparation_inplace(arguments: ProjectManagerArguments, request: Prepar
         if ctx.cancel_event.is_set():
             ctx.output(f"{status_noun.capitalize()} preparation stopped by user.\n")
         else:
-            ctx.status("⏳ Executing...", StatusKind.BUSY)
+            ctx.status("Executing...", StatusKind.BUSY)
             ctx.output("Executing...\n")
             stream = OutputStream(ctx)
 

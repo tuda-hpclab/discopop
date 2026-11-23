@@ -124,7 +124,7 @@ class Env:
         return (self.exit_code, 0.25, "", "")
 
     def fake_analyzer(self, ctx: WorkContext) -> bool:
-        ctx.status("⏳ Analyzing...")
+        ctx.status("Analyzing...")
         ctx.output("analyzed\n")
         self.write_results()
         return True
@@ -264,7 +264,7 @@ def test_stop_ends_the_batch(qtbot: QtBot, env: Env) -> None:
     env.panel.run_button.click()
     qtbot.waitUntil(lambda: env.executed_configs == ["big"], timeout=10000)
     qtbot.waitUntil(lambda: env.panel.header.chip.text() == "Measuring 1 of 2: big", timeout=10000)
-    assert configs_in_list(env.panel)[0][2] == "⏳ measuring…: 1/2"
+    assert configs_in_list(env.panel)[0][2] == "measuring…: 1/2"
     assert not env.panel.select_all_button.isEnabled()
     env.panel.run_button.click()
     env.gate.set()
@@ -405,7 +405,7 @@ def test_a_measurement_instruments_runs_and_analyzes(qtbot: QtBot, env: Env) -> 
     assert panel.running and panel.run_button.is_running() and panel.run_button.isEnabled()
     assert panel.run_button.text() == "■ Stop" and not panel.reinstrument_button.isEnabled()
     assert panel.header.chip.text() == "Measurement running" and not panel.run_button.can_run()
-    assert panel.status.text() == "⏳ Hotspot measurement in progress..."
+    assert panel.status.text() == "Hotspot measurement in progress..."
     wait_idle(qtbot, panel)
     assert completed_on == [True]  # the handler ran on the main thread
 
@@ -532,7 +532,7 @@ def test_rerun_analysis_needs_runs_and_does_not_execute(qtbot: QtBot, env: Env) 
     env.panel.output.set_text("old output")
     env.panel.analyze_button.click()
     assert env.panel.running and env.panel.run_button.is_running() and env.panel.output.text() == ""
-    assert env.panel.status.text() == "⏳ Hotspot analysis in progress..."
+    assert env.panel.status.text() == "Hotspot analysis in progress..."
     wait_idle(qtbot, env.panel)
     assert env.executed == [] and "analyzed" in env.panel.output.text() and len(env.published) == 1
 
