@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QBrush, QPainter, QPen, QPolygonF
 
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
+
 class Mouse(RoundedSquareButton):
     def _paint_icon(self, painter: QPainter) -> None:
         color = "black"

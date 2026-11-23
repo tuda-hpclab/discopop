@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.RoundedSquareButton import RoundedSquareButton
 
+
 class Magnifier(RoundedSquareButton):
     def _paint_icon(self, painter: QPainter) -> None:
         color = "black"
