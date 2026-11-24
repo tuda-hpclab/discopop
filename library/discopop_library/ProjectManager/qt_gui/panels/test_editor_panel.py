@@ -112,7 +112,8 @@ def test_selecting_a_configuration_shows_its_files(panel: EditorPanel) -> None:
         "compile_validate.sh (override)",
     ]
     assert not panel.has_unsaved_changes() and tabs(panel).titles["Editor"] == "Editor"
-    assert results == [ResultsChanged()]
+    # showing the files of another configuration changes no results (the report would load them again)
+    assert results == []
 
 
 def test_a_missing_execute_script_is_reported_in_the_editor(panel: EditorPanel) -> None:
