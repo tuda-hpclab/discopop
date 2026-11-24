@@ -1,0 +1,8 @@
+# add_children (line 36) reads a temporary array in its stack frame whose initialization the profiler does not see.
+# The memory was last written by the local array of accept (line 26), a function called before at the same stack
+# depth. Analyzed per address, the read depended on that write of a frame that no longer exists; per frame instance
+# (rtlib/memory/StackFrames.hpp) it does not. The writes of accept are profiled, as sum_up reads them (required).
+required = ["1:13 RAW 1:26|GEPRESULT_values"]
+forbidden = [
+    { type = "RAW", sink = "1:36", source = "1:26" },
+]

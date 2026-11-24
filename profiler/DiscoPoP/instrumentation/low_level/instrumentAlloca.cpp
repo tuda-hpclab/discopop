@@ -10,7 +10,11 @@
  *
  */
 
+#include <cstdint>
 #include <vector>
+
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Module.h"
 
 #include "DiscoPoP.hpp"
 
@@ -42,41 +46,28 @@ void DiscoPoP::InstrumentAlloca(AllocaInst* to_instrument) {
   Value* start_addr = irb.CreatePtrToInt(to_instrument, int64_, "");
   args.push_back(start_addr);
 
-  Value* end_addr = start_addr;
-  std::uint64_t element_size_in_bytes = to_instrument->getAllocatedType()->getScalarSizeInBits() / 8;
-  Value* num_elements = to_instrument->getOperand(0);
-  if (to_instrument->isArrayAllocation()) {
-    // endAddr = startAddr + allocated size
-    end_addr = irb.CreateAdd(start_addr, irb.CreateIntCast(num_elements, int64_, true));
-  } else if (to_instrument->getAllocatedType()->isArrayTy()) {
-    // unpack potentially multidimensional allocations
-
-    Type* type_to_parse = to_instrument->getAllocatedType();
-    Type* element_type;
-
-    std::uint64_t tmp_num_elements = 1;
-
-    // unpack multidimensional allocations
-    while (type_to_parse->isArrayTy()) {
-      // extract size from current dimension and multiply to numElements
-      tmp_num_elements *= cast<ArrayType>(type_to_parse)->getNumElements();
-      // proceed one dimension
-      type_to_parse = type_to_parse->getArrayElementType();
+  // the number of elements: of a variable size alloca its operand, of a (multidimensional) array its elements
+  Value* num_elements = irb.CreateIntCast(to_instrument->getArraySize(), int64_, false);
+  if (!to_instrument->isArrayAllocation()) {
+    std::uint64_t array_elements = 1;
+    for (Type* type = to_instrument->getAllocatedType(); type->isArrayTy(); type = type->getArrayElementType()) {
+      array_elements *= cast<ArrayType>(type)->getNumElements();
     }
-    // typeToParse now contains the element type
-    element_type = type_to_parse;
-
-    // allocated size = Element size in Bytes * Number of elements
-    element_size_in_bytes = element_type->getScalarSizeInBits() / 8;
-
-    // endAddr = startAddr + allocated size
-    num_elements = ConstantInt::get(int64_, tmp_num_elements);
-    end_addr = irb.CreateAdd(start_addr, irb.CreateIntCast(num_elements, int64_, true));
+    num_elements = ConstantInt::get(int64_, array_elements);
   }
 
+  // the size in bytes as the target lays the type out (structs and padding included), times the operand of a
+  // variable size alloca; the runtime assigns [start_addr, end_addr) to the frame of the function
+  const std::uint64_t type_size_in_bytes =
+      to_instrument->getModule()->getDataLayout().getTypeAllocSize(to_instrument->getAllocatedType()).getFixedValue();
+  Value* num_bytes = ConstantInt::get(int64_, type_size_in_bytes);
+  if (to_instrument->isArrayAllocation()) {
+    num_bytes = irb.CreateMul(irb.CreateIntCast(to_instrument->getArraySize(), int64_, false), num_bytes);
+  }
+  Value* end_addr = irb.CreateAdd(start_addr, num_bytes);
+
   args.push_back(end_addr);
-  args.push_back(
-      irb.CreateMul(irb.CreateIntCast(num_elements, int64_, true), ConstantInt::get(int64_, element_size_in_bytes)));
-  args.push_back(irb.CreateIntCast(num_elements, int64_, true));
+  args.push_back(num_bytes);
+  args.push_back(num_elements);
   inserted_access_callbacks_[to_instrument] = irb.CreateCall(dp_alloca_, args, "");
 }

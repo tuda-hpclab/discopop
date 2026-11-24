@@ -28,9 +28,12 @@ namespace dp {
 /******* Instrumentation function *******/
 extern "C" {
 
-void __dp_alloca(LID /*lid*/, char* /*var*/, ADDR /*start_addr*/, ADDR /*end_addr*/, std::int64_t /*num_bytes*/,
+void __dp_alloca(LID /*lid*/, char* /*var*/, ADDR start_addr, ADDR /*end_addr*/, std::int64_t num_bytes,
                  std::int64_t /*num_elements*/) {
   DP_CALLBACK_SCOPE(ALLOCA);
+
+  // the variable belongs to the frame of the function executing the alloca, see memory/StackFrames.hpp
+  stack_frames.Register(start_addr, start_addr + num_bytes);
 }
 }
 

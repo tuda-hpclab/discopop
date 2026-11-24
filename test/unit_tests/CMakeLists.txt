@@ -36,6 +36,7 @@ target_sources(
   memory/scope/test_scope.cpp
   memory/shadow_memory/test_shadow_memory.cpp
   memory/signature/test_signature.cpp
+  memory/stack_frames/test_stack_frames.cpp
   access_queues/test_first_access_queue_chunk.cpp
   access_queues/test_first_access_queue_chunk_buffer.cpp
   access_queues/test_second_access_queue_element.cpp

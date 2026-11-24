@@ -15,6 +15,7 @@ A case is a directory ``<category>/<case>/`` holding ``test.cpp``, a ``Makefile`
     forbidden = [                         # optional: none of these may be reported by the dynamic profiling
         { type = "WAR", var = "x" },      #   a dependency type and variable
         { sink = "1:7", var = "y" },      #   a sink location and variable
+        { sink = "1:9", source = "1:4" }, #   a sink and a source location (keys: type, sink, source, var)
     ]
 
 The tests are named ``Test<category>::test_dependencies[<case>]``. Before the first test of a class, the selected cases
@@ -62,7 +63,12 @@ def _problems(expected: dict[str, Any], profiler_dir: Path) -> list[str]:
     # false positives are only checked in the exact dynamic trace: the static analysis is a conservative
     # may-analysis, a legitimate over-approximation of it must not fail the test
     for dep in dynamic_deps:
-        properties = {"sink": dep.split(" ")[0], "type": dep.split(" ")[1], "var": dep.split("|")[1].split("(")[0]}
+        properties = {
+            "sink": dep.split(" ")[0],
+            "type": dep.split(" ")[1],
+            "source": dep.split(" ")[2].split("|")[0],
+            "var": dep.split("|")[1].split("(")[0],
+        }
         for forbidden in expected.get("forbidden", []):
             if all(properties[key] == value for key, value in forbidden.items()):
                 problems.append(f"forbidden {dep}")

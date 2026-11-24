@@ -29,6 +29,7 @@
 
 #include "Immortal.hpp"
 #include "memory/AbstractShadow.hpp"
+#include "memory/StackFrames.hpp"
 #include "runtimeFunctionsTypes.hpp"
 #include "static_callstate_transitions/CallStateGraph.hpp"
 #include "timer.hpp"

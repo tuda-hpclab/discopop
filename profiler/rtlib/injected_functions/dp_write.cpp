@@ -73,7 +73,8 @@ void __dp_write(LID lid, ADDR addr, const char* var) {
   current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state_id) << 32);
   current.var = var;
   current.aa_var = reinterpret_cast<std::int64_t>(var);
-  current.addr = addr;
+  // stack memory per frame instance, see memory/StackFrames.hpp
+  current.addr = stack_frames.Key(addr);
 
 #if defined DP_NUM_WORKERS && DP_NUM_WORKERS == 0
   AnalyzeSingleAccessOnMainThread(current);

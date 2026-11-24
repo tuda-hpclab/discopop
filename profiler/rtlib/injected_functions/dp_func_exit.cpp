@@ -40,6 +40,8 @@ void __dp_func_exit(LID lid, std::int32_t is_exit) {
 
   DP_CALLBACK_SCOPE(FUNC_EXIT);
 
+  stack_frames.Pop();
+
   loop_manager->CleanFunctionExit(function_manager->GetCurrentStackLevel(), lid);
 
   function_manager->ResetCall(lid);

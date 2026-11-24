@@ -32,6 +32,8 @@ extern "C" {
 void __dp_func_entry(LID lid, std::int32_t is_start, std::int32_t function_entry_id) {
   DP_CALLBACK_SCOPE(FUNC_ENTRY);
 
+  stack_frames.Push();
+
   // The runtime is up before the first callback: it is brought up from .init_array, see
   // lifecycle/runtime_startup.cpp. No lazy initialization is needed here.
   function_manager->RegisterFunctionStart(lid);
