@@ -93,3 +93,8 @@ def test_the_interpreter_bin_is_put_on_the_path_once() -> None:
     environment = environment_with_interpreter_on_path({"PATH": "/usr/bin"})
     assert environment["PATH"] == interpreter_bin + os.pathsep + "/usr/bin"
     assert environment_with_interpreter_on_path(environment)["PATH"] == environment["PATH"]
+
+
+def test_autotuner_command_without_kept_build_trees() -> None:
+    assert "--no-kept-build-trees" not in autotuner_command(_autotuner(), "d", "py")
+    assert "--no-kept-build-trees" in autotuner_command(_autotuner(kept_build_trees=False), "d", "py")
