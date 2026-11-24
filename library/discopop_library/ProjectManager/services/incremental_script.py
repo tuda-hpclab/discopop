@@ -23,14 +23,16 @@ HEADER_COMMENT = (
     "# (no clean, no rm -rf of the build directory, normally no configure step). Check it before saving.\n"
     "# CMake superbuilds (ExternalProject): build the inner project, e.g. cmake --build build/<project>-build,\n"
     "# as the outer build does not see changed sources of an external project.\n"
-    "# OMP_NUM_THREADS is set to the thread count of the run, and $(nproc) honors it: use $(nproc --all) for -j.\n"
+    "# $(nproc) honors OMP_NUM_THREADS (set for builds only if the project passes the thread count to them):\n"
+    "# $(nproc --all) is safe for -j.\n"
 )
 EMPTY_TEMPLATE = (
     "#!/bin/bash\n"
     "# Derived from compile.sh: no build line could be recognized there. Write the command that rebuilds\n"
     "# the kept build tree (e.g. cmake --build build -j, make -j, ninja -C build); it must only rebuild.\n"
     "# CMake superbuilds (ExternalProject): build the inner project, e.g. cmake --build build/<project>-build.\n"
-    "# OMP_NUM_THREADS is set to the thread count of the run, and $(nproc) honors it: use $(nproc --all) for -j.\n"
+    "# $(nproc) honors OMP_NUM_THREADS (set for builds only if the project passes the thread count to them):\n"
+    "# $(nproc --all) is safe for -j.\n"
 )
 
 _ENVIRONMENT_COMMANDS = {"set", "export", "cd", "source", ".", "unset"}

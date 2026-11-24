@@ -18,7 +18,8 @@ _PROJECT_ROOT_NOTE = (
     "  • $DOT_DISCOPOP: the .discopop directory of that root\n"
     "  • $DP_PROJECT_INCLUDE_DIRS / $DP_PROJECT_EXCLUDE_DIRS: project directories outside / inside\n"
     "    the root that are instrumented / left out\n"
-    "  • $OMP_NUM_THREADS: the thread count of the run"
+    "  • $OMP_NUM_THREADS: the thread count of the run (execute.sh / validate.sh; compile scripts only if the\n"
+    "    project passes it to them: Build stage), which $(nproc) honors"
 )
 
 HELP_TEXTS: dict[str, tuple[str, str]] = {
