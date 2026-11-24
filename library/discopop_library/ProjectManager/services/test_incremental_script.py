@@ -88,3 +88,18 @@ def test_the_empty_template_is_a_script_that_asks_for_a_build_command() -> None:
 @pytest.mark.parametrize("command", ["ninja -t clean", "make -C build clean"])
 def test_clean_commands_are_dropped(command: str) -> None:
     assert propose_incremental_script(command + "\n") is None
+
+
+def test_builds_that_clean_first_are_not_proposed() -> None:
+    from discopop_library.ProjectManager.services.incremental_script import propose_incremental_script
+
+    for line in (
+        "cmake --build build --clean-first",
+        "cmake --build build --target clean",
+        "cmake --build build -t clean",
+        "make -B",
+        "make --always-make -j4",
+    ):
+        assert propose_incremental_script("#!/bin/bash\n" + line + "\n") is None, line
+    proposal = propose_incremental_script("#!/bin/bash\ncmake --build build --target kripke -j\n")
+    assert proposal is not None and "cmake --build build --target kripke -j" in proposal
