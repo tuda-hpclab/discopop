@@ -18,7 +18,7 @@ import logging
 import os
 import shutil
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple
 
@@ -38,9 +38,12 @@ from discopop_library.ProjectManager.configurations.builds import (
     build_status,
     build_lock_path_of,
     build_tree_path_of,
+    build_trees_dir_of,
     compute_fingerprint,
     delete_build,
+    environment_fingerprint,
     forget_build,
+    incremental_compile_script_of,
     kept_tree_path_of,
     key_of,
     left_out_of,
@@ -59,9 +62,15 @@ from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
     restore_outside_patches,
 )
+from discopop_library.ProjectManager.configurations.compile_script import (
+    BUILD_KIND_VARIABLE,
+    FULL_BUILD,
+    INCREMENTAL_BUILD,
+)
 from discopop_library.ProjectManager.configurations.tree_sync import (
     BUILDING,
     CLEAN,
+    DIRTY,
     SYNCING,
     TreeState,
     clean_outputs,
@@ -235,6 +244,7 @@ def ensure_build(
     except OSError:
         pass
     remove_build_files(arguments.project_dir, key)
+    _remove_tree_of_older_build(arguments, key, status.record)
     # taken before the copy, so that a change while copying makes the build stale rather than wrongly current
     # computed once: the fingerprint describes the pruning the compilation below uses, even if hotspot results change
     pruning_environment = callpath_pruning.environment(arguments, key.configuration) if key.mode == "dp" else None
@@ -243,13 +253,21 @@ def ensure_build(
     tree = (
         kept_tree_path_of(arguments.project_root, key) if kept_tree else build_tree_path_of(arguments.project_root, key)
     )
+    # compile_incremental.sh continues a tree compiled in the same environment (never on --rebuild)
+    incremental_script = (
+        incremental_compile_script_of(arguments, key) if kept_tree and policy != BuildPolicy.REBUILD else None
+    )
+    environment = environment_fingerprint(parts)
 
+    update: Optional[_TreeUpdate] = None
     try:
         if kept_tree:
-            failed_application = _prepare_kept_tree(arguments, key, tree, message, on_application_failure)
-            if failed_application is not None:
+            update = _prepare_kept_tree(
+                arguments, key, tree, message, on_application_failure, environment if incremental_script else None
+            )
+            if update.failed_application is not None:
                 return BuildOutcome(
-                    BuildResult.APPLICATION_FAILED, key, application_result=failed_application, tree=None
+                    BuildResult.APPLICATION_FAILED, key, application_result=update.failed_application, tree=None
                 )
         else:
             message("Copying project to " + tree + "...\n")
@@ -264,6 +282,22 @@ def ensure_build(
     except Exception as error:
         return BuildOutcome(BuildResult.COPY_FAILED, key, message="Error copying project: " + str(error))
 
+    def compile_with(script: PATH, kind: str) -> Optional[Tuple[int, float, str, str]]:
+        return execute_configuration(
+            arguments,
+            tree,
+            config_path,
+            settings_path,
+            script,
+            thread_count,
+            timeout,
+            process_started_callback=process_started_callback,
+            result_annotations={"build_id": key.build_id, "build_kind": kind},
+            output_callback=output_callback,
+            callpath_pruning_environment=pruning_environment,
+            extra_environment={BUILD_KIND_VARIABLE: kind},
+        )
+
     application_result = get_application_result(tree)
     try:
         if application_result is not None and application_result.failure:
@@ -272,24 +306,40 @@ def ensure_build(
             _discard_tree(arguments, tree)
             return BuildOutcome(BuildResult.APPLICATION_FAILED, key, application_result=application_result, tree=None)
 
-        message("Compiling...\n")
-        compile_result = execute_configuration(
-            arguments,
-            tree,
-            config_path,
-            settings_path,
-            compile_script,
-            thread_count,
-            timeout,
-            process_started_callback=process_started_callback,
-            result_annotations={"build_id": key.build_id},
-            output_callback=output_callback,
-            callpath_pruning_environment=pruning_environment,
-        )
+        build_kind = FULL_BUILD
+        compile_result: Optional[Tuple[int, float, str, str]] = None
+        if update is not None and update.incremental and incremental_script is not None:
+            outputs_before = output_snapshot(tree, update.synced)
+            message("Compiling incrementally (" + os.path.basename(incremental_script) + ")...\n")
+            compile_result = compile_with(incremental_script, INCREMENTAL_BUILD)
+            problem = None
+            if compile_result is None or compile_result[0] != 0:
+                problem = os.path.basename(incremental_script) + " failed"
+            elif update.changed_files and output_snapshot(tree, update.synced) == outputs_before:
+                # e.g. a superbuild whose inner project is not rebuilt: the old binary would be measured
+                problem = (
+                    "it wrote no file although "
+                    + str(update.changed_files)
+                    + " file(s) of the project changed, so the program is probably stale (check "
+                    + os.path.basename(incremental_script)
+                    + ")"
+                )
+            if problem is None:
+                build_kind = INCREMENTAL_BUILD
+            else:
+                text = "The incremental build is not used: " + problem + ". Compiling from scratch with compile.sh."
+                logger.warning(text)
+                message("WARNING: " + text + "\n")
+                clean_outputs(tree, update.synced, arguments.project_root, update.directories)
+        if build_kind == FULL_BUILD:
+            message("Compiling...\n")
+            compile_result = compile_with(compile_script, FULL_BUILD)
         if compile_result is None or compile_result[0] != 0:
-            # the files of a kept tree are those of the project, but its outputs are unknown: copied anew next time
-            remove_tree_state(arguments.project_dir, tree_key(key).build_id)
-            _discard_tree(arguments, tree)
+            if kept_tree:
+                # its files are those of the project, its outputs unknown: compiled in full next time
+                set_tree_state(arguments.project_dir, tree_key(key).build_id, DIRTY)
+            else:
+                _discard_tree(arguments, tree)
             return BuildOutcome(
                 BuildResult.COMPILE_FAILED,
                 key,
@@ -298,12 +348,14 @@ def ensure_build(
                 message="Compilation failed.",
             )
         if kept_tree:
-            set_tree_state(arguments.project_dir, tree_key(key).build_id, CLEAN)
+            _mark_built(arguments.project_dir, tree_key(key).build_id, environment)
             # the builds of other suggestions in the tree are gone (their runs stay)
             for other in list_builds(arguments.project_dir):
                 if other.build_id != key.build_id and os.path.abspath(other.tree) == os.path.abspath(tree):
                     forget_build(arguments.project_dir, key_of(other))
-        record = make_record(arguments, key, compile_script, settings_path, tree, compile_result[1], parts)
+        record = make_record(
+            arguments, key, compile_script, settings_path, tree, compile_result[1], parts, build_kind=build_kind
+        )
         write_build(
             arguments.project_dir, record, BuildFiles(sources=entries, left_out=left_out_of(arguments, entries))
         )
@@ -323,6 +375,69 @@ def ensure_build(
             logger.error("Restoring the files outside the project failed: " + str(error))
 
 
+def _remove_tree_of_older_build(
+    arguments: ProjectManagerArguments, key: BuildKey, record: Optional[BuildRecord]
+) -> None:
+    """Remove the tree of a build compiled before builds shared a kept tree (``<id>_s<hash>``), which the build of
+    ``key`` replaces now; its manifest is gone, so nothing else would."""
+    if record is None or not _uses_kept_tree(arguments, key):
+        return
+    tree = os.path.abspath(record.tree)
+    trees_dir = os.path.abspath(build_trees_dir_of(arguments.project_root))
+    if tree == os.path.abspath(kept_tree_path_of(arguments.project_root, key)) or os.path.dirname(tree) != trees_dir:
+        return
+    try:
+        shutil.rmtree(tree)
+        logger.info("removed the tree of an older build: " + tree)
+    except OSError:
+        pass
+
+
+@dataclass
+class _TreeUpdate:
+    """What :func:`_prepare_kept_tree` did."""
+
+    failed_application: Optional[PatchApplicationResult] = None
+    # TreeState.synced of the tree now
+    synced: Dict[str, str] = field(default_factory=dict)
+    # the directories of the project (copy_set)
+    directories: Set[str] = field(default_factory=set)
+    # files written or deleted
+    changed_files: int = 0
+    # the outputs of the last compilation were kept: compile_incremental.sh may continue it
+    incremental: bool = False
+
+
+def _mark_built(project_dir: PATH, tree_id: str, environment: str) -> None:
+    state = read_tree_state(project_dir, tree_id)
+    if state is not None:
+        state.state = CLEAN
+        state.environment = environment
+        write_tree_state(project_dir, tree_id, state)
+
+
+def output_snapshot(tree: PATH, synced: Dict[str, str]) -> Dict[str, Tuple[int, int]]:
+    """Size and modification time of the files of ``tree`` outside of ``.discopop`` that are not files of the
+    project (``synced``): the outputs of the compilations. An incremental build that changes none of them after
+    files of the project changed has not rebuilt the program."""
+    tree = os.path.abspath(tree)
+    snapshot: Dict[str, Tuple[int, int]] = {}
+    for directory, subdirectories, names in os.walk(tree):
+        if directory == tree:
+            subdirectories[:] = [name for name in subdirectories if name != ".discopop"]
+        relative_dir = os.path.relpath(directory, tree)
+        prefix = "" if relative_dir == "." else relative_dir.replace(os.sep, "/") + "/"
+        for name in names:
+            if prefix + name in synced:
+                continue
+            try:
+                stat = os.lstat(os.path.join(directory, name))
+            except OSError:
+                continue
+            snapshot[prefix + name] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
 def _uses_kept_tree(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
     """Whether the build ``key`` is compiled in the kept tree of its configuration and mode, updated instead of
     copied (``configurations/tree_sync.py``). Not a build whose suggestions may patch files outside of the project:
@@ -336,7 +451,8 @@ def _prepare_kept_tree(
     tree: PATH,
     message: Callable[[str], None],
     on_application_failure: Optional[Callable[[PATH, PatchApplicationResult], None]] = None,
-) -> Optional[PatchApplicationResult]:
+    incremental_environment: Optional[str] = None,
+) -> _TreeUpdate:
     """Make ``tree`` hold what a fresh copy of the project with the suggestions of ``key`` would: the files of the
     project (written only where they differ), the patched files instead of the originals, no outputs of an earlier
     compilation, and a new copy of the project's ``.discopop``. A tree in an unknown state (none recorded, an
@@ -344,12 +460,16 @@ def _prepare_kept_tree(
 
     The suggestions are applied to copies of the files they patch in a scratch directory first; if that fails,
     the tree is not touched and the result of the application is returned (``on_application_failure`` is called
-    with the scratch directory)."""
+    with the scratch directory).
+
+    ``incremental_environment`` (the environment of the build, if it may be compiled incrementally) keeps the
+    outputs of the last compilation, if it succeeded in the same environment."""
     project_dir = arguments.project_dir
     tree_id = tree_key(key).build_id
     state = read_tree_state(project_dir, tree_id)
     exclusions = CopyExclusions(arguments.project_root, listed=load_copy_exclude(project_dir))
-    files = copy_set(exclusions)
+    directories: Set[str] = set()
+    files = copy_set(exclusions, directories)
     scratch = tree + ".scratch"
     overrides: Dict[str, PATH] = {}
     try:
@@ -359,8 +479,20 @@ def _prepare_kept_tree(
                 logger.error("Suggestion application incomplete: " + application_result.summary())
                 if on_application_failure is not None:
                     on_application_failure(scratch, application_result)
-                return application_result
-        fresh = state is None or state.state != CLEAN or not os.path.isdir(tree)
+                return _TreeUpdate(failed_application=application_result)
+            for name in sorted(set(overrides) - set(files)):
+                # a patched file that the copy leaves out (copy_exclude.json, a build directory) is no file of the tree
+                logger.warning("The patched file " + name + " is left out of the build tree (see copy_exclude.json).")
+                del overrides[name]
+        # without a state or after an interrupted sync, the files of the tree are unknown
+        fresh = state is None or state.state == SYNCING or not os.path.isdir(tree)
+        incremental = (
+            not fresh
+            and state is not None
+            and state.state == CLEAN
+            and incremental_environment is not None
+            and state.environment == incremental_environment
+        )
         if fresh:
             message("Copying project to " + tree + "...\n")
             if os.path.lexists(tree):
@@ -375,8 +507,8 @@ def _prepare_kept_tree(
         if report is not None:
             message(report + "\n")
         write_tree_state(project_dir, tree_id, TreeState(dict(previous), [], SYNCING))
-        result = sync_tree(tree, files, previous, overrides)
-        removed = clean_outputs(tree, result.synced, arguments.project_root)
+        result = sync_tree(tree, files, previous, overrides, directories, preserve_times=fresh)
+        removed = [] if incremental else clean_outputs(tree, result.synced, arguments.project_root, directories)
         copy_dot_discopop(arguments, tree, DATA_LEFT_OUT_OF_BUILDS)
         if key.suggestions:
             # what the application recorded: the applied suggestions, the result, the shifted lines
@@ -387,7 +519,11 @@ def _prepare_kept_tree(
                 shutil.copyfile(line_mapping, os.path.join(tree, ".discopop", "line_mapping.json"))
         else:
             clear_application_result(patch_applicator_dir_of(tree))
-        write_tree_state(project_dir, tree_id, TreeState(result.synced, sorted(key.suggestions), BUILDING))
+        write_tree_state(
+            project_dir,
+            tree_id,
+            TreeState(result.synced, sorted(key.suggestions), BUILDING, state.environment if state else ""),
+        )
         if not fresh:
             message(
                 "Changed files written: "
@@ -398,7 +534,12 @@ def _prepare_kept_tree(
                 + str(len(removed))
                 + ".\n"
             )
-        return None
+        return _TreeUpdate(
+            synced=result.synced,
+            directories=directories,
+            changed_files=len(result.written) + len(result.deleted),
+            incremental=incremental,
+        )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

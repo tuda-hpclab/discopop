@@ -198,6 +198,9 @@ def test_a_failed_compilation_leaves_no_build(project: Dict[str, Path]) -> None:
     outcome = _build(project)
     assert outcome.result == BuildResult.COMPILE_FAILED and outcome.tree is None
     assert not os.path.exists(manifest_path_of(str(project["root"] / ".discopop" / "project"), KEY))
+    # the kept tree stays for the next compilation; deleting all builds removes it
+    assert os.path.exists(build_tree_path_of(str(project["root"]), KEY))
+    delete_builds(_arguments(project["root"]))
     assert not os.path.exists(build_tree_path_of(str(project["root"]), KEY))
 
 
@@ -869,6 +872,7 @@ def test_every_part_of_the_fingerprint_is_classified(project: Dict[str, Path]) -
     (shared / "lib.c").write_text("\n")
     save_included_directories(_project_dir(project), str(project["root"]), [str(shared)])
     save_copy_exclude(_project_dir(project), ["data"])
+    (project["configs"] / "compile_incremental.sh").write_text("#!/bin/bash\n")
     seen = set()
     for mode in ("seq", "par", "dp", "hd"):
         for suggestions in ((), ("1",)):
@@ -961,19 +965,20 @@ def test_a_tree_in_an_unknown_state_is_copied_anew(project: Dict[str, Path]) -> 
     set_tree_state(_project_dir(project), KEY.build_id, SYNCING)  # interrupted
     assert "Copying project" in _build_with_messages(project, BuildPolicy.REBUILD)[1]
 
-    invalidate_build(_project_dir(project), KEY)  # a validation build changed the tree
+    invalidate_build(_project_dir(project), KEY)  # a validation build changed the outputs: synced, compiled in full
     outcome, text = _build_with_messages(project)
-    assert outcome.result == BuildResult.BUILT and "Copying project" in text
+    assert outcome.result == BuildResult.BUILT and "Updating the build tree" in text
 
 
-def test_a_failed_compilation_forgets_the_tree(project: Dict[str, Path]) -> None:
-    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state
+def test_a_failed_compilation_marks_the_tree_dirty(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, read_tree_state
 
     _build_with_messages(project)
     project["compile"].write_text("#!/bin/bash\nexit 1\n")
     outcome, _ = _build_with_messages(project)
     assert outcome.result == BuildResult.COMPILE_FAILED
-    assert read_tree_state(_project_dir(project), KEY.build_id) is None
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == DIRTY
 
 
 def test_the_data_runs_link_to_stays_when_the_tree_is_built_again(project: Dict[str, Path]) -> None:
@@ -1109,3 +1114,90 @@ def test_the_builds_of_one_tree_share_its_lock(project: Dict[str, Path]) -> None
     assert build_lock_path_of(project_dir, one) != build_lock_path_of(
         project_dir, BuildKey("cfg", "par", (), ROLE_VALIDATE)
     )
+
+
+def _incremental_project(project: Dict[str, Path], incremental: str) -> None:
+    """compile.sh and compile_incremental.sh note in kinds.txt which ran, with DP_BUILD_KIND."""
+    kinds = project["tmp"] / "kinds.txt"
+    project["compile"].write_text(f'#!/bin/bash\necho "full $DP_BUILD_KIND" >> "{kinds}"\ncp main.c prog.out\n')
+    (project["configs"] / "compile_incremental.sh").write_text(
+        f'#!/bin/bash\necho "incremental $DP_BUILD_KIND" >> "{kinds}"\n' + incremental
+    )
+
+
+def _kinds(project: Dict[str, Path]) -> List[str]:
+    return (project["tmp"] / "kinds.txt").read_text().splitlines()
+
+
+def test_a_kept_tree_is_compiled_again_incrementally(project: Dict[str, Path]) -> None:
+    _incremental_project(project, "cp main.c prog.out\n")
+    first, _ = _build_with_messages(project)
+    assert first.record is not None and first.record.build_kind == "full"
+
+    (project["root"] / "main.c").write_text("int main() { return 6; }\n")
+    second, text = _build_with_messages(project)
+
+    assert second.result == BuildResult.BUILT and second.record is not None
+    assert "Compiling incrementally (compile_incremental.sh)" in text
+    assert _kinds(project) == ["full full", "incremental incremental"]
+    assert second.record.build_kind == "incremental"
+    assert (Path(second.tree or "") / "prog.out").read_text() == "int main() { return 6; }\n"
+    # --rebuild compiles in full
+    _build_with_messages(project, BuildPolicy.REBUILD)
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_an_incremental_build_that_rebuilt_nothing_falls_back_to_a_full_build(project: Dict[str, Path]) -> None:
+    # like the outer build of a superbuild: succeeds, writes nothing
+    _incremental_project(project, "true\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 8; }\n")
+
+    outcome, text = _build_with_messages(project)
+
+    assert outcome.result == BuildResult.BUILT and outcome.record is not None
+    assert "wrote no file although 1 file(s) of the project changed" in text
+    assert _kinds(project) == ["full full", "incremental incremental", "full full"]
+    assert outcome.record.build_kind == "full"
+    assert (Path(outcome.tree or "") / "prog.out").read_text() == "int main() { return 8; }\n"
+
+
+def test_a_failing_incremental_build_falls_back_to_a_full_build(project: Dict[str, Path]) -> None:
+    _incremental_project(project, "exit 2\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 9; }\n")
+
+    outcome, text = _build_with_messages(project)
+
+    assert outcome.result == BuildResult.BUILT and "compile_incremental.sh failed" in text
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_only_a_tree_compiled_in_the_same_environment_and_mode_is_compiled_incrementally(
+    project: Dict[str, Path],
+) -> None:
+    from discopop_library.ProjectManager.configurations.builds import invalidate_build
+
+    _incremental_project(project, "cp main.c prog.out\n")
+    _build_with_messages(project)
+    # another settings file: in full
+    (project["configs"] / "seq_settings.json").write_text(
+        json.dumps({"CC": "cc", "CXX": "c++", "CFLAGS": "-O1", "CXXFLAGS": ""})
+    )
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "full full"
+    # a validation build changed the outputs: in full
+    invalidate_build(_project_dir(project), KEY)
+    (project["root"] / "main.c").write_text("int main() { return 10; }\n")
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "full full"
+    # now incrementally
+    (project["root"] / "main.c").write_text("int main() { return 11; }\n")
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "incremental incremental"
+    # instrumented modes are always compiled in full
+    dp_key = BuildKey("cfg", "dp")
+    for _ in range(2):
+        (project["root"] / "main.c").write_text("int main() { return %d; }\n" % (20 + _))
+        _build(project, key=dp_key)
+    assert _kinds(project)[-2:] == ["full full", "full full"]
