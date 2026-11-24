@@ -848,3 +848,63 @@ def test_a_dp_build_is_stale_when_the_openmp_flags_are_removed_and_the_change_ca
             _arguments(project["root"]), dp, str(project["compile"]), str(project["configs"] / "dp_settings.json")
         )
     assert _build(project, key=dp).result == BuildResult.BUILT
+
+
+def test_every_part_of_the_fingerprint_is_classified(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import (
+        CONTENT_PARTS,
+        ENVIRONMENT_PARTS,
+        compute_fingerprint_parts,
+    )
+    from discopop_library.ProjectManager.services import openmp_handling
+    from discopop_library.ProjectManager.services.included_directories import save_included_directories
+
+    assert not CONTENT_PARTS & ENVIRONMENT_PARTS
+    # switch on every optional part
+    openmp_handling.save_openmp_handling(_project_dir(project), openmp_handling.OpenMPHandling(strip=True))
+    save_callpath_pruning(_project_dir(project), CallpathPruning(enabled=True))
+    shared = project["tmp"] / "shared"
+    shared.mkdir()
+    (shared / "lib.c").write_text("\n")
+    save_included_directories(_project_dir(project), str(project["root"]), [str(shared)])
+    save_copy_exclude(_project_dir(project), ["data"])
+    seen = set()
+    for mode in ("seq", "par", "dp", "hd"):
+        for suggestions in ((), ("1",)):
+            arguments = _arguments(project["root"])
+            seen |= set(
+                compute_fingerprint_parts(
+                    arguments,
+                    BuildKey("cfg", mode, suggestions),
+                    str(project["compile"]),
+                    str(project["configs"] / (mode + "_settings.json")),
+                )
+            )
+    assert seen == CONTENT_PARTS | ENVIRONMENT_PARTS
+
+
+def test_the_role_is_part_of_the_id_and_survives_the_manifest(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import ROLE_VALIDATE, key_of
+
+    assert BuildKey("cfg", "par").build_id == "cfg_par"
+    assert BuildKey("cfg", "par", (), ROLE_VALIDATE).build_id == "cfg_par_validate"
+    outcome = _build(project, key=BuildKey("cfg", "seq", (), ROLE_VALIDATE))
+    assert outcome.result == BuildResult.BUILT and outcome.record is not None
+    (record,) = list_builds(_project_dir(project))
+    assert key_of(record) == BuildKey("cfg", "seq", (), ROLE_VALIDATE)
+    # a manifest of before the role (no field) is a build of the runs of its mode
+    data = json.loads(Path(manifest_path_of(_project_dir(project), key_of(record))).read_text())
+    del data["role"]
+    (Path(_project_dir(project)) / "builds" / "cfg_seq.json").write_text(json.dumps(dict(data, build_id="cfg_seq")))
+    old = read_build(_project_dir(project), BuildKey("cfg", "seq"))
+    assert old is not None and old.role == "" and key_of(old) == BuildKey("cfg", "seq")
+
+
+def test_only_content_changes_leave_the_environment_alone(project: Dict[str, Path]) -> None:
+    _build(project)
+    (project["root"] / "main.c").write_text("int main() { return 3; }\n")
+    status = _status(project)
+    assert status.changes is not None and status.changes.content_only
+    project["compile"].write_text(project["compile"].read_text() + "\n# changed\n")
+    status = _status(project)
+    assert status.changes is not None and not status.changes.content_only

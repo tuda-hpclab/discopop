@@ -27,7 +27,13 @@ from discopop_library.ProjectManager.configurations.building import (
     ensure_build,
 )
 from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for, stale_declaration_problems
-from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
+from discopop_library.ProjectManager.configurations.builds import (
+    BuildKey,
+    BuildPolicy,
+    BuildRecord,
+    invalidate_build,
+    key_of,
+)
 from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.runs import ActivationError, activate_run
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
@@ -304,9 +310,7 @@ def run_execution(
 
             if validation.compile_required and build is not None:
                 # the validation build overwrote the build of the tree: the next run has to compile again
-                invalidate_build(
-                    args_copy.project_dir, BuildKey(build.configuration, build.mode, tuple(build.suggestions))
-                )
+                invalidate_build(args_copy.project_dir, key_of(build))
             if validation.compile_required:
                 if validation.compile_successful:
                     assert validation.compile_result is not None
