@@ -113,6 +113,7 @@ The *Configuration Setup* stage edits the scripts of the selected configuration.
 | `compile.sh (override)` | A build script used instead of the shared `compile.sh` for this configuration only. **Add Override** creates it, the button then removes it. |
 | `validate.sh` | Optional correctness check, run separately from `execute.sh`. **Add validate.sh** creates it. |
 | `compile_validate.sh (override)` | Optional build used for `validate.sh` only. |
+| `compile_incremental.sh (override)` | Optional script that continues the kept build tree (modes `seq` and `par`) instead of building from scratch, see [Incremental builds](Project_manager.md#builds). **Add Override** shows a script proposed from the configuration's `compile.sh` (CMake, make, ninja build lines without configure and clean steps); it is written only when you save it. |
 
 The scripts are executed with the project root as working directory and with the environment variables described in [Project manager](Project_manager.md#configuration-directory).
 
