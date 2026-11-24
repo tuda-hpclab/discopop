@@ -109,6 +109,8 @@ class CodeConfiguration(object):
         self.suggestion_application = None
         # the build of a candidate in a kept build tree (uses_kept_build_trees), None for a copy of its own
         self.kept_key: Optional[BuildKey] = None
+        # recorded with the measurements of a candidate in a kept build tree (build id, build kind)
+        self.build_annotations: Dict[str, Any] = {}
         logger.debug("Created configuration: " + root_path)
 
     def __str__(self) -> str:
@@ -257,6 +259,9 @@ class CodeConfiguration(object):
             message=lambda text: logger.debug(text.rstrip()),
         )
         if outcome.result in (BuildResult.BUILT, BuildResult.REUSED) and outcome.tree is not None:
+            self.build_annotations = {"build_id": key.build_id}
+            if outcome.record is not None:
+                self.build_annotations["build_kind"] = outcome.record.build_kind
             self.root_path = outcome.tree
             self.config_dot_dp_path = os.path.join(outcome.tree, ".discopop")
             return True
@@ -321,6 +326,7 @@ class CodeConfiguration(object):
             execution_time_regex=resolve_execution_time_regex(config_path, arguments.execution_time_regex),
             measurement=measurement,
             repetitions=arguments.execution_repetitions,
+            result_annotations=self.build_annotations or None,
         )
         if ret is None:
             result_returncode = 1
