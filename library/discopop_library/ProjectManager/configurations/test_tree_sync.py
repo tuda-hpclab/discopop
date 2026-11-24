@@ -232,3 +232,24 @@ def test_empty_directories_permissions_and_times_of_a_fresh_fill(tmp_path: Path)
     second = sync_tree(str(tree), copy_set(CopyExclusions(str(project))), first.synced, None, directories)
     assert os.stat(tree / "configure").st_mode & 0o777 == 0o644
     assert second.written == []  # same content: not written, so not compiled again
+
+
+def test_outputs_of_a_build_in_the_project_are_not_restored_before_an_incremental_build(tmp_path: Path) -> None:
+    project, tree = tmp_path / "p", tmp_path / "t"
+    _write(project / "main.c", "int main;\n", OLD)
+    _write(project / "main.o", "object of an in-place build of the project\n", OLD)
+    _, first = _first_copy(project, tree)
+    _write(tree / "main.o", "object compiled in the tree\n")  # the build in the tree replaced it
+
+    _write(project / "main.c", "int main = 1;\n", OLD)
+    incremental = _sync_with(project, tree, first, keep_outputs=True)
+    assert incremental.written == ["main.c"] and incremental.kept_outputs == ["main.o"]
+    assert (tree / "main.o").read_text() == "object compiled in the tree\n"
+
+    # before a full build the tree holds what a copy would
+    full = _sync_with(project, tree, incremental)
+    assert full.written == ["main.o"] and (tree / "main.o").read_text().startswith("object of an in-place")
+
+
+def _sync_with(project: Path, tree: Path, previous: SyncResult, keep_outputs: bool = False) -> SyncResult:
+    return sync_tree(str(tree), copy_set(CopyExclusions(str(project))), previous.synced, keep_outputs=keep_outputs)
