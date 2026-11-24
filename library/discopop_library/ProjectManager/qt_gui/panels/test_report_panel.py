@@ -227,6 +227,11 @@ def record_start(started: List[Any], _parent: Any, work: Any, handle: Any) -> An
     return mock.Mock()
 
 
+def test_the_cost_estimate_scales_with_the_detection_result() -> None:
+    text = report_panel.extraction_cost_text(int(1.2 * 1024**3))
+    assert "(1.2 GiB)" in text and "about 42.0 GiB of memory" in text
+
+
 def dot_discopop(panel: ReportPanel) -> Path:
     return Path(report_panel.dot_discopop_of(panel.arguments.project_dir))
 
@@ -240,7 +245,7 @@ def write_old_dump(panel: ReportPanel) -> Path:
 
 
 def test_missing_suggestion_extents_are_computed_on_request_only(
-    panel: ReportPanel, monkeypatch: pytest.MonkeyPatch
+    panel: ReportPanel, monkeypatch: pytest.MonkeyPatch, dialog_answers: DialogRecorder
 ) -> None:
     def no_decode(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("decoded in the GUI process")
@@ -250,9 +255,17 @@ def test_missing_suggestion_extents_are_computed_on_request_only(
     dump = write_old_dump(panel)
     panel.project_state.publish(ResultsChanged())
     assert panel.amdahl_notice.isVisibleTo(panel) and panel.compute_amdahl_button.isEnabled()
+    # the notice recommends the pattern detection and names the cost of the alternative
+    assert "run the pattern detection again" in panel.amdahl_label.text()
+    assert "(25 B)" in panel.amdahl_label.text()
 
     started: List[Any] = []
     monkeypatch.setattr(report_panel, "start_work", functools.partial(record_start, started))
+    # the cost is confirmed first: "No" starts nothing
+    dialog_answers.answer("ask_yes_no", False)
+    panel.compute_amdahl_button.click()
+    assert started == [] and dialog_answers.titles("ask_yes_no") == ["Compute Amdahl ceilings"]
+    dialog_answers.answer("ask_yes_no", True)
     panel.compute_amdahl_button.click()
     assert len(started) == 1 and not panel.compute_amdahl_button.isEnabled()
     panel.compute_amdahl_button.click()  # a second click while it runs starts nothing
@@ -275,8 +288,11 @@ def test_missing_suggestion_extents_are_computed_on_request_only(
     assert panel.status.text() == "Amdahl ceilings computed."
 
 
-def test_a_failed_extraction_is_reported(panel: ReportPanel, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_extraction_is_reported(
+    panel: ReportPanel, monkeypatch: pytest.MonkeyPatch, dialog_answers: DialogRecorder
+) -> None:
     write_old_dump(panel)
+    dialog_answers.answer("ask_yes_no", True)
     started: List[Any] = []
     monkeypatch.setattr(report_panel, "start_work", functools.partial(record_start, started))
     panel.compute_amdahl_ceilings()

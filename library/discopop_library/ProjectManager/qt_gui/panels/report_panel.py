@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.Amdahl.model import SuggestionRegion
-from discopop_library.Amdahl.regions import load_regions, needs_extraction, regions_stamp
+from discopop_library.Amdahl.regions import dump_path_of, load_regions, needs_extraction, regions_stamp
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.plots import mode_style, report_charts
 from discopop_library.ProjectManager.plots.data import ExecutionRecord, parse_execution_results
@@ -48,6 +48,7 @@ from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.reports.full import generate_full_report
+from discopop_library.ProjectManager.services.build_overview import format_size
 from discopop_library.ProjectManager.services.jobs import (
     JobSpec,
     WorkContext,
@@ -118,9 +119,21 @@ class PlotTab:
 
 _AMDAHL_MISSING_TEXT = (
     "Amdahl ceilings unavailable: the detection result was written by an older explorer and lacks the extents of "
-    "the suggestions. Run the pattern detection again, or compute them from the existing result (decodes the whole "
-    "detection result in a separate process: may take minutes and a lot of memory)."
+    "the suggestions. Recommended: run the pattern detection again."
 )
+# peak memory of decoding a detection result dump relative to its size (relearn: 41 GB for a 1.2 GB dump)
+DECODE_MEMORY_FACTOR = 35
+
+
+def extraction_cost_text(dump_size: int) -> str:
+    """What computing the extents from a dump of ``dump_size`` bytes costs (an estimate)."""
+    return (
+        "Computing them from the existing result decodes the whole detection result ("
+        + format_size(dump_size)
+        + ") in a separate process: expect minutes and about "
+        + format_size(dump_size * DECODE_MEMORY_FACTOR)
+        + " of memory."
+    )
 
 
 def dot_discopop_of(project_dir: str) -> str:
@@ -343,9 +356,18 @@ class ReportPanel(Panel):
         self.generate_report_button.setEnabled(not self._execution_running and bool(records))
         self._update_amdahl_notice()
 
+    def _dump_size(self) -> int:
+        try:
+            return os.path.getsize(dump_path_of(dot_discopop_of(self.arguments.project_dir)))
+        except OSError:
+            return 0
+
     def _update_amdahl_notice(self) -> None:
         running = self._extraction is not None
-        self.amdahl_notice.setVisible(running or needs_extraction(dot_discopop_of(self.arguments.project_dir)))
+        visible = running or needs_extraction(dot_discopop_of(self.arguments.project_dir))
+        self.amdahl_notice.setVisible(visible)
+        if visible:
+            self.amdahl_label.setText(_AMDAHL_MISSING_TEXT + " " + extraction_cost_text(self._dump_size()))
         self.compute_amdahl_button.setEnabled(not running)
         self.compute_amdahl_button.setText("Computing Amdahl ceilings..." if running else "Compute Amdahl ceilings")
 
@@ -592,6 +614,13 @@ class ReportPanel(Panel):
         """Extract the suggestion extents of a detection result of an older explorer, in a process of its own (the
         whole result is decoded: minutes and gigabytes for a large program, which the GUI must not hold)."""
         if self._extraction is not None:
+            return
+        if not dialogs.ask_yes_no(
+            self,
+            "Compute Amdahl ceilings",
+            extraction_cost_text(self._dump_size())
+            + " Running the pattern detection again is usually faster. Compute them anyway?",
+        ):
             return
         dot_dp = dot_discopop_of(self.arguments.project_dir)
         spec = JobSpec(
