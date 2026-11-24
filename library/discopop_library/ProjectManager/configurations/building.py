@@ -20,7 +20,7 @@ import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 import subprocess
 
@@ -36,13 +36,19 @@ from discopop_library.ProjectManager.configurations.builds import (
     BuildState,
     accepted_changes_text,
     build_status,
+    build_lock_path_of,
     build_tree_path_of,
     compute_fingerprint,
     delete_build,
+    forget_build,
+    kept_tree_path_of,
+    key_of,
     left_out_of,
+    list_builds,
     make_record,
     manifest_path_of,
     remove_build_files,
+    tree_key,
     write_build,
 )
 from discopop_library.ProjectManager.configurations.copy_exclusions import CopyExclusions
@@ -67,6 +73,9 @@ from discopop_library.ProjectManager.configurations.tree_sync import (
     write_tree_state,
 )
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
+from discopop_library.PatchApplicator.PatchApplicatorArguments import PatchApplicatorArguments
+from discopop_library.PatchApplicator.outside_project import patch_target_paths, read_file_mapping_paths
+from discopop_library.PatchApplicator.patch_applicator import run_with_result as apply_suggestions
 from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
 from discopop_library.ProjectManager.services import callpath_pruning
@@ -122,13 +131,15 @@ def build_lock(
     should_abort: Optional[Callable[[], bool]] = None,
     on_wait: Optional[Callable[[], None]] = None,
 ) -> Iterator[None]:
-    """Serializes everything that uses or changes the build tree of ``key`` (building and running in it).
+    """Serializes everything that uses or changes the build tree of ``key`` (building and running in it); the
+    builds of all sets of suggestions of a configuration and mode share one tree, and so this lock.
 
     Waits as long as another run holds the lock, calling ``on_wait`` once, and raises :class:`BuildLockAborted`
     if ``should_abort`` says so meanwhile.
     """
-    os.makedirs(os.path.dirname(manifest_path_of(arguments.project_dir, key)), exist_ok=True)
-    lock = FileLock(manifest_path_of(arguments.project_dir, key) + ".build.lock")
+    lock_path = build_lock_path_of(arguments.project_dir, key)
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    lock = FileLock(lock_path)
     waiting = False
     while True:
         try:
@@ -228,12 +239,18 @@ def ensure_build(
     # computed once: the fingerprint describes the pruning the compilation below uses, even if hotspot results change
     pruning_environment = callpath_pruning.environment(arguments, key.configuration) if key.mode == "dp" else None
     parts, entries = compute_fingerprint(arguments, key, compile_script, settings_path, pruning_environment)
-    tree = build_tree_path_of(arguments.project_root, key)
     kept_tree = _uses_kept_tree(arguments, key)
+    tree = (
+        kept_tree_path_of(arguments.project_root, key) if kept_tree else build_tree_path_of(arguments.project_root, key)
+    )
 
     try:
         if kept_tree:
-            _prepare_kept_tree(arguments, key, tree, message)
+            failed_application = _prepare_kept_tree(arguments, key, tree, message, on_application_failure)
+            if failed_application is not None:
+                return BuildOutcome(
+                    BuildResult.APPLICATION_FAILED, key, application_result=failed_application, tree=None
+                )
         else:
             message("Copying project to " + tree + "...\n")
             copy_configuration(
@@ -271,7 +288,7 @@ def ensure_build(
         )
         if compile_result is None or compile_result[0] != 0:
             # the files of a kept tree are those of the project, but its outputs are unknown: copied anew next time
-            remove_tree_state(arguments.project_dir, key.build_id)
+            remove_tree_state(arguments.project_dir, tree_key(key).build_id)
             _discard_tree(arguments, tree)
             return BuildOutcome(
                 BuildResult.COMPILE_FAILED,
@@ -281,7 +298,11 @@ def ensure_build(
                 message="Compilation failed.",
             )
         if kept_tree:
-            set_tree_state(arguments.project_dir, key.build_id, CLEAN)
+            set_tree_state(arguments.project_dir, tree_key(key).build_id, CLEAN)
+            # the builds of other suggestions in the tree are gone (their runs stay)
+            for other in list_builds(arguments.project_dir):
+                if other.build_id != key.build_id and os.path.abspath(other.tree) == os.path.abspath(tree):
+                    forget_build(arguments.project_dir, key_of(other))
         record = make_record(arguments, key, compile_script, settings_path, tree, compile_result[1], parts)
         write_build(
             arguments.project_dir, record, BuildFiles(sources=entries, left_out=left_out_of(arguments, entries))
@@ -303,52 +324,145 @@ def ensure_build(
 
 
 def _uses_kept_tree(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
-    """Whether the build ``key`` updates its tree instead of copying the project again (``configurations/tree_sync``):
-    builds without suggestions (their tree holds the project's files only)."""
-    return not key.suggestions
+    """Whether the build ``key`` is compiled in the kept tree of its configuration and mode, updated instead of
+    copied (``configurations/tree_sync.py``). Not a build whose suggestions may patch files outside of the project:
+    those are patched in place, which the tree does not isolate."""
+    return not (key.suggestions and arguments.allow_patching_outside_project)
 
 
 def _prepare_kept_tree(
-    arguments: ProjectManagerArguments, key: BuildKey, tree: PATH, message: Callable[[str], None]
-) -> None:
-    """Make ``tree`` hold what a fresh copy of the project would: the files of the project (written only where
-    they differ), no outputs of an earlier compilation, and a new copy of the project's ``.discopop``. A tree in
-    an unknown state (none recorded, an interrupted sync or compilation, changed by a validation build) is filled
-    from scratch."""
+    arguments: ProjectManagerArguments,
+    key: BuildKey,
+    tree: PATH,
+    message: Callable[[str], None],
+    on_application_failure: Optional[Callable[[PATH, PatchApplicationResult], None]] = None,
+) -> Optional[PatchApplicationResult]:
+    """Make ``tree`` hold what a fresh copy of the project with the suggestions of ``key`` would: the files of the
+    project (written only where they differ), the patched files instead of the originals, no outputs of an earlier
+    compilation, and a new copy of the project's ``.discopop``. A tree in an unknown state (none recorded, an
+    interrupted update or compilation, changed by a validation build) is filled from scratch.
+
+    The suggestions are applied to copies of the files they patch in a scratch directory first; if that fails,
+    the tree is not touched and the result of the application is returned (``on_application_failure`` is called
+    with the scratch directory)."""
     project_dir = arguments.project_dir
-    state = read_tree_state(project_dir, key.build_id)
+    tree_id = tree_key(key).build_id
+    state = read_tree_state(project_dir, tree_id)
     exclusions = CopyExclusions(arguments.project_root, listed=load_copy_exclude(project_dir))
     files = copy_set(exclusions)
-    report = exclusions.report()
-    if state is None or state.state != CLEAN or state.applied or not os.path.isdir(tree):
-        message("Copying project to " + tree + "...\n")
-        if os.path.lexists(tree):
-            shutil.rmtree(tree)
-        os.makedirs(tree)
-        previous: Dict[str, str] = {}
-        fresh = True
-    else:
-        message("Updating the build tree " + tree + "...\n")
-        previous = state.synced
-        fresh = False
-    if report is not None:
-        message(report + "\n")
-    write_tree_state(project_dir, key.build_id, TreeState(dict(previous), [], SYNCING))
-    result = sync_tree(tree, files, previous)
-    removed = clean_outputs(tree, result.synced, arguments.project_root)
-    copy_dot_discopop(arguments, tree, DATA_LEFT_OUT_OF_BUILDS)
-    clear_application_result(patch_applicator_dir_of(tree))
-    write_tree_state(project_dir, key.build_id, TreeState(result.synced, [], BUILDING))
-    if not fresh:
-        message(
-            "Changed files written: "
-            + str(len(result.written))
-            + ", deleted: "
-            + str(len(result.deleted))
-            + "; outputs of the last compilation removed: "
-            + str(len(removed))
-            + ".\n"
-        )
+    scratch = tree + ".scratch"
+    overrides: Dict[str, PATH] = {}
+    try:
+        if key.suggestions:
+            overrides, application_result = _apply_in_scratch(arguments, key, scratch)
+            if application_result is not None and application_result.failure:
+                logger.error("Suggestion application incomplete: " + application_result.summary())
+                if on_application_failure is not None:
+                    on_application_failure(scratch, application_result)
+                return application_result
+        fresh = state is None or state.state != CLEAN or not os.path.isdir(tree)
+        if fresh:
+            message("Copying project to " + tree + "...\n")
+            if os.path.lexists(tree):
+                shutil.rmtree(tree)
+            os.makedirs(tree)
+            previous: Dict[str, str] = {}
+        else:
+            assert state is not None
+            message("Updating the build tree " + tree + "...\n")
+            previous = state.synced
+        report = exclusions.report()
+        if report is not None:
+            message(report + "\n")
+        write_tree_state(project_dir, tree_id, TreeState(dict(previous), [], SYNCING))
+        result = sync_tree(tree, files, previous, overrides)
+        removed = clean_outputs(tree, result.synced, arguments.project_root)
+        copy_dot_discopop(arguments, tree, DATA_LEFT_OUT_OF_BUILDS)
+        if key.suggestions:
+            # what the application recorded: the applied suggestions, the result, the shifted lines
+            shutil.rmtree(patch_applicator_dir_of(tree), ignore_errors=True)
+            shutil.copytree(os.path.join(scratch, ".discopop", "patch_applicator"), patch_applicator_dir_of(tree))
+            line_mapping = os.path.join(scratch, ".discopop", "line_mapping.json")
+            if os.path.exists(line_mapping):
+                shutil.copyfile(line_mapping, os.path.join(tree, ".discopop", "line_mapping.json"))
+        else:
+            clear_application_result(patch_applicator_dir_of(tree))
+        write_tree_state(project_dir, tree_id, TreeState(result.synced, sorted(key.suggestions), BUILDING))
+        if not fresh:
+            message(
+                "Changed files written: "
+                + str(len(result.written))
+                + ", deleted: "
+                + str(len(result.deleted))
+                + "; outputs of the last compilation removed: "
+                + str(len(removed))
+                + ".\n"
+            )
+        return None
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _apply_in_scratch(
+    arguments: ProjectManagerArguments, key: BuildKey, scratch: PATH
+) -> Tuple[Dict[str, PATH], Optional[PatchApplicationResult]]:
+    """Apply the suggestions of ``key`` to copies of the files they patch, in ``scratch`` (a ``.discopop`` of its own
+    whose ``FileMapping.txt`` names the copies). Returns the patched files (relative path in the project -> copy)
+    and the result of the application."""
+    root = os.path.abspath(arguments.project_root)
+    project_dot = os.path.abspath(arguments.dot_dp)
+    if os.path.lexists(scratch):
+        shutil.rmtree(scratch)
+    scratch = os.path.abspath(scratch)
+    scratch_dot = os.path.join(scratch, ".discopop")
+    os.makedirs(scratch_dot)
+    os.symlink(os.path.join(project_dot, "patch_generator"), os.path.join(scratch_dot, "patch_generator"))
+    for name in ("line_mapping.json",):
+        if os.path.exists(os.path.join(project_dot, name)):
+            shutil.copyfile(os.path.join(project_dot, name), os.path.join(scratch_dot, name))
+    if os.path.isdir(os.path.join(project_dot, "patch_applicator")):
+        shutil.copytree(os.path.join(project_dot, "patch_applicator"), os.path.join(scratch_dot, "patch_applicator"))
+    clear_application_result(os.path.join(scratch_dot, "patch_applicator"))
+
+    mapping = read_file_mapping_paths(project_dot)
+    target_ids: Set[int] = set()
+    for suggestion in key.suggestions:
+        for target in patch_target_paths(project_dot, suggestion, mapping):
+            target_ids.update(file_id for file_id, path in mapping.items() if path == target)
+    overrides: Dict[str, PATH] = {}
+    lines: List[str] = []
+    for file_id in sorted(target_ids):
+        path = mapping[file_id]
+        relative = os.path.relpath(os.path.abspath(path), root)
+        if relative != ".." and not relative.startswith(".." + os.sep) and os.path.isfile(path):
+            copy = os.path.join(scratch, relative)
+            os.makedirs(os.path.dirname(copy), exist_ok=True)
+            shutil.copy2(path, copy)
+            overrides[relative.replace(os.sep, "/")] = copy
+            path = copy
+        # a file outside of the project keeps its path: the patch applicator refuses it (outside_project.py)
+        lines.append(str(file_id) + "\t" + path + "\n")
+    with open(os.path.join(scratch_dot, "FileMapping.txt"), "w") as file:
+        file.writelines(lines)
+
+    pa_args = PatchApplicatorArguments(
+        verbose=False,
+        apply=list(key.suggestions),
+        rollback=[],
+        clear=False,
+        load=False,
+        list=False,
+        log_level=arguments.log_level,
+        write_log=arguments.write_log,
+        allow_outside_project=False,
+    )
+    home_dir = os.getcwd()
+    os.chdir(scratch_dot)
+    try:
+        _retval, application_result = apply_suggestions(pa_args)
+    finally:
+        os.chdir(home_dir)
+    return overrides, application_result
 
 
 def _discard_tree(arguments: ProjectManagerArguments, tree: PATH) -> None:
