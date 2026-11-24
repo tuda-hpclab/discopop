@@ -40,7 +40,13 @@ from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONL
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
 from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.copy_exclusions import drop_below, left_out_paths
-from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, remove_tree_state, set_tree_state
+from discopop_library.ProjectManager.configurations.tree_sync import (
+    CLEAN,
+    DIRTY,
+    read_tree_state,
+    remove_tree_state,
+    set_tree_state,
+)
 from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored, load_fingerprint_ignore
 
@@ -182,7 +188,9 @@ class BuildChanges:
 # - environment: how the tree is compiled (scripts, settings, compilers, profiler, what is instrumented and how);
 #   the tree has to be built from scratch
 # Every part belongs to exactly one of them (checked by test_builds.py).
-CONTENT_PARTS = frozenset({"sources", "included_sources", "patches", "copy_exclude"})
+# not computed but found: the kept tree holds the code of another build (BuildStatus of build_status)
+TREE_PART = "tree"
+CONTENT_PARTS = frozenset({"sources", "included_sources", "patches", "copy_exclude", TREE_PART})
 ENVIRONMENT_PARTS = frozenset(
     {
         "compile_script",
@@ -231,6 +239,26 @@ def build_trees_dir_of(project_root: PATH) -> PATH:
 
 def build_tree_path_of(project_root: PATH, key: BuildKey) -> PATH:
     return os.path.join(build_trees_dir_of(project_root), key.build_id)
+
+
+def tree_key(key: BuildKey) -> BuildKey:
+    """The key whose kept tree the build ``key`` is compiled in: one tree per configuration, mode and role holds the
+    builds of every set of suggestions, one at a time (``configurations/tree_sync.py``)."""
+    return BuildKey(key.configuration, key.mode, (), key.role)
+
+
+def kept_tree_path_of(project_root: PATH, key: BuildKey) -> PATH:
+    return build_tree_path_of(project_root, tree_key(key))
+
+
+def build_lock_path_of(project_dir: PATH, key: BuildKey) -> PATH:
+    """The lock that serializes everything using or changing the tree of ``key``; the builds of all sets of
+    suggestions share it, as they share the tree."""
+    return manifest_path_of(project_dir, tree_key(key)) + ".build.lock"
+
+
+def _same_path(first: PATH, second: PATH) -> bool:
+    return os.path.abspath(first) == os.path.abspath(second)
 
 
 def _hash_file(path: PATH) -> str:
@@ -657,6 +685,23 @@ def describe_changes(changes: BuildChanges) -> str:
     return text
 
 
+def _tree_holds_other_code(arguments: ProjectManagerArguments, key: BuildKey, record: BuildRecord) -> Optional[str]:
+    """Why the kept tree of ``record`` does not hold the build ``key`` any more (None if it does, or if the build has
+    a tree of its own)."""
+    if not _same_path(record.tree, kept_tree_path_of(arguments.project_root, key)):
+        return None
+    state = read_tree_state(arguments.project_dir, tree_key(key).build_id)
+    if state is None:
+        return None  # compiled before trees were kept
+    if state.state != CLEAN:
+        return "its tree was changed after the compilation (" + state.state + ")"
+    if sorted(state.applied) != sorted(key.suggestions):
+        if state.applied:
+            return "its tree holds the build with the suggestions " + ", ".join(state.applied) + " now"
+        return "its tree holds the build without suggestions now"
+    return None
+
+
 def build_status(
     arguments: ProjectManagerArguments, key: BuildKey, compile_script: PATH, settings_path: PATH
 ) -> BuildStatus:
@@ -671,6 +716,10 @@ def build_status(
         return BuildStatus(BuildState.NONE, "No build yet.")
     if not os.path.isdir(record.tree):
         return BuildStatus(BuildState.NONE, "The build tree " + record.tree + " does not exist any more.", record)
+    tree_cause = _tree_holds_other_code(arguments, key, record)
+    if tree_cause is not None:
+        changes = BuildChanges((TREE_PART,), causes=((TREE_PART, tree_cause),))
+        return BuildStatus(BuildState.STALE, describe_changes(changes), record, changes)
     parts, entries = compute_fingerprint(arguments, key, compile_script, settings_path)
     patterns = load_fingerprint_ignore(arguments.project_dir)
     recorded_parts = dict(record.fingerprint_parts)
@@ -772,8 +821,7 @@ def accept_build(
     Returns the status before the acceptance (CURRENT: nothing to accept, NONE: no build). Raises
     :class:`BuildInUseError` while a run or a compilation holds the build.
     """
-    manifest = manifest_path_of(arguments.project_dir, key)
-    lock = FileLock(manifest + ".build.lock")
+    lock = FileLock(build_lock_path_of(arguments.project_dir, key))
     try:
         lock.acquire(timeout=0)
     except Timeout:
@@ -791,6 +839,11 @@ def accept_build(
                 + ". Accepting cannot change how its code is pruned: compile it again"
                 + (", or first accept or rebuild the hd build named above" if "_hd is stale" in cause else "")
                 + "."
+            )
+        if TREE_PART in status.changes.parts:
+            raise BuildAcceptError(
+                "The build tree holds the code of another build now (other suggestions, or an interrupted "
+                "compilation). Accepting cannot change that: compile it again."
             )
         if "openmp" in status.changes.parts:
             # the tree was compiled with or without the OpenMP flags; accepting would make its data claim the other
@@ -849,7 +902,16 @@ def invalidate_build(project_dir: PATH, key: BuildKey) -> None:
     except OSError:
         pass
     remove_build_files(project_dir, key)
-    set_tree_state(project_dir, key.build_id, DIRTY)
+    set_tree_state(project_dir, tree_key(key).build_id, DIRTY)
+
+
+def forget_build(project_dir: PATH, key: BuildKey) -> None:
+    """Remove the manifest of the build ``key`` but not its tree: another build was compiled into it."""
+    try:
+        os.remove(manifest_path_of(project_dir, key))
+    except OSError:
+        pass
+    remove_build_files(project_dir, key)
 
 
 class BuildAcceptError(Exception):
@@ -865,7 +927,7 @@ def delete_build(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
     record = read_build(arguments.project_dir, key)
     manifest = manifest_path_of(arguments.project_dir, key)
     existed = record is not None or os.path.exists(manifest)
-    lock = FileLock(manifest + ".build.lock")
+    lock = FileLock(build_lock_path_of(arguments.project_dir, key))
     try:
         lock.acquire(timeout=0)
     except Timeout:
@@ -895,7 +957,8 @@ def _delete_build_locked(
         except OSError:
             pass
     remove_build_files(arguments.project_dir, key)
-    remove_tree_state(arguments.project_dir, key.build_id)
+    if record is not None and _same_path(record.tree, kept_tree_path_of(arguments.project_root, key)):
+        remove_tree_state(arguments.project_dir, tree_key(key).build_id)
 
 
 def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequence[str]] = None) -> List[str]:

@@ -854,6 +854,7 @@ def test_every_part_of_the_fingerprint_is_classified(project: Dict[str, Path]) -
     from discopop_library.ProjectManager.configurations.builds import (
         CONTENT_PARTS,
         ENVIRONMENT_PARTS,
+        TREE_PART,
         compute_fingerprint_parts,
     )
     from discopop_library.ProjectManager.services import openmp_handling
@@ -880,7 +881,7 @@ def test_every_part_of_the_fingerprint_is_classified(project: Dict[str, Path]) -
                     str(project["configs"] / (mode + "_settings.json")),
                 )
             )
-    assert seen == CONTENT_PARTS | ENVIRONMENT_PARTS
+    assert seen | {TREE_PART} == CONTENT_PARTS | ENVIRONMENT_PARTS  # TREE_PART is found, not computed
 
 
 def test_the_role_is_part_of_the_id_and_survives_the_manifest(project: Dict[str, Path]) -> None:
@@ -987,3 +988,124 @@ def test_the_data_runs_link_to_stays_when_the_tree_is_built_again(project: Dict[
     _build_with_messages(project)
 
     assert run_copy.read_text() == "data of build 1\n"
+
+
+def _add_suggestions(project: Dict[str, Path]) -> None:
+    """Suggestion 1 patches main.c, 2 patches other.c, 9 does not apply."""
+    import subprocess
+
+    root, dot = project["root"], project["root"] / ".discopop"
+    (root / "other.c").write_text("int other = 0;\n")
+    (dot / "FileMapping.txt").write_text("1\t" + str(root / "main.c") + "\n2\t" + str(root / "other.c") + "\n")
+    (dot / "line_mapping.json").write_text(json.dumps({"1": {"1": 1}, "2": {"1": 1}}))
+    patched = {"1": ("main.c", 1, "int main() { return 7; }\n"), "2": ("other.c", 2, "int other = 2;\n")}
+    patched["9"] = ("main.c", 1, "something else\n")
+    for suggestion, (name, file_id, text) in patched.items():
+        original = root / name
+        modified = project["tmp"] / (name + "." + suggestion)
+        modified.write_text(text)
+        if suggestion == "9":
+            original = project["tmp"] / "not_main.c"
+            original.write_text("unrelated\n")
+        diff = subprocess.run(["diff", "-Naru", str(original), str(modified)], stdout=subprocess.PIPE).stdout
+        (dot / "patch_generator" / suggestion).mkdir(parents=True)
+        (dot / "patch_generator" / suggestion / (str(file_id) + ".patch")).write_bytes(diff)
+
+
+def _build_suggestions(project: Dict[str, Path], suggestions: Tuple[str, ...]) -> Tuple[BuildOutcome, str]:
+    messages: List[str] = []
+    arguments = _arguments(project["root"], apply_suggestions=",".join(suggestions) if suggestions else None)
+    key = BuildKey("cfg", "seq", suggestions)
+    with build_lock(arguments, key):
+        outcome = ensure_build(
+            arguments,
+            key,
+            str(project["configs"] / "cfg"),
+            str(project["configs"] / "seq_settings.json"),
+            str(project["compile"]),
+            1,
+            BuildPolicy.AUTO,
+            message=messages.append,
+        )
+    return outcome, "".join(messages)
+
+
+def test_the_builds_of_all_suggestion_sets_share_one_kept_tree(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state
+
+    _add_suggestions(project)
+    project_dir = _project_dir(project)
+
+    first, text = _build_suggestions(project, ("1",))
+    assert first.result == BuildResult.BUILT and first.tree is not None
+    tree = Path(first.tree)
+    assert tree.name == "cfg_seq" and "Copying project" in text
+    assert (tree / "main.c").read_text() == "int main() { return 7; }\n"
+    assert (tree / "prog.out").read_text() == "int main() { return 7; }\n"
+    assert first.application_result is not None and first.application_result.applied == ["1"]
+    assert (project["root"] / "main.c").read_text() == "int main() { return 0; }\n"  # the project is untouched
+    assert _status(project, BuildKey("cfg", "seq", ("1",))).state == BuildState.CURRENT
+    other_written = os.stat(tree / "other.c").st_mtime_ns
+
+    second, text = _build_suggestions(project, ("2",))
+    assert second.result == BuildResult.BUILT and second.tree == first.tree
+    assert "Updating the build tree" in text and "Changed files written: 2" in text
+    assert (tree / "main.c").read_text() == "int main() { return 0; }\n"  # the original is back
+    assert (tree / "other.c").read_text() == "int other = 2;\n"
+    assert os.stat(tree / "other.c").st_mtime_ns != other_written
+    state = read_tree_state(project_dir, "cfg_seq")
+    assert state is not None and state.applied == ["2"]
+    # one build per tree: the build of suggestion 1 is gone, its id is free
+    assert [r.build_id for r in list_builds(project_dir)] == [BuildKey("cfg", "seq", ("2",)).build_id]
+    assert _status(project, BuildKey("cfg", "seq", ("1",))).state == BuildState.NONE
+    (record,) = list_builds(project_dir)
+    assert record.suggestions == ["2"]  # runs of it record the suggestions (activate_run refuses them)
+
+    third, _ = _build_suggestions(project, ())
+    assert third.result == BuildResult.BUILT and third.tree == first.tree
+    assert (tree / "other.c").read_text() == "int other = 0;\n"
+    assert _status(project, BuildKey("cfg", "seq", ("2",))).state == BuildState.NONE
+    assert _status(project).state == BuildState.CURRENT
+
+
+def test_a_failed_application_leaves_the_kept_tree_alone(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state
+
+    _add_suggestions(project)
+    first, _ = _build_suggestions(project, ("1",))
+    assert first.tree is not None
+    before = read_tree_state(_project_dir(project), "cfg_seq")
+
+    failed, _ = _build_suggestions(project, ("9",))
+
+    assert failed.result == BuildResult.APPLICATION_FAILED
+    assert (Path(first.tree) / "main.c").read_text() == "int main() { return 7; }\n"
+    assert read_tree_state(_project_dir(project), "cfg_seq") == before
+    assert not Path(first.tree + ".scratch").exists()
+    assert _status(project, BuildKey("cfg", "seq", ("1",))).state == BuildState.CURRENT
+
+
+def test_a_build_whose_tree_holds_another_build_is_stale_and_cannot_be_accepted(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import TreeState, write_tree_state
+
+    _build(project)
+    write_tree_state(_project_dir(project), "cfg_seq", TreeState({}, ["5"], "clean"))
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert status.changes.parts == ("tree",) and "suggestions 5" in status.reason
+    arguments = _arguments(project["root"])
+    with pytest.raises(BuildAcceptError):
+        accept_build(arguments, KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json"))
+
+
+def test_the_builds_of_one_tree_share_its_lock(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import ROLE_VALIDATE, build_lock_path_of
+
+    project_dir = _project_dir(project)
+    one, other = BuildKey("cfg", "par", ("1",)), BuildKey("cfg", "par", ("2", "3"))
+    assert build_lock_path_of(project_dir, one) == build_lock_path_of(project_dir, other)
+    assert build_lock_path_of(project_dir, one) == build_lock_path_of(project_dir, BuildKey("cfg", "par"))
+    assert build_lock_path_of(project_dir, one) != build_lock_path_of(project_dir, BuildKey("cfg", "seq"))
+    assert build_lock_path_of(project_dir, one) != build_lock_path_of(
+        project_dir, BuildKey("cfg", "par", (), ROLE_VALIDATE)
+    )
