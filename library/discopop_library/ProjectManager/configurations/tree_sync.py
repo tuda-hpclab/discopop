@@ -186,6 +186,8 @@ class SyncResult:
     written: List[str] = field(default_factory=list)
     # files that were deleted, as the project does not have them any more
     deleted: List[str] = field(default_factory=list)
+    # files of the project that a compilation changed in the tree and that were left as they are (keep_outputs)
+    kept_outputs: List[str] = field(default_factory=list)
     # what the tree holds now (TreeState.synced)
     synced: Dict[str, str] = field(default_factory=dict)
 
@@ -201,6 +203,7 @@ def sync_tree(
     overrides: Optional[Mapping[str, PATH]] = None,
     directories: Iterable[str] = (),
     preserve_times: bool = False,
+    keep_outputs: bool = False,
 ) -> SyncResult:
     """Make the files of ``tree`` those of ``files`` (relative path -> source; a patched file of ``overrides``
     instead), knowing that it was synced to the signatures ``previous`` before. See the module docstring.
@@ -221,6 +224,13 @@ def sync_tree(
         # project in the tree, e.g. a configure step writing into the sources)
         if previous.get(name) == _entry(wanted[name], destination):
             result.synced[name] = previous[name]
+            continue
+        if keep_outputs and name not in overrides and _changed_in_tree(previous.get(name), destination):
+            # the build changed this file of the project in the tree: an output (e.g. an object file of a build in
+            # the project directory). Restoring the project's version would give it a new modification time and
+            # make the build system take it for current. Recorded as before, so a full build restores it.
+            result.synced[name] = previous[name]  # type: ignore[assignment]
+            result.kept_outputs.append(name)
             continue
         if not _same_content(sources[name], destination):
             _write(sources[name], destination, preserve_times)
@@ -245,6 +255,14 @@ def _mode_of(path: PATH) -> int:
         return os.stat(path).st_mode & 0o7777
     except OSError:
         return -1
+
+
+def _changed_in_tree(previous: Optional[str], destination: PATH) -> bool:
+    """Whether the file at ``destination`` differs from what the sync recorded for it (``previous``)."""
+    if previous is None or "|" not in previous:
+        return False
+    recorded = previous.rsplit("|", 1)[1]
+    return recorded != "missing" and (signature_of(destination) if _is_file(destination) else "missing") != recorded
 
 
 def _entry(wanted: str, destination: PATH) -> str:
