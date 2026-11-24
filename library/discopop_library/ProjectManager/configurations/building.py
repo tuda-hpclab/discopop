@@ -525,7 +525,16 @@ def _prepare_kept_tree(
             message(report + "\n")
         write_tree_state(project_dir, tree_id, TreeState(dict(previous), [], SYNCING))
         result = sync_tree(
-            tree, files, previous, overrides, directories, preserve_times=fresh, keep_outputs=incremental
+            tree,
+            files,
+            previous,
+            overrides,
+            directories,
+            # before a full build, the tree is a copy: the project's modification times (an output of a build in the
+            # project directory must not look newer than a patched source); before an incremental build, the files
+            # written must look newer than what the last compilation made of them
+            preserve_times=not incremental,
+            keep_outputs=incremental,
         )
         removed = [] if incremental else clean_outputs(tree, result.synced, arguments.project_root, directories)
         copy_dot_discopop(arguments, tree, DATA_LEFT_OUT_OF_BUILDS)

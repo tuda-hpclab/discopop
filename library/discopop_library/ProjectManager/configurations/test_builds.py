@@ -1201,3 +1201,29 @@ def test_only_a_tree_compiled_in_the_same_environment_and_mode_is_compiled_incre
         (project["root"] / "main.c").write_text("int main() { return %d; }\n" % (20 + _))
         _build(project, key=dp_key)
     assert _kinds(project)[-2:] == ["full full", "full full"]
+
+
+def test_a_full_build_in_the_kept_tree_does_not_take_restored_outputs_for_current(project: Dict[str, Path]) -> None:
+    """Like make without a clean step: main.o is compiled only if it is older than main.c. The project holds an
+    up-to-date main.o of a build in place, which a copy holds as well. Suggestions 1 and 3 both patch main.c."""
+    import subprocess
+
+    _add_suggestions(project)
+    root, dot = project["root"], project["root"] / ".discopop"
+    modified = project["tmp"] / "main.c.3"
+    modified.write_text("int main() { return 8; }\n")
+    diff = subprocess.run(["diff", "-Naru", str(root / "main.c"), str(modified)], stdout=subprocess.PIPE).stdout
+    (dot / "patch_generator" / "3").mkdir()
+    (dot / "patch_generator" / "3" / "1.patch").write_bytes(diff)
+    project["compile"].write_text("#!/bin/bash\n[ main.o -nt main.c ] || cp main.c main.o\ncp main.o prog.out\n")
+    (root / "main.o").write_text("object of the unpatched main.c\n")
+    os.utime(root / "main.c", (OLD_TIME, OLD_TIME))
+    os.utime(root / "main.o", (OLD_TIME + 10, OLD_TIME + 10))
+
+    for suggestions, expected in ((("1",), "return 7"), (("3",), "return 8"), ((), "object of the unpatched")):
+        outcome, _ = _build_suggestions(project, suggestions)
+        assert outcome.result == BuildResult.BUILT and outcome.tree is not None
+        assert expected in (Path(outcome.tree) / "prog.out").read_text(), suggestions
+
+
+OLD_TIME = 1_000_000_000

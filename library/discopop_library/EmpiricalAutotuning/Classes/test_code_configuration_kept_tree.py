@@ -91,6 +91,9 @@ def test_candidates_share_the_kept_tree_and_are_compiled_incrementally(project: 
     for candidate in (first, second, third):
         assert candidate.execution_result is not None and candidate.execution_result.result_valid
     assert "[1, 2]" in third.label
+    results = json.loads((project["dot"] / "project" / "execution_results.json").read_text())
+    kinds = [entry.get("build_kind") for entry in results["cfg"]["execute.sh"]["par_settings.json"]]
+    assert "incremental" in kinds
     # the project itself is never patched, and no copy per candidate was made
     assert (project["root"] / "main.c").read_text() == "main 0\n"
     assert sorted(os.listdir(project["tmp"] / "proj_discopop_builds")) == ["cfg_par"]

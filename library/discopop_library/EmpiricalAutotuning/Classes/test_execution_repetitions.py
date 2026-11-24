@@ -94,6 +94,7 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> List[_RecordedCall]:
         measurement: Optional[Dict[str, Any]] = None,
         repetitions: int = 1,
         should_abort: Any = None,
+        result_annotations: Optional[Dict[str, Any]] = None,
     ) -> Tuple[int, float, str, str]:
         recorded.append(_RecordedCall(script_path, repetitions))
         if measurement is not None:
