@@ -20,7 +20,7 @@ import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Iterator, Optional, Tuple
+from typing import Callable, Dict, Iterator, Optional, Tuple
 
 import subprocess
 
@@ -45,11 +45,29 @@ from discopop_library.ProjectManager.configurations.builds import (
     remove_build_files,
     write_build,
 )
+from discopop_library.ProjectManager.configurations.copy_exclusions import CopyExclusions
 from discopop_library.ProjectManager.configurations.copying import (
     copy_configuration,
+    copy_dot_discopop,
     get_application_result,
+    patch_applicator_dir_of,
     restore_outside_patches,
 )
+from discopop_library.ProjectManager.configurations.tree_sync import (
+    BUILDING,
+    CLEAN,
+    SYNCING,
+    TreeState,
+    clean_outputs,
+    copy_set,
+    read_tree_state,
+    remove_tree_state,
+    set_tree_state,
+    sync_tree,
+    write_tree_state,
+)
+from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
+from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
 from discopop_library.ProjectManager.services import callpath_pruning
 
@@ -211,17 +229,21 @@ def ensure_build(
     pruning_environment = callpath_pruning.environment(arguments, key.configuration) if key.mode == "dp" else None
     parts, entries = compute_fingerprint(arguments, key, compile_script, settings_path, pruning_environment)
     tree = build_tree_path_of(arguments.project_root, key)
+    kept_tree = _uses_kept_tree(arguments, key)
 
-    message("Copying project to " + tree + "...\n")
     try:
-        copy_configuration(
-            arguments,
-            config_path,
-            settings_path,
-            destination=tree,
-            leave_out_of_dot_discopop=DATA_LEFT_OUT_OF_BUILDS,
-            on_left_out=lambda text: message(text + "\n"),
-        )
+        if kept_tree:
+            _prepare_kept_tree(arguments, key, tree, message)
+        else:
+            message("Copying project to " + tree + "...\n")
+            copy_configuration(
+                arguments,
+                config_path,
+                settings_path,
+                destination=tree,
+                leave_out_of_dot_discopop=DATA_LEFT_OUT_OF_BUILDS,
+                on_left_out=lambda text: message(text + "\n"),
+            )
     except Exception as error:
         return BuildOutcome(BuildResult.COPY_FAILED, key, message="Error copying project: " + str(error))
 
@@ -248,6 +270,8 @@ def ensure_build(
             callpath_pruning_environment=pruning_environment,
         )
         if compile_result is None or compile_result[0] != 0:
+            # the files of a kept tree are those of the project, but its outputs are unknown: copied anew next time
+            remove_tree_state(arguments.project_dir, key.build_id)
             _discard_tree(arguments, tree)
             return BuildOutcome(
                 BuildResult.COMPILE_FAILED,
@@ -256,6 +280,8 @@ def ensure_build(
                 application_result=application_result,
                 message="Compilation failed.",
             )
+        if kept_tree:
+            set_tree_state(arguments.project_dir, key.build_id, CLEAN)
         record = make_record(arguments, key, compile_script, settings_path, tree, compile_result[1], parts)
         write_build(
             arguments.project_dir, record, BuildFiles(sources=entries, left_out=left_out_of(arguments, entries))
@@ -274,6 +300,55 @@ def ensure_build(
             restore_outside_patches(tree)
         except Exception as error:
             logger.error("Restoring the files outside the project failed: " + str(error))
+
+
+def _uses_kept_tree(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
+    """Whether the build ``key`` updates its tree instead of copying the project again (``configurations/tree_sync``):
+    builds without suggestions (their tree holds the project's files only)."""
+    return not key.suggestions
+
+
+def _prepare_kept_tree(
+    arguments: ProjectManagerArguments, key: BuildKey, tree: PATH, message: Callable[[str], None]
+) -> None:
+    """Make ``tree`` hold what a fresh copy of the project would: the files of the project (written only where
+    they differ), no outputs of an earlier compilation, and a new copy of the project's ``.discopop``. A tree in
+    an unknown state (none recorded, an interrupted sync or compilation, changed by a validation build) is filled
+    from scratch."""
+    project_dir = arguments.project_dir
+    state = read_tree_state(project_dir, key.build_id)
+    exclusions = CopyExclusions(arguments.project_root, listed=load_copy_exclude(project_dir))
+    files = copy_set(exclusions)
+    report = exclusions.report()
+    if state is None or state.state != CLEAN or state.applied or not os.path.isdir(tree):
+        message("Copying project to " + tree + "...\n")
+        if os.path.lexists(tree):
+            shutil.rmtree(tree)
+        os.makedirs(tree)
+        previous: Dict[str, str] = {}
+        fresh = True
+    else:
+        message("Updating the build tree " + tree + "...\n")
+        previous = state.synced
+        fresh = False
+    if report is not None:
+        message(report + "\n")
+    write_tree_state(project_dir, key.build_id, TreeState(dict(previous), [], SYNCING))
+    result = sync_tree(tree, files, previous)
+    removed = clean_outputs(tree, result.synced, arguments.project_root)
+    copy_dot_discopop(arguments, tree, DATA_LEFT_OUT_OF_BUILDS)
+    clear_application_result(patch_applicator_dir_of(tree))
+    write_tree_state(project_dir, key.build_id, TreeState(result.synced, [], BUILDING))
+    if not fresh:
+        message(
+            "Changed files written: "
+            + str(len(result.written))
+            + ", deleted: "
+            + str(len(result.deleted))
+            + "; outputs of the last compilation removed: "
+            + str(len(removed))
+            + ".\n"
+        )
 
 
 def _discard_tree(arguments: ProjectManagerArguments, tree: PATH) -> None:

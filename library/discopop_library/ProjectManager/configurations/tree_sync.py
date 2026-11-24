@@ -60,7 +60,7 @@ _PATCHED = "patched:"
 class TreeState:
     """What a kept build tree holds."""
 
-    # relative path -> signature (:func:`signature_of`) of the file the tree got
+    # relative path -> signature (:func:`signature_of`) of the file the tree got, and of that file in the tree
     synced: Dict[str, str] = field(default_factory=dict)
     # the suggestions applied to the files of the tree
     applied: List[str] = field(default_factory=list)
@@ -173,7 +173,7 @@ class SyncResult:
     written: List[str] = field(default_factory=list)
     # files that were deleted, as the project does not have them any more
     deleted: List[str] = field(default_factory=list)
-    # the signatures of what the tree holds now (TreeState.synced)
+    # what the tree holds now (TreeState.synced)
     synced: Dict[str, str] = field(default_factory=dict)
 
     @property
@@ -190,29 +190,70 @@ def sync_tree(
     """Make the files of ``tree`` those of ``files`` (relative path -> source; a patched file of ``overrides``
     instead), knowing that it was synced to the signatures ``previous`` before. See the module docstring.
 
-    A file whose signature is unchanged is not looked at. One whose signature changed is compared by content with
-    the file in the tree and written only if it differs (a ``touch`` or a checkout of the same content does not
-    cause a compilation). Raises :class:`OSError` if a file cannot be written; the caller marks the tree to be
-    copied anew.
+    A file whose signature is unchanged, in the project and in the tree, is not read. One whose signature changed is
+    compared by content with the file in the tree and written only if it differs (a ``touch`` or a checkout of the
+    same content does not cause a compilation). Raises :class:`OSError` if a file cannot be written; the caller
+    marks the tree to be copied anew.
     """
     overrides = dict(overrides or {})
     sources = dict(files)
     sources.update(overrides)
-    result = SyncResult(synced=signatures_of(files, overrides))
+    wanted = signatures_of(files, overrides)
+    result = SyncResult()
     for name in sorted(sources):
-        if name in previous and previous[name] == result.synced[name] and _is_file(os.path.join(tree, name)):
-            continue
         destination = os.path.join(tree, name)
-        if _same_content(sources[name], destination):
+        # unchanged in the project, and in the tree as the sync left it (a compilation may change a file of the
+        # project in the tree, e.g. a configure step writing into the sources)
+        if previous.get(name) == _entry(wanted[name], destination):
+            result.synced[name] = previous[name]
             continue
-        _write(sources[name], destination)
-        result.written.append(name)
+        if not _same_content(sources[name], destination):
+            _write(sources[name], destination)
+            result.written.append(name)
+        result.synced[name] = _entry(wanted[name], destination)
     for name in sorted(set(previous) - set(sources)):
         destination = os.path.join(tree, name)
         if os.path.lexists(destination) and not os.path.isdir(destination):
             os.remove(destination)
             result.deleted.append(name)
     return result
+
+
+def _entry(wanted: str, destination: PATH) -> str:
+    """The entry of :attr:`TreeState.synced`: the signature of the source and that of the file in the tree."""
+    return wanted + "|" + (signature_of(destination) if _is_file(destination) else "missing")
+
+
+def clean_outputs(tree: PATH, synced: Mapping[str, str], project_root: PATH) -> List[str]:
+    """Delete everything in ``tree`` outside of ``.discopop`` that is no file of the project (``synced``): the
+    outputs of earlier compilations, so that a compile script runs as in a fresh copy. An empty directory is kept
+    only if the project has it empty as well (a copy holds it). Returns the deleted files (relative paths)."""
+    tree = os.path.abspath(tree)
+    deleted: List[str] = []
+    for directory, subdirectories, names in os.walk(tree, topdown=True):
+        relative_dir = os.path.relpath(directory, tree)
+        prefix = "" if relative_dir == "." else relative_dir.replace(os.sep, "/") + "/"
+        if not prefix:
+            subdirectories[:] = [name for name in subdirectories if name != ".discopop"]
+        for name in names + [d for d in subdirectories if os.path.islink(os.path.join(directory, d))]:
+            if prefix + name not in synced:
+                os.remove(os.path.join(directory, name))
+                deleted.append(prefix + name)
+    # empty directories, deepest first
+    for directory, subdirectories, names in os.walk(tree, topdown=False):
+        relative = os.path.relpath(directory, tree)
+        if relative == "." or relative.split(os.sep, 1)[0] == ".discopop":
+            continue
+        if not os.listdir(directory) and not _empty_directory(os.path.join(project_root, relative)):
+            os.rmdir(directory)
+    return deleted
+
+
+def _empty_directory(path: PATH) -> bool:
+    try:
+        return os.path.isdir(path) and not os.listdir(path)
+    except OSError:
+        return False
 
 
 def _is_file(path: PATH) -> bool:
