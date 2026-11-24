@@ -40,6 +40,9 @@ class AutotunerRequest:
     evaluate_ids: Tuple[str, ...]
     # None: the whole search space
     search_space_ids: Optional[Tuple[str, ...]]
+    # compile the seq / par candidates one after the other in the kept build tree of their mode (False: a copy of
+    # the project per candidate, --no-kept-build-trees)
+    kept_build_trees: bool = True
 
 
 @dataclass(frozen=True)
