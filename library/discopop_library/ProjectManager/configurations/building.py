@@ -17,6 +17,7 @@ callers' business: they execute in the returned tree.
 import logging
 import os
 import shutil
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -544,6 +545,18 @@ def _prepare_kept_tree(
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+def check_suggestions(arguments: ProjectManagerArguments, key: BuildKey) -> Optional[PatchApplicationResult]:
+    """Whether the suggestions of ``key`` apply, without building: applied to copies of the files they patch in a
+    temporary directory (as :func:`ensure_build` does before it touches the tree). None without suggestions."""
+    if not key.suggestions:
+        return None
+    scratch = tempfile.mkdtemp(prefix="dp_suggestion_check_")
+    try:
+        return _apply_in_scratch(arguments, key, os.path.join(scratch, "tree"))[1]
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def _apply_in_scratch(
     arguments: ProjectManagerArguments, key: BuildKey, scratch: PATH
 ) -> Tuple[Dict[str, PATH], Optional[PatchApplicationResult]]:
@@ -636,6 +649,7 @@ __all__ = [
     "BuildResult",
     "BuildLockAborted",
     "build_lock",
+    "check_suggestions",
     "delete_build",
     "ensure_build",
 ]

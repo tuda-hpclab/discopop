@@ -41,6 +41,10 @@ class AutotunerArguments(GeneralArguments):
     # diagnostics for a single suggestion and would otherwise pay a full program run
     # per invocation.
     compile_only: bool = False
+    # Compile the seq / par candidates one after the other in the kept build tree of their mode (incrementally, if
+    # the configuration has a compile_incremental.sh) instead of in a copy of the project each; see
+    # EmpiricalAutotuning/Classes/CodeConfiguration.uses_kept_build_trees.
+    kept_build_trees: bool = True
     # Tuning knobs of the hotspot-guided region descent (-A 6). Defaults are chosen so
     # the algorithm can be run without any of them.
     noise_threshold: float = 0.02

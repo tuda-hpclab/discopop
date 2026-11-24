@@ -269,3 +269,13 @@ def test_mutation_without_known_genes_is_a_noop() -> None:
     """Regression: an empty gene pool used to raise ValueError from randint(0, -1)."""
     population: List[CHROMOSOME] = [tuple()]
     assert __mutate(logger, population, 3) == [tuple()]
+
+
+def test_nearest_neighbour_order_changes_few_suggestions_between_candidates() -> None:
+    from discopop_library.EmpiricalAutotuning.optimization.evolutionary_combination import nearest_neighbour_order
+
+    population = [(1, 2, 3), (4,), (1,), (1, 2), (4, 5)]
+    ordered = nearest_neighbour_order(population)
+    assert sorted(ordered) == sorted(population)
+    assert ordered == [(1,), (1, 2), (1, 2, 3), (4,), (4, 5)]
+    assert nearest_neighbour_order([]) == []
