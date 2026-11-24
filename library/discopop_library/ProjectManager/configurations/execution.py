@@ -44,7 +44,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     project_directories_of,
     record_instrumented_directories,
 )
-from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
+from discopop_library.ProjectManager.services import build_thread_count, callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -450,7 +450,11 @@ def execute_configuration(
         if text is not None:
             openmp_warnings.append(text)
         my_env.update(openmp_handling.environment(arguments))
-    my_env["OMP_NUM_THREADS"] = str(thread_count)
+    # nproc honors OMP_NUM_THREADS: a compile script only gets the thread count of the run if the project says so,
+    # otherwise `make -j $(nproc)` of a par:8 build would run 8 jobs. A value of the environment or the settings file
+    # is left alone
+    if not script_name.startswith("compile") or build_thread_count.passes_thread_count_to_builds(arguments):
+        my_env["OMP_NUM_THREADS"] = str(thread_count)
     if dot_discopop is not None:
         my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
 
