@@ -39,6 +39,7 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONLY_FILES
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
 from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
+from discopop_library.ProjectManager.configurations.compile_script import resolve_incremental_compile_script_path
 from discopop_library.ProjectManager.configurations.copy_exclusions import drop_below, left_out_paths
 from discopop_library.ProjectManager.configurations.tree_sync import (
     CLEAN,
@@ -46,6 +47,7 @@ from discopop_library.ProjectManager.configurations.tree_sync import (
     read_tree_state,
     remove_tree_state,
     set_tree_state,
+    tree_states_dir_of,
 )
 from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored, load_fingerprint_ignore
@@ -121,6 +123,8 @@ class BuildRecord:
     fingerprint_parts: Dict[str, str] = field(default_factory=dict)
     # BuildKey.role (manifests written before it have none: the runs of the mode)
     role: str = ""
+    # how the tree was compiled last: "full" (compile.sh) or "incremental" (compile_incremental.sh)
+    build_kind: str = "full"
 
 
 def key_of(record: BuildRecord) -> BuildKey:
@@ -200,8 +204,15 @@ ENVIRONMENT_PARTS = frozenset(
         "toolchain",
         "callpath_pruning",
         "openmp",
+        "incremental_compile_script",
     }
 )
+
+
+def environment_fingerprint(parts: Dict[str, str]) -> str:
+    """The hash of the environment parts of ``parts``: a tree compiled with another one cannot be compiled again
+    incrementally."""
+    return combine_fingerprint({name: value for name, value in parts.items() if name in ENVIRONMENT_PARTS})
 
 
 @dataclass(frozen=True)
@@ -446,6 +457,19 @@ def _patch_fingerprint(dot_dp: PATH) -> str:
     return digest.hexdigest()
 
 
+def incremental_compile_script_of(arguments: ProjectManagerArguments, key: BuildKey) -> Optional[PATH]:
+    """The ``compile_incremental.sh`` the build ``key`` is compiled again with, None if it is always compiled in
+    full: modes ``seq`` and ``par`` (an instrumented build is always compiled in full) of the runs (no validation
+    build) only."""
+    if key.mode not in INCREMENTAL_MODES or key.role:
+        return None
+    return resolve_incremental_compile_script_path(arguments.project_config_dir, key.configuration)
+
+
+# the modes whose builds compile_incremental.sh may compile again
+INCREMENTAL_MODES = ("seq", "par")
+
+
 def compute_fingerprint_parts(
     arguments: ProjectManagerArguments,
     key: BuildKey,
@@ -513,6 +537,10 @@ def compute_fingerprint(
             parts["openmp"] = openmp_part
     if key.suggestions:
         parts["patches"] = _patch_fingerprint(arguments.dot_dp)
+    incremental_script = incremental_compile_script_of(arguments, key)
+    if incremental_script is not None:
+        # how the tree is compiled again (no part without the script, so that the builds before it stay current)
+        parts["incremental_compile_script"] = _hash_file(incremental_script)
     copy_exclude = load_copy_exclude(arguments.project_dir)
     if copy_exclude:
         # what the copy leaves out (no part without a list, so that the builds before it stay current)
@@ -782,6 +810,7 @@ def make_record(
     tree: PATH,
     compile_seconds: float,
     parts: Optional[Dict[str, str]] = None,
+    build_kind: str = "full",
 ) -> BuildRecord:
     if parts is None:
         parts = compute_fingerprint_parts(arguments, key, compile_script, settings_path)
@@ -797,6 +826,7 @@ def make_record(
         compile_script=os.path.abspath(compile_script),
         fingerprint_parts=parts,
         role=key.role,
+        build_kind=build_kind,
     )
 
 
@@ -973,4 +1003,34 @@ def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequen
                 deleted.append(record.build_id)
         except BuildInUseError:
             logger.warning("not deleting the build " + record.build_id + ": a run is using it")
+    if build_ids is None:
+        _delete_trees_without_build(arguments)
     return deleted
+
+
+def _delete_trees_without_build(arguments: ProjectManagerArguments) -> None:
+    """Delete the kept trees no build uses (their last compilation failed, so no manifest names them)."""
+    states_dir = tree_states_dir_of(arguments.project_dir)
+    if not os.path.isdir(states_dir):
+        return
+    used = {os.path.abspath(record.tree) for record in list_builds(arguments.project_dir)}
+    for name in sorted(os.listdir(states_dir)):
+        if not name.endswith(".json"):
+            continue
+        tree_id = name[: -len(".json")]
+        tree = os.path.abspath(os.path.join(build_trees_dir_of(arguments.project_root), tree_id))
+        if tree in used:
+            continue
+        # build_lock_path_of of the builds of the tree
+        lock = FileLock(os.path.join(builds_dir_of(arguments.project_dir), tree_id + ".json.build.lock"))
+        try:
+            lock.acquire(timeout=0)
+        except Timeout:
+            continue
+        try:
+            if os.path.isdir(tree):
+                shutil.rmtree(tree)
+                logger.info("removed build tree without a build: " + tree)
+            remove_tree_state(arguments.project_dir, tree_id)
+        finally:
+            lock.release()

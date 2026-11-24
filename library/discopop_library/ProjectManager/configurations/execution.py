@@ -320,6 +320,7 @@ def execute_configuration(
     result_annotations: Optional[Dict[str, Any]] = None,
     output_callback: Optional[Callable[[str], None]] = None,
     callpath_pruning_environment: Optional[Dict[str, str]] = None,
+    extra_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -358,6 +359,8 @@ def execute_configuration(
     in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
 
     ``output_callback`` receives the output of the script (stdout and stderr, line by line) while it runs.
+
+    ``extra_environment`` is added to the environment of the script last (``DP_BUILD_KIND`` of a build).
 
     ``callpath_pruning_environment`` is the call path pruning a ``dp`` compilation gets (the variables of
     :func:`callpath_pruning.environment`); the builds compute it once for their fingerprint and the compilation. If
@@ -469,6 +472,9 @@ def execute_configuration(
         if resolved != original:
             logger.info("Resolved %s=%s to %s (no bare %s on PATH)", compiler_key, original, resolved, original)
             my_env[compiler_key] = resolved
+
+    # set by the caller last (DP_BUILD_KIND of a build, configurations/building.py)
+    my_env.update(extra_environment or {})
 
     # print("MYENV:")
     # for key in my_env:
