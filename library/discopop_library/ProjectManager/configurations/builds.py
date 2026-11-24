@@ -506,8 +506,8 @@ def compute_fingerprint(
       the runs take from the project)
     - the installed profiler and the compilers
 
-    The thread count is no part of it: it only reaches the compilation as ``OMP_NUM_THREADS``, which a
-    build script has no business to depend on.
+    The thread count is no part of it: it only reaches a compilation as ``OMP_NUM_THREADS`` when the
+    project setting asks for it (``services/build_thread_count.py``), which a build script has no business to depend on.
     """
     directories = project_directories_of(
         arguments.project_dir, arguments.project_root, arguments.project_include_dirs, arguments.project_exclude_dirs

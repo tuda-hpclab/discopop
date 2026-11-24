@@ -141,6 +141,9 @@ Further actions are buttons in the settings column:
 
 Results are stored in `.discopop/hotspot_detection/` (`Hotspots.json` and the run log `measurement_runs.json`).
 
+## Build
+The *Build* stage compiles the selected configuration into a kept build per mode without running it (see [Builds](Project_manager.md#builds)). Its cards also hold project settings that are saved at once: *Call path pruning* and *Thread count in builds*. The check box *Pass the thread count to compile scripts (OMP_NUM_THREADS)* of the latter is off by default, so that `nproc` in a compile script returns the number of CPUs; when on, it returns the thread count of the run (see [Thread count in builds](Project_manager.md#thread-count-in-builds)).
+
 ## Profiling
 ![Profiling stage with the time of the last profiling run and the timeouts](../assets/screenshots/gui_profiling.svg)
 
