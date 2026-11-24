@@ -22,6 +22,7 @@ from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT, BUILD_MISMATCH, BUILD_NONE
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
+from discopop_library.ProjectManager.services import workflow_status
 from discopop_library.ProjectManager.services.workflow_status import (
     OTHER_DIRECTORIES,
     forget_build_states,
@@ -140,6 +141,28 @@ def test_execute_and_report_count_runs(tmp_path: Path) -> None:
     result = statuses(arguments, "A")
     assert result[STAGE_EXECUTE] == StageStatus(StageState.DONE, "3 measured runs")
     assert result[STAGE_REPORT] == StageStatus(StageState.DONE, "3 execution results")
+
+
+def test_the_run_count_is_read_again_only_after_a_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    arguments = make_arguments(tmp_path)
+    path = os.path.join(arguments.project_dir, "execution_results.json")
+    touch(path, json.dumps({"A": {"execute.sh": {"s1": [{"time": 1}]}}}))
+    reads: List[str] = []
+    original = workflow_status._count_execution_results
+
+    def counted(file: str) -> int:
+        reads.append(file)
+        return original(file)
+
+    monkeypatch.setattr(workflow_status, "_count_execution_results", counted)
+    assert count_execution_results(arguments.project_dir) == 1
+    assert count_execution_results(arguments.project_dir) == 1
+    assert len(reads) == 1
+    touch(path, json.dumps({"A": {"execute.sh": {"s1": [{"time": 1}, {"time": 2}]}}}))
+    assert count_execution_results(arguments.project_dir) == 2
+    assert len(reads) == 2
+    os.remove(path)
+    assert count_execution_results(arguments.project_dir) == 0
 
 
 def test_unreadable_execution_results(tmp_path: Path) -> None:
