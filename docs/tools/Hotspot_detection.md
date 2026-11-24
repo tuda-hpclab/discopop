@@ -40,7 +40,9 @@ cmake -DCMAKE_C_COMPILER_WORKS=1 -DCMAKE_CXX_COMPILER_WORKS=1 \
       -DCMAKE_C_COMPILER=discopop_hotspot_cc -DCMAKE_CXX_COMPILER=discopop_hotspot_cxx ..
 ```
 
-<!-- UNVERIFIED: the Makefile and CMake invocations were not run; only the single file example was. -->
+<!-- UNVERIFIED: the CMake invocation was not run. The Makefile one is run by test/end_to_end/hotspot_parallel_build. -->
+
+Parallel builds (`make -j`, `cmake --build -j`) are supported: the compiler processes take turns while they number the code regions (a lock in `.discopop/hotspot_detection/locking_files/`), so every region gets an id of its own.
 
 The build creates `.discopop/FileMapping.txt` and `.discopop/hotspot_detection/private/` (with `cs_id.txt`, the table of the instrumented code regions).
 
