@@ -40,6 +40,7 @@ from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONL
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
 from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.copy_exclusions import drop_below, left_out_paths
+from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, remove_tree_state, set_tree_state
 from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored, load_fingerprint_ignore
 
@@ -841,12 +842,14 @@ def accepted_changes_text(project_dir: PATH, key: BuildKey) -> str:
 
 def invalidate_build(project_dir: PATH, key: BuildKey) -> None:
     """Forget the manifest of the build ``key``, so that the next run compiles. For a tree that was changed after
-    its compilation (e.g. by the separate build of a validation), which the fingerprint cannot see."""
+    its compilation (e.g. by the separate build of a validation), which the fingerprint cannot see. Its tree is
+    copied anew by the next build (``configurations/tree_sync.py``)."""
     try:
         os.remove(manifest_path_of(project_dir, key))
     except OSError:
         pass
     remove_build_files(project_dir, key)
+    set_tree_state(project_dir, key.build_id, DIRTY)
 
 
 class BuildAcceptError(Exception):
@@ -892,6 +895,7 @@ def _delete_build_locked(
         except OSError:
             pass
     remove_build_files(arguments.project_dir, key)
+    remove_tree_state(arguments.project_dir, key.build_id)
 
 
 def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequence[str]] = None) -> List[str]:

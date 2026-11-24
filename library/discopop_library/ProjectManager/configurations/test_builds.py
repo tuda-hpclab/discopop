@@ -14,7 +14,7 @@ import queue
 import shutil
 import threading
 from pathlib import Path
-from typing import Dict, Iterator, List
+from typing import Dict, Iterator, List, Tuple
 
 import pytest
 
@@ -908,3 +908,82 @@ def test_only_content_changes_leave_the_environment_alone(project: Dict[str, Pat
     project["compile"].write_text(project["compile"].read_text() + "\n# changed\n")
     status = _status(project)
     assert status.changes is not None and not status.changes.content_only
+
+
+def _build_with_messages(project: Dict[str, Path], policy: BuildPolicy = BuildPolicy.AUTO) -> Tuple[BuildOutcome, str]:
+    messages: List[str] = []
+    arguments = _arguments(project["root"])
+    with build_lock(arguments, KEY):
+        outcome = ensure_build(
+            arguments,
+            KEY,
+            str(project["configs"] / "cfg"),
+            str(project["configs"] / "seq_settings.json"),
+            str(project["compile"]),
+            1,
+            policy,
+            message=messages.append,
+        )
+    return outcome, "".join(messages)
+
+
+def test_a_kept_tree_is_updated_in_place_like_a_fresh_copy(project: Dict[str, Path]) -> None:
+    (project["root"] / "other.c").write_text("int other;\n")
+    first, text = _build_with_messages(project)
+    assert first.result == BuildResult.BUILT and first.tree is not None and "Copying project" in text
+    tree = Path(first.tree)
+    (tree / "leftover.o").write_text("output of the last compilation\n")
+    (tree / ".discopop" / "stale.txt").write_text("\n")
+    other_written = os.stat(tree / "other.c").st_mtime_ns
+
+    (project["root"] / "main.c").write_text("int main() { return 4; }\n")
+    second, text = _build_with_messages(project)
+
+    assert second.result == BuildResult.BUILT and second.tree == first.tree
+    assert "Updating the build tree" in text and "Changed files written: 1" in text
+    assert (tree / "main.c").read_text() == "int main() { return 4; }\n"
+    assert (tree / "prog.out").exists()  # compiled again
+    assert not (tree / "leftover.o").exists() and not (tree / ".discopop" / "stale.txt").exists()
+    assert os.stat(tree / "other.c").st_mtime_ns == other_written
+    assert _count(project, "compiles.txt") == 2
+    assert _status(project).state == BuildState.CURRENT
+
+
+def test_a_tree_in_an_unknown_state_is_copied_anew(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import invalidate_build
+    from discopop_library.ProjectManager.configurations.tree_sync import SYNCING, read_tree_state, set_tree_state
+
+    _build_with_messages(project)
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == "clean" and "main.c" in state.synced
+
+    set_tree_state(_project_dir(project), KEY.build_id, SYNCING)  # interrupted
+    assert "Copying project" in _build_with_messages(project, BuildPolicy.REBUILD)[1]
+
+    invalidate_build(_project_dir(project), KEY)  # a validation build changed the tree
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and "Copying project" in text
+
+
+def test_a_failed_compilation_forgets_the_tree(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state
+
+    _build_with_messages(project)
+    project["compile"].write_text("#!/bin/bash\nexit 1\n")
+    outcome, _ = _build_with_messages(project)
+    assert outcome.result == BuildResult.COMPILE_FAILED
+    assert read_tree_state(_project_dir(project), KEY.build_id) is None
+
+
+def test_the_data_runs_link_to_stays_when_the_tree_is_built_again(project: Dict[str, Path]) -> None:
+    first, _ = _build_with_messages(project)
+    assert first.tree is not None
+    data = Path(first.tree) / ".discopop" / "static.txt"
+    data.write_text("data of build 1\n")
+    run_copy = project["tmp"] / "run_static.txt"
+    os.link(data, run_copy)  # as configurations/runs.py links the static data of a build into a run
+
+    (project["root"] / "main.c").write_text("int main() { return 5; }\n")
+    _build_with_messages(project)
+
+    assert run_copy.read_text() == "data of build 1\n"
