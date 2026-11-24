@@ -78,6 +78,8 @@ class BuildKey:
     mode: str
     # the ids of the suggestions applied to the sources; only they make builds of the same mode differ
     suggestions: Tuple[str, ...] = ()
+    # what the build is for: "" (the runs of the mode) or ROLE_VALIDATE (the validation build, compile_validate.sh)
+    role: str = ""
 
     @property
     def build_id(self) -> str:
@@ -85,7 +87,12 @@ class BuildKey:
         if self.suggestions:
             digest = hashlib.sha1(",".join(sorted(self.suggestions)).encode()).hexdigest()[:8]
             build_id += "_s" + digest
+        if self.role:
+            build_id += "_" + self.role
         return build_id
+
+
+ROLE_VALIDATE = "validate"
 
 
 @dataclass
@@ -105,6 +112,14 @@ class BuildRecord:
     version: int = MANIFEST_VERSION
     # what the fingerprint was made of, to tell what changed when a build is stale
     fingerprint_parts: Dict[str, str] = field(default_factory=dict)
+    # BuildKey.role (manifests written before it have none: the runs of the mode)
+    role: str = ""
+
+
+def key_of(record: BuildRecord) -> BuildKey:
+    """The key of the build ``record`` describes. The one place that turns a manifest back into a key, so that a
+    field added to :class:`BuildKey` cannot be forgotten by its callers."""
+    return BuildKey(record.configuration, record.mode, tuple(record.suggestions), record.role)
 
 
 @dataclass
@@ -152,6 +167,32 @@ class BuildChanges:
     files: Optional[FileChanges] = None
     # (part, why) for parts whose change has a cause elsewhere (callpath_pruning: outdated hotspot results)
     causes: Tuple[Tuple[str, str], ...] = ()
+
+    @property
+    def content_only(self) -> bool:
+        """Whether only what the tree holds changed (:data:`CONTENT_PARTS`): the tree can be brought up to date
+        by writing the changed files into it. Any other part changes how the code is compiled."""
+        return all(part in CONTENT_PARTS for part in self.parts)
+
+
+# The parts of the fingerprint (compute_fingerprint), split by what a change of them means for a kept build tree:
+# - content: the files the tree holds (the sources of the project and of the included directories, the patches
+#   of the applied suggestions, what the copy leaves out); writing the changed files into the tree suffices
+# - environment: how the tree is compiled (scripts, settings, compilers, profiler, what is instrumented and how);
+#   the tree has to be built from scratch
+# Every part belongs to exactly one of them (checked by test_builds.py).
+CONTENT_PARTS = frozenset({"sources", "included_sources", "patches", "copy_exclude"})
+ENVIRONMENT_PARTS = frozenset(
+    {
+        "compile_script",
+        "settings",
+        "project_directories",
+        "configuration",
+        "toolchain",
+        "callpath_pruning",
+        "openmp",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -475,7 +516,7 @@ def read_build(project_dir: PATH, key: BuildKey) -> Optional[BuildRecord]:
 def write_build(project_dir: PATH, record: BuildRecord, files: Optional[BuildFiles] = None) -> None:
     """Write the manifest of ``record`` and, if given, its :class:`BuildFiles` (before the manifest, so that a
     manifest never goes with the files of an older build)."""
-    key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
+    key = key_of(record)
     os.makedirs(builds_dir_of(project_dir), exist_ok=True)
     path = manifest_path_of(project_dir, key)
     with FileLock(path + ".lock"):
@@ -705,6 +746,7 @@ def make_record(
         compile_seconds=compile_seconds,
         compile_script=os.path.abspath(compile_script),
         fingerprint_parts=parts,
+        role=key.role,
     )
 
 
@@ -858,7 +900,7 @@ def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequen
     for record in list_builds(arguments.project_dir):
         if build_ids is not None and record.build_id not in build_ids:
             continue
-        key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
+        key = key_of(record)
         try:
             if delete_build(arguments, key):
                 deleted.append(record.build_id)
