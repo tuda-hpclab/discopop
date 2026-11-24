@@ -468,7 +468,11 @@ def run(arguments: AutotunerArguments) -> None:
         print("No valid configuration found!")
     else:
         print("##############################")
-        print("Best configuration located at: " + best_suggestion_configuration[1].root_path)
+        if best_suggestion_configuration[1].kept_key is None:
+            print("Best configuration located at: " + best_suggestion_configuration[1].root_path)
+        else:
+            # the kept build tree held every candidate in turn; it does not keep the best one
+            print("Best configuration measured in the build tree: " + best_suggestion_configuration[1].root_path)
         print("Applied suggestions: " + str(best_suggestion_configuration[0]))
         print("Speedup: ", round(speedup, 3))
         print("Parallel efficiency: ", round(parallel_efficiency, 3))
