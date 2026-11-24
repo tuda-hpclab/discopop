@@ -10,7 +10,7 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 from discopop_library.ProjectManager.configurations.copy_exclusions import CopyExclusions
 from discopop_library.ProjectManager.configurations.tree_sync import (
@@ -210,3 +210,25 @@ def test_cleaning_leaves_the_files_of_the_project_and_dot_discopop(tmp_path: Pat
         ".discopop",
         ".discopop/FileMapping.txt",
     }
+
+
+def test_empty_directories_permissions_and_times_of_a_fresh_fill(tmp_path: Path) -> None:
+    project, tree = tmp_path / "p", tmp_path / "t"
+    _write(project / "configure", "#!/bin/sh\n", OLD)
+    os.chmod(project / "configure", 0o755)
+    (project / "build").mkdir()  # an empty directory the scripts expect
+    directories: Set[str] = set()
+    files = copy_set(CopyExclusions(str(project)), directories)
+    assert directories == {"build"}
+
+    first = sync_tree(str(tree), files, {}, None, directories, preserve_times=True)
+
+    assert (tree / "build").is_dir()
+    assert os.stat(tree / "configure").st_mtime == OLD  # like a copy: generated files keep their order
+    assert os.stat(tree / "configure").st_mode & 0o777 == 0o755
+    assert clean_outputs(str(tree), first.synced, str(project), directories) == [] and (tree / "build").is_dir()
+
+    os.chmod(project / "configure", 0o644)  # neither size nor modification time change
+    second = sync_tree(str(tree), copy_set(CopyExclusions(str(project))), first.synced, None, directories)
+    assert os.stat(tree / "configure").st_mode & 0o777 == 0o644
+    assert second.written == []  # same content: not written, so not compiled again

@@ -24,8 +24,9 @@ does that:
 
 What a tree was synced from is kept in a state file of its own (:class:`TreeState`, in
 ``.discopop/project/builds/trees/<build id>.json``), apart from the build's fingerprint (accepting a stale build
-changes its fingerprint, not the tree). A sync marks the state ``syncing`` while it writes; a tree whose state
-is not ``clean`` (an interrupted sync or compilation, a tree changed by a validation build) is copied anew.
+changes its fingerprint, not the tree). A sync marks the state ``syncing`` while it writes; a tree with no state
+or an interrupted sync is copied anew. One whose outputs are unknown (an interrupted or failed compilation, a
+validation build in it) is synced, but compiled in full.
 
 The files of the tree are those a copy would hold (:func:`copy_set`): every file below the project root except
 ``.discopop`` and what the copy leaves out (``configurations/copy_exclusions.py``). ``.discopop`` is the caller's.
@@ -39,18 +40,17 @@ import json
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional, Set
 
 from discopop_library.ProjectManager.configurations.copy_exclusions import CopyExclusions
 
 PATH = str
 
 # the states of a tree (TreeState.state)
-CLEAN = "clean"  # holds what ``synced`` says; the last compilation in it succeeded or none has run yet
-SYNCING = "syncing"  # a sync was writing into it; what it holds is unknown
-BUILDING = "building"  # a compilation was running in it; its outputs are unknown
-FAILED = "failed"  # the last compilation in it failed; its files are as ``synced`` says
-DIRTY = "dirty"  # changed by something else (a validation build); copy it anew
+CLEAN = "clean"  # holds what ``synced`` says and the outputs of a successful compilation
+SYNCING = "syncing"  # a sync was writing into it; what it holds is unknown: copied anew
+BUILDING = "building"  # its files are as ``synced`` says, the outputs unknown (a compilation was running)
+DIRTY = "dirty"  # its files are as ``synced`` says, the outputs unknown (failed compilation, validation build)
 
 _TEMPORARY_SUFFIX = ".dp_sync_tmp"
 _PATCHED = "patched:"
@@ -65,6 +65,9 @@ class TreeState:
     # the suggestions applied to the files of the tree
     applied: List[str] = field(default_factory=list)
     state: str = CLEAN
+    # environment_fingerprint (builds.py) of the last successful compilation in the tree: only a tree compiled in
+    # the same environment can be compiled again incrementally
+    environment: str = ""
 
 
 def tree_states_dir_of(project_dir: PATH) -> PATH:
@@ -85,7 +88,13 @@ def read_tree_state(project_dir: PATH, build_id: str) -> Optional[TreeState]:
         state = data.get("state")
         if not isinstance(synced, dict) or not isinstance(applied, list) or not isinstance(state, str):
             return None
-        return TreeState({str(k): str(v) for k, v in synced.items()}, [str(a) for a in applied], state)
+        environment = data.get("environment", "")
+        return TreeState(
+            {str(k): str(v) for k, v in synced.items()},
+            [str(a) for a in applied],
+            state,
+            environment if isinstance(environment, str) else "",
+        )
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -114,9 +123,10 @@ def remove_tree_state(project_dir: PATH, build_id: str) -> None:
         pass
 
 
-def copy_set(exclusions: CopyExclusions) -> Dict[str, PATH]:
+def copy_set(exclusions: CopyExclusions, directories: Optional[Set[str]] = None) -> Dict[str, PATH]:
     """The files a copy of ``exclusions.root`` holds outside of ``.discopop`` (relative path -> path in the project),
     as :func:`shutil.copytree` with ``exclusions.ignore()`` copies them: links are followed, dangling links skipped.
+    ``directories``, if given, receives the directories of the copy (relative paths), empty ones included.
     """
     root = os.path.abspath(exclusions.root)
     ignore = exclusions.ignore()
@@ -128,6 +138,8 @@ def copy_set(exclusions: CopyExclusions) -> Dict[str, PATH]:
         subdirectories[:] = [name for name in subdirectories if name not in left_out]
         relative_dir = os.path.relpath(directory, root)
         prefix = "" if relative_dir == "." else relative_dir.replace(os.sep, "/") + "/"
+        if directories is not None:
+            directories.update(prefix + name for name in subdirectories)
         for name in names:
             path = os.path.join(directory, name)
             if name in left_out or not os.path.exists(path):  # dangling link
@@ -137,15 +149,16 @@ def copy_set(exclusions: CopyExclusions) -> Dict[str, PATH]:
 
 
 def signature_of(path: PATH, patched: bool = False) -> str:
-    """What tells whether the file at ``path`` changed: size and modification time (of the target of a link), or,
-    for a patched file (whose modification time is that of its patching), its content."""
-    if patched:
-        return _PATCHED + _content_hash(path)
+    """What tells whether the file at ``path`` changed: size, modification time and permissions (of the target of a
+    link), or, for a patched file (whose modification time is that of its patching), its content and permissions."""
     try:
         stat = os.stat(path)
     except OSError:
         return "missing"
-    return str(stat.st_size) + "\0" + str(stat.st_mtime_ns)
+    mode = oct(stat.st_mode & 0o7777)
+    if patched:
+        return _PATCHED + _content_hash(path) + "\0" + mode
+    return str(stat.st_size) + "\0" + str(stat.st_mtime_ns) + "\0" + mode
 
 
 def _content_hash(path: PATH) -> str:
@@ -186,6 +199,8 @@ def sync_tree(
     files: Mapping[str, PATH],
     previous: Mapping[str, str],
     overrides: Optional[Mapping[str, PATH]] = None,
+    directories: Iterable[str] = (),
+    preserve_times: bool = False,
 ) -> SyncResult:
     """Make the files of ``tree`` those of ``files`` (relative path -> source; a patched file of ``overrides``
     instead), knowing that it was synced to the signatures ``previous`` before. See the module docstring.
@@ -208,15 +223,28 @@ def sync_tree(
             result.synced[name] = previous[name]
             continue
         if not _same_content(sources[name], destination):
-            _write(sources[name], destination)
+            _write(sources[name], destination, preserve_times)
             result.written.append(name)
+        elif _mode_of(sources[name]) != _mode_of(destination):
+            shutil.copymode(sources[name], destination)
         result.synced[name] = _entry(wanted[name], destination)
     for name in sorted(set(previous) - set(sources)):
         destination = os.path.join(tree, name)
         if os.path.lexists(destination) and not os.path.isdir(destination):
             os.remove(destination)
             result.deleted.append(name)
+    for name in sorted(directories):
+        destination = os.path.join(tree, name)
+        if not os.path.isdir(destination):
+            _make_parent(os.path.join(destination, "x"))
     return result
+
+
+def _mode_of(path: PATH) -> int:
+    try:
+        return os.stat(path).st_mode & 0o7777
+    except OSError:
+        return -1
 
 
 def _entry(wanted: str, destination: PATH) -> str:
@@ -224,10 +252,13 @@ def _entry(wanted: str, destination: PATH) -> str:
     return wanted + "|" + (signature_of(destination) if _is_file(destination) else "missing")
 
 
-def clean_outputs(tree: PATH, synced: Mapping[str, str], project_root: PATH) -> List[str]:
+def clean_outputs(
+    tree: PATH, synced: Mapping[str, str], project_root: PATH, directories: Optional[Set[str]] = None
+) -> List[str]:
     """Delete everything in ``tree`` outside of ``.discopop`` that is no file of the project (``synced``): the
     outputs of earlier compilations, so that a compile script runs as in a fresh copy. An empty directory is kept
-    only if the project has it empty as well (a copy holds it). Returns the deleted files (relative paths)."""
+    only if it is one of the ``directories`` of the copy (by default: if the project has it empty as well).
+    Returns the deleted files (relative paths)."""
     tree = os.path.abspath(tree)
     deleted: List[str] = []
     for directory, subdirectories, names in os.walk(tree, topdown=True):
@@ -244,7 +275,12 @@ def clean_outputs(tree: PATH, synced: Mapping[str, str], project_root: PATH) -> 
         relative = os.path.relpath(directory, tree)
         if relative == "." or relative.split(os.sep, 1)[0] == ".discopop":
             continue
-        if not os.listdir(directory) and not _empty_directory(os.path.join(project_root, relative)):
+        keep = (
+            relative.replace(os.sep, "/") in directories
+            if directories is not None
+            else _empty_directory(os.path.join(project_root, relative))
+        )
+        if not os.listdir(directory) and not keep:
             os.rmdir(directory)
     return deleted
 
@@ -283,14 +319,17 @@ def _make_parent(destination: PATH) -> None:
     os.mkdir(parent)
 
 
-def _write(source: PATH, destination: PATH) -> None:
-    """Copy ``source`` to ``destination`` with the current time as modification time, replacing the file at once
-    (a compilation never reads half of it)."""
+def _write(source: PATH, destination: PATH, preserve_times: bool = False) -> None:
+    """Copy ``source`` to ``destination`` with the current time as modification time (``preserve_times``: that of
+    ``source``), replacing the file at once (a compilation never reads half of it)."""
     _make_parent(destination)
     if os.path.isdir(destination) and not os.path.islink(destination):
         # a file of the project that was a directory when the tree was synced
         shutil.rmtree(destination)
     temporary = destination + _TEMPORARY_SUFFIX
     shutil.copyfile(source, temporary)
-    shutil.copymode(source, temporary)
+    if preserve_times:
+        shutil.copystat(source, temporary)
+    else:
+        shutil.copymode(source, temporary)
     os.replace(temporary, destination)
