@@ -39,6 +39,7 @@ from discopop_library.ProjectManager.configurations.builds import (
     build_tree_path_of,
     compute_fingerprint,
     delete_build,
+    left_out_of,
     make_record,
     manifest_path_of,
     remove_build_files,
@@ -214,7 +215,12 @@ def ensure_build(
     message("Copying project to " + tree + "...\n")
     try:
         copy_configuration(
-            arguments, config_path, settings_path, destination=tree, leave_out_of_dot_discopop=DATA_LEFT_OUT_OF_BUILDS
+            arguments,
+            config_path,
+            settings_path,
+            destination=tree,
+            leave_out_of_dot_discopop=DATA_LEFT_OUT_OF_BUILDS,
+            on_left_out=lambda text: message(text + "\n"),
         )
     except Exception as error:
         return BuildOutcome(BuildResult.COPY_FAILED, key, message="Error copying project: " + str(error))
@@ -251,7 +257,9 @@ def ensure_build(
                 message="Compilation failed.",
             )
         record = make_record(arguments, key, compile_script, settings_path, tree, compile_result[1], parts)
-        write_build(arguments.project_dir, record, BuildFiles(sources=entries))
+        write_build(
+            arguments.project_dir, record, BuildFiles(sources=entries, left_out=left_out_of(arguments, entries))
+        )
         return BuildOutcome(
             BuildResult.BUILT,
             key,

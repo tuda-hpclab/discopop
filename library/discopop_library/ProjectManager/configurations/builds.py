@@ -39,6 +39,8 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONLY_FILES
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
 from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
+from discopop_library.ProjectManager.configurations.copy_exclusions import drop_below, left_out_paths
+from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored, load_fingerprint_ignore
 
 PATH = str
@@ -116,6 +118,9 @@ class BuildFiles:
     # the fingerprint of the manifest these files belong to: a manifest written without them (by an older version
     # of DiscoPoP, which keeps no file list) must not be compared with the files of the build before
     fingerprint: str = ""
+    # the paths the copy left out and the fingerprint did not count (configured build directories, copy_exclude),
+    # so that such a directory deleted later does not count as removed files
+    left_out: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -244,6 +249,35 @@ def without_ignored(entries: Dict[str, str], patterns: Sequence[str]) -> Dict[st
     return {name: value for name, value in entries.items() if not is_ignored(name, patterns)}
 
 
+def left_out_of(
+    arguments: ProjectManagerArguments, entries: Dict[str, str], patterns: Optional[Sequence[str]] = None
+) -> List[str]:
+    """The paths a copy of the project leaves out (configured build directories and the paths of
+    ``copy_exclude.json``, ``configurations/copy_exclusions.py``), as far as they concern ``entries`` (those of
+    :func:`source_entries` that the ignore patterns ``patterns``, by default the project's, keep)."""
+    if patterns is None:
+        patterns = load_fingerprint_ignore(arguments.project_dir)
+    return left_out_paths(
+        arguments.project_root, without_ignored(entries, patterns), load_copy_exclude(arguments.project_dir)
+    )
+
+
+def counted_entries(
+    arguments: ProjectManagerArguments,
+    entries: Dict[str, str],
+    patterns: Optional[Sequence[str]] = None,
+    left_out: Optional[Sequence[str]] = None,
+) -> Dict[str, str]:
+    """The ``entries`` of the project (:func:`source_entries`) that its builds depend on: without those the ignore
+    patterns (``patterns``, by default the project's) leave out, and without those a copy of the project leaves out
+    (``left_out``, by default :func:`left_out_of`): they are no input of a build."""
+    if patterns is None:
+        patterns = load_fingerprint_ignore(arguments.project_dir)
+    if left_out is None:
+        left_out = left_out_of(arguments, entries, patterns)
+    return drop_below(without_ignored(entries, patterns), left_out)
+
+
 def source_fingerprint(project_root: PATH, ignore: Sequence[str] = ()) -> str:
     """A hash over the path, size and modification time of the files below ``project_root``.
 
@@ -365,7 +399,9 @@ def compute_fingerprint(
     the build as well).
 
     - the files of the project (path, size, modification time) without those the project's ignore patterns
-      (``services/fingerprint_ignore.py``) leave out
+      (``services/fingerprint_ignore.py``) or the copy (configured build directories, ``copy_exclude.json``) leave
+      out (:func:`counted_entries`)
+    - the paths of ``copy_exclude.json``, if it lists any
     - the compile script and the settings file of the mode (compiler, flags)
     - what is project code (included and excluded directories), as it decides what is instrumented, and the files
       of the included directories
@@ -384,7 +420,7 @@ def compute_fingerprint(
     )
     entries = source_entries(arguments.project_root)
     parts = {
-        "sources": hash_of_entries(without_ignored(entries, load_fingerprint_ignore(arguments.project_dir))),
+        "sources": hash_of_entries(counted_entries(arguments, entries)),
         "compile_script": _hash_file(compile_script),
         "settings": _hash_file(settings_path),
         "project_directories": json.dumps(
@@ -407,6 +443,10 @@ def compute_fingerprint(
             parts["openmp"] = openmp_part
     if key.suggestions:
         parts["patches"] = _patch_fingerprint(arguments.dot_dp)
+    copy_exclude = load_copy_exclude(arguments.project_dir)
+    if copy_exclude:
+        # what the copy leaves out (no part without a list, so that the builds before it stay current)
+        parts["copy_exclude"] = json.dumps(copy_exclude)
     return parts, entries
 
 
@@ -457,10 +497,12 @@ def read_build_files(project_dir: PATH, key: BuildKey) -> Optional[BuildFiles]:
         accepted = data.get("accepted", [])
         if not isinstance(sources, dict) or not isinstance(accepted, list):
             return None
+        left_out = data.get("left_out", [])
         return BuildFiles(
             {str(k): str(v) for k, v in sources.items()},
             [a for a in accepted if isinstance(a, dict)],
             str(data.get("fingerprint", "")),
+            [str(path) for path in left_out] if isinstance(left_out, list) else [],
         )
     except (OSError, ValueError, AttributeError):
         return None
@@ -592,8 +634,15 @@ def build_status(
     recorded_parts = dict(record.fingerprint_parts)
     stored = read_build_files(arguments.project_dir, key)
     recorded_sources: Optional[Dict[str, str]] = None
+    current_left_out = left_out_of(arguments, entries, patterns)
     if stored is not None and stored.fingerprint == record.fingerprint and "sources" in recorded_parts:
-        recorded_sources = without_ignored(stored.sources, patterns)
+        # what the copy leaves out now, and what it left out then (a build directory deleted since the build does
+        # not count as removed files; one that turned into sources counts as added)
+        recorded_left_out = set(current_left_out) | set(stored.left_out)
+        if not stored.left_out:
+            # a file list written before the paths were kept: classify its names by the project of now
+            recorded_left_out |= set(left_out_of(arguments, stored.sources, patterns))
+        recorded_sources = counted_entries(arguments, stored.sources, patterns, sorted(recorded_left_out))
         recorded_parts["sources"] = hash_of_entries(recorded_sources)
     changed = tuple(
         sorted(name for name in set(parts) | set(recorded_parts) if parts.get(name) != recorded_parts.get(name))
@@ -602,7 +651,14 @@ def build_status(
         return BuildStatus(BuildState.CURRENT, "", record)
     files = (
         _file_changes(
-            record, recorded_sources, without_ignored(entries, patterns) if recorded_sources is not None else entries
+            record,
+            recorded_sources,
+            # without a recorded file list, the recorded hash covered every file: name them all
+            (
+                counted_entries(arguments, entries, patterns, current_left_out)
+                if recorded_sources is not None
+                else entries
+            ),
         )
         if "sources" in changed
         else None
@@ -711,6 +767,7 @@ def accept_build(
             note["file_count"] = len(changed_files)
             note["files"] = list(changed_files.paths[:_ACCEPTED_FILES_KEPT])
         files.sources = entries
+        files.left_out = left_out_of(arguments, entries)
         files.accepted.append(note)
         record = status.record
         record.fingerprint_parts = parts
