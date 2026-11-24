@@ -27,6 +27,9 @@ from discopop_library.ProjectManager.configurations.validation import run_valida
 
 logger = logging.getLogger("CodeConfiguration")
 
+# the directories of the project's .discopop a candidate does not need
+AUTOTUNER_LEFT_OUT_OF_COPIES = ("profiler", "explorer")
+
 
 class CodeConfiguration(object):
     root_path: str
@@ -303,6 +306,9 @@ class CodeConfiguration(object):
             arguments.configuration,
             settings_path,
             get_new_configuration_id(),
+            # the profiling data and the pattern detection results are not needed by a candidate (it compiles and
+            # runs, the patches are in patch_generator); the hotspot data stays for the comparison of hd candidates
+            leave_out_of_dot_discopop=AUTOTUNER_LEFT_OUT_OF_COPIES,
         )
         new_dot_discopop_path = os.path.join(dest_path, ".discopop")
 

@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.PatchApplicator.PatchApplicationResult import (
     PatchApplicationResult,
@@ -25,6 +25,8 @@ from discopop_library.PatchApplicator.outside_project import (
     split_by_outside_project,
 )
 from discopop_library.PatchApplicator.patch_applicator import run_with_result as apply_suggestions
+from discopop_library.ProjectManager.configurations.copy_exclusions import CopyExclusions
+from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 
 PATH = str
 logger = logging.getLogger("ConfigurationManager")
@@ -95,6 +97,7 @@ def copy_configuration(
     configuration_id: Optional[int] = None,
     destination: Optional[PATH] = None,
     leave_out_of_dot_discopop: Sequence[str] = (),
+    on_left_out: Optional[Callable[[str], None]] = None,
 ) -> PATH:
     """Copy the project for one run (or one build) of a configuration and apply the requested suggestions.
 
@@ -102,6 +105,9 @@ def copy_configuration(
     file and lies next to the project root. An existing directory of that name is replaced.
     ``leave_out_of_dot_discopop`` names directories of the project's ``.discopop`` that are not copied (the data of
     earlier profiling runs, which a build must not start with).
+
+    Configured build directories and the paths of the project's ``copy_exclude.json`` are not copied
+    (``configurations/copy_exclusions.py``); ``on_left_out`` (by default the log) is told what was left out.
     """
 
     config_name = os.path.basename(config_path)
@@ -117,15 +123,16 @@ def copy_configuration(
         os.makedirs(os.path.dirname(project_copy_path), exist_ok=True)
     if os.path.exists(project_copy_path):
         shutil.rmtree(project_copy_path)
-    ignore = None
-    if leave_out_of_dot_discopop:
-        left_out = os.path.join(os.path.abspath(arguments.project_root), ".discopop")
-
-        def ignore(directory: str, names: List[str]) -> List[str]:  # type: ignore[misc]
-            return list(leave_out_of_dot_discopop) if os.path.abspath(directory) == left_out else []
-
+    exclusions = CopyExclusions(
+        arguments.project_root, listed=load_copy_exclude(arguments.project_dir), dot_discopop=leave_out_of_dot_discopop
+    )
     # a symbolic link that points nowhere (submodules of large codes have some) is skipped instead of failing the copy
-    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore, ignore_dangling_symlinks=True)
+    shutil.copytree(
+        arguments.project_root, project_copy_path, ignore=exclusions.ignore(), ignore_dangling_symlinks=True
+    )
+    report = exclusions.report()
+    if report is not None:
+        (on_left_out or logger.info)(report)
     # correct paths in Filemapping.txt
     fmap_path = os.path.join(project_copy_path, ".discopop", "FileMapping.txt")
     if os.path.exists(fmap_path):

@@ -11,9 +11,10 @@
 import json
 import os
 import queue
+import shutil
 import threading
 from pathlib import Path
-from typing import Dict, Iterator
+from typing import Dict, Iterator, List
 
 import pytest
 
@@ -43,6 +44,7 @@ from discopop_library.ProjectManager.configurations.builds import (
 )
 from discopop_library.ProjectManager.services import execution_run
 from discopop_library.ProjectManager.services.callpath_pruning import CallpathPruning, save_callpath_pruning
+from discopop_library.ProjectManager.services.copy_exclude import save_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import add_patterns
 from discopop_library.ProjectManager.services.jobs import WorkContext
 
@@ -593,7 +595,7 @@ def test_a_stale_build_names_the_changed_files(project: Dict[str, Path]) -> None
     _build(project)
     (project["root"] / "main.c").write_text("int main() { return 1; }\n")
     (project["root"] / "dp_build").mkdir()
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("cache\n")
     (project["root"] / "gone.h").unlink()
 
     status = _status(project)
@@ -602,16 +604,78 @@ def test_a_stale_build_names_the_changed_files(project: Dict[str, Path]) -> None
     files = status.changes.files
     assert files is not None and not files.approximate
     assert files.modified == ("main.c",)
-    assert files.added == ("dp_build/CMakeCache.txt",)
+    assert files.added == ("dp_build/build.ninja",)
     assert files.removed == ("gone.h",)
     assert status.reason.startswith("Changed since the build: sources.")
     assert "3 files changed (1 modified, 1 added, 1 removed)" in status.reason
 
 
+def test_a_configured_build_directory_is_neither_copied_nor_counted(project: Dict[str, Path]) -> None:
+    _build(project)
+    # an in-place compilation of the project after the build: an out-of-source CMake build directory
+    build_dir = project["root"] / "build"
+    (build_dir / "CMakeFiles").mkdir(parents=True)
+    (build_dir / "CMakeCache.txt").write_text("CMAKE_HOME_DIRECTORY:INTERNAL=" + str(project["root"]) + "\n")
+    (build_dir / "prog").write_text("binary\n")
+    assert _status(project).state == BuildState.CURRENT
+
+    messages: List[str] = []
+    arguments = _arguments(project["root"])
+    with build_lock(arguments, KEY):
+        outcome = ensure_build(
+            arguments,
+            KEY,
+            str(project["configs"] / "cfg"),
+            str(project["configs"] / "seq_settings.json"),
+            str(project["compile"]),
+            1,
+            BuildPolicy.REBUILD,
+            message=messages.append,
+        )
+    assert outcome.result == BuildResult.BUILT and outcome.tree is not None
+    assert not (Path(outcome.tree) / "build").exists()
+    assert any("Not copied: configured build directories" in text and "build" in text for text in messages)
+
+
+def test_a_build_directory_deleted_after_the_build_does_not_make_it_stale(project: Dict[str, Path]) -> None:
+    build_dir = project["root"] / "build"
+    (build_dir / "CMakeFiles").mkdir(parents=True)
+    (build_dir / "CMakeCache.txt").write_text("CMAKE_HOME_DIRECTORY:INTERNAL=" + str(project["root"]) + "\n")
+    (build_dir / "prog").write_text("binary\n")
+    _build(project)
+    shutil.rmtree(build_dir)
+    assert _status(project).state == BuildState.CURRENT
+    # sources in a directory of that name count again
+    (project["root"] / "build").mkdir()
+    (project["root"] / "build" / "extra.c").write_text("\n")
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
+    assert status.changes.files.added == ("build/extra.c",)
+
+
+def test_the_copy_exclude_list_is_part_of_the_fingerprint(project: Dict[str, Path]) -> None:
+    (project["root"] / "data").mkdir()
+    (project["root"] / "data" / "input.bin").write_text("large\n")
+    _build(project)
+    assert _status(project).state == BuildState.CURRENT
+
+    save_copy_exclude(_project_dir(project), ["data"])
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert "copy_exclude" in status.changes.parts
+
+    outcome = _build(project)
+    assert outcome.result == BuildResult.BUILT and outcome.tree is not None
+    assert not (Path(outcome.tree) / "data").exists()
+    # a change of what is left out no longer matters
+    (project["root"] / "data" / "input.bin").write_text("other\n")
+    assert _status(project).state == BuildState.CURRENT
+
+
 def test_an_ignore_pattern_added_after_the_build_makes_it_current(project: Dict[str, Path]) -> None:
     _build(project)
     (project["root"] / "dp_build").mkdir()
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("cache\n")
     assert _status(project).state == BuildState.STALE
 
     add_patterns(_project_dir(project), ["dp_build/"])
@@ -627,30 +691,30 @@ def test_an_ignore_pattern_added_after_the_build_makes_it_current(project: Dict[
 def test_a_build_without_a_file_list_reports_the_files_newer_than_the_build(project: Dict[str, Path]) -> None:
     # the build directory existed when the build was compiled (an in-place compilation before), as in practice
     (project["root"] / "dp_build").mkdir()
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("old\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("old\n")
     _build(project)
     os.remove(build_files_path_of(_project_dir(project), KEY))
     record = read_build(_project_dir(project), KEY)
     assert record is not None
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("\n")
-    os.utime(project["root"] / "dp_build" / "CMakeCache.txt", (record.built_at + 10, record.built_at + 10))
+    (project["root"] / "dp_build" / "build.ninja").write_text("\n")
+    os.utime(project["root"] / "dp_build" / "build.ninja", (record.built_at + 10, record.built_at + 10))
 
     status = _status(project)
     assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
-    assert status.changes.files.approximate and status.changes.files.modified == ("dp_build/CMakeCache.txt",)
+    assert status.changes.files.approximate and status.changes.files.modified == ("dp_build/build.ninja",)
     assert "1 file is newer than the build: dp_build/ (1)." in status.reason
 
     # its recorded hash covers every file: a pattern does not help, which is said
     add_patterns(_project_dir(project), ["dp_build/"])
     status = _status(project)
     assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
-    assert status.changes.files.modified == ("dp_build/CMakeCache.txt",)
+    assert status.changes.files.modified == ("dp_build/build.ninja",)
     assert NO_FILE_LIST_NOTE in status.reason
     # accepted once, the pattern applies
     accept_build(
         _arguments(project["root"]), KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json")
     )
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("changed\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("changed\n")
     assert _status(project).state == BuildState.CURRENT
 
 
