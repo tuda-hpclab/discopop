@@ -102,6 +102,22 @@ def _is_assignment(word: str) -> bool:
     return bool(sep) and name.replace("_", "a").isalnum() and not name[0].isdigit()
 
 
+def _target_arguments(arguments: List[str]) -> List[str]:
+    """The targets of ``cmake --build`` (``--target a b``, ``-t a``, ``--target=a``)."""
+    targets: List[str] = []
+    taking = False
+    for argument in arguments:
+        if argument in ("--target", "-t"):
+            taking = True
+        elif argument.startswith("--target="):
+            targets.append(argument.split("=", 1)[1])
+        elif taking and not argument.startswith("-"):
+            targets.append(argument)
+        else:
+            taking = False
+    return targets
+
+
 def _classify(command: str) -> str:
     """ "env" (keep), "build" (keep), "compound" (not handled) or "drop"."""
     try:
@@ -123,9 +139,15 @@ def _classify(command: str) -> str:
     if program in _ENVIRONMENT_COMMANDS:
         return "env"
     if program == "cmake":
-        return "build" if "--build" in arguments else "drop"
+        if "--build" not in arguments or "--clean-first" in arguments:
+            return "drop"
+        if any(argument in _CLEAN_TARGETS for argument in _target_arguments(arguments)):
+            return "drop"
+        return "build"
     if program in _BUILD_COMMANDS:
         if any(argument in _CLEAN_TARGETS for argument in arguments):
+            return "drop"
+        if program in ("make", "gmake") and any(argument in ("-B", "--always-make") for argument in arguments):
             return "drop"
         if program == "ninja" and "-t" in arguments and "clean" in arguments:
             return "drop"
