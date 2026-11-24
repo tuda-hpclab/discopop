@@ -72,8 +72,14 @@
 #include <iostream>
 
 
+#include <memory>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define DP_DEBUG false
 
@@ -295,6 +301,48 @@ int getFileID(string name)
 
 long int UID = 0;
 
+// Serializes the compiler processes of a parallel build (make -j) while they hand out region and file ids: all of them
+// continue the counter in temp.txt and append to cs_id.txt and FileMapping.txt, and the runtime, the analyzer and the
+// project manager rely on the ids being exactly 1..N. The lock is held from reading temp.txt to writing it back, so
+// the ids of a serial build stay the same. flock belongs to the open file description, so the lock is taken once per
+// module and never again while it is held (a second open + flock of the file in this process would wait for itself);
+// the kernel releases it when the process ends, so a crashing compiler cannot block the build.
+class RegionIdLock
+{
+public:
+  explicit RegionIdLock(const std::string &path)
+  {
+    fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+    if (fd == -1)
+    {
+      report_fatal_error(Twine("HotspotDetection: cannot open the lock file ") + path + ": " + strerror(errno));
+    }
+    int result;
+    do
+    {
+      result = flock(fd, LOCK_EX);
+    } while (result == -1 && errno == EINTR);
+    if (result == -1)
+    {
+      const int error = errno;
+      close(fd);
+      report_fatal_error(Twine("HotspotDetection: cannot lock ") + path + ": " + strerror(error));
+    }
+  }
+
+  RegionIdLock(const RegionIdLock &) = delete;
+  RegionIdLock &operator=(const RegionIdLock &) = delete;
+
+  ~RegionIdLock()
+  {
+    flock(fd, LOCK_UN);
+    close(fd);
+  }
+
+private:
+  int fd = -1;
+};
+
 namespace
 {
   // The nearest directory named ".discopop" in start or one of its ancestors (symbolic links resolved); empty if there
@@ -506,6 +554,9 @@ namespace
     static char ID;
     HotspotPass(){} // : FunctionPass(ID) {}
 
+    // the lock of the region and file ids while runOnModule hands them out (see RegionIdLock)
+    std::unique_ptr<RegionIdLock> idLock;
+
     void getAnalysisUsage(AnalysisUsage &AU) const
     {
       AU.addRequired<LoopInfoWrapperPass>();
@@ -585,6 +636,15 @@ namespace
       }
 
 
+      // the lock directory is outside of private/, whose files the project manager hands to the runs of a build
+      string lockDirectory(getenv("DOT_DISCOPOP"));
+      lockDirectory += "/hotspot_detection/locking_files";
+      if (mkdir(lockDirectory.data(), 0777) == -1 && errno != EEXIST){
+          report_fatal_error(Twine("HotspotDetection: cannot create ") + lockDirectory + ": " + strerror(errno));
+      }
+      // held until runOnModule has written the counter back (doFinalization)
+      idLock = std::make_unique<RegionIdLock>(lockDirectory + "/region_ids.lock");
+
       string tmp5 = tmp3 + "/temp.txt";
       tempfile.open(tmp5.data(), ios::in);
       if (tempfile.is_open())
@@ -613,6 +673,7 @@ namespace
         runOnFunction(F, M, MAM);
       }
       doFinalization(M);
+      idLock.reset();
       return true;
     }
 
