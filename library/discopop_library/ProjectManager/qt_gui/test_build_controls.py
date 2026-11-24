@@ -199,7 +199,7 @@ def stale_build(qtbot: QtBot, tmp_path: Path) -> BuildsAndRuns:
     record = make_record(arguments, key, compile_script, settings, str(tree), 1.0, parts)
     write_build(arguments.project_dir, record, BuildFiles(sources=entries))
     (tmp_path / "proj" / "dp_build").mkdir()
-    (tmp_path / "proj" / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    (tmp_path / "proj" / "dp_build" / "build.ninja").write_text("cache\n")
     created = BuildsAndRuns(arguments)
     qtbot.addWidget(created)
     created.build_table.selectRow(0)
@@ -232,7 +232,7 @@ def test_accepting_a_stale_build_asks_first(
     qtbot.waitUntil(lambda: not stale_build.is_busy(), timeout=20000)
     assert stale_build.build_table.item(0, 6).text() == "current (changes accepted)"  # type: ignore[union-attr]
     files = read_build_files(stale_build.arguments.project_dir, BuildKey("cfg", "seq"))
-    assert files is not None and files.accepted[0]["files"] == ["dp_build/CMakeCache.txt"]
+    assert files is not None and files.accepted[0]["files"] == ["dp_build/build.ninja"]
     assert load_fingerprint_ignore(stale_build.arguments.project_dir) == []
 
 
@@ -255,4 +255,4 @@ def test_the_review_proposes_build_directories_only(stale_build: BuildsAndRuns) 
     review = build_overview.review_build(stale_build.arguments, "cfg_seq")
     # no git: a directory counts as a build directory by the marker of its build system
     assert review.suggested_patterns == ("dp_build/",)
-    assert review.file_lines() == ["A  dp_build/CMakeCache.txt", "M  main.c", "A  out/a.o"]
+    assert review.file_lines() == ["A  dp_build/build.ninja", "M  main.c", "A  out/a.o"]
