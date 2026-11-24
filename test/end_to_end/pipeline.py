@@ -18,6 +18,7 @@ from pathlib import Path
 
 import jsonpickle
 
+from discopop_library.Amdahl.regions import extents_path_of, read_suggestion_extents, suggestion_extents
 from discopop_library.result_classes.DetectionResult import DetectionResult
 
 
@@ -81,7 +82,22 @@ def explore(dot_discopop: Path, enable_patterns: str) -> DetectionResult:
     _run("explorer", f"discopop_explorer --enable-patterns {enable_patterns}", dot_discopop, env)
     dump = dot_discopop / "explorer" / "detection_result_dump.json"
     result: DetectionResult = jsonpickle.decode(dump.read_text(), keys=True)
+    _check_suggestion_extents(dump, result)
     return result
+
+
+def _check_suggestion_extents(dump: Path, result: DetectionResult) -> None:
+    """The explorer writes the extents of the suggestions next to the dump (what the GUI reads instead of decoding
+    the dump): they must belong to this dump and match the detection result."""
+    written = read_suggestion_extents(str(dump))
+    if written is None:
+        raise PipelineError(f"explorer wrote no current {extents_path_of(str(dump))} next to {dump}")
+    expected = suggestion_extents(result)
+    if written != expected:
+        raise PipelineError(
+            f"the suggestion extents next to {dump} differ from the detection result:\n"
+            f"written: {written}\nexpected: {expected}"
+        )
 
 
 def run_pipeline(src_dir: Path, work_dir: Path, enable_patterns: str, run_args: str = "") -> DetectionResult:
