@@ -1,0 +1,11 @@
+# The outer loop (line 68) is parallelizable: every call of count_targets works on its own stack frames.
+# add_children reads the elements of a temporary array (the copy returned by get_children) in its stack frame,
+# whose initialization the profiler does not record. The reads therefore depend on whatever was written last at
+# that stack address: the local array of accept, called in the previous iteration. This RAW is reported as
+# loop-carried and blocked the do-all suggestion (as found in relearn, BarnesHutBase.h).
+
+[do_all]
+includes = ["1:68"]
+
+[reduction]
+includes = ["1:72"]

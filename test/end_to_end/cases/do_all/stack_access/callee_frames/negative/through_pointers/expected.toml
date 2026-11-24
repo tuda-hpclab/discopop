@@ -1,0 +1,9 @@
+# The loop at line 14 carries a value from one iteration to the next through `carried`, written by store and read
+# by load. Both access it through a pointer, so the dependency is named after a local of the callee (source), just
+# like a dependency through the stack frame of a callee; but it is real, and the loop must not be suggested.
+
+[do_all]
+excludes = ["1:14"]
+
+[reduction]
+lines = ["1:20"]
