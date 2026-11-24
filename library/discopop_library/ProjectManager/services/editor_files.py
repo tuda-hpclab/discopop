@@ -82,6 +82,14 @@ VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER = (
     "# is compiled after the timed execute.sh run and before validate.sh, so it\n"
     "# never affects the measured runtime. It is ignored while no validate.sh exists.\n"
 )
+INCREMENTAL_COMPILE_OVERRIDE_PLACEHOLDER = (
+    "# This configuration has no compile_incremental.sh.\n"
+    "# Without it (and without a shared one) every compilation of the modes seq and par runs compile.sh\n"
+    "# in a freshly updated build tree.\n"
+    "# Click 'Add Override' above to continue the kept build tree instead: the script must only rebuild\n"
+    "# (no clean), so the build system compiles just what changed. It is proposed from compile.sh and\n"
+    "# written only when you save it.\n"
+)
 
 COMPILE_SCRIPT_WARNING_TITLE = "Compilation Script Warning"
 COMPILE_SCRIPT_WARNING = (

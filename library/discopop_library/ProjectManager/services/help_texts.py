@@ -78,6 +78,39 @@ HELP_TEXTS: dict[str, tuple[str, str]] = {
         "#!/bin/bash\n"
         "$CXX $CXXFLAGS -DVALIDATE_OUTPUT -o program main.cpp" + _PROJECT_ROOT_NOTE,
     ),
+    "compile_incremental.sh": (
+        "compile_incremental.sh Help",
+        "Incremental Build Script (compile_incremental.sh) — optional\n\n"
+        "Purpose:\n"
+        "compile.sh builds the program from scratch. compile_incremental.sh continues the\n"
+        "kept build tree instead: the outputs of the last compilation are kept, so the\n"
+        "build system compiles only what changed, e.g. only the files that another set of\n"
+        "suggestions patches.\n\n"
+        "Behavior:\n"
+        "  • Optional, and used for the modes seq and par only (instrumented dp / hd\n"
+        "    builds are always compiled in full).\n"
+        "  • Used only when the tree was last compiled successfully in the same\n"
+        "    environment; otherwise (and after a validation build or with a forced\n"
+        "    rebuild) compile.sh runs.\n"
+        "  • Gets DP_BUILD_KIND (full or incremental) and the same environment as\n"
+        "    compile.sh.\n"
+        "  • Must only rebuild: no rm -rf of the build directory, no make clean, normally\n"
+        "    no configure step.\n"
+        "  • If it fails, or writes no file at all although sources changed, the project\n"
+        "    manager says so, removes the outputs and runs compile.sh instead.\n\n"
+        "Resolution order:\n"
+        "  1. the configuration's own compile_incremental.sh\n"
+        "  2. the shared compile_incremental.sh, only for configurations that use the\n"
+        "     shared compile.sh\n\n"
+        "Examples (compile.sh -> compile_incremental.sh):\n"
+        "  cmake -S . -B build && cmake --build build -j  ->  cmake --build build -j\n"
+        "  make clean && make -j                          ->  make -j\n"
+        "  ./configure && make -j                         ->  make -j\n"
+        "  meson setup build && ninja -C build            ->  ninja -C build\n\n"
+        "CMake superbuilds (ExternalProject, e.g. Kripke):\n"
+        "The outer build does not see changed sources of an external project, so build the\n"
+        "inner project: cmake --build build/<project>-build -j" + _PROJECT_ROOT_NOTE,
+    ),
     "execute.sh": (
         "execute.sh Help",
         "Execution Script (execute.sh)\n\n"
