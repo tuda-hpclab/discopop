@@ -301,16 +301,14 @@ int getFileID(string name)
 
 long int UID = 0;
 
-// Serializes the compiler processes of a parallel build (make -j) while they hand out region and file ids: all of them
-// continue the counter in temp.txt and append to cs_id.txt and FileMapping.txt, and the runtime, the analyzer and the
-// project manager rely on the ids being exactly 1..N. The lock is held from reading temp.txt to writing it back, so
-// the ids of a serial build stay the same. flock belongs to the open file description, so the lock is taken once per
-// module and never again while it is held (a second open + flock of the file in this process would wait for itself);
-// the kernel releases it when the process ends, so a crashing compiler cannot block the build.
-class RegionIdLock
+// An exclusive flock on a lock file, held for the lifetime of the object. flock belongs to the open file description,
+// so a lock is taken once per module and never again while it is held (a second open + flock of the file in this
+// process would wait for itself); the kernel releases it when the process ends, so a crashing compiler cannot block
+// the build.
+class FileLock
 {
 public:
-  explicit RegionIdLock(const std::string &path)
+  explicit FileLock(const std::string &path)
   {
     fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
     if (fd == -1)
@@ -330,10 +328,10 @@ public:
     }
   }
 
-  RegionIdLock(const RegionIdLock &) = delete;
-  RegionIdLock &operator=(const RegionIdLock &) = delete;
+  FileLock(const FileLock &) = delete;
+  FileLock &operator=(const FileLock &) = delete;
 
-  ~RegionIdLock()
+  ~FileLock()
   {
     flock(fd, LOCK_UN);
     close(fd);
@@ -554,8 +552,14 @@ namespace
     static char ID;
     HotspotPass(){} // : FunctionPass(ID) {}
 
-    // the lock of the region and file ids while runOnModule hands them out (see RegionIdLock)
-    std::unique_ptr<RegionIdLock> idLock;
+    // Held while runOnModule hands out region and file ids. All compiler processes of a parallel build (make -j)
+    // continue the counter in temp.txt and append to cs_id.txt and FileMapping.txt, and the runtime, the analyzer and
+    // the project manager rely on the ids being exactly 1..N. idLock is held from reading temp.txt to writing it
+    // back, so the ids of a serial build stay the same. fileMappingLock is the lock of FileMapping.txt that the
+    // profiler pass takes as well (dputil::GetFileId), so both passes can share the file; it is always taken after
+    // idLock, and the profiler takes no other lock, so the two cannot wait for each other.
+    std::unique_ptr<FileLock> idLock;
+    std::unique_ptr<FileLock> fileMappingLock;
 
     void getAnalysisUsage(AnalysisUsage &AU) const
     {
@@ -643,7 +647,13 @@ namespace
           report_fatal_error(Twine("HotspotDetection: cannot create ") + lockDirectory + ": " + strerror(errno));
       }
       // held until runOnModule has written the counter back (doFinalization)
-      idLock = std::make_unique<RegionIdLock>(lockDirectory + "/region_ids.lock");
+      idLock = std::make_unique<FileLock>(lockDirectory + "/region_ids.lock");
+      string fileMappingLockDirectory(getenv("DOT_DISCOPOP"));
+      fileMappingLockDirectory += "/locking_files";
+      if (mkdir(fileMappingLockDirectory.data(), 0777) == -1 && errno != EEXIST){
+          report_fatal_error(Twine("HotspotDetection: cannot create ") + fileMappingLockDirectory + ": " + strerror(errno));
+      }
+      fileMappingLock = std::make_unique<FileLock>(fileMappingLockDirectory + "/FileMapping.lock");
 
       string tmp5 = tmp3 + "/temp.txt";
       tempfile.open(tmp5.data(), ios::in);
@@ -673,6 +683,7 @@ namespace
         runOnFunction(F, M, MAM);
       }
       doFinalization(M);
+      fileMappingLock.reset();
       idLock.reset();
       return true;
     }
