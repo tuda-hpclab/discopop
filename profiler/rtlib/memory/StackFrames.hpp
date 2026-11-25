@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -94,6 +95,39 @@ class StackFrames {
 
   [[nodiscard]] std::size_t Depth() const noexcept { return frames_.size(); }
 
+  // The ids of the live frames, ascending (ids grow from the outermost frame inwards). Taken by the profiled thread
+  // when it hands a chunk of accesses over: a frame missing from it has ended and its keys are never used again.
+  void LiveIds(std::vector<std::uint64_t>& ids) const {
+    ids.clear();
+    for (const Frame& frame : frames_) {
+      ids.push_back(frame.id);
+    }
+  }
+
+  [[nodiscard]] static bool IsStackKey(ADDR key) noexcept { return key >= 0 && (key & kStackKeyBit) != 0; }
+
+  [[nodiscard]] static std::uint64_t FrameIdOf(ADDR key) noexcept {
+    return (static_cast<std::uint64_t>(key) & ~static_cast<std::uint64_t>(kStackKeyBit)) >> kOffsetBits;
+  }
+
+  // Removes the keys of frames that are not in live_ids (as taken by LiveIds) from a map keyed by access keys, e.g.
+  // the shadow of the second access queue, which otherwise keeps a state for every variable of every frame instance.
+  // Returns the number of removed keys.
+  template <typename Map>
+  static std::size_t EraseKeysOfEndedFrames(Map& map, const std::vector<std::uint64_t>& live_ids) {
+    std::vector<ADDR> ended;
+    for (const auto& entry : map) {
+      const ADDR key = entry.first;
+      if (IsStackKey(key) && !std::binary_search(live_ids.begin(), live_ids.end(), FrameIdOf(key))) {
+        ended.push_back(key);
+      }
+    }
+    for (const ADDR key : ended) {
+      map.erase(key);
+    }
+    return ended.size();
+  }
+
  private:
   struct Frame {
     ADDR lo;  // the memory of the frame's own allocas: [lo, hi)
@@ -110,13 +144,21 @@ class StackFrames {
   // The offset is taken from the top of the frame: the static allocas are all reported on entry, before the first
   // access, and allocas of variable size (alloca(), VLAs) reported later only extend the frame downwards, so an
   // address keeps its key for the whole lifetime of the frame.
+  //
+  // The shadow maps (emhash7 with the identity hash of integers) choose the bucket by the low bits of the key. The
+  // offset alone would put the same variable of every frame instance into the same bucket, so the low bits hold the
+  // offset rotated by a multiple of the frame id instead: for a given frame id a bijection, so the keys stay unique.
   [[nodiscard]] static ADDR Encode(const Frame& frame, ADDR addr) noexcept {
     const ADDR offset = frame.hi - 1 - addr;
     if (offset > kMaxOffset || frame.id > kMaxId) {
       return addr;
     }
-    return kStackKeyBit | static_cast<ADDR>(frame.id << kOffsetBits) | offset;
+    const auto spread = static_cast<ADDR>((static_cast<std::uint64_t>(offset) + frame.id * kSpreadFactor) &
+                                          static_cast<std::uint64_t>(kMaxOffset));
+    return kStackKeyBit | static_cast<ADDR>(frame.id << kOffsetBits) | spread;
   }
+
+  static constexpr std::uint64_t kSpreadFactor = 0x9E3779B1;  // odd: consecutive ids land far apart
 
   std::vector<Frame> frames_;
   std::uint64_t next_id_ = 1;

@@ -60,6 +60,7 @@ void __dp_read(LID lid, ADDR addr, const char* var) {
     while (!first_access_queue.CanAcceptEntries()) {
       usleep(1000);
     }
+    stack_frames.LiveIds(main_thread_access_info_buffer->live_frames);
     first_access_queue.Push(main_thread_access_info_buffer);
     main_thread_access_info_buffer = first_access_queue_chunk_buffer.GetPreparedChunk(kFirstAccessQueueChunkSize);
   }
