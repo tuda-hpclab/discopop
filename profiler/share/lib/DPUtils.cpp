@@ -180,6 +180,42 @@ bool IsInProjectRoot(const std::string& path) {
          std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
 }
 
+bool IsInLibraryDirs(const std::string& path) {
+  // as in IsInProjectRoot: prepared again only when the variables change, never destroyed
+  struct LibraryDirectories {
+    std::string variable;
+    std::string root_variable;
+    std::vector<std::string> directories;  // with a trailing '/', in every spelling
+  };
+  static LibraryDirectories& library = *new LibraryDirectories();
+  static bool prepared = false;
+  const std::string variable(dputil::GetEnvOrDefault("DP_LIBRARY_DIRS", ""));
+  const std::string root_variable(dputil::GetEnvOrDefault("DP_PROJECT_ROOT_DIR", "/"));
+  if (!prepared || variable != library.variable || root_variable != library.root_variable) {
+    prepared = true;
+    library.variable = variable;
+    library.root_variable = root_variable;
+    library.directories.clear();
+    std::stringstream entries(variable);
+    std::string entry;
+    while (std::getline(entries, entry, ':')) {
+      if (entry.empty()) {
+        continue;
+      }
+      const std::string candidate = entry.front() == '/' ? entry : WithTrailingSlash(root_variable) + entry;
+      for (const std::string& spelling : Spellings(candidate)) {
+        const std::string directory = WithTrailingSlash(spelling);
+        if (std::find(library.directories.begin(), library.directories.end(), directory) == library.directories.end()) {
+          library.directories.push_back(directory);
+        }
+      }
+    }
+  }
+  // a directory prefix, unlike the substring test of IsInProjectRoot: the paths are absolute and resolved
+  return std::any_of(library.directories.begin(), library.directories.end(),
+                     [&path](const std::string& directory) { return path.starts_with(directory); });
+}
+
 std::string FindDotDiscopop(const std::string& start_directory, std::string* shadowed) {
   namespace fs = std::filesystem;
   std::error_code error;

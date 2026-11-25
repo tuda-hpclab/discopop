@@ -40,6 +40,9 @@ void __dp_call(LID lid, std::int32_t instruction_id) {
   // the callpath state transition happens when the callee enters an instrumented function, see
   // enter_function_for_callstate. A callee without instrumentation does not change the state.
   RegisterCallForCallstate(instruction_id);
+
+  // the call library accesses made during it are attributed to (see StackFrames::LibraryAccessAttribution)
+  stack_frames.SetCallInstruction(instruction_id);
 }
 }
 

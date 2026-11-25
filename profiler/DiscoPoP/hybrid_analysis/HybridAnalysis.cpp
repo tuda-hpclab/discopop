@@ -22,13 +22,14 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
-#include "Globals.hpp"
 #include "DiscoPoP.hpp"
+#include "Globals.hpp"
 #include "hybrid_analysis/InstructionCFG.hpp"
 #include "hybrid_analysis/InstructionDG.hpp"
 #include "llvm_compat.hpp"
@@ -139,10 +140,12 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
     for (Instruction& i : bb) {
       // Remove from staticallyPredictableValues those which are passed to
       // other functions (by ref/ptr)
-      if (CallInst* call_inst = dyn_cast<CallInst>(&i)) {
-        if (call_inst->getCalledFunction()) {
-          for (uint i = 0; i < call_inst->getNumOperands() - 1; ++i) {
-            v = call_inst->getArgOperand(i);
+      // invokes as well (calls in the scope of a cleanup), and pointers into the local (a member, an element):
+      // the callee may access it, e.g. library code (DP_LIBRARY_DIRS) whose accesses are profiled
+      if (auto* call_inst = dyn_cast<llvm::CallBase>(&i)) {
+        {  // indirect calls, too
+          for (uint i = 0; i < call_inst->arg_size(); ++i) {
+            v = llvm::getUnderlyingObject(call_inst->getArgOperand(i));
             const std::set<Value*>::iterator it = statically_predictable_values.find(v);
             if (it != statically_predictable_values.end()) {
               statically_predictable_values.erase(v);
@@ -155,7 +158,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
       }
       // Remove values from locals if dereferenced
       if (isa<StoreInst>(i)) {
-        v = i.getOperand(0);
+        v = llvm::getUnderlyingObject(i.getOperand(0));  // also a pointer into the local
         std::set<Value*> to_be_removed;
         for (Value* w : statically_predictable_values) {
           if (w == v) {

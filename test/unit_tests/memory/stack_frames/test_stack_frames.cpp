@@ -163,3 +163,127 @@ TEST(StackFramesTest, DeepCallChainsKeepTheirKeys) {
   }
   EXPECT_EQ(frames.Depth(), 0u);
 }
+
+// Library code (DP_LIBRARY_DIRS) has no frames: its accesses are attributed to the last call of the innermost frame of
+// project code, see StackFrames::LibraryAccessAttribution. probe stands for the frame of the callback, below all
+// frames.
+TEST(StackFramesTest, LibraryAccessesAreAttributedToTheCallOfTheInnermostFrame) {
+  Frames frames;
+  constexpr ADDR kProbe = 0x1000;
+  EnterFrame(frames, 0x8000, 0x100);
+  frames.SetCallInstruction(17);
+
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, kProbe), 17);  // heap below the stack
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7f80, kProbe), 17); // the caller's own variables
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x9000, kProbe), 17); // above the frames
+
+  frames.SetCallInstruction(23); // the next call of the same frame
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, kProbe), 23);
+}
+
+TEST(StackFramesTest, LibraryAccessesWithoutAProjectCallAreDropped) {
+  Frames frames;
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, 0x1000), 0); // no frame: e.g. static initialization
+
+  EnterFrame(frames, 0x8000, 0x100);
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, 0x1000), 0); // no call yet
+}
+
+// the locals of library frames lie between the callback and the memory of the project frames; dead after the call,
+// they must not depend on the locals of the library call before, which used the same addresses
+TEST(StackFramesTest, LibraryAccessesToStackBelowTheProjectFramesAreDropped) {
+  Frames frames;
+  constexpr ADDR kProbe = 0x7000;
+  EnterFrame(frames, 0x8000, 0x100);
+  frames.SetCallInstruction(17);
+
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7000, kProbe), 0);
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7eff, kProbe), 0);
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7f00, kProbe), 17); // the lowest alloca of the project frame
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x6fff, kProbe), 17); // below the callback: not on this stack
+}
+
+TEST(StackFramesTest, AVariableSizedAllocaOfTheProjectFrameIsNotLibraryStack) {
+  Frames frames;
+  constexpr ADDR kProbe = 0x7000;
+  EnterFrame(frames, 0x8000, 0x100);
+  frames.Register(0x7c00, 0x7d00); // alloca() / VLA, reported later, below the static allocas
+  frames.SetCallInstruction(17);
+
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7c80, kProbe), 17);
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7bff, kProbe), 0);
+}
+
+// a callback from the library into project code (e.g. a comparator) pushes a frame with calls of its own; when it
+// returns, the library code continues within the call of the frame below
+TEST(StackFramesTest, ACallbackIntoProjectCodeHasItsOwnAttribution) {
+  Frames frames;
+  constexpr ADDR kProbe = 0x1000;
+  EnterFrame(frames, 0x8000, 0x100);
+  frames.SetCallInstruction(17);    // e.g. std::sort
+  EnterFrame(frames, 0x7c00, 0x40); // the comparator, called by the library
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, kProbe), 0);
+  frames.SetCallInstruction(31); // the comparator calls into the library itself
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, kProbe), 31);
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7f80, kProbe), 31); // the outer project frame's memory
+  frames.Pop();
+
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x200, kProbe), 17);
+}
+
+TEST(StackFramesTest, AFrameWithoutAllocasBoundsTheLibraryStackByTheOuterFrames) {
+  Frames frames;
+  constexpr ADDR kProbe = 0x7000;
+  EnterFrame(frames, 0x8000, 0x100);
+  frames.Push(); // a project function without allocas, below
+  frames.SetCallInstruction(41);
+
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7e00, kProbe), 0);
+  EXPECT_EQ(frames.LibraryAccessAttribution(0x7f80, kProbe), 41);
+}
+
+// library accesses to a variable of project code are reported under its name, see StackFrames::VariableAt
+TEST(StackFramesTest, TheVariablesOfTheLiveFramesAreFoundByAddress) {
+  Frames frames;
+  frames.Push();
+  frames.Register(0x7ff0, 0x8000, "outer");
+  frames.Register(0x7fe0, 0x7ff0, "it");
+  frames.Push();
+  frames.Register(0x7f00, 0x7f08, "inner");
+
+  EXPECT_STREQ(frames.VariableAt(0x7ff8), "outer");
+  EXPECT_STREQ(frames.VariableAt(0x7fe8), "it");
+  EXPECT_STREQ(frames.VariableAt(0x7f04), "inner");
+  EXPECT_EQ(frames.VariableAt(0x7f08), nullptr); // a gap between the variables
+  EXPECT_EQ(frames.VariableAt(0x1000), nullptr); // heap
+
+  frames.Pop();
+  EXPECT_EQ(frames.VariableAt(0x7f04), nullptr); // the variables of an ended frame are gone
+  frames.Push();
+  frames.Register(0x7f00, 0x7f08, "next");
+  EXPECT_STREQ(frames.VariableAt(0x7f04), "next");
+  EXPECT_STREQ(frames.VariableAt(0x7fe8), "it");
+}
+
+TEST(StackFramesTest, ManyVariablesAreKept) {
+  // more variables than the initial capacity
+  Frames frames;
+  frames.Push();
+  static const char *const kName = "v";
+  for (ADDR i = 0; i < 1000; ++i) {
+    frames.Register(0x100000 - 8 * (i + 1), 0x100000 - 8 * i, kName);
+  }
+  EXPECT_EQ(frames.VariableAt(0x100000 - 8 * 999), kName);
+}
+
+// a variable sized alloca in a loop is registered again in every iteration: it replaces its entry
+TEST(StackFramesTest, AVariableRegisteredAgainReplacesItsEntry) {
+  Frames frames;
+  frames.Push();
+  frames.Register(0x7ff0, 0x8000, "static");
+  for (int i = 0; i < 100; ++i) {
+    frames.Register(0x7f00, 0x7f00 + 8 * (i % 4 + 1), i % 2 == 0 ? "even" : "odd");
+  }
+  EXPECT_STREQ(frames.VariableAt(0x7f00), "odd");
+  EXPECT_STREQ(frames.VariableAt(0x7ff8), "static");
+}

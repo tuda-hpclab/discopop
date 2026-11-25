@@ -1,0 +1,5 @@
+# A range-for over a std::vector (DP_LIBRARY_DIRS in the Makefile): the increment and the comparison of the hidden
+# iterator __begin are library calls on the loop header, whose accesses to the iterator are attributed to the header.
+# They must be recognized as the loop's iteration variable, the loop stays do-all.
+[do_all]
+includes = ["1:8"]

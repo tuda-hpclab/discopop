@@ -10,8 +10,11 @@
  *
  */
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "DiscoPoP.hpp"
 
@@ -19,6 +22,7 @@ using llvm::BasicBlock;
 using llvm::DebugLoc;
 using llvm::DISubprogram;
 using llvm::dyn_cast;
+using llvm::dyn_cast_or_null;
 using llvm::errs;
 using llvm::Function;
 using llvm::FunctionAnalysisManagerModuleProxy;
@@ -32,61 +36,74 @@ using llvm::StringRef;
 // Returns true if runOnFunction instruments F, i.e. F reports its entry and exit to the runtime.
 // Calls to functions without instrumentation must not update the callpath state (see
 // runOnBasicBlock): the runtime would wait for the callee's __dp_func_exit forever.
+namespace {
+
+// The files of the DISubprograms attached to f, resolved: as spelled when the file was found, e.g.
+// "/usr/lib/gcc/<triple>/13/../../../../include/c++/13/vector", compared like the paths of FileMapping.txt
+// (DetermineFileId), as an included directory "/usr/include/c++/13" would not match the spelling
+std::vector<std::string> SubprogramPaths(Function& f) {
+  // asked for every function by IsInstrumentedFunction and IsLibraryFunction; canonical() costs system calls
+  static std::unordered_map<const Function*, std::vector<std::string>> cache;
+  const auto cached = cache.find(&f);
+  if (cached != cache.end()) {
+    return cached->second;
+  }
+  std::vector<std::string>& paths = cache[&f];
+  SmallVector<std::pair<unsigned, MDNode*>, 4> mds;
+  f.getAllMetadata(mds);
+  for (auto& md : mds) {
+    if (auto* sub_program = dyn_cast_or_null<DISubprogram>(md.second)) {
+      std::string full_file_name;
+      if (!sub_program->getDirectory().empty()) {
+        full_file_name += sub_program->getDirectory().str();
+        full_file_name += "/";
+      }
+      full_file_name += sub_program->getFilename().str();
+      std::error_code error;
+      const std::filesystem::path resolved = std::filesystem::canonical(full_file_name, error);
+      paths.push_back(error ? std::filesystem::path(full_file_name).lexically_normal().string() : resolved.string());
+    }
+  }
+  return paths;
+}
+
+// helper and instrumentation functions, which are never instrumented
+bool IsExcludedByName(StringRef func_name) {
+  return func_name.contains("llvm.")                        // llvm debug calls
+         || func_name.contains("__dp_")                     // instrumentation calls
+         || func_name.starts_with("__cxx_global_var_init")  // c++ init calls (not "__cx": mangled __cxx11)
+         || func_name.starts_with("__cxa_")                 // C++ ABI runtime calls
+         || func_name.contains("__clang")                   // clang helper calls
+         || func_name.contains("_GLOBAL_")                  // global init calls (c++)
+         || func_name.contains("pthread_");
+}
+
+}  // namespace
+
 bool DiscoPoP::IsInstrumentedFunction(Function& f) {
   if (f.isDeclaration()) {
     return false;
   }
-
-  SmallVector<std::pair<unsigned, MDNode*>, 4> mds;
-  f.getAllMetadata(mds);
-  bool func_defined_in_project = false;
-  for (auto& md : mds) {
-    if (MDNode* n = md.second) {
-      if (auto* sub_program = dyn_cast<DISubprogram>(n)) {
-        std::string full_file_name = "";
-        if (sub_program->getDirectory().str().length() > 0) {
-          full_file_name += sub_program->getDirectory().str();
-          full_file_name += "/";
-        }
-        full_file_name += sub_program->getFilename().str();
-        // as spelled when the file was found, e.g. "/usr/lib/gcc/<triple>/13/../../../../include/c++/13/vector":
-        // compared like the paths of FileMapping.txt (DetermineFileId), resolved, as an included directory
-        // "/usr/include/c++/13" would not match the spelling
-        std::error_code error;
-        const std::filesystem::path resolved = std::filesystem::canonical(full_file_name, error);
-        full_file_name = error ? std::filesystem::path(full_file_name).lexically_normal().string() : resolved.string();
-        if (dputil::IsInProjectRoot(full_file_name)) {  // function defined inside project
-          func_defined_in_project = true;
-        }
-      }
-    }
-  }
-  if (!func_defined_in_project) {
+  const std::vector<std::string> paths = SubprogramPaths(f);
+  // function defined inside the project
+  if (std::none_of(paths.begin(), paths.end(), [](const std::string& path) { return dputil::IsInProjectRoot(path); })) {
     return false;
   }
-
-  StringRef func_name = f.getName();
-  // Avoid functions we don't want to instrument
-  if (func_name.find("llvm.") != std::string::npos) {  // llvm debug calls
+  if (IsExcludedByName(f.getName())) {
     return false;
   }
-  if (func_name.find("__dp_") != std::string::npos) {  // instrumentation calls
-    return false;
-  }
-  if (func_name.find("__cx") != std::string::npos) {  // c++ init calls
-    return false;
-  }
-  if (func_name.find("__clang") != std::string::npos) {  // clang helper calls
-    return false;
-  }
-  if (func_name.find("_GLOBAL_") != std::string::npos) {  // global init calls (c++)
-    return false;
-  }
-  if (func_name.find("pthread_") != std::string::npos) {
-    return false;
-  }
-
   return GetCachedFileId(f) != 0;
+}
+
+// Library code (DP_LIBRARY_DIRS) is instrumented for its memory accesses only: the runtime attributes them to the call
+// in project code that entered the library, so the library's own structure (CUs, loops, functions, call path states,
+// file ids) never shows up. Project code takes precedence.
+bool DiscoPoP::IsLibraryFunction(Function& f) {
+  if (f.isDeclaration() || IsExcludedByName(f.getName()) || IsInstrumentedFunction(f)) {
+    return false;
+  }
+  const std::vector<std::string> paths = SubprogramPaths(f);
+  return std::any_of(paths.begin(), paths.end(), [](const std::string& path) { return dputil::IsInLibraryDirs(path); });
 }
 
 std::int32_t DiscoPoP::GetCachedFileId(Function& f) {
@@ -126,6 +143,10 @@ bool DiscoPoP::RunOnFunction(Function& f, ModuleAnalysisManager& mam) {
   // avoid instrumenting functions which are defined outside the scope of the
   // project, as well as helper and instrumentation functions
   if (!IsInstrumentedFunction(f)) {
+    if (IsLibraryFunction(f)) {
+      InstrumentLibraryAccesses(f);
+      return true;
+    }
     return false;
   }
 

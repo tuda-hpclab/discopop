@@ -145,6 +145,13 @@ inline bool FileExists(const std::string& filename) {
 // rule and must agree.
 bool IsInProjectRoot(const std::string& path);
 
+// Whether path lies in one of the directories of DP_LIBRARY_DIRS (':' separated, absolute or relative to the project
+// root, compared as given and with symbolic links resolved), e.g. "/usr/include/c++". The functions of library code are
+// instrumented for their memory accesses only, which the runtime attributes to the call in project code that entered
+// the library (no CUs, no function entry/exit, no loops, no file id); see DiscoPoP::IsLibraryFunction. Project code
+// (IsInProjectRoot) takes precedence. Expects an absolute path with resolved symbolic links.
+bool IsInLibraryDirs(const std::string& path);
+
 // The nearest directory named ".discopop" in start_directory or one of its ancestors (symbolic links resolved), as an
 // absolute path; empty if there is none. Used when DOT_DISCOPOP is not set, so that the compiler calls of any build (in
 // the project directory, a build directory below it or a subdirectory) and the instrumented program write to the same

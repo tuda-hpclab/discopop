@@ -61,6 +61,10 @@ class StackFrames {
     frames_ = nullptr;
     size_ = 0;
     capacity_ = 0;
+    std::free(variables_);
+    variables_ = nullptr;
+    variables_size_ = 0;
+    variables_capacity_ = 0;
   }
 
   // __dp_func_entry: a new frame without memory yet; it inherits the bounds of the frames around it
@@ -69,10 +73,10 @@ class StackFrames {
       Grow();
     }
     if (size_ == 0) {
-      frames_[size_++] = Frame{kEmptyLo, kEmptyHi, next_id_++, kEmptyLo, kEmptyHi};
+      frames_[size_++] = Frame{kEmptyLo, kEmptyHi, next_id_++, kEmptyLo, kEmptyHi, 0, variables_size_};
     } else {
       const Frame outer = frames_[size_ - 1];
-      frames_[size_++] = Frame{kEmptyLo, kEmptyHi, next_id_++, outer.all_lo, outer.all_hi};
+      frames_[size_++] = Frame{kEmptyLo, kEmptyHi, next_id_++, outer.all_lo, outer.all_hi, 0, variables_size_};
     }
   }
 
@@ -80,13 +84,35 @@ class StackFrames {
   void Pop() noexcept {
     if (size_ != 0) {
       --size_;
+      variables_size_ = frames_[size_].first_variable;
     }
   }
 
-  // __dp_alloca: [start, end) belongs to the innermost frame
-  void Register(ADDR start, ADDR end) noexcept {
+  // __dp_alloca: [start, end) belongs to the innermost frame; name (optional) is the variable's name as the
+  // instrumentation passes it to the accesses of project code, see VariableAt
+  void Register(ADDR start, ADDR end, const char* name = nullptr) {
     if (size_ == 0 || end <= start) {
       return;
+    }
+    if (name != nullptr) {
+      // an alloca executed again (a variable sized one in a loop) replaces its variable instead of piling up; the
+      // last few entries suffice, as the static allocas of a frame are reported once, on entry
+      Variable* replaced = nullptr;
+      const std::size_t first = frames_[size_ - 1].first_variable;
+      for (std::size_t v = variables_size_; v-- > first && v + kRecheckedVariables >= variables_size_;) {
+        if (variables_[v].start == start) {
+          replaced = &variables_[v];
+          break;
+        }
+      }
+      if (replaced != nullptr) {
+        *replaced = Variable{start, end, name};
+      } else {
+        if (variables_size_ == variables_capacity_) {
+          GrowVariables();
+        }
+        variables_[variables_size_++] = Variable{start, end, name};
+      }
     }
     Frame& frame = frames_[size_ - 1];
     frame.lo = start < frame.lo ? start : frame.lo;
@@ -115,6 +141,64 @@ class StackFrames {
   }
 
   [[nodiscard]] std::size_t Depth() const noexcept { return size_; }
+
+  // The name of the variable of a live frame addr lies in, nullptr if none is known. Library code (see
+  // LibraryAccessAttribution) names what it accesses by its own variables (this1, __x); an access to a variable of
+  // project code is reported under the name of that variable instead, as if project code had made it, e.g. "__begin1"
+  // for the iterator of a range-for advanced by operator++, which the explorer then recognizes as a loop variable.
+  [[nodiscard]] const char* VariableAt(ADDR addr) const noexcept {
+    if (size_ == 0) {
+      return nullptr;
+    }
+    const Frame& innermost = frames_[size_ - 1];
+    if (addr < innermost.all_lo || addr >= innermost.all_hi) {
+      return nullptr;
+    }
+    for (std::size_t i = size_; i-- != 0;) {
+      const Frame& frame = frames_[i];
+      if (addr >= frame.lo && addr < frame.hi) {
+        const std::size_t end = i + 1 < size_ ? frames_[i + 1].first_variable : variables_size_;
+        for (std::size_t v = end; v-- > frame.first_variable;) {  // the newest first
+          if (addr >= variables_[v].start && addr < variables_[v].end) {
+            return variables_[v].name;
+          }
+        }
+        return nullptr;
+      }
+    }
+    return nullptr;
+  }
+
+  // __dp_call: the instruction id of the call the innermost frame is about to make
+  void SetCallInstruction(std::int64_t instruction_id) noexcept {
+    if (size_ != 0) {
+      frames_[size_ - 1].call_instruction = instruction_id;
+    }
+  }
+
+  // The instruction id an access of library code (kLibraryAccessInstructionId, see dputil::IsInLibraryDirs) is
+  // attributed to: the last call of the innermost frame of project code, i.e. the call that entered the library, as
+  // library code has no frames of its own; a callback from the library into project code pushes one, so its accesses
+  // and calls are its own, and the call it returns into is still the one of the frame below. 0 drops the access:
+  //  - no frame or no call yet: library code not reached from project code (e.g. static initialization)
+  //  - addr is stack memory below the memory of all live frames, i.e. in a frame called by the innermost frame (stack
+  //    grows downwards): a local of library code (or of uninstrumented code in between), dead once the call returns.
+  //    Analyzed by address, it would make the calls of library functions at the same depth depend on each other (as in
+  //    every iteration of a loop), the very dependencies the frame keys remove for project code. probe is the address
+  //    of the frame of the callback, i.e. below every frame of the library. The memory of the project frames, including
+  //    their variable sized allocas, lies above all_lo; a project without any alloca on the stack keeps the accesses.
+  [[nodiscard]] std::int64_t LibraryAccessAttribution(ADDR addr, ADDR probe) const noexcept {
+    if (size_ == 0) {
+      return 0;
+    }
+    const Frame& innermost = frames_[size_ - 1];
+    // probe and the frames on different stacks (an alternate signal stack, user level threads) would make the range
+    // cover anything, hence the bound
+    if (addr >= probe && addr < innermost.all_lo && innermost.all_lo - probe <= kMaxLibraryStack) {
+      return 0;
+    }
+    return innermost.call_instruction;
+  }
 
   // The ids of the live frames, ascending (ids grow from the outermost frame inwards). Taken by the profiled thread
   // when it hands a chunk of accesses over: a frame missing from it has ended and its keys are never used again.
@@ -156,11 +240,32 @@ class StackFrames {
     std::uint64_t id;
     ADDR all_lo;  // the memory of this and all outer frames, to rule out other memory with two comparisons
     ADDR all_hi;
+    std::int64_t call_instruction;  // the instruction id of the last call made, 0 if none (SetCallInstruction)
+    std::size_t first_variable;     // the variables of the frame: variables_[first_variable, first of the next frame)
+  };
+
+  struct Variable {
+    ADDR start;
+    ADDR end;
+    const char* name;
   };
 
   static constexpr ADDR kEmptyLo = INT64_MAX;
   static constexpr ADDR kEmptyHi = INT64_MIN;
   static constexpr std::size_t kInitialCapacity = 256;
+  void GrowVariables() {
+    const std::size_t capacity = variables_capacity_ == 0 ? kInitialCapacity : 2 * variables_capacity_;
+    void* variables = std::realloc(variables_, capacity * sizeof(Variable));  // Variable is trivially copyable
+    if (variables == nullptr) {
+      throw std::bad_alloc();
+    }
+    variables_ = static_cast<Variable*>(variables);
+    variables_capacity_ = capacity;
+  }
+
+  static constexpr std::size_t kRecheckedVariables = 8;
+  // the most stack memory library calls take below the innermost project frame
+  static constexpr ADDR kMaxLibraryStack = ADDR{1} << 30;
 
   void Grow() {
     const std::size_t capacity = capacity_ == 0 ? kInitialCapacity : 2 * capacity_;
@@ -195,6 +300,9 @@ class StackFrames {
   std::size_t size_ = 0;
   std::size_t capacity_ = 0;
   std::uint64_t next_id_ = 1;
+  Variable* variables_ = nullptr;  // the named variables of the live frames, the innermost frame's last
+  std::size_t variables_size_ = 0;
+  std::size_t variables_capacity_ = 0;
 };
 
 static_assert(std::is_trivially_destructible_v<StackFrames>,

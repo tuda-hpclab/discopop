@@ -29,6 +29,7 @@ add_library(DiscoPoP_PassObjects OBJECT
         instrumentation/low_level/instrumentCalloc.cpp
         instrumentation/low_level/instrumentPosixMemalign.cpp
         instrumentation/low_level/instrumentDeleteOrFree.cpp
+        instrumentation/low_level/instrumentLibraryAccesses.cpp
         instrumentation/low_level/instrumentLoad.cpp
         instrumentation/low_level/instrumentStore.cpp
         instrumentation/low_level/instrumentFuncEntry.cpp
