@@ -68,17 +68,18 @@ The output of all jobs is shown in one pane below the stages, with one tab per s
 ## Configuration assistant (wizard)
 ![First page of the configuration assistant](../assets/screenshots/gui_wizard.svg)
 
-When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has nine steps (eight in the Tk version, which has no step for the project directories):
+When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has ten steps (eight in the Tk version, which has no step for the project directories and none for the incremental build script):
 
 1. **Welcome**
 2. **Write Permissions Check**: the project is copied to a sibling directory for every run. Without write access to the parent directory, only in-place execution is possible.
 3. **Project Directories**: what is project code, with the same folder tree of excluded directories and list of included directories as the *Project Setup* stage; see [Project directories](Project_manager.md#project-directories). Exclude third-party code bundled with the project, include sources outside of it. Every change is saved at once.
 4. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
-5. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
-6. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
-7. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
-8. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
-9. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
+5. **Incremental Build Script** (optional): the shared `compile_incremental.sh`, which continues a kept build tree and rebuilds only what changed instead of running `compile.sh` in full; worthwhile for projects whose build takes long (e.g. when the autotuner builds one candidate after the other). Leave **Use an incremental build script** unchecked to skip the step; checking it proposes a script derived from the `compile.sh` of the previous step (check it, it must only rebuild: no clean, no configure) unless you edited the text already. An existing script starts checked; unchecking it asks whether to remove it. It can also be added later in *Project Setup* or per configuration in the Editor stage.
+6. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
+7. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
+8. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
+9. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
+10. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
 
 After **Finish**, the new configuration is selected and the *Profiling* stage, the first one of the pipeline, opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
 
