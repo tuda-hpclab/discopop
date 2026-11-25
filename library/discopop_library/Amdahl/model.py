@@ -25,6 +25,16 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
+class SuggestionExtent:
+    """The source range one suggestion parallelizes (from the detection result, without runtimes)."""
+
+    suggestion_id: int
+    file_id: int
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
 class SuggestionRegion:
     """The source range one suggestion parallelizes and its share of the program's runtime."""
 

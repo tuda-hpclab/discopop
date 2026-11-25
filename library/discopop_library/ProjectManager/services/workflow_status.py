@@ -82,10 +82,28 @@ def autotuning_ready(dot_dp: str) -> bool:
     return autotuning_missing(dot_dp) is None
 
 
+# the count of the last execution_results.json read, by (path, size, mtime_ns): the file holds the output of every
+# run and can be tens of megabytes, the sidebar asks after every burst of events
+_execution_result_counts: Dict[Tuple[str, int, int], int] = {}
+
+
 def count_execution_results(project_dir: str) -> int:
     """The number of recorded runs in ``execution_results.json`` (configuration -> script -> settings -> runs)."""
+    path = os.path.abspath(os.path.join(project_dir, "execution_results.json"))
     try:
-        with open(os.path.join(project_dir, "execution_results.json"), "r") as f:
+        stat = os.stat(path)
+    except OSError:
+        return 0
+    key = (path, stat.st_size, stat.st_mtime_ns)
+    if key not in _execution_result_counts:
+        _execution_result_counts.clear()
+        _execution_result_counts[key] = _count_execution_results(path)
+    return _execution_result_counts[key]
+
+
+def _count_execution_results(path: str) -> int:
+    try:
+        with open(path, "r") as f:
             results: Any = json.load(f)
     except (OSError, ValueError):
         return 0
