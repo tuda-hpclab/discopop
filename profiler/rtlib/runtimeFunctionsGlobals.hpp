@@ -98,6 +98,30 @@ extern RuntimeState runtime_state;
 // The question every instrumented callback asks: may it do its work?
 inline bool ProfilingActive() noexcept { return runtime_state == RuntimeState::kRunning; }
 
+// Whether the calling thread is executing the runtime itself: a callback, __dp_init, the output of __dp_finalize, or
+// a worker thread of the runtime (for its whole lifetime). Callbacks reached from there return at once.
+//
+// The runtime reaches instrumented code when the project includes library headers (DP_PROJECT_INCLUDE_DIRS, e.g.
+// libstdc++): template instantiations such as std::vector<unsigned>::_M_default_append are linkonce_odr, the linker
+// keeps one copy for the program and the statically linked runtime, and that copy may be the instrumented one of the
+// program. LoopCounter::IncrLoopCounter in __dp_loop_incr then called __dp_read and __dp_loop_incr in the middle of
+// resizing its own vector, and the worker threads recorded accesses into the buffer of the main thread, both of which
+// corrupted the heap. Constant initialized and trivially destructible, like stack_frames, so the check needs no TLS
+// wrapper and works in the global destructors as well.
+extern constinit thread_local bool inside_runtime;
+
+// Marks the calling thread as executing the runtime for the lifetime of the object, see inside_runtime.
+class RuntimeSection {
+ public:
+  RuntimeSection() noexcept : outer_(inside_runtime) { inside_runtime = true; }
+  ~RuntimeSection() { inside_runtime = outer_; }
+  RuntimeSection(const RuntimeSection&) = delete;
+  RuntimeSection& operator=(const RuntimeSection&) = delete;
+
+ private:
+  bool outer_;
+};
+
 // Runtime merging structures
 extern DepMap* all_deps;
 

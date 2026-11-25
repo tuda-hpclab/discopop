@@ -53,6 +53,9 @@ ImmortalStorage<LoopManager> loop_manager;
 // one per thread: the stack frames of a thread are nested in each other only, see memory/StackFrames.hpp
 constinit thread_local StackFrames stack_frames;
 
+// see runtimeFunctionsGlobals.hpp: set while the calling thread executes the runtime
+constinit thread_local bool inside_runtime = false;
+
 // hybrid analysis
 ReportedBBRecorder* bb_list = nullptr;
 StringDepMap* out_put_deps = nullptr;

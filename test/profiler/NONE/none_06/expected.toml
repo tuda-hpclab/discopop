@@ -1,0 +1,8 @@
+# The libstdc++ headers are instrumented (DP_PROJECT_INCLUDE_DIRS in the Makefile). Template instantiations are
+# linkonce_odr, so the linker keeps one copy of std::vector<unsigned>::_M_default_append for the program and the
+# runtime: the instrumented one, which __dp_loop_incr calls to grow its loop counters. Callbacks were then entered from
+# within callbacks and from the worker threads of the runtime, which corrupted the heap of larger programs (relearn).
+# Here the runtime only reported calls and accesses of its own; callbacks reached from the runtime must return at once
+# (inside_runtime in rtlib/runtimeFunctionsGlobals.hpp, unit tests in test/unit_tests/callback_scope), while the
+# program's own accesses, also those in libstdc++, are still analyzed.
+required = ["1:11 RAW 1:9|", "1:9 RAW 1:8|i", "1:11 WAR 1:11|total"]

@@ -69,6 +69,9 @@ constexpr double kDeferredDedupMinHitRate = 0.25;
 }  // namespace
 
 void* ProcessFirstAccessQueue(void* arg) {
+  // the whole thread is runtime: instrumented code it reaches (see inside_runtime) records nothing
+  inside_runtime = true;
+
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::kAnalyzeDeps);
 #endif
@@ -180,6 +183,9 @@ void* ProcessFirstAccessQueue(void* arg) {
 }
 
 void* ProcessSecondAccessQueue(void* arg) {
+  // the whole thread is runtime: instrumented code it reaches (see inside_runtime) records nothing
+  inside_runtime = true;
+
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::kAnalyzeDeps);
 #endif
