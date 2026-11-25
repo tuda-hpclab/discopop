@@ -288,7 +288,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Prepare image: ${{ matrix.id }}"
     needs: [create_matrix]
-    if: ${{ needs.create_matrix.outputs.missing_images != '[]' && needs.create_matrix.outputs.tested_by == '' }}
+    if: ${{ needs.create_matrix.outputs.missing_images != '[]' }}
     timeout-minutes: 60
     # the only job that writes to the registry; the others only read
     permissions:
@@ -537,6 +537,38 @@ jobs:
         run: |
           . venv/bin/activate
           python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup --durations=20 test/end_to_end
+
+  # CACHES OF A TESTED PUSH: a push to master whose checks are skipped (see create_matrix, tested_by) still saves the
+  # venv and the profiler wheel of every environment to the actions cache: the caches of master are the ones every
+  # pull request into it can restore (a pull request cannot read the caches of another one), so without them the first
+  # run of every pull request would build the profiler again. Restoring an existing cache takes seconds.
+  warm_caches:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Caches of a tested push (${{ matrix.id }})"
+    needs: [create_matrix, prepare_images]
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by != '' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build the venv with DiscoPoP and save it to the cache, unless it is cached
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+          save: "true"
 
   # RUNTIME CHECKS of the profiler runtime library, independent of the platform (one environment, the tools image), in one
   # job: each check takes only one or two minutes, so jobs of their own spent about as much time on starting containers
