@@ -16,7 +16,7 @@ is a starting point for the user, who sees and saves it in the editor; nothing i
 """
 
 import shlex
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 HEADER_COMMENT = (
     "# Derived from compile.sh: this script continues the kept build tree and must only rebuild\n"
@@ -189,3 +189,12 @@ def propose_incremental_script(compile_script_text: str) -> Optional[str]:
     if not found_build:
         return None
     return shebang + "\n" + HEADER_COMMENT + "\n".join(kept) + "\n"
+
+
+def incremental_draft(compile_script_text: str) -> Tuple[str, bool]:
+    """The text to show as the draft of a ``compile_incremental.sh`` for ``compile_script_text``, and whether a build
+    line was found in it (else the text is ``EMPTY_TEMPLATE``)."""
+    proposal = propose_incremental_script(compile_script_text)
+    if proposal is None:
+        return EMPTY_TEMPLATE, False
+    return proposal, True
