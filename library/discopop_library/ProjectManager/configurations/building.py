@@ -447,7 +447,8 @@ class _TreeUpdate:
     changed_files: int = 0
     # the outputs of the last compilation were kept: compile_incremental.sh may continue it
     incremental: bool = False
-    # compile_incremental.sh has compiled this tree successfully in the environment of the build before
+    # compile_incremental.sh has compiled this tree successfully in the environment of the build before, and the last
+    # compilation in the tree succeeded: a failure of the script is then one of the code, and compile.sh is not run
     proven_incremental: bool = False
 
 
@@ -609,8 +610,12 @@ def _prepare_kept_tree(
             directories=directories,
             changed_files=len(result.written) + len(result.deleted),
             incremental=incremental,
+            # only after a successful compilation: after a failed one the tree itself may be broken (e.g. compile.sh
+            # failed in its configure step), and compile.sh must get the chance to repair it, or every later build
+            # would fail without it ever running again
             proven_incremental=incremental
             and state is not None
+            and state.state == CLEAN
             and state.incremental_environment == incremental_environment,
         )
     finally:
