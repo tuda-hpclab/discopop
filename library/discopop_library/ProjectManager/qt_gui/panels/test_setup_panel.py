@@ -97,6 +97,7 @@ def test_the_files_are_shown_with_placeholders_and_disabled_derived_tabs(editor:
     assert tab_titles(editor) == [
         "compile.sh",
         "compile_validate.sh",
+        "compile_incremental.sh",
         "seq_settings.json",
         "dp_settings.json",
         "hd_settings.json",
@@ -107,7 +108,7 @@ def test_the_files_are_shown_with_placeholders_and_disabled_derived_tabs(editor:
     assert editor.editors["compile_validate.sh"].isReadOnly()
     assert editor.editors["compile_validate.sh"].text().startswith("# This project has no shared compile_validate.sh")
     assert editor.shared_validation_compile_button.text() == "Add"
-    for index in (3, 4, 5):
+    for index in (4, 5, 6):
         assert not editor.notebook.isTabEnabled(index)
         assert "Use 'Derive Settings'" in editor.notebook.tabToolTip(index)
     assert editor.notebook.tabToolTip(0) == "Compilation instructions"
@@ -124,7 +125,7 @@ def test_the_buttons_follow_the_tab_in_front(editor: SetupPanel) -> None:
     assert not editor.test_compilation_button.isEnabled()
     write_files(editor)
     assert editor.test_compilation_button.isEnabled()
-    editor.notebook.setCurrentIndex(2)
+    editor.notebook.setCurrentIndex(3)
     assert editor.derive_button.isVisible() and not editor.test_compilation_button.isVisible()
     editor.notebook.setCurrentIndex(1)
     assert not editor.derive_button.isVisible() and not editor.test_compilation_button.isVisible()
@@ -179,6 +180,95 @@ def test_the_shared_validation_build_script_is_added_and_removed(
     assert editor.editors["compile_validate.sh"].isReadOnly()
     assert editor.status.text() == "Removed shared compile_validate.sh"
     assert changed == [ConfigurationsChanged(), ConfigurationsChanged()]
+
+
+def test_the_shared_incremental_script_is_a_draft_until_it_is_saved(editor: SetupPanel) -> None:
+    write_files(editor, "#!/bin/bash\ncmake -S . -B build\ncmake --build build -j\n")
+    script = comp_dir(editor) / "compile_incremental.sh"
+    ed = editor.editors["compile_incremental.sh"]
+    # without the file: a read-only placeholder that is never saved
+    assert ed.isReadOnly() and ed.text().startswith("# This project has no shared compile_incremental.sh")
+    assert editor.shared_incremental_compile_button.text() == "Add"
+    assert not editor.has_unsaved_changes()
+    editor.save()
+    assert not script.exists()
+
+    changed = recorded_changes(editor)
+    editor.shared_incremental_compile_button.click()
+    # a proposal derived from compile.sh, unsaved
+    assert not script.exists() and ed.document().isModified() and not ed.isReadOnly()
+    assert "cmake --build build" in ed.text() and "cmake -S . -B build" not in ed.text()
+    assert editor.shared_incremental_compile_button.text() == "Discard Draft"
+    assert editor.notebook.currentIndex() == editor.tab_index["compile_incremental.sh"]
+    assert editor.status.text() == "Check the proposed compile_incremental.sh and save it"
+    assert editor.has_unsaved_changes() and changed == []
+    # a reload keeps the draft
+    editor.reload_unmodified()
+    assert "cmake --build build" in ed.text() and ed.document().isModified()
+
+    editor.save()
+    assert script.exists() and os.stat(script).st_mode & stat.S_IXUSR
+    assert "cmake --build build" in script.read_text()
+    assert editor.shared_incremental_compile_button.text() == "Remove"
+    assert changed == [ConfigurationsChanged()]
+
+
+def test_the_proposal_uses_the_unsaved_compile_script_and_reports_a_missing_build_line(editor: SetupPanel) -> None:
+    write_files(editor, "#!/bin/bash\necho nothing to see\n")
+    editor.shared_incremental_compile_button.click()
+    assert editor.status.text().startswith("No build line found in compile.sh")
+    editor.shared_incremental_compile_button.click()  # discard
+    type_into(editor, "compile.sh", "#!/bin/bash\nmake -j\n")
+    editor.shared_incremental_compile_button.click()
+    assert "make -j" in editor.editors["compile_incremental.sh"].text()
+    assert editor.status.text() == "Check the proposed compile_incremental.sh and save it"
+
+
+def test_discarding_the_draft_restores_the_placeholder(editor: SetupPanel) -> None:
+    write_files(editor, "#!/bin/bash\nmake -j\n")
+    ed = editor.editors["compile_incremental.sh"]
+    placeholder = ed.text()
+    editor.shared_incremental_compile_button.click()
+    editor.shared_incremental_compile_button.click()
+    assert ed.text() == placeholder and ed.isReadOnly() and not ed.document().isModified()
+    assert editor.shared_incremental_compile_button.text() == "Add"
+    assert not (comp_dir(editor) / "compile_incremental.sh").exists()
+    assert not editor.has_unsaved_changes()
+
+
+def test_the_shared_incremental_script_is_removed_after_confirmation(
+    editor: SetupPanel, dialog_answers: DialogRecorder
+) -> None:
+    write_files(editor, "#!/bin/bash\nmake -j\n")
+    script = comp_dir(editor) / "compile_incremental.sh"
+    editor.shared_incremental_compile_button.click()
+    editor.save()
+    changed = recorded_changes(editor)
+    dialog_answers.answer("ask_yes_no", False, True)
+    editor.shared_incremental_compile_button.click()
+    assert script.exists() and changed == []
+    editor.shared_incremental_compile_button.click()
+    assert not script.exists() and editor.shared_incremental_compile_button.text() == "Add"
+    assert editor.editors["compile_incremental.sh"].isReadOnly()
+    assert editor.status.text() == "Removed shared compile_incremental.sh"
+    assert changed == [ConfigurationsChanged()]
+
+
+def test_a_configuration_with_the_shared_compile_script_resolves_to_the_saved_incremental_script(
+    editor: SetupPanel,
+) -> None:
+    from discopop_library.ProjectManager.configurations.compile_script import resolve_incremental_compile_script_path
+
+    write_files(editor, "#!/bin/bash\nmake -j\n")
+    config_dir = str(comp_dir(editor))
+    (comp_dir(editor) / "tiny").mkdir()
+    assert resolve_incremental_compile_script_path(config_dir, "tiny") is None
+    editor.shared_incremental_compile_button.click()
+    assert resolve_incremental_compile_script_path(config_dir, "tiny") is None  # a draft is no script
+    editor.save()
+    assert resolve_incremental_compile_script_path(config_dir, "tiny") == str(
+        comp_dir(editor) / "compile_incremental.sh"
+    )
 
 
 def test_derive_creates_the_derived_settings_and_enables_their_tabs(editor: SetupPanel) -> None:
