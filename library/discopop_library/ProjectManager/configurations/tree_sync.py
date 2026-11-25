@@ -25,8 +25,9 @@ does that:
 What a tree was synced from is kept in a state file of its own (:class:`TreeState`, in
 ``.discopop/project/builds/trees/<build id>.json``), apart from the build's fingerprint (accepting a stale build
 changes its fingerprint, not the tree). A sync marks the state ``syncing`` while it writes; a tree with no state
-or an interrupted sync is copied anew. One whose outputs are unknown (an interrupted or failed compilation, a
-validation build in it) is synced, but compiled in full.
+or an interrupted sync is copied anew. One whose outputs are unknown (an interrupted, cancelled or timed out
+compilation, a validation build in it) is synced, but compiled in full. A compilation that ended with a compiler
+error leaves the state ``failed``: the next one continues incrementally (see :data:`FAILED`).
 
 The files of the tree are those a copy would hold (:func:`copy_set`): every file below the project root except
 ``.discopop`` and what the copy leaves out (``configurations/copy_exclusions.py``). ``.discopop`` is the caller's.
@@ -50,7 +51,13 @@ PATH = str
 CLEAN = "clean"  # holds what ``synced`` says and the outputs of a successful compilation
 SYNCING = "syncing"  # a sync was writing into it; what it holds is unknown: copied anew
 BUILDING = "building"  # its files are as ``synced`` says, the outputs unknown (a compilation was running)
-DIRTY = "dirty"  # its files are as ``synced`` says, the outputs unknown (failed compilation, validation build)
+DIRTY = "dirty"  # its files are as ``synced`` says, the outputs unknown (interrupted compilation, validation build)
+# Its files are as ``synced`` says, the outputs those of a compilation that exited with an error in ``environment``.
+# Compiling incrementally from there is safe: a compiler writes no object for a source it rejects, so make / ninja
+# build it again, and a sync gives every file it writes the current modification time, so objects made from a
+# header before the error (patched or restored by the sync since) are older than it and built again as well. A
+# compilation that was killed (cancelled, timed out) may have left partial outputs and makes the tree DIRTY instead.
+FAILED = "failed"
 
 _TEMPORARY_SUFFIX = ".dp_sync_tmp"
 _PATCHED = "patched:"
@@ -65,9 +72,12 @@ class TreeState:
     # the suggestions applied to the files of the tree
     applied: List[str] = field(default_factory=list)
     state: str = CLEAN
-    # environment_fingerprint (builds.py) of the last successful compilation in the tree: only a tree compiled in
-    # the same environment can be compiled again incrementally
+    # environment_fingerprint (builds.py) of the compilation whose outputs the tree holds (successful or failed):
+    # only a tree compiled in the same environment can be compiled again incrementally
     environment: str = ""
+    # the environment in which compile_incremental.sh last succeeded in this tree: the script is known to work
+    # there, so a failure of it is an error in the code, not in the script
+    incremental_environment: str = ""
 
 
 def tree_states_dir_of(project_dir: PATH) -> PATH:
@@ -89,11 +99,13 @@ def read_tree_state(project_dir: PATH, build_id: str) -> Optional[TreeState]:
         if not isinstance(synced, dict) or not isinstance(applied, list) or not isinstance(state, str):
             return None
         environment = data.get("environment", "")
+        incremental_environment = data.get("incremental_environment", "")
         return TreeState(
             {str(k): str(v) for k, v in synced.items()},
             [str(a) for a in applied],
             state,
             environment if isinstance(environment, str) else "",
+            incremental_environment if isinstance(incremental_environment, str) else "",
         )
     except (OSError, ValueError, AttributeError):
         return None

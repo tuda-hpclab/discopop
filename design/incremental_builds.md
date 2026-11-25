@@ -29,6 +29,9 @@ Branch `design/incremental_builds` (off `master` 2a631c4a).
 7. The **evolutionary search compiles its candidates one after the other**, like every other strategy (one `par`
    slot is enough, no slot pool).
 8. When the incremental build rebuilt nothing although sources changed, it **falls back to a full build**.
+9. A compilation that failed with a compile error leaves the tree `failed`, and the next build is incremental
+   again; interrupted / killed / timed out ones leave it `dirty`. A failing `compile_incremental.sh` that has
+   already compiled the tree in the same environment is not followed by a full build (the error is in the code).
 
 ## 1. What happens today
 
@@ -170,7 +173,7 @@ configure time depends on the script: `compile.sh` usually wipes everything.
   `compile_validate.sh` (decision 5).
 - The `BuildKey` of a slot no longer contains the suggestions. The manifest records the slot's **content
   state**: the source entries it was synced to, the applied suggestion set, the patch fingerprint, and the
-  state (`clean` | `syncing` | `building` | `dirty`).
+  state (`clean` | `syncing` | `building` | `dirty` | `failed`).
 - The fingerprint is split:
   - **environment part**: `compile_script` (resp. the incremental script), `settings`, `project_directories`,
     `configuration`, `toolchain`, `callpath_pruning`, `openmp`. If it
