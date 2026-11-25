@@ -819,9 +819,10 @@ def __compile_configuration(args: Tuple[CHROMOSOME, AutotunerArguments, float]) 
     tell whether the build produced a binary worth executing.
     """
     global entry_to_configuration
-    configuration, arguments, timeout_after = args
+    configuration, arguments, _timeout_after = args
+    # builds are not bounded by the runtime derived timeout (see CodeConfiguration.compile_only)
     compilation_successful = entry_to_configuration[configuration].compile_only(
-        arguments, timeout=timeout_after, thread_count=arguments.thread_count
+        arguments, thread_count=arguments.thread_count
     )
     return configuration, compilation_successful
 

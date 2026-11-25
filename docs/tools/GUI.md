@@ -222,6 +222,7 @@ The *Report* stage shows all recorded measurements. The *Table* tab lists config
 - **Generate PDF Report** and **View Report PDF** create and open `.discopop/project/reports/<timestamp>/full_report.pdf` (the folder also holds `report.csv` and single PDFs). Viewing uses `xdg-open`.
 - To delete the measured runs and the reports, use **Reset Execution Results…** in the *Danger zone* of the [Project Setup](#project-setup) stage.
 - **Reload** re-reads the results.
+- The *Amdahl ceiling* and *Amdahl limit* columns and the Amdahl charts estimate the best possible speedup of the applied suggestions from the runtimes of the hotspot detection. They need the extents of the suggestions, which the explorer writes into `explorer/suggestion_extents.json`. A detection result of an older explorer lacks them: the stage then recommends running the pattern detection again and offers **Compute Amdahl ceilings**, which extracts them from `detection_result_dump.json` in a separate process after a confirmation. That decodes the whole detection result and needs about 35 times its size in memory (41 GB and almost 5 minutes for a 1.2 GB result), which the notice estimates from the size of the dump.
 
 ## What the stages run
 

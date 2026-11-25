@@ -59,11 +59,9 @@ class CodeConfiguration(object):
         if self.record_failed_application():
             return
         # ``timeout`` is derived from the reference configuration's *runtime*, which
-        # says nothing about how long a build may take -- and in compile-only mode no
-        # run was measured at all, so it is a bound on nothing. Builds are therefore
-        # left unbounded in that mode rather than cut off by a number picked for runs.
-        compile_timeout = None if arguments.compile_only else timeout
-        compilation_successful = self.compile_only(arguments, compile_timeout, thread_count, is_initial)
+        # says nothing about how long a build may take: a program running for a second
+        # may well take minutes to compile. Builds are therefore never bounded by it.
+        compilation_successful = self.compile_only(arguments, thread_count, is_initial)
         if arguments.compile_only:
             # The build is the whole answer here. A failed build already stored its
             # result in compile_only(); a successful one gets a result that carries no
@@ -98,9 +96,12 @@ class CodeConfiguration(object):
         )
         return True
 
-    def compile_only(
-        self, arguments: AutotunerArguments, timeout: Optional[float], thread_count: int, is_initial: bool = False
-    ) -> bool:
+    def compile_only(self, arguments: AutotunerArguments, thread_count: int, is_initial: bool = False) -> bool:
+        """Build the configuration; returns whether the build succeeded.
+
+        A build has no time limit: the autotuner's timeout is derived from the runtime
+        of the reference configuration and bounds runs, never compilations.
+        """
         cm_args = ProjectManagerArguments(
             log_level=arguments.log_level,
             write_log=arguments.write_log,
@@ -118,9 +119,9 @@ class CodeConfiguration(object):
             reset_execution_results=False,
             gui=False,
             label_prefix="",
-            timeout_compilation=timeout,
-            timeout_execution=timeout,
-            timeout_validation=timeout,
+            timeout_compilation=None,
+            timeout_execution=None,
+            timeout_validation=None,
         )
 
         compilation_successful = True
@@ -141,12 +142,17 @@ class CodeConfiguration(object):
             settings_path,
             compile_sh,
             thread_count,
-            timeout,
+            None,
         )
 
         if ret is None or ret[0] != 0:
-            print("Error during compilation!\n" + "" if ret is None else ("STDERR: " + ret[3]))
-            self.execution_result = ExecutionResult(0.1, 1, False, False)
+            message = "Error during compilation of " + self.root_path
+            if ret is not None:
+                message += " (return code " + str(ret[0]) + ")"
+                if ret[3]:
+                    message += "\nSTDERR: " + ret[3]
+            print(message)
+            self.execution_result = ExecutionResult(0.1, 1, False, False, compilation_failed=True)
             compilation_successful = False
         return compilation_successful
 
@@ -170,7 +176,7 @@ class CodeConfiguration(object):
             reset_execution_results=False,
             gui=False,
             label_prefix="",
-            timeout_compilation=timeout,
+            timeout_compilation=None,
             timeout_execution=timeout,
             timeout_validation=timeout,
         )
@@ -228,7 +234,8 @@ class CodeConfiguration(object):
                 config_path,
                 settings_path,
                 thread_count,
-                timeout_compilation=timeout,
+                # a build, which the runtime derived timeout must not bound (see compile_only)
+                timeout_compilation=None,
                 timeout_validation=timeout,
             )
             if validation.compile_required and not validation.compile_successful:

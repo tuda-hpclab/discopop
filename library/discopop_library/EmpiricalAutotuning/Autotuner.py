@@ -11,7 +11,7 @@ import logging
 from logging import Logger
 import os
 import time
-from typing import List, Tuple, cast
+from typing import List, Optional, Tuple, cast
 
 import jsonpickle  # type: ignore
 from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArguments
@@ -147,6 +147,26 @@ def write_measurements(auto_tuner_dir: str, debug_stats: List[DebugStatEntry]) -
         )
 
 
+class ReferenceConfigurationFailed(Exception):
+    """The reference configuration (no suggestions applied) did not build or run successfully.
+
+    Every candidate is measured against it, so without it the search has no baseline: its runtime would be a
+    placeholder, every timeout derived from it would be meaningless, and a failure of the project itself would be
+    reported as the failure of every candidate.
+    """
+
+
+def reference_failure_reason(result: ExecutionResult) -> Optional[str]:
+    """Why the reference configuration is unusable as the baseline of a search, or None if it is usable."""
+    if result.compilation_failed:
+        return "it does not build (see the compiler output above)"
+    if result.return_code != 0:
+        return "its execute.sh failed with return code " + str(result.return_code)
+    if not result.result_valid:
+        return "its result is invalid (validate.sh failed)"
+    return None
+
+
 def run(arguments: AutotunerArguments) -> None:
     logger.info("Starting discopop autotuner.")
     # ``ProgressList`` emits a structured "measurement" progress event on every
@@ -168,6 +188,21 @@ def run(arguments: AutotunerArguments) -> None:
     reference_configuration = CodeConfiguration(arguments.project_path, arguments.dot_dp_path, "par_settings.json")
     reference_configuration.execute(arguments, timeout=None, thread_count=arguments.thread_count, is_initial=True)
     reference_result = cast(ExecutionResult, reference_configuration.execution_result)
+    # In compile-only mode a reference that does not build is reported with the candidates' build results
+    # (report_compile_only_results); a search, however, measures nothing meaningful without it.
+    failure_reason = None if arguments.compile_only else reference_failure_reason(reference_result)
+    if failure_reason is not None:
+        progress_reporter.close()
+        set_active_reporter(None)
+        raise ReferenceConfigurationFailed(
+            "The reference configuration (the project with "
+            + reference_configuration.settings_name
+            + ", no suggestions applied) cannot be used as the baseline: "
+            + failure_reason
+            + ". No candidate was measured; fix the configuration "
+            + arguments.configuration
+            + " first."
+        )
     progress_reporter.baseline(
         reference_result.runtime,
         reference_result.return_code == 0 and reference_result.result_valid and reference_result.thread_sanitizer,
