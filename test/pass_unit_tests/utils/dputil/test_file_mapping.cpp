@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -125,8 +126,26 @@ TEST_F(FileMappingTest, ParallelProcessesGiveEveryFileExactlyOneId) {
   EXPECT_EQ(static_cast<int>(ids_of_file.size()), kProcesses * kOwnFiles + kSharedFiles);
   EXPECT_EQ(lines, kProcesses * kOwnFiles + kSharedFiles) << "a file is listed more than once";
   // the ids are 1..N
+  ASSERT_FALSE(files_of_id.empty());
   EXPECT_EQ(files_of_id.begin()->first, 1);
   EXPECT_EQ(files_of_id.rbegin()->first, static_cast<int>(files_of_id.size()));
+}
+
+// A lock that cannot be taken (a file system without flock, e.g. NFS without lockd; a .discopop of another user) does
+// not stop the compilation: the file is registered unlocked, as before the lock, with a warning. Here the lock
+// directory is a file, so the lock file cannot be opened. Registered in this process: the ids start at 1 again, as
+// the cache belongs to the FileMapping.txt it was loaded from.
+TEST_F(FileMappingTest, ALockThatCannotBeTakenDoesNotStopTheRegistration) {
+  std::ofstream(root_ / ".discopop" / "locking_files").close();
+  FileMappingPath() = (root_ / ".discopop" / "FileMapping.txt").string();
+  EXPECT_EQ(dputil::GetFileId("", Source("a.cpp")), 1);
+  EXPECT_EQ(dputil::GetFileId("", Source("b.cpp")), 2);
+  EXPECT_EQ(dputil::GetFileId("", Source("a.cpp")), 1);
+
+  std::ifstream mapping(root_ / ".discopop" / "FileMapping.txt");
+  std::stringstream content;
+  content << mapping.rdbuf();
+  EXPECT_EQ(content.str(), "1\t" + Source("a.cpp") + "\n2\t" + Source("b.cpp") + "\n");
 }
 
 }  // namespace
