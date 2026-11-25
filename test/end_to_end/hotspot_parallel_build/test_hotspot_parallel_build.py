@@ -89,27 +89,42 @@ def _environment(project: pathlib.Path) -> Dict[str, str]:
     return env
 
 
-def _build_and_run(root: pathlib.Path, jobs: int) -> pathlib.Path:
-    """Builds the program with `make -j<jobs>` in a project of its own below root, runs it, returns the project."""
-    project = root / f"j{jobs}"
+def _make(project: pathlib.Path, jobs: int) -> subprocess.CompletedProcess:  # type: ignore[type-arg]
+    build = subprocess.run(
+        ["make", f"-j{jobs}", "CXX=discopop_hotspot_cxx"],
+        cwd=project,
+        env=_environment(project),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert build.returncode == 0, build.stderr[-4000:]
+    return build
+
+
+def _project(root: pathlib.Path, name: str) -> pathlib.Path:
+    project = root / name
     project.mkdir(parents=True)
     (project / ".discopop").mkdir()
     for unit in range(TRANSLATION_UNITS):
         (project / f"unit{unit}.cpp").write_text(_unit_source(unit))
     (project / "main.cpp").write_text(_main_source())
     (project / "Makefile").write_text(MAKEFILE)
-    env = _environment(project)
-    build = subprocess.run(
-        ["make", f"-j{jobs}", "CXX=discopop_hotspot_cxx"],
-        cwd=project,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
+    return project
+
+
+def _run(project: pathlib.Path) -> None:
+    run = subprocess.run(
+        ["./prog"], cwd=project, env=_environment(project), capture_output=True, text=True, timeout=120
     )
-    assert build.returncode == 0, build.stderr[-4000:]
-    run = subprocess.run(["./prog"], cwd=project, env=env, capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stderr[-4000:]
+
+
+def _build_and_run(root: pathlib.Path, jobs: int) -> pathlib.Path:
+    """Builds the program with `make -j<jobs>` in a project of its own below root, runs it, returns the project."""
+    project = _project(root, f"j{jobs}")
+    _make(project, jobs)
+    _run(project)
     return project
 
 
@@ -138,7 +153,7 @@ def _region_keys(project: pathlib.Path) -> Set[RegionKey]:
     }
 
 
-def _check_ids(project: pathlib.Path) -> None:
+def _check_region_ids(project: pathlib.Path) -> List[List[str]]:
     rows = _cs_ids(project)
     ids = [int(fields[0]) for fields in rows]
     duplicates = sorted({i for i in ids if ids.count(i) > 1})
@@ -146,6 +161,11 @@ def _check_ids(project: pathlib.Path) -> None:
     assert sorted(ids) == list(range(1, len(rows) + 1)), "the region ids are not exactly 1..N"
     counter = (_private(project) / "temp.txt").read_text().split()
     assert int(counter[-1]) == len(rows), "temp.txt does not continue after the last region id"
+    return rows
+
+
+def _check_ids(project: pathlib.Path) -> None:
+    rows = _check_region_ids(project)
 
     mapping = _file_mapping(project)
     file_ids = [file_id for file_id, _ in mapping]
@@ -186,3 +206,33 @@ def test_a_parallel_build_instruments_the_same_regions_as_a_serial_one(
         return {(kind, line, os.path.relpath(name, project), function) for kind, line, name, function in keys}
 
     assert relative(_region_keys(parallel_build), parallel_build) == relative(_region_keys(serial_build), serial_build)
+
+
+def test_a_lock_that_cannot_be_taken_does_not_stop_the_build(tmp_path: pathlib.Path) -> None:
+    """E.g. a file system without flock (NFS without lockd) or a .discopop of another user: the build continues
+    unlocked, as before the locks, with a warning. Here the lock directories are files, so the lock files cannot be
+    opened."""
+    project = _project(tmp_path, "unlocked")
+    (project / ".discopop" / "hotspot_detection").mkdir()
+    (project / ".discopop" / "hotspot_detection" / "locking_files").write_text("")
+    (project / ".discopop" / "locking_files").write_text("")
+    build = _make(project, 1)
+    assert "Compiling without the lock" in build.stderr
+    _run(project)
+    _check_ids(project)
+
+
+def test_ids_of_a_crashed_compilation_are_not_handed_out_again(tmp_path: pathlib.Path) -> None:
+    """A compilation that crashed after appending regions to cs_id.txt never wrote the counter back to temp.txt; the
+    next one continues after the highest id in cs_id.txt, so the ids stay unique and 1..N (the runtime sizes its
+    tables by the lines of cs_id.txt)."""
+    project = _project(tmp_path, "crashed")
+    _make(project, 1)
+    regions = len(_check_region_ids(project))
+    with open(_private(project) / "cs_id.txt", "a") as cs_id:
+        for region in range(regions + 1, regions + 4):
+            cs_id.write(f"{region} loop 1 1 crashed\n")
+    (project / "unit0.cpp").write_text(_unit_source(0) + "\n")
+    _make(project, 1)
+    rows = _check_region_ids(project)
+    assert len(rows) == regions + 3 + FUNCTIONS_PER_UNIT * (1 + LOOPS_PER_FUNCTION)

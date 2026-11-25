@@ -304,7 +304,9 @@ long int UID = 0;
 // An exclusive flock on a lock file, held for the lifetime of the object. flock belongs to the open file description,
 // so a lock is taken once per module and never again while it is held (a second open + flock of the file in this
 // process would wait for itself); the kernel releases it when the process ends, so a crashing compiler cannot block
-// the build.
+// the build. A lock that cannot be taken (a file system without flock, e.g. NFS without lockd: ENOLCK; a .discopop of
+// another user: EACCES) does not stop the compilation: it continues unlocked, as before the locks, with a warning that
+// the ids of a parallel build may collide.
 class FileLock
 {
 public:
@@ -313,7 +315,8 @@ public:
     fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
     if (fd == -1)
     {
-      report_fatal_error(Twine("HotspotDetection: cannot open the lock file ") + path + ": " + strerror(errno));
+      WarnUnlocked(path, "cannot open the lock file", errno);
+      return;
     }
     int result;
     do
@@ -324,7 +327,8 @@ public:
     {
       const int error = errno;
       close(fd);
-      report_fatal_error(Twine("HotspotDetection: cannot lock ") + path + ": " + strerror(error));
+      fd = -1;
+      WarnUnlocked(path, "cannot lock", error);
     }
   }
 
@@ -333,8 +337,18 @@ public:
 
   ~FileLock()
   {
-    flock(fd, LOCK_UN);
-    close(fd);
+    if (fd != -1)
+    {
+      flock(fd, LOCK_UN);
+      close(fd);
+    }
+  }
+
+  static void WarnUnlocked(const std::string &path, const char *what, int error)
+  {
+    errs() << "WARNING: HotspotDetection: " << what << " " << path << ": " << strerror(error)
+           << ". Compiling without the lock: the region and file ids of a parallel build (make -j) may collide, "
+              "build serially if they do.\n";
   }
 
 private:
@@ -644,14 +658,14 @@ namespace
       string lockDirectory(getenv("DOT_DISCOPOP"));
       lockDirectory += "/hotspot_detection/locking_files";
       if (mkdir(lockDirectory.data(), 0777) == -1 && errno != EEXIST){
-          report_fatal_error(Twine("HotspotDetection: cannot create ") + lockDirectory + ": " + strerror(errno));
+          FileLock::WarnUnlocked(lockDirectory, "cannot create", errno);
       }
       // held until runOnModule has written the counter back (doFinalization)
       idLock = std::make_unique<FileLock>(lockDirectory + "/region_ids.lock");
       string fileMappingLockDirectory(getenv("DOT_DISCOPOP"));
       fileMappingLockDirectory += "/locking_files";
       if (mkdir(fileMappingLockDirectory.data(), 0777) == -1 && errno != EEXIST){
-          report_fatal_error(Twine("HotspotDetection: cannot create ") + fileMappingLockDirectory + ": " + strerror(errno));
+          FileLock::WarnUnlocked(fileMappingLockDirectory, "cannot create", errno);
       }
       fileMappingLock = std::make_unique<FileLock>(fileMappingLockDirectory + "/FileMapping.lock");
 
@@ -673,6 +687,16 @@ namespace
         errs() << "Temp file not exist!\n";
       }
       tempfile.close();
+      // a compilation that crashed after appending to cs_id.txt never wrote its counter back: continue after the
+      // highest id handed out, so its ids are not handed out again (they stay unused)
+      std::ifstream regionIds(tmp3 + "/cs_id.txt");
+      long int recordedId;
+      std::string restOfLine;
+      while (regionIds >> recordedId)
+      {
+        UID = std::max(UID, recordedId);
+        std::getline(regionIds, restOfLine);
+      }
       errs() << "UID is: " << UID << '\n';
       return false;
     }
