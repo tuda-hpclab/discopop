@@ -120,6 +120,8 @@ class ConfigListPanel(Panel):
         self._updating = False
         self._shown_config: Optional[str] = None
         self._wizard: Optional[ConfigurationWizard] = None
+        # called once the wizard is closed (maybe_open_wizard)
+        self._after_wizard: Optional[Callable[[], None]] = None
 
         self.caption_label = QLabel(CAPTION)
         caption_font = QFont(self.caption_label.font())
@@ -420,10 +422,16 @@ class ConfigListPanel(Panel):
 
     # --- the wizard ---
 
-    def maybe_open_wizard(self, was_initialized: bool) -> None:
-        """Offer the configuration wizard if the project has no real configuration; call once the window is shown."""
+    def maybe_open_wizard(self, was_initialized: bool, then: Optional[Callable[[], None]] = None) -> None:
+        """Offer the configuration wizard if the project has no real configuration; call once the window is shown.
+
+        ``then`` is called once the wizard is closed, or at once if it is not needed.
+        """
         if has_real_configuration(self.config_dir):
+            if then is not None:
+                then()
             return
+        self._after_wizard = then
         if was_initialized:
             dialogs.show_message(
                 self,
@@ -448,6 +456,9 @@ class ConfigListPanel(Panel):
         if result and result in self.names():
             self._tabs.show_tab(TAB_PROFILING)
         wizard.deleteLater()
+        after, self._after_wizard = self._after_wizard, None
+        if after is not None:
+            after()
 
     def cancel_jobs(self) -> None:
         if self._wizard is not None:

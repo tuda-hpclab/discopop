@@ -8,7 +8,9 @@
 
 """The main window: the workflow sidebar on the left, the panel of the selected stage on the right with the output
 pane below it, the status line at the bottom. The configuration selector is at the top of the stages that work on the
-selected configuration (``tabs.CONFIG_STAGES``), the color theme in a menu at the bottom of the sidebar.
+selected configuration (``tabs.CONFIG_STAGES``), the color theme in a menu at the bottom of the sidebar. The menu bar
+has "View", "Settings" (the update check) and "Help" (versions, check for updates); an available update shows as a
+button in the status line (``updates.py``).
 
 The window assembles the panels and wires them: which panel reacts to which :class:`ProjectState` event, and the
 few callbacks one panel offers another. The panels do not know each other. The window is their :class:`TabHost`:
@@ -50,6 +52,7 @@ from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import Profil
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
+from discopop_library.ProjectManager.qt_gui.updates import UpdateController, show_versions
 
 # re-exported: the names were defined here first
 from discopop_library.ProjectManager.qt_gui.tabs import (
@@ -133,6 +136,10 @@ class MainWindow(QMainWindow):
 
         self.status = StatusLine()
         self.statusBar().addWidget(self.status, 1)
+        # set by "Restart now" after an update: run_qt_gui starts the GUI again once the window is closed
+        self.restart_requested = False
+        self.updates = UpdateController(self, self.busy_reason, self.restart)
+        self.statusBar().addPermanentWidget(self.updates.button)
         # the project's path at the right end of the status line: there when needed, without taking the eye
         self.dot_dp_label = ElidedPathLabel(arguments.dot_dp)
         self.dot_dp_label.setMinimumWidth(80)
@@ -247,13 +254,33 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _build_menu_bar(self) -> None:
-        """The menu bar: "View" with "Reset" (the layout as at the start)."""
+        """The menu bar: "View" with "Reset" (the layout as at the start), "Settings" with "Updates" (whether to
+        check at the start, the release channel), "Help" with "Version" and "Check for updates"."""
         # in the window, at its top (not in the global menu bar of the desktop)
         self.menuBar().setNativeMenuBar(False)
         self.view_menu = self.menuBar().addMenu("&View")
         self.reset_view_action = self.view_menu.addAction("&Reset")
         self.reset_view_action.setToolTip("Undo manual changes of the layout: box heights, splitters, the output pane")
         self.reset_view_action.triggered.connect(lambda _checked=False: self.reset_view())
+        self.settings_menu = self.menuBar().addMenu("&Settings")
+        self.updates_menu = self.updates.build_settings_menu(self.settings_menu)
+        self.help_menu = self.menuBar().addMenu("&Help")
+        self.version_action = self.help_menu.addAction("&Version")
+        self.version_action.setToolTip("The installed DiscoPoP packages and their versions")
+        self.version_action.triggered.connect(lambda _checked=False: show_versions(self))
+        self.check_updates_action = self.help_menu.addAction("&Check for updates")
+        self.check_updates_action.setToolTip("Ask PyPI for newer versions of the installed DiscoPoP packages")
+        self.check_updates_action.triggered.connect(lambda _checked=False: self.updates.check(manual=True))
+
+    def busy_reason(self) -> str:
+        """Why the packages cannot be replaced now ("" if they can): a job of a panel runs."""
+        busy = [panel.output_title or type(panel).__name__ for panel in self.panels if panel.is_busy()]
+        return f"A job is running ({', '.join(busy)})." if busy else ""
+
+    def restart(self) -> None:
+        """Close the window and start the GUI again (after an update; see ``app.run_qt_gui``)."""
+        self.restart_requested = True
+        self.close()
 
     def reset_view(self) -> None:
         """Undo the manual changes of the layout: resized boxes, splitter positions, the height of the output pane."""
@@ -357,10 +384,11 @@ class MainWindow(QMainWindow):
         self._place_config_selector()
 
     def after_show(self) -> None:
-        """Called once the window is visible: the wizard of a fresh project opens on top of it."""
+        """Called once the window is visible: the wizard of a fresh project opens on top of it. The check for
+        updates starts afterwards (once the wizard is closed), so the wizard's opt-out comes first."""
         # the first stage in the sidebar has the keyboard focus, not the first widget of the page
         self.nav.setFocus()
-        self.config_list.maybe_open_wizard(self.was_initialized)
+        self.config_list.maybe_open_wizard(self.was_initialized, then=self.updates.check_at_start)
 
     # --- the stages ---
 

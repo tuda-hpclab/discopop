@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui import dialogs, updates, widgets
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
@@ -256,7 +256,11 @@ class ConfigurationWizard(QWizard):
     # --- the steps ---
 
     def _welcome_step(self) -> _Step:
-        return self._step(0, _label(WELCOME_TEXT, wrap=True))
+        # a setting of the user, not of the project: saved at once, like in Settings -> Updates
+        self.check_updates_checkbox = updates.check_at_start_checkbox()
+        step = self._step(0, _label(WELCOME_TEXT, wrap=True), self.check_updates_checkbox)
+        step.layout().addStretch(1)  # type: ignore[union-attr]
+        return step
 
     def _write_access_step(self) -> _Step:
         parent_folder = os.path.dirname(self.arguments.project_root)

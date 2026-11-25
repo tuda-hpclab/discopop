@@ -118,6 +118,22 @@ def theme_settings_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qapp:
 
 
 @pytest.fixture(autouse=True)
+def update_settings_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The update settings are stored in a temporary file (never in the user's), and PyPI is never contacted: a
+    test that checks for updates replaces ``update_notifier.check_for_updates`` (or the fetch) itself."""
+    from discopop_library.tools.update_notifications import update_notifier
+
+    path = tmp_path / "update_settings" / "settings.json"
+    monkeypatch.setattr(update_notifier, "settings_path", lambda: str(path))
+
+    def no_network(name: str) -> List[str]:
+        raise ConnectionError(f"the tests do not contact PyPI (asked for {name})")
+
+    monkeypatch.setattr(update_notifier, "fetch_release_versions", no_network)
+    return path
+
+
+@pytest.fixture(autouse=True)
 def delete_leftover_widgets(qapp: QApplication) -> Iterator[None]:
     """Delete the windows a test left behind, while the application still exists.
 

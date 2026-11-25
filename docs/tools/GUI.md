@@ -44,7 +44,7 @@ Up to DiscoPoP 5.0, the bare `discopop` command opened the GUI. It is now the co
 ## Window layout
 ![Main window with the workflow sidebar on the left and the output pane below the stage](../assets/screenshots/gui_main_window.svg)
 
-The window has a workflow sidebar, the stage that is selected and an output pane. The sidebar and the status line form the frame of the window, in a darker shade than the page of the stage. The colors follow the light or dark color scheme of the desktop; **◐ Theme** at the bottom of the sidebar switches to *Light* (gray pages and off-white views, with more contrast than most light desktop schemes) or *Dark* (and back to *System*), and the choice is kept for the next start. The charts stay light. The status line at the bottom shows messages on the left and the path of the `.discopop` directory on the right (shortened in the middle; its tooltip shows all of it).
+The window has a workflow sidebar, the stage that is selected and an output pane. The sidebar and the status line form the frame of the window, in a darker shade than the page of the stage. The colors follow the light or dark color scheme of the desktop; **◐ Theme** at the bottom of the sidebar switches to *Light* (gray pages and off-white views, with more contrast than most light desktop schemes) or *Dark* (and back to *System*), and the choice is kept for the next start. The charts stay light. The status line at the bottom shows messages on the left and the path of the `.discopop` directory on the right (shortened in the middle; its tooltip shows all of it); when a new DiscoPoP version is available, **● Update available** appears next to the path, see [Updates](#updates). The menu bar has *View* (**Reset** undoes manual changes of the layout), *Settings* (**Updates**) and *Help* (**Version**, **Check for updates**).
 
 - **Configuration selector** (a card, the first content below the header of the stages that work on the selected configuration: *Configuration Setup*, *Profiling*, *Patch Repair*, *Autotuning* and *Execute*; the other stages do not show it): the execution configurations of the project (the directories below `.discopop/project/configs/`) as tabs; the selected one is filled in the highlight color like the selected stage of the sidebar. A click on a tab switches to it, and the stage stays in front. The selection is the same on all these stages. When there are more configurations than fit, arrows at the end of the tabs (or the mouse wheel over them) scroll them. **+** creates an empty configuration (you enter a name; its `execute.sh` is a placeholder you have to edit). The **⋯** menu at the right end offers *New Configuration…*, *New with Wizard…*, *Copy*, *Rename* and *Delete* of the selected configuration; right-clicking a tab offers *Copy*, *Rename* and *Delete* of its configuration.
 - **Workflow sidebar** (left): the stages of the pipeline, grouped into three sections:
@@ -65,12 +65,27 @@ The stages for later steps explain which prerequisite is missing: the detail lin
 ### Output pane
 The output of all jobs is shown in one pane below the stages, with one tab per stage. Collapsed, the pane is one line that shows the last line any job wrote. It opens when a job starts; the toggle expands and collapses it, and **Clear** empties the shown output. The stages themselves have no consoles.
 
+## Updates
+The Qt GUI checks PyPI for newer versions of the installed DiscoPoP packages when it starts (in the background; a failed check, e.g. without network access, is not reported) and on **Help → Check for updates** (which reports the result in any case). **Help → Version** lists the installed DiscoPoP packages, their versions and where they were installed from (PyPI, or a local directory, an editable install or a VCS URL), and the Python interpreter.
+
+An available update shows as **● Update available** in the status line. It opens a window with the packages, the installed and the available versions and the command that installs them (**Copy** copies it). **Update now** runs it with the `pip` of the Python environment the GUI runs in (`uv pip` if the environment has no pip) and shows its output. Packages such as the profiler are built from source while they are installed, which needs clang / LLVM 19-22 with its development files and CMake and can take several minutes. The update cannot start while a job of the GUI runs, and the window blocks the GUI until it is closed. **Restart now** starts the GUI again with the new version.
+
+**Settings → Updates** switches the check at the start on or off and selects the release channel:
+- *Automatic* (default): follows the installed version of the meta-package `discopop`. A final release installed means stable updates only; then only `discopop` itself is checked, and installing its new version raises the sub-packages to the versions it requires. A pre-release installed (`pip install --pre discopop`) means pre-releases are offered as well; then every package is checked and pinned to its newest version.
+- *Stable releases only* / *Include pre-releases*: one of the two regardless of the installed version.
+
+A package that has no final release at all is offered its pre-releases on either channel, as pip does. The command names the exact versions (`discopop==5.0.3`), so it needs no `--pre`.
+
+Packages that were not installed from PyPI (an editable or local install from a checkout, or a package managed by conda) are listed but not checked. If `discopop` itself is such an install (a development install), the check at the start is skipped and **Check for updates** says to update the checkout instead. If only some packages come from elsewhere, the window shows the command but no **Update now**, as pip could replace them with the PyPI build.
+
+The settings are stored in `~/.discopop_config/auto_updater/settings.json` (`automatic_check_active`, `release_channel`). The command line tools, the Explorer and the Tk GUI do not check for updates.
+
 ## Configuration assistant (wizard)
 ![First page of the configuration assistant](../assets/screenshots/gui_wizard.svg)
 
 When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has nine steps (eight in the Tk version, which has no step for the project directories):
 
-1. **Welcome**
+1. **Welcome**, with the check box *Check for DiscoPoP updates when the Project Manager starts* (on by default; a setting of the user, not of the project, see [Updates](#updates)). The check runs once the assistant is closed.
 2. **Write Permissions Check**: the project is copied to a sibling directory for every run. Without write access to the parent directory, only in-place execution is possible.
 3. **Project Directories**: what is project code, with the same folder tree of excluded directories and list of included directories as the *Project Setup* stage; see [Project directories](Project_manager.md#project-directories). Exclude third-party code bundled with the project, include sources outside of it. Every change is saved at once.
 4. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
