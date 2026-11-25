@@ -49,7 +49,6 @@ from discopop_explorer.pattern_detection import PatternDetectorX
 from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
-from discopop_library.tools.update_notifications.update_notifier import run as check_for_updates
 
 
 @dataclass
@@ -146,13 +145,6 @@ def __run(
 ) -> DetectionResult:
     """pattern_decisions, if given, receives which candidates the pattern detection considered and
     why it rejected them. It stays empty when existing patterns are loaded."""
-    # check for updates
-    module_name = "discopop"
-    module_api_url = "https://api.github.com/repos/tuda-hpclab/DiscoPoP/releases/latest"
-    module_release_url = "https://github.com/tuda-hpclab/DiscoPoP/releases"
-    with stage("Checking for updates"):
-        check_for_updates(module_name, module_api_url, module_release_url)
-
     visualizer = None
 
     if enable_visualizer:

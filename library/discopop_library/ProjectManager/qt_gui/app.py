@@ -83,3 +83,17 @@ def run_qt_gui(arguments: ProjectManagerArguments) -> None:
     finally:
         wake_up.stop()
         window.cancel_running_jobs()
+    if window.restart_requested:
+        restart_process()
+
+
+def restart_process() -> None:
+    """Replace this process by a new start of the same command (after an update: the new code is loaded).
+
+    ``sys.orig_argv`` keeps how Python was started (``-m`` included), ``sys.executable`` the interpreter of the
+    environment that was updated.
+    """
+    print("Restarting the DiscoPoP Project Manager.", file=sys.stderr)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable] + sys.orig_argv[1:])

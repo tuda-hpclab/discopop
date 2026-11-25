@@ -30,7 +30,8 @@ def _isolated_home(project_dir: Path) -> Path:
     """A HOME next to project_dir with the update check of the DiscoPoP tools switched off.
 
     The tools keep their configuration in $HOME/.discopop_config; a HOME per test keeps the tests from sharing it
-    with each other and with the developer, and from contacting the release server.
+    with each other and with the developer. Only the project manager's Qt GUI checks PyPI for updates (at its
+    start, if enabled), which no test of the pipeline starts; the setting stays off in case one does.
     """
     home = project_dir.parent / "home"
     settings_file = home / ".discopop_config" / "auto_updater" / "settings.json"

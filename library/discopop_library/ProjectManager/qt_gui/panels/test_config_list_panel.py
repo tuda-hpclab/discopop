@@ -318,6 +318,18 @@ def test_the_wizard_stays_closed_with_a_real_configuration(env: Env) -> None:
     assert env.panel._wizard is None
 
 
+def test_then_runs_after_the_wizard_or_at_once(env: Env) -> None:
+    calls: List[str] = []
+    env.panel.maybe_open_wizard(False, then=lambda: calls.append("after"))
+    wizard = env.panel._wizard
+    assert wizard is not None and calls == []
+    wizard.done(0)
+    assert calls == ["after"]
+    Path(env.panel.config_dir, "a", "execute.sh").write_text("#!/bin/bash\n./run\n")
+    env.panel.maybe_open_wizard(False, then=lambda: calls.append("at once"))
+    assert env.panel._wizard is None and calls == ["after", "at once"]
+
+
 def test_a_finished_wizard_selects_its_configuration_and_shows_execute(env: Env) -> None:
     env.panel.maybe_open_wizard(False)
     wizard = env.panel._wizard

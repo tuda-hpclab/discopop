@@ -272,3 +272,12 @@ def test_the_project_directories_step_saves_at_once(
     assert load_included_directories(wizard.arguments.project_dir) == [str(shared)]
     wizard.next()
     assert wizard.currentId() == 3
+
+
+def test_the_welcome_step_switches_the_update_check(wizard: ConfigurationWizard) -> None:
+    from discopop_library.tools.update_notifications import update_notifier
+
+    # on by default; a setting of the user, saved at once (the conftest keeps it in a temporary file)
+    assert wizard.check_updates_checkbox.isChecked()
+    wizard.check_updates_checkbox.setChecked(False)
+    assert not update_notifier.load_settings().check_at_start
