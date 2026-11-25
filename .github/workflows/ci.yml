@@ -70,7 +70,11 @@ jobs:
       contents: read
       # looks up which prerequisite images exist already
       packages: read
+      # look up whether a pull request run tested the tree of a push already
+      actions: read
+      pull-requests: read
     outputs:
+      tested_by: ${{ steps.tested.outputs.tested_by }}
       scope: ${{ steps.create_matrix.outputs.scope }}
       benchmarks: ${{ steps.create_matrix.outputs.benchmarks }}
       matrix: ${{ steps.create_matrix.outputs.matrix }}
@@ -159,7 +163,60 @@ jobs:
             echo "primary_image=$(image_of "$e_llvm21")"
           } >> "$GITHUB_OUTPUT"
 
-          # only the images that do not exist yet are built (prepare_images): usually none, and then that job is skipped
+          # A push to master whose tree a pull request run has tested completely already (the merge of a pull request that
+      # was up to date with master, which the branch protection of master requires) is not tested again: its checks
+      # are skipped and checks_successful names the run that tested it. A pull request run tests the merge of its head
+      # into the target branch as it was then; that tree equals the tree of the head if the head contains the target
+      # branch of then, which is an ancestor of the master before the push (the first parent). So the tree was tested if
+      # it equals the tree of the head of a merged pull request into master that contains that first parent, and if that
+      # head has a successful run with the full matrix (a pull request retargeted to master without a new push only had
+      # a reduced run).
+      - name: Find out whether a pull request run tested this tree already
+        id: tested
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && !github.event.act }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX: ${{ steps.create_matrix.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          api() { gh api -H "Accept: application/vnd.github+json" "repos/$GITHUB_REPOSITORY/$1" "${@:2}"; }
+          tree="$(api "commits/$GITHUB_SHA" -q .commit.tree.sha)"
+          first_parent="$(api "commits/$GITHUB_SHA" -q '.parents[0].sha')"
+          environments="$(jq '.include | length' <<< "$MATRIX")"
+          tested_by=""
+          while read -r number head; do
+            [ -n "$number" ] || continue
+            if [ "$(api "commits/$head" -q .commit.tree.sha)" != "$tree" ]; then
+              echo "#$number: the tree of its head ${head:0:8} differs"; continue
+            fi
+            if [[ ! "$(api "compare/$first_parent...$head" -q .status)" =~ ^(ahead|identical)$ ]]; then
+              echo "#$number: its head ${head:0:8} does not contain ${first_parent:0:8}"; continue
+            fi
+            while read -r run_id run_url; do
+              [ -n "$run_id" ] || continue
+              # every matrix entry of the full configuration had to run its tests, and the run had to succeed
+              python_tests="$(api "actions/runs/$run_id/jobs?per_page=100" --paginate \
+                -q '[.jobs[] | select((.name | startswith("Python tests:")) and .conclusion == "success")] | length' \
+                | awk '{ sum += $1 } END { print sum + 0 }')"
+              if [ "$python_tests" -ge "$environments" ]; then
+                tested_by="$run_url"; break
+              fi
+              echo "#$number: run $run_url tested $python_tests of $environments environments"
+            done < <(api "actions/workflows/ci.yml/runs?event=pull_request&head_sha=$head&status=success&per_page=20" \
+                       -q '.workflow_runs[] | "\(.id) \(.html_url)"')
+            [ -z "$tested_by" ] || break
+          done < <(api "commits/$GITHUB_SHA/pulls" \
+                     -q '.[] | select(.base.ref == "master" and .merged_at != null) | "\(.number) \(.head.sha)"')
+          if [ -n "$tested_by" ]; then
+            echo "The tree of $GITHUB_SHA was tested by $tested_by: its checks are skipped"
+          else
+            echo "No pull request run tested the tree of $GITHUB_SHA: it is tested"
+          fi
+          echo "tested_by=$tested_by" >> "$GITHUB_OUTPUT"
+
+      # only the images that do not exist yet are built (prepare_images): usually none, and then that job is skipped
       # instead of taking a runner per image to find out
       - name: Find the prerequisite images that do not exist yet
         id: missing_images
@@ -231,7 +288,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Prepare image: ${{ matrix.id }}"
     needs: [create_matrix]
-    if: ${{ needs.create_matrix.outputs.missing_images != '[]' }}
+    if: ${{ needs.create_matrix.outputs.missing_images != '[]' && needs.create_matrix.outputs.tested_by == '' }}
     timeout-minutes: 60
     # the only job that writes to the registry; the others only read
     permissions:
@@ -308,6 +365,9 @@ jobs:
     permissions:
       contents: read
     name: "Static checks: license tags, formatting (black), lint (ruff)"
+    # only for skipping a tested push (create_matrix takes seconds on a hosted runner)
+    needs: [create_matrix]
+    if: ${{ needs.create_matrix.outputs.tested_by == '' }}
     timeout-minutes: 20
     steps:
       - name: Checkout Repository
@@ -371,7 +431,7 @@ jobs:
     name: "Profiler unit tests: runtime library and LLVM pass (${{ matrix.id }})"
     needs: [create_matrix, prepare_images]
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -431,7 +491,7 @@ jobs:
     name: "Python tests: mypy, unit, profiler, end-to-end (${{ matrix.id }})"
     needs: [create_matrix, prepare_images]
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -498,7 +558,7 @@ jobs:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner: create_matrix is skipped for them;
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' }}
     permissions:
       contents: read
       packages: read
@@ -733,7 +793,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Report
+        env:
+          TESTED_BY: ${{ needs.create_matrix.outputs.tested_by }}
         run: |
+          # a push to master whose tree a pull request run tested completely already (see create_matrix): its checks
+          # are skipped on purpose
+          if [ "${{ needs.create_matrix.result }}" = "success" ] && [ -n "$TESTED_BY" ]; then
+            echo "This tree was tested by $TESTED_BY; its checks were skipped"
+            exit 0
+          fi
           # the benchmark is skipped where create_matrix did not ask for it (a pull request of a stack); every other
           # skipped job (e.g. all of them for a pull request from a fork) must not report success
           benchmark_skipped_as_planned="${{ needs.create_matrix.outputs.benchmarks == 'false' && needs.benchmarks.result == 'skipped' }}"
