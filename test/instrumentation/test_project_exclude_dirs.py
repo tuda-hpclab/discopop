@@ -206,6 +206,34 @@ def test_included_directory_outside_the_project_is_instrumented_and_mapped(
     ]
 
 
+def test_included_directory_reached_through_dot_dot_is_instrumented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The debug info spells a header as it was found: through "-I<base>/detour/.." it is
+    # "<base>/detour/../outside/include/vendored.hpp", as clang spells the headers of libstdc++
+    # "/usr/lib/gcc/<triple>/<version>/../../../../include/c++/<version>/...". The included directory
+    # "<base>/outside/include" must still contain it.
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    project, outside = _outside_project(tmp_path)
+    (tmp_path / "detour").mkdir()
+    monkeypatch.setenv("DP_PROJECT_INCLUDE_DIRS", str(outside))
+    program = compile_to_ir(OUTSIDE_SOURCE, directory=str(project), extra_arguments=[f"-I{tmp_path}/detour/.."])
+    assert _instrumented(program, "vendored_sum") and _instrumented(program, "skipped_sum")
+    assert _mapped_names(program) == ["skipped.hpp", "test.cpp", "vendored.hpp"]
+
+
+def test_a_header_reached_through_the_project_root_and_dot_dot_is_no_project_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "<project>/../outside/include/vendored.hpp" contains the spelling of the project root, but lies outside of it
+    monkeypatch.delenv("DP_PROJECT_INCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    project, _ = _outside_project(tmp_path)
+    program = compile_to_ir(OUTSIDE_SOURCE, directory=str(project), extra_arguments=[f"-I{project}/.."])
+    assert _mapped_names(program) == ["test.cpp"]
+    assert program.callback_counts(function=_function(program, "vendored_sum")) == {}
+
+
 def test_included_directory_does_not_match_its_namesake_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
     project, outside = _outside_project(tmp_path)

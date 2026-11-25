@@ -10,6 +10,7 @@
  *
  */
 
+#include <filesystem>
 #include <string>
 
 #include "DiscoPoP.hpp"
@@ -48,6 +49,12 @@ bool DiscoPoP::IsInstrumentedFunction(Function& f) {
           full_file_name += "/";
         }
         full_file_name += sub_program->getFilename().str();
+        // as spelled when the file was found, e.g. "/usr/lib/gcc/<triple>/13/../../../../include/c++/13/vector":
+        // compared like the paths of FileMapping.txt (DetermineFileId), resolved, as an included directory
+        // "/usr/include/c++/13" would not match the spelling
+        std::error_code error;
+        const std::filesystem::path resolved = std::filesystem::canonical(full_file_name, error);
+        full_file_name = error ? std::filesystem::path(full_file_name).lexically_normal().string() : resolved.string();
         if (dputil::IsInProjectRoot(full_file_name)) {  // function defined inside project
           func_defined_in_project = true;
         }
