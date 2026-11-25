@@ -344,8 +344,15 @@ public:
     }
   }
 
+  // once per compilation: a failing mkdir is followed by a failing open of the lock file in it, for both locks
   static void WarnUnlocked(const std::string &path, const char *what, int error)
   {
+    static bool warned = false;
+    if (warned)
+    {
+      return;
+    }
+    warned = true;
     errs() << "WARNING: HotspotDetection: " << what << " " << path << ": " << strerror(error)
            << ". Compiling without the lock: the region and file ids of a parallel build (make -j) may collide, "
               "build serially if they do.\n";
@@ -689,13 +696,26 @@ namespace
       tempfile.close();
       // a compilation that crashed after appending to cs_id.txt never wrote its counter back: continue after the
       // highest id handed out, so its ids are not handed out again (they stay unused)
-      std::ifstream regionIds(tmp3 + "/cs_id.txt");
+      const std::string regionIdsPath = tmp3 + "/cs_id.txt";
+      std::ifstream regionIds(regionIdsPath);
       long int recordedId;
       std::string restOfLine;
       while (regionIds >> recordedId)
       {
         UID = std::max(UID, recordedId);
         std::getline(regionIds, restOfLine);
+      }
+      // a line cut short (e.g. a full disk) must not run into the first line of this compilation: that would merge
+      // their ids into one number
+      regionIds.clear();
+      if (regionIds.seekg(-1, std::ios::end))
+      {
+        char last = '\n';
+        regionIds.get(last);
+        if (last != '\n')
+        {
+          std::ofstream(regionIdsPath, std::ios::app) << '\n';
+        }
       }
       errs() << "UID is: " << UID << '\n';
       return false;

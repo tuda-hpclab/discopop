@@ -89,7 +89,7 @@ def _environment(project: pathlib.Path) -> Dict[str, str]:
     return env
 
 
-def _make(project: pathlib.Path, jobs: int) -> subprocess.CompletedProcess:  # type: ignore[type-arg]
+def _make(project: pathlib.Path, jobs: int) -> "subprocess.CompletedProcess[str]":
     build = subprocess.run(
         ["make", f"-j{jobs}", "CXX=discopop_hotspot_cxx"],
         cwd=project,
@@ -230,9 +230,11 @@ def test_ids_of_a_crashed_compilation_are_not_handed_out_again(tmp_path: pathlib
     _make(project, 1)
     regions = len(_check_region_ids(project))
     with open(_private(project) / "cs_id.txt", "a") as cs_id:
-        for region in range(regions + 1, regions + 4):
-            cs_id.write(f"{region} loop 1 1 crashed\n")
+        for region in range(regions + 1, regions + 3):
+            cs_id.write(f"{region} loop 1 1\n")
+        cs_id.write(f"{regions + 3}")  # cut short
     (project / "unit0.cpp").write_text(_unit_source(0) + "\n")
     _make(project, 1)
     rows = _check_region_ids(project)
     assert len(rows) == regions + 3 + FUNCTIONS_PER_UNIT * (1 + LOOPS_PER_FUNCTION)
+    _run(project)  # the runtime sizes its tables by the lines of cs_id.txt
