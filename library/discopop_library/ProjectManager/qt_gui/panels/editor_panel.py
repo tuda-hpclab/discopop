@@ -57,7 +57,7 @@ from discopop_library.ProjectManager.services.editor_files import (
     last_recorded_execution_output,
     uses_compiler_variables,
 )
-from discopop_library.ProjectManager.services.incremental_script import EMPTY_TEMPLATE, propose_incremental_script
+from discopop_library.ProjectManager.services.incremental_script import incremental_draft
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
@@ -558,10 +558,10 @@ class EditorPanel(Panel):
         if self._refuse_for_shared_build(config, INCREMENTAL_COMPILE_SCRIPT_NAME):
             return
         source = resolve_compile_script_path(self.arguments.project_config_dir, config)
-        proposal = propose_incremental_script(self._read(source))
+        draft, found = incremental_draft(self._read(source))
         editor = self.editors[INCREMENTAL_COMPILE_SCRIPT_NAME]
         editor.setReadOnly(False)
-        editor.set_text(proposal if proposal is not None else EMPTY_TEMPLATE)
+        editor.set_text(draft)
         editor.document().setModified(True)
         self._incremental_draft = True
         self.incremental_compile_button.setText("Discard Draft")
@@ -570,7 +570,7 @@ class EditorPanel(Panel):
         self.status.set(
             (
                 "Check the proposed compile_incremental.sh and save it"
-                if proposal is not None
+                if found
                 else "No build line found in compile.sh: write compile_incremental.sh and save it"
             ),
             widgets.STATUS_OK,
