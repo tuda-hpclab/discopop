@@ -118,6 +118,14 @@ def read_without_callpath_tree(path: str, chunk_size: int = _CHUNK) -> Tuple[str
             return kept.decode("utf-8"), False
         if not buffer.startswith(b"{"):
             return _whole_file(path, "its value is no dict"), False
+        while len(buffer) < 5:
+            chunk = file.read(chunk_size)
+            if not chunk:
+                break
+            buffer += chunk
+        if buffer.startswith(b'{"py/'):
+            # a jsonpickle tag (a reference to a dict encoded before, an object) instead of a dict of state ids
+            return _whole_file(path, "its value is a jsonpickle object"), False
         # skip to the end of the tree, checking what is left out: the tree's opening brace and tuple values only. A
         # piece is checked up to its last "]", which splits nothing that is counted and keeps a "]}}" in the rest
         braces = 0
@@ -155,7 +163,7 @@ def read_without_callpath_tree(path: str, chunk_size: int = _CHUNK) -> Tuple[str
 
 def _whole_file(path: str, reason: str) -> str:
     logger.warning("The callpath tree of " + path + " could not be left out (" + reason + "): decoding the whole file.")
-    with open(path, "r") as file:
+    with open(path, "r", encoding="utf-8") as file:
         return file.read()
 
 

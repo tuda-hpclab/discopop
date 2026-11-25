@@ -193,3 +193,24 @@ def test_a_real_detection_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert loaded.pet.main is loaded.pet.g.nodes["1:1"]["data"]
     assert loaded.patterns.do_all[0]._node is loaded.pet.g.nodes["1:2"]["data"]
     assert loaded.enabled_patterns == ["doall"]
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 1 << 20])
+def test_a_label_with_a_bracket_is_decoded_whole(tmp_path: Path, chunk_size: int) -> None:
+    path = _write(tmp_path, _result({"1": ("0", "main"), "2": ("1", "operator[]")}))
+    text, left_out = read_without_callpath_tree(path, chunk_size)
+    assert not left_out
+    assert text == Path(path).read_text()
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 1 << 20])
+def test_a_shared_tree_is_decoded_whole(tmp_path: Path, chunk_size: int) -> None:
+    """The tree as a reference to a dict encoded before it, followed by a tuple whose "]}}" closes the PET."""
+    path = tmp_path / "detection_result_dump.json"
+    path.write_text(
+        '{"pet": {"a": {"1": {"py/tuple": ["0", "main"]}}, "callpath_tree": {"py/id": 2}, '
+        '"z": {"py/tuple": ["q"]}}, "y": [1]}'
+    )
+    text, left_out = read_without_callpath_tree(str(path), chunk_size)
+    assert not left_out
+    assert text == path.read_text()
