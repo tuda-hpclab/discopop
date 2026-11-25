@@ -194,7 +194,8 @@ def needs_extraction(dot_dp: str) -> bool:
 def extract_suggestion_extents(dot_dp: str) -> Dict[int, SuggestionExtent]:
     """Decode the detection result dump of ``dot_dp`` and write its extents file. Slow and memory hungry (the
     detection result is decoded, without the callpath tree of the PET, which the extents do not need, see
-    ``result_classes/loading.py``): run it in a process of its own, never in the GUI."""
+    ``result_classes/loading.py``; the tree of the PET fails on any use): run it in a process of its own, never in the
+    GUI."""
     from discopop_library.result_classes.loading import load_detection_result
 
     dump_path = dump_path_of(dot_dp)

@@ -238,7 +238,8 @@ def run(arguments: AutotunerArguments) -> None:
     hotspot_information = load_hotspots(hsl_arguments)
     logger.debug("loaded hotspots")
     # load suggestions
-    # without the callpath tree of the PET, which the search does not need and which can be most of the dump
+    # without the callpath tree of the PET, which the search does not need and which can be most of the dump; the
+    # result must not be used for the task detection (its tree fails on any use, see result_classes/loading.py)
     detection_result: DetectionResult = load_detection_result(
         os.path.join(arguments.dot_dp_path, "explorer", "detection_result_dump.json")
     )
