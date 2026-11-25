@@ -77,7 +77,6 @@ jobs:
       missing_images: ${{ steps.missing_images.outputs.missing_images }}
       tools_image: ${{ steps.create_matrix.outputs.tools_image }}
       primary_image: ${{ steps.create_matrix.outputs.primary_image }}
-      leak_check_image: ${{ steps.create_matrix.outputs.leak_check_image }}
       head_label: ${{ steps.versions.outputs.head_label }}
       base_sha: ${{ steps.versions.outputs.base_sha }}
       base_label: ${{ steps.versions.outputs.base_label }}
@@ -119,22 +118,21 @@ jobs:
           e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && $apt_install llvm-20-dev clang-20 clang-tools-20 libclang-20-dev libomp-20-dev")"
           e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && $apt_llvm_org && $apt_install llvm-21-dev clang-21 clang-tools-21 libclang-21-dev libomp-21-dev")"
           e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && $apt_install llvm-22-dev clang-22 clang-tools-22 libclang-22-dev libomp-22-dev")"
-          # the sanitized unit tests and the coverage (no venv needed); llvm-19 provides llvm-cov and llvm-profdata,
-          # libclang-rt-19-dev the sanitizer and profile runtimes (only recommended by clang-19)
+          # the runtime checks (sanitized unit tests, leak check, coverage; no venv needed); llvm-19 provides llvm-cov,
+          # llvm-profdata and llvm-symbolizer, libclang-rt-19-dev the sanitizer and profile runtimes (only recommended by
+          # clang-19)
           e_tools="$(entry ubuntu-24-04-llvm-19-tools ubuntu:24.04 python3 "$apt_common && $apt_install llvm-19 llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev")"
-          # the leak check links against the sanitizer runtime of clang
-          e_leak="$(entry debian-trixie-llvm-19-leak-check debian:trixie python3 "export DEBIAN_FRONTEND=noninteractive && apt update && $apt_install ca-certificates python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-dev")"
 
           # the full matrix only where code is merged into master (pushes and pull requests targeting it);
           # every other push is checked on one platform to keep development runs short
           if [[ ( "$GITHUB_EVENT_NAME" = "push" && "$GITHUB_REF" = "refs/heads/master" ) \
              || ( "$GITHUB_EVENT_NAME" = "pull_request" && "$PR_BASE_REF" = "master" ) ]]; then
             matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
-            images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
+            images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
             scope="full"
           else
             matrix="{\"include\":[$e_llvm21]}"
-            images="[$e_llvm21,$e_tools,$e_leak]"
+            images="[$e_llvm21,$e_tools]"
             scope="reduced"
           fi
           # the benchmarks (about half of the time of a run) compare against the version before and are of interest where
@@ -159,7 +157,6 @@ jobs:
             # the environment of the jobs outside the matrix that need the venv (static checks, benchmarks): the matrix entry
             # both configurations contain, so its venv is prepared anyway
             echo "primary_image=$(image_of "$e_llvm21")"
-            echo "leak_check_image=$(image_of "$e_leak")"
           } >> "$GITHUB_OUTPUT"
 
           # only the images that do not exist yet are built (prepare_images): usually none, and then that job is skipped
@@ -479,16 +476,29 @@ jobs:
           . venv/bin/activate
           python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/end_to_end
 
-  # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
-  # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's
-  # code, but only in what the unit tests exercise: no LLVM pass and no instrumented program are involved.
-  # The other memory check, "Leak check of instrumented programs", runs real instrumented programs instead.
-  # Locally: scripts/dev/run_profiler_sanitizers.sh <address,undefined|thread>
-  runtime_unit_tests_sanitized:
+  # RUNTIME CHECKS of the profiler runtime library, independent of the platform (one environment, the tools image), in one
+  # job: each check takes only one or two minutes, so jobs of their own spent about as much time on starting containers
+  # and waiting for runners. They run next to the tests instead of after them: off the critical path of a run.
+  # Every step runs, so a run reports every failing check.
+  # - SANITIZED UNIT TESTS: the C++ unit tests (DiscoPoP_UT) against a runtime built with sanitizers (DP_SANITIZERS).
+  #   Finds memory errors, undefined behavior and data races in the runtime's code, but only in what the unit tests
+  #   exercise: no LLVM pass and no instrumented program are involved.
+  #   Locally: scripts/dev/run_profiler_sanitizers.sh <address,undefined|thread>
+  # - LEAK CHECK OF INSTRUMENTED PROGRAMS: small programs (test/leak_check/programs) are compiled with the DiscoPoP
+  #   pass, linked against a runtime built with AddressSanitizer/LeakSanitizer and run. The runtime library must
+  #   not leak, and must not keep growing memory over the run time (see scripts/dev/check_profiler_leaks.sh and
+  #   test/leak_check/evaluate_leaks.py). It only looks for leaks, but in the whole pipeline and in more detail than
+  #   LSan's check at exit: before and after the runtime's shutdown, against a list of known bounded leaks, and
+  #   short against long runs. Locally: scripts/dev/check_profiler_leaks.sh
+  # - COVERAGE: line coverage of the runtime library by DiscoPoP_UT (clang source based coverage, see
+  #   scripts/dev/run_rtlib_coverage.sh). Not enforced yet (continue-on-error): the floor of 90% lines is reported
+  #   until it has proven stable on the runner.
+  # Locally: scripts/dev/run_ci_locally.sh -j runtime_checks
+  runtime_checks:
     runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    # (prepare_images is skipped when all images exist; create_matrix is skipped for pull requests of forks)
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.static_checks.result == 'success' && needs.python_tests.result == 'success' && needs.profiler_unit_tests.result == 'success' }}
+    # never run code from pull requests of forks on the self-hosted runner: create_matrix is skipped for them;
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
     permissions:
       contents: read
       packages: read
@@ -499,91 +509,37 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
       # TSan needs ASLR disabled on kernels with high mmap entropy (setarch -R), which Docker's default seccomp profile forbids
       options: --security-opt seccomp=unconfined
-    name: "Runtime unit tests with sanitizers (${{ matrix.label }})"
-    # the more detailed checks only run once the basic checks and tests have passed
-    needs: [create_matrix, prepare_images, static_checks, python_tests, profiler_unit_tests]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - sanitizers: "address,undefined"
-            label: "ASan+UBSan: memory errors, undefined behavior"
-          - sanitizers: "thread"
-            label: "TSan: data races"
-
+    name: "Runtime checks: sanitizers, leak check, coverage"
+    needs: [create_matrix, prepare_images]
+    timeout-minutes: 60
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # builds DiscoPoP_UT with -DDP_SANITIZERS and runs it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
-      - name: Build the runtime unit tests with ${{ matrix.sanitizers }} and run them
+      # build DiscoPoP_UT with -DDP_SANITIZERS and run it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
+      - name: "Runtime unit tests with ASan+UBSan: memory errors, undefined behavior"
+        if: ${{ !cancelled() }}
         run: |
-          scripts/dev/run_profiler_sanitizers.sh "${{ matrix.sanitizers }}"
+          scripts/dev/run_profiler_sanitizers.sh address,undefined
 
-  # LEAK CHECK OF INSTRUMENTED PROGRAMS: small programs (test/leak_check/programs) are compiled with the DiscoPoP
-  # pass, linked against a runtime built with AddressSanitizer/LeakSanitizer and run. The runtime library must
-  # not leak, and must not keep growing memory over the run time (see scripts/dev/check_profiler_leaks.sh and
-  # test/leak_check/evaluate_leaks.py). It only looks for leaks, but in the whole pipeline and in more detail than
-  # LSan's check at exit: before and after the runtime's shutdown, against a list of known bounded leaks, and
-  # short against long runs. The sanitized unit tests are a separate job ("Runtime unit tests with sanitizers").
-  # One platform is enough: the check is about the runtime library's code, not about the platform.
-  # Locally: scripts/dev/check_profiler_leaks.sh, or scripts/dev/run_ci_locally.sh -j instrumented_programs_leak_check
-  instrumented_programs_leak_check:
-    runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    # (prepare_images is skipped when all images exist; create_matrix is skipped for pull requests of forks)
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.static_checks.result == 'success' && needs.python_tests.result == 'success' && needs.profiler_unit_tests.result == 'success' }}
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ${{ needs.create_matrix.outputs.leak_check_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Leak check of instrumented programs (ASan/LSan)"
-    # the more detailed checks only run once the basic checks and tests have passed
-    needs: [create_matrix, prepare_images, static_checks, python_tests, profiler_unit_tests]
-    timeout-minutes: 45
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Build, run and evaluate the leak check programs
+      - name: "Runtime unit tests with TSan: data races"
+        if: ${{ !cancelled() }}
         run: |
-          # the unit tests run under ASan/LSan in the "Runtime unit tests with sanitizers" job already
+          scripts/dev/run_profiler_sanitizers.sh thread
+
+      - name: "Leak check of instrumented programs (ASan/LSan)"
+        if: ${{ !cancelled() }}
+        run: |
+          # the unit tests run under ASan/LSan in the step above already
           DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
 
-  # Line coverage of the runtime library by DiscoPoP_UT (clang source based coverage, see
-  # scripts/dev/run_rtlib_coverage.sh). Not part of checks_successful yet: the floor of 90% lines is
-  # reported, not enforced, until it has proven stable on the runner.
-  rtlib_coverage:
-    runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    # (prepare_images is skipped when all images exist; create_matrix is skipped for pull requests of forks)
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.static_checks.result == 'success' && needs.python_tests.result == 'success' && needs.profiler_unit_tests.result == 'success' }}
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ${{ needs.create_matrix.outputs.tools_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Coverage: runtime library unit tests"
-    # the more detailed checks only run once the basic checks and tests have passed
-    needs: [create_matrix, prepare_images, static_checks, python_tests, profiler_unit_tests]
-    timeout-minutes: 45
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Measure the coverage of the runtime library
+      - name: Coverage of the runtime library by its unit tests (not enforced)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
         run: |
           scripts/dev/run_rtlib_coverage.sh --markdown-out rtlib_coverage_summary.md --min-line-coverage 90
 
-      - name: Add the report to the job summary
+      - name: Add the coverage report to the job summary
         if: ${{ always() }}
         run: |
           if [ -f rtlib_coverage_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -603,9 +559,9 @@ jobs:
   # enforced.
   pass_overhead_benchmark:
     runs-on: self-hosted
-    # after the detailed checks (whose success implies the basic ones'); the coverage only has to be finished.
+    # after all checks and tests: they would compete for the machine while it measures
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.create_matrix.outputs.benchmarks == 'true' && needs.runtime_unit_tests_sanitized.result == 'success' && needs.instrumented_programs_leak_check.result == 'success' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.create_matrix.outputs.benchmarks == 'true' && needs.static_checks.result == 'success' && needs.profiler_unit_tests.result == 'success' && needs.python_tests.result == 'success' && needs.runtime_checks.result == 'success' }}
     permissions:
       contents: read
       packages: read
@@ -615,7 +571,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: overhead of the DiscoPoP LLVM pass"
-    needs: [create_matrix, prepare_images, python_tests, runtime_unit_tests_sanitized, instrumented_programs_leak_check, rtlib_coverage]
+    needs: [create_matrix, prepare_images, static_checks, profiler_unit_tests, python_tests, runtime_checks]
     timeout-minutes: 90
     steps:
       - name: Checkout Repository
@@ -833,7 +789,7 @@ jobs:
     name: Checks successful
     # a matrix job stands for all of its entries, i.e. the configurations create_matrix selected for
     # this run: debian trixie with LLVM 21 in the reduced, every entry in the full configuration
-    needs: [create_matrix, static_checks, python_tests, profiler_unit_tests, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
+    needs: [create_matrix, static_checks, python_tests, profiler_unit_tests, runtime_checks, pass_overhead_benchmark]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5
@@ -843,7 +799,7 @@ jobs:
           # the benchmark is skipped where create_matrix did not ask for it (a pull request of a stack); every other
           # skipped job (e.g. all of them for a pull request from a fork) must not report success
           benchmark_skipped_as_planned="${{ needs.create_matrix.outputs.benchmarks == 'false' && needs.pass_overhead_benchmark.result == 'skipped' }}"
-          others_skipped="${{ needs.create_matrix.result == 'skipped' || needs.static_checks.result == 'skipped' || needs.python_tests.result == 'skipped' || needs.profiler_unit_tests.result == 'skipped' || needs.runtime_unit_tests_sanitized.result == 'skipped' || needs.instrumented_programs_leak_check.result == 'skipped' || (needs.pass_overhead_benchmark.result == 'skipped' && needs.create_matrix.outputs.benchmarks != 'false') }}"
+          others_skipped="${{ needs.create_matrix.result == 'skipped' || needs.static_checks.result == 'skipped' || needs.python_tests.result == 'skipped' || needs.profiler_unit_tests.result == 'skipped' || needs.runtime_checks.result == 'skipped' || (needs.pass_overhead_benchmark.result == 'skipped' && needs.create_matrix.outputs.benchmarks != 'false') }}"
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" != "false" || "$others_skipped" != "false" ]]; then
             echo "Checks did not succeed, job results: ${{ join(needs.*.result, ', ') }}"
             exit 1
