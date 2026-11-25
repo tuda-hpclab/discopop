@@ -75,7 +75,6 @@ jobs:
       benchmarks: ${{ steps.create_matrix.outputs.benchmarks }}
       matrix: ${{ steps.create_matrix.outputs.matrix }}
       missing_images: ${{ steps.missing_images.outputs.missing_images }}
-      build_environments: ${{ steps.create_matrix.outputs.build_environments }}
       tools_image: ${{ steps.create_matrix.outputs.tools_image }}
       primary_image: ${{ steps.create_matrix.outputs.primary_image }}
       leak_check_image: ${{ steps.create_matrix.outputs.leak_check_image }}
@@ -132,13 +131,10 @@ jobs:
              || ( "$GITHUB_EVENT_NAME" = "pull_request" && "$PR_BASE_REF" = "master" ) ]]; then
             matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
             images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
-            # the environments that need the venv with DiscoPoP (see prepare_build)
-            build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]"
             scope="full"
           else
             matrix="{\"include\":[$e_llvm21]}"
             images="[$e_llvm21,$e_tools,$e_leak]"
-            build_environments="[$e_llvm21]"
             scope="reduced"
           fi
           # the benchmarks (about half of the time of a run) compare against the version before and are of interest where
@@ -158,9 +154,6 @@ jobs:
             echo "END"
             echo "images<<END"
             echo "$images"
-            echo "END"
-            echo "build_environments<<END"
-            echo "$build_environments"
             echo "END"
             echo "tools_image=$(image_of "$e_tools")"
             # the environment of the jobs outside the matrix that need the venv (static checks, benchmarks): the matrix entry
@@ -306,42 +299,8 @@ jobs:
           fi
 
 
-  # BUILT CODE: builds the venv with all DiscoPoP packages (installed without -e) once per environment and saves it to
-  # the actions cache (see .github/actions/prepared-venv); the jobs below restore it instead of installing themselves.
-  # The built profiler is cached separately and keyed by profiler/ only: a change of the Python sources reinstalls the
-  # packages, but does not rebuild the profiler.
-  prepare_build:
-    runs-on: self-hosted
-    name: "Prepare build: ${{ matrix.id }}"
-    needs: [create_matrix, prepare_images]
-    # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ${{ matrix.image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.create_matrix.outputs.build_environments) }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Build the venv with DiscoPoP, unless it is cached
-        uses: ./.github/actions/prepared-venv
-        with:
-          environment: ${{ matrix.image }}
-          python: ${{ matrix.python }}
-          save: "true"
-
   # The tests of the matrix entries are split into the jobs below (the Python based checks in one, the profiler build in
-  # another), which run in parallel. Each matrix job restores the prepared venv and installs the DiscoPoP packages itself.
+  # another), which run in parallel.
   #
   # STATIC CHECKS: independent of the platform (black targets the supported Python versions, see pyproject.toml), so
   # they run once instead of per matrix entry. They need neither the prepared image nor DiscoPoP, only black and ruff:
@@ -457,6 +416,11 @@ jobs:
   # One job instead of one per kind: each kind takes about a minute, so a job of its own spent more time on starting the
   # container, restoring the venv and waiting for a free runner than on the checks. The steps all run, so a run
   # reports every failing kind; the profiler build (profiler_unit_tests) stays a job of its own, it takes minutes.
+  # BUILT CODE: the job also provides the venv with all DiscoPoP packages (installed without -e) of its environment: it
+  # restores it from the actions cache, or builds and saves it there (see .github/actions/prepared-venv), so that the
+  # benchmarks restore it. The built profiler is cached separately and keyed by profiler/ only: a change of the Python
+  # sources reinstalls the packages, but does not rebuild the profiler. (A job of its own preparing the venv cost another
+  # wait for a runner between the image and the tests, up to an hour in busy times.)
   python_tests:
     runs-on: self-hosted
     permissions:
@@ -468,9 +432,9 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Python tests: mypy, unit, profiler, end-to-end (${{ matrix.id }})"
-    needs: [create_matrix, prepare_images, prepare_build]
+    needs: [create_matrix, prepare_images]
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.prepare_build.result == 'success' }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -479,12 +443,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # the venv with all DiscoPoP packages comes from the prepare_build job
-      - name: Setup venv with DiscoPoP
+      - name: Setup venv with DiscoPoP (built and saved to the cache, unless it is cached)
         uses: ./.github/actions/prepared-venv
         with:
           environment: ${{ matrix.image }}
           python: ${{ matrix.python }}
+          save: "true"
 
       - name: Type check (mypy)
         run: |
@@ -651,7 +615,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: overhead of the DiscoPoP LLVM pass"
-    needs: [create_matrix, prepare_images, prepare_build, runtime_unit_tests_sanitized, instrumented_programs_leak_check, rtlib_coverage]
+    needs: [create_matrix, prepare_images, python_tests, runtime_unit_tests_sanitized, instrumented_programs_leak_check, rtlib_coverage]
     timeout-minutes: 90
     steps:
       - name: Checkout Repository
@@ -717,7 +681,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Benchmark: cost of the injected callbacks"
-    needs: [create_matrix, prepare_images, prepare_build, pass_overhead_benchmark]
+    needs: [create_matrix, prepare_images, python_tests, pass_overhead_benchmark]
     timeout-minutes: 180
     steps:
       - name: Checkout Repository
