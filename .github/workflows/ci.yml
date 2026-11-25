@@ -767,10 +767,13 @@ jobs:
           overwrite: true
 
       # the report (not in local runs with act: scripts/dev/run_ci_locally.sh sets github.event.act, and there is no
-      # artifact service there); the comparison only needs the standard library
+      # artifact service there); the comparison only needs the standard library.
+      # The report is informative: its steps never fail the job, which checks_successful requires (e.g. a transient
+      # error of the GitHub API when commenting; it was a job of its own outside checks_successful before)
       - name: Compare the versions
         id: compare
         if: ${{ !cancelled() && !github.event.act && steps.pass_overhead.outcome != 'skipped' }}
+        continue-on-error: true
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -781,6 +784,7 @@ jobs:
       - name: Upload the report
         id: upload
         if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-report
@@ -789,7 +793,9 @@ jobs:
 
       # once more, now that the link to the uploaded report is known
       - name: Link the report and add it to the job summary
+        id: link
         if: ${{ !cancelled() && steps.upload.outcome == 'success' }}
+        continue-on-error: true
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
@@ -799,9 +805,12 @@ jobs:
           cat benchmark_comment.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the pull request
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.upload.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.link.outcome == 'success' }}
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
+          # the API answers with a server error now and then (HTTP 500)
+          retries: 3
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('benchmark_comment.md', 'utf8');
