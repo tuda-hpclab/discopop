@@ -1,0 +1,5 @@
+# The destructor of the global logger runs instrumented code after the thread_local objects of the main thread were
+# destroyed, before __dp_finalize writes the results. The frames of the profiler (rtlib/memory/StackFrames.hpp) must
+# still work then, also 1000 calls deep: a destroyed std::vector there took writes into freed memory, and grew by
+# freeing its buffer a second time.
+required = ["1:10 RAW 1:6|GEPRESULT_values"]

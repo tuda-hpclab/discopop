@@ -51,7 +51,7 @@ ImmortalStorage<FunctionManager> function_manager;
 ImmortalStorage<LoopManager> loop_manager;
 
 // one per thread: the stack frames of a thread are nested in each other only, see memory/StackFrames.hpp
-thread_local StackFrames stack_frames;
+constinit thread_local StackFrames stack_frames;
 
 // hybrid analysis
 ReportedBBRecorder* bb_list = nullptr;

@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <new>
+#include <type_traits>
 #include <vector>
 
 #include "lid_constants.hpp"
@@ -34,6 +37,10 @@ namespace dp {
 // A frame is pushed by __dp_func_entry and popped by __dp_func_exit (and by __dp_landing_pad for frames left by an
 // exception); its address range is the union of the allocas the function reports to __dp_alloca. Addresses outside
 // the live frames (heap, globals, stack memory of uninstrumented code) keep their address as key.
+//
+// Trivially destructible on purpose: the thread_local instance must outlive the destructors of the thread_local
+// objects, as __dp_finalize runs from _dl_fini, after them, and the instrumented global destructors before it still
+// enter functions. A destroyed std::vector there took writes into freed memory. The buffer is only freed by Release().
 class StackFrames {
  public:
   // Key layout: bit 62 marks a stack key (keys stay positive, as ADDR is signed), bits 24..61 hold the frame id,
@@ -44,31 +51,44 @@ class StackFrames {
   static constexpr ADDR kMaxOffset = (ADDR{1} << kOffsetBits) - 1;
   static constexpr std::uint64_t kMaxId = (std::uint64_t{1} << kIdBits) - 1;
 
-  StackFrames() { frames_.reserve(kInitialCapacity); }
+  constexpr StackFrames() noexcept = default;
+  StackFrames(const StackFrames&) = delete;
+  StackFrames& operator=(const StackFrames&) = delete;
+
+  // Frees the buffer and forgets all frames (frame ids keep growing)
+  void Release() noexcept {
+    std::free(frames_);
+    frames_ = nullptr;
+    size_ = 0;
+    capacity_ = 0;
+  }
 
   // __dp_func_entry: a new frame without memory yet; it inherits the bounds of the frames around it
   void Push() {
-    if (frames_.empty()) {
-      frames_.push_back(Frame{kEmptyLo, kEmptyHi, next_id_++, kEmptyLo, kEmptyHi});
+    if (size_ == capacity_) {
+      Grow();
+    }
+    if (size_ == 0) {
+      frames_[size_++] = Frame{kEmptyLo, kEmptyHi, next_id_++, kEmptyLo, kEmptyHi};
     } else {
-      const Frame& outer = frames_.back();
-      frames_.push_back(Frame{kEmptyLo, kEmptyHi, next_id_++, outer.all_lo, outer.all_hi});
+      const Frame outer = frames_[size_ - 1];
+      frames_[size_++] = Frame{kEmptyLo, kEmptyHi, next_id_++, outer.all_lo, outer.all_hi};
     }
   }
 
   // __dp_func_exit; leaving more frames than were entered (a runtime started inside a function) is ignored
   void Pop() noexcept {
-    if (!frames_.empty()) {
-      frames_.pop_back();
+    if (size_ != 0) {
+      --size_;
     }
   }
 
   // __dp_alloca: [start, end) belongs to the innermost frame
   void Register(ADDR start, ADDR end) noexcept {
-    if (frames_.empty() || end <= start) {
+    if (size_ == 0 || end <= start) {
       return;
     }
-    Frame& frame = frames_.back();
+    Frame& frame = frames_[size_ - 1];
     frame.lo = start < frame.lo ? start : frame.lo;
     frame.hi = end > frame.hi ? end : frame.hi;
     frame.all_lo = start < frame.all_lo ? start : frame.all_lo;
@@ -78,29 +98,30 @@ class StackFrames {
   // The key an access to addr is analyzed under. Two comparisons for memory outside the live frames; within them
   // usually one more, as most stack accesses go to the innermost frame.
   [[nodiscard]] ADDR Key(ADDR addr) const noexcept {
-    if (frames_.empty()) {
+    if (size_ == 0) {
       return addr;
     }
-    const Frame& innermost = frames_.back();
+    const Frame& innermost = frames_[size_ - 1];
     if (addr < innermost.all_lo || addr >= innermost.all_hi) {
       return addr;
     }
-    for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
-      if (addr >= frame->lo && addr < frame->hi) {
-        return Encode(*frame, addr);
+    for (std::size_t i = size_; i-- != 0;) {
+      const Frame& frame = frames_[i];
+      if (addr >= frame.lo && addr < frame.hi) {
+        return Encode(frame, addr);
       }
     }
     return addr;
   }
 
-  [[nodiscard]] std::size_t Depth() const noexcept { return frames_.size(); }
+  [[nodiscard]] std::size_t Depth() const noexcept { return size_; }
 
   // The ids of the live frames, ascending (ids grow from the outermost frame inwards). Taken by the profiled thread
   // when it hands a chunk of accesses over: a frame missing from it has ended and its keys are never used again.
   void LiveIds(std::vector<std::uint64_t>& ids) const {
     ids.clear();
-    for (const Frame& frame : frames_) {
-      ids.push_back(frame.id);
+    for (std::size_t i = 0; i < size_; ++i) {
+      ids.push_back(frames_[i].id);
     }
   }
 
@@ -141,6 +162,16 @@ class StackFrames {
   static constexpr ADDR kEmptyHi = INT64_MIN;
   static constexpr std::size_t kInitialCapacity = 256;
 
+  void Grow() {
+    const std::size_t capacity = capacity_ == 0 ? kInitialCapacity : 2 * capacity_;
+    void* frames = std::realloc(frames_, capacity * sizeof(Frame));  // Frame is trivially copyable
+    if (frames == nullptr) {
+      throw std::bad_alloc();
+    }
+    frames_ = static_cast<Frame*>(frames);
+    capacity_ = capacity;
+  }
+
   // The offset is taken from the top of the frame: the static allocas are all reported on entry, before the first
   // access, and allocas of variable size (alloca(), VLAs) reported later only extend the frame downwards, so an
   // address keeps its key for the whole lifetime of the frame.
@@ -160,11 +191,17 @@ class StackFrames {
 
   static constexpr std::uint64_t kSpreadFactor = 0x9E3779B1;  // odd: consecutive ids land far apart
 
-  std::vector<Frame> frames_;
+  Frame* frames_ = nullptr;  // frames_[0, size_), the innermost last
+  std::size_t size_ = 0;
+  std::size_t capacity_ = 0;
   std::uint64_t next_id_ = 1;
 };
 
-// The frames of the calling thread (defined in runtimeFunctionsGlobals.cpp)
-extern thread_local StackFrames stack_frames;
+static_assert(std::is_trivially_destructible_v<StackFrames>,
+              "stack_frames is used by the global destructors, after the thread_local objects were destroyed");
+
+// The frames of the calling thread (defined in runtimeFunctionsGlobals.cpp); constant initialized and never destroyed,
+// so the access needs no TLS wrapper. The buffer of a thread lives until the process ends.
+extern constinit thread_local StackFrames stack_frames;
 
 }  // namespace dp
