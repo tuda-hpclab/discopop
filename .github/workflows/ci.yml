@@ -59,7 +59,8 @@ jobs:
 # is derived from its base image and install command, so changing either one builds a new image, and a push that
 # changes neither one reuses the existing image. Bump IMAGE_REVISION to rebuild all images, e.g. to update the packages.
   create_matrix:
-    runs-on: self-hosted
+    # a GitHub-hosted runner: it only decides what runs, and starts at once instead of waiting for a self-hosted slot
+    runs-on: ubuntu-latest
     name: Create matrix
     # the jobs run on a self-hosted runner: never execute code from pull requests of forks there.
     # a maintainer pushes such a branch to this repository to have it checked.
@@ -305,19 +306,14 @@ jobs:
   # another), which run in parallel. Each matrix job restores the prepared venv and installs the DiscoPoP packages itself.
   #
   # STATIC CHECKS: independent of the platform (black targets the supported Python versions, see pyproject.toml), so
-  # they run once instead of per matrix entry.
+  # they run once instead of per matrix entry. They need neither the prepared image nor DiscoPoP, only black and ruff:
+  # a GitHub-hosted runner, which starts at once, so that they are the first result of a run. Executing the code of a
+  # pull request of a fork is harmless there, but its other jobs do not run anyway (create_matrix).
   static_checks:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
-    container:
-      image: ${{ needs.create_matrix.outputs.primary_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Static checks: license tags, formatting (black), lint (ruff)"
-    needs: [create_matrix, prepare_images, prepare_build]
     timeout-minutes: 20
     steps:
       - name: Checkout Repository
@@ -327,11 +323,11 @@ jobs:
         run: |
           ./scripts/dev/check-license.sh $(find . -type f)
 
-      # only black and ruff (requirements-dev.txt) are needed from this venv
-      - name: Setup venv
-        uses: ./.github/actions/prepared-venv
-        with:
-          environment: ${{ needs.create_matrix.outputs.primary_image }}
+      # the versions CI pins in requirements-dev.txt; the other requirements are not needed
+      - name: Setup venv with black and ruff
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install $(grep -E '^(black|ruff)==' requirements-dev.txt)
 
       - name: Check formatting of DiscoPoP Explorer
         run: |
@@ -823,7 +819,8 @@ jobs:
             }
 
   checks_successful:
-    runs-on: self-hosted
+    # only evaluates the results of the other jobs: a GitHub-hosted runner, no self-hosted slot
+    runs-on: ubuntu-latest
     name: Checks successful
     # a matrix job stands for all of its entries, i.e. the configurations create_matrix selected for
     # this run: debian trixie with LLVM 21 in the reduced, every entry in the full configuration
