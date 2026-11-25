@@ -13,7 +13,6 @@ import os
 import time
 from typing import List, Optional, Tuple, cast
 
-import jsonpickle  # type: ignore
 from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArguments
 from discopop_library.EmpiricalAutotuning.Classes.CodeConfiguration import CodeConfiguration
 from discopop_library.EmpiricalAutotuning.Classes.ExecutionResult import ExecutionResult
@@ -54,6 +53,7 @@ from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
 from discopop_library.HostpotLoader.detailed_hotspot_loader import load_detailed_hotspots
 from discopop_library.Amdahl.regions import build_regions
 from discopop_library.result_classes.DetectionResult import DetectionResult
+from discopop_library.result_classes.loading import load_detection_result
 
 logger = logging.getLogger("Autotuner")
 
@@ -238,9 +238,10 @@ def run(arguments: AutotunerArguments) -> None:
     hotspot_information = load_hotspots(hsl_arguments)
     logger.debug("loaded hotspots")
     # load suggestions
-    with open(os.path.join(arguments.dot_dp_path, "explorer", "detection_result_dump.json"), "r") as f:
-        tmp_str = f.read()
-    detection_result: DetectionResult = jsonpickle.decode(tmp_str, keys=True)
+    # without the callpath tree of the PET, which the search does not need and which can be most of the dump
+    detection_result: DetectionResult = load_detection_result(
+        os.path.join(arguments.dot_dp_path, "explorer", "detection_result_dump.json")
+    )
     logger.debug("loaded suggestions")
     # suggestions that patch files outside the project cannot be tried in isolated copies: skipped, and logged
     skipped_outside_project = exclude_outside_project_patterns(detection_result, arguments.dot_dp_path, logger)
