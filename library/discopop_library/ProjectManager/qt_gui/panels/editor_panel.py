@@ -59,7 +59,6 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
     ProjectState,
-    ResultsChanged,
 )
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 
@@ -314,8 +313,10 @@ class EditorPanel(Panel):
         self._load_validation_compile_override()
         self._load_execution_time_settings()
         self._refresh_marks()
+        # no ResultsChanged: showing other files changes no results, and the panels that follow the selection
+        # subscribe to ConfigChanged themselves (a ResultsChanged refreshed every stage a second time, the report
+        # included)
         self._loaded_state = self._disk_state()
-        self.project_state.publish(ResultsChanged())
 
     def _disk_state(self) -> Tuple[Tuple[str, Optional[str]], ...]:
         """The content of every file the tab shows (None: does not exist), to tell whether a reload would change it."""
