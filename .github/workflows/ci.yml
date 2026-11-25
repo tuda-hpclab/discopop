@@ -460,8 +460,10 @@ jobs:
           python3 scripts/dev/check_headers.py build_tests
 
       # most of the runtime is configured by -DDP_... options, and the default build compiles only one variant:
-      # this builds the runtime library once per set of options, so that an option does not stop compiling unnoticed
+      # this builds the runtime library once per set of options, so that an option does not stop compiling unnoticed.
+      # The runtime library does not depend on LLVM: one environment (the primary one, part of every run) suffices.
       - name: Build the runtime library with the compile time options (scripts/dev/check_rtlib_options.sh)
+        if: ${{ matrix.image == needs.create_matrix.outputs.primary_image }}
         run: |
           scripts/dev/check_rtlib_options.sh
 
@@ -516,7 +518,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -m "not e2e and not profiler"
+          python3 -m pytest -n "$DP_TEST_WORKERS" -m "not e2e and not profiler"
 
       - name: Instrumentation tests
         if: ${{ !cancelled() }}
@@ -534,7 +536,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/end_to_end
+          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup --durations=20 test/end_to_end
 
   # RUNTIME CHECKS of the profiler runtime library, independent of the platform (one environment, the tools image), in one
   # job: each check takes only one or two minutes, so jobs of their own spent about as much time on starting containers
