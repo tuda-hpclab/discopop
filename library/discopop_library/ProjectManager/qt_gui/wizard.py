@@ -346,11 +346,13 @@ class ConfigurationWizard(QWizard):
             self.incremental_check.setChecked(True)
             self.incremental_sh_text.setEnabled(True)
         self.incremental_check.toggled.connect(self._incremental_toggled)
+        # the check box and the Help button in one row (a button alone in the step would span its width)
+        check_row = QWidget()
+        check_row.setLayout(widgets.hbox(self.incremental_check, None, help_button(self, "compile_incremental.sh")))
         return self._step(
             4,
             _label(INCREMENTAL_TEXT, wrap=True),
-            help_button(self, "compile_incremental.sh"),
-            self.incremental_check,
+            check_row,
             self.incremental_status,
             self.incremental_sh_text,
             on_next=self._leave_incremental,
