@@ -14,7 +14,7 @@ import queue
 import shutil
 import threading
 from pathlib import Path
-from typing import Dict, Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
@@ -970,15 +970,141 @@ def test_a_tree_in_an_unknown_state_is_copied_anew(project: Dict[str, Path]) -> 
     assert outcome.result == BuildResult.BUILT and "Updating the build tree" in text
 
 
-def test_a_failed_compilation_marks_the_tree_dirty(project: Dict[str, Path]) -> None:
+def test_a_compilation_that_ended_on_an_error_marks_the_tree_failed_and_the_next_build_is_incremental(
+    project: Dict[str, Path],
+) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import FAILED, read_tree_state
+
+    # compile.sh and the incremental script (content is part of the environment) stay unchanged: the source decides
+    _incremental_project(project, "grep -q BROKEN main.c && exit 1\ncp main.c prog.out\n")
+    project["compile"].write_text(
+        project["compile"].read_text().replace("cp main.c", "! grep -q BROKEN main.c && cp main.c")
+    )
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("BROKEN\n")
+    outcome, _ = _build_with_messages(project)  # not proven: compile.sh runs as the fallback and fails as well
+    assert outcome.result == BuildResult.COMPILE_FAILED
+    assert _kinds(project) == ["full full", "incremental incremental", "full full"]
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == FAILED and state.environment
+
+    # the next build continues incrementally
+    (project["root"] / "main.c").write_text("int main() { return 3; }\n")
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and "Compiling incrementally" in text
+    assert _kinds(project)[-1] == "incremental incremental"
+
+
+def _failing_script(project: Dict[str, Path], code: str) -> None:
+    project["compile"].write_text(f"#!/bin/bash\nexit {code}\n")
+
+
+@pytest.mark.parametrize("code", ["124", "137", "143", "127"])
+def test_a_compilation_that_was_killed_or_timed_out_marks_the_tree_dirty(project: Dict[str, Path], code: str) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, read_tree_state
+
+    _incremental_project(project, "cp main.c prog.out\n")
+    _build_with_messages(project)
+    _failing_script(project, code)  # 124: what the timeout wrapper of execute_configuration returns
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    assert _build_with_messages(project)[0].result == BuildResult.COMPILE_FAILED
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == DIRTY
+    # the next build is a full one
+    _incremental_project(project, "cp main.c prog.out\n")
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "full full"
+
+
+@pytest.mark.parametrize("result", [None, (-9, 0.0, "", "")])
+def test_a_compilation_without_a_return_code_or_killed_by_a_signal_marks_the_tree_dirty(
+    project: Dict[str, Path], result: Optional[Tuple[int, float, str, str]]
+) -> None:
+    from unittest import mock
+
+    from discopop_library.ProjectManager.configurations import building
     from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, read_tree_state
 
     _build_with_messages(project)
-    project["compile"].write_text("#!/bin/bash\nexit 1\n")
-    outcome, _ = _build_with_messages(project)
-    assert outcome.result == BuildResult.COMPILE_FAILED
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    with mock.patch.object(building, "execute_configuration", return_value=result):
+        assert _build_with_messages(project)[0].result == BuildResult.COMPILE_FAILED
     state = read_tree_state(_project_dir(project), KEY.build_id)
     assert state is not None and state.state == DIRTY
+
+
+def test_a_failed_tree_is_compiled_in_full_after_a_change_of_the_environment(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import FAILED, read_tree_state
+
+    _incremental_project(project, "cp main.c prog.out\n")
+    _build_with_messages(project)
+    _failing_script(project, "1")
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    _build_with_messages(project)
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == FAILED
+    _incremental_project(project, "cp main.c prog.out\n")
+    (project["configs"] / "seq_settings.json").write_text(
+        json.dumps({"CC": "cc", "CXX": "c++", "CFLAGS": "-O1", "CXXFLAGS": ""})
+    )
+    assert _build_with_messages(project)[0].result == BuildResult.BUILT
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_a_proven_incremental_script_that_fails_is_not_followed_by_compile_sh(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import CLEAN, FAILED, read_tree_state
+
+    _incremental_project(project, "if grep -q BROKEN main.c; then exit 1; fi\ncp main.c prog.out\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    outcome, _ = _build_with_messages(project)  # incremental, proves the script
+    assert outcome.record is not None and outcome.record.build_kind == "incremental"
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == CLEAN and state.incremental_environment == state.environment
+
+    (project["root"] / "main.c").write_text("BROKEN\n")
+    tree = Path(outcome.tree or "")
+    (tree / "kept_output.o").write_text("output\n")
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.COMPILE_FAILED
+    assert "compile.sh is not run again" in text
+    assert _kinds(project) == ["full full", "incremental incremental", "incremental incremental"]
+    assert (tree / "kept_output.o").exists() and (tree / "prog.out").exists()  # outputs not cleaned
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == FAILED
+
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    outcome, _ = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and _kinds(project)[-1] == "incremental incremental"
+
+
+def test_an_incremental_build_that_rebuilt_nothing_falls_back_even_when_the_script_is_proven(
+    project: Dict[str, Path],
+) -> None:
+    _incremental_project(project, "[ -f stale ] || cp main.c prog.out\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    _build_with_messages(project)  # proven
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    tree = Path(_status(project).record.tree)  # type: ignore[union-attr]
+    (tree / "stale").write_text("\n")  # the script now writes nothing
+    # "stale" is an output of the tree and kept, so the script writes nothing
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and "wrote no file" in text
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_a_tree_state_file_without_incremental_environment_still_loads(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state, tree_state_path_of
+
+    _build_with_messages(project)
+    path = tree_state_path_of(_project_dir(project), KEY.build_id)
+    data = json.loads(Path(path).read_text())
+    del data["incremental_environment"]
+    Path(path).write_text(json.dumps(data))
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.incremental_environment == "" and state.environment
 
 
 def test_the_data_runs_link_to_stays_when_the_tree_is_built_again(project: Dict[str, Path]) -> None:

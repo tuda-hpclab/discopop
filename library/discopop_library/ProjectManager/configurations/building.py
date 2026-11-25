@@ -72,6 +72,7 @@ from discopop_library.ProjectManager.configurations.tree_sync import (
     BUILDING,
     CLEAN,
     DIRTY,
+    FAILED,
     SYNCING,
     TreeState,
     clean_outputs,
@@ -319,8 +320,19 @@ def ensure_build(
             problem = None
             if compile_result is None:
                 # the script could not be run at all (e.g. no settings file): compile.sh would not run either
-                return _failed_compilation(arguments, key, tree, compile_result, application_result)
+                return _failed_compilation(arguments, key, tree, compile_result, application_result, True, environment)
             if compile_result[0] != 0:
+                if update.proven_incremental and _is_compile_error(compile_result[0]):
+                    text = (
+                        os.path.basename(incremental_script)
+                        + " failed; it has compiled this tree before in the same environment, so the error is in "
+                        + "the code (e.g. the applied suggestions): compile.sh is not run again."
+                    )
+                    logger.info(text)
+                    message(text + "\n")
+                    return _failed_compilation(
+                        arguments, key, tree, compile_result, application_result, True, environment
+                    )
                 problem = os.path.basename(incremental_script) + " failed"
             elif update.changed_files and output_snapshot(tree) == outputs_before:
                 # e.g. a superbuild whose inner project is not rebuilt: the old binary would be measured
@@ -342,9 +354,9 @@ def ensure_build(
             message("Compiling...\n")
             compile_result = compile_with(compile_script, FULL_BUILD)
         if compile_result is None or compile_result[0] != 0:
-            return _failed_compilation(arguments, key, tree, compile_result, application_result, kept_tree)
+            return _failed_compilation(arguments, key, tree, compile_result, application_result, kept_tree, environment)
         if kept_tree:
-            _mark_built(arguments.project_dir, tree_key(key).build_id, environment)
+            _mark_built(arguments.project_dir, tree_key(key).build_id, environment, build_kind)
             # the builds of other suggestions in the tree are gone (their runs stay)
             for other in list_builds(arguments.project_dir):
                 if other.build_id != key.build_id and os.path.abspath(other.tree) == os.path.abspath(tree):
@@ -396,10 +408,21 @@ def _failed_compilation(
     compile_result: Optional[Tuple[int, float, str, str]],
     application_result: Optional[PatchApplicationResult],
     kept_tree: bool = True,
+    environment: str = "",
 ) -> BuildOutcome:
     if kept_tree:
-        # its files are those of the project, its outputs unknown: compiled in full next time
-        set_tree_state(arguments.project_dir, tree_key(key).build_id, DIRTY)
+        if compile_result is not None and _is_compile_error(compile_result[0]) and environment:
+            # a compiler error: the outputs are those of a compilation in this environment, the next one may continue
+            # incrementally (tree_sync.FAILED)
+            current = read_tree_state(arguments.project_dir, tree_key(key).build_id)
+            if current is not None:
+                current.state = FAILED
+                current.environment = environment
+                write_tree_state(arguments.project_dir, tree_key(key).build_id, current)
+        else:
+            # its files are those of the project, its outputs unknown (interrupted, cancelled, timed out): compiled
+            # in full next time
+            set_tree_state(arguments.project_dir, tree_key(key).build_id, DIRTY)
     else:
         _discard_tree(arguments, tree)
     return BuildOutcome(
@@ -424,13 +447,26 @@ class _TreeUpdate:
     changed_files: int = 0
     # the outputs of the last compilation were kept: compile_incremental.sh may continue it
     incremental: bool = False
+    # compile_incremental.sh has compiled this tree successfully in the environment of the build before
+    proven_incremental: bool = False
 
 
-def _mark_built(project_dir: PATH, tree_id: str, environment: str) -> None:
+def _is_compile_error(return_code: int) -> bool:
+    """Whether a compilation's return code says that the script ended on an error of the code it compiled (the
+    compiler rejected something, make failed), after which the tree can be compiled again incrementally. Not a kill
+    by a signal (negative, or 128 + signal from a shell), and not 124 / 125 / 126 / 127, which ``timeout`` returns
+    for a timeout / its own failure / a command that cannot be run / not found: execute_configuration reports no
+    timeout apart from the return code of the ``timeout`` wrapper."""
+    return 0 < return_code < 124
+
+
+def _mark_built(project_dir: PATH, tree_id: str, environment: str, build_kind: str = FULL_BUILD) -> None:
     state = read_tree_state(project_dir, tree_id)
     if state is not None:
         state.state = CLEAN
         state.environment = environment
+        if build_kind == INCREMENTAL_BUILD:
+            state.incremental_environment = environment
         write_tree_state(project_dir, tree_id, state)
 
 
@@ -506,7 +542,7 @@ def _prepare_kept_tree(
         incremental = (
             not fresh
             and state is not None
-            and state.state == CLEAN
+            and state.state in (CLEAN, FAILED)
             and incremental_environment is not None
             and state.environment == incremental_environment
         )
@@ -550,7 +586,13 @@ def _prepare_kept_tree(
         write_tree_state(
             project_dir,
             tree_id,
-            TreeState(result.synced, sorted(key.suggestions), BUILDING, state.environment if state else ""),
+            TreeState(
+                result.synced,
+                sorted(key.suggestions),
+                BUILDING,
+                state.environment if state else "",
+                state.incremental_environment if state else "",
+            ),
         )
         if not fresh:
             message(
@@ -567,6 +609,9 @@ def _prepare_kept_tree(
             directories=directories,
             changed_files=len(result.written) + len(result.deleted),
             incremental=incremental,
+            proven_incremental=incremental
+            and state is not None
+            and state.incremental_environment == incremental_environment,
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
