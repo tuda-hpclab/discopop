@@ -36,6 +36,9 @@ class ExecutionResult(object):
     # candidates this measurement could actually have resolved. Empty when the run
     # was not measured at all (--compile-only, a failed application).
     repetition_runtimes: List[float]
+    # True when the configuration did not build, so it was never run: ``runtime``
+    # and ``return_code`` are then placeholders, not a measurement.
+    compilation_failed: bool
 
     def __init__(
         self,
@@ -48,6 +51,7 @@ class ExecutionResult(object):
         wall_clock_runtime: Optional[float] = None,
         compiled_only: bool = False,
         repetition_runtimes: Optional[List[float]] = None,
+        compilation_failed: bool = False,
     ):
         self.runtime = runtime
         # defaults to runtime, which is exactly right when no execution time was
@@ -60,6 +64,7 @@ class ExecutionResult(object):
         self.failed_suggestions = [] if failed_suggestions is None else failed_suggestions
         self.compiled_only = compiled_only
         self.repetition_runtimes = [] if repetition_runtimes is None else repetition_runtimes
+        self.compilation_failed = compilation_failed
 
     def __str__(self) -> str:
         if self.compiled_only:

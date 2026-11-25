@@ -127,7 +127,7 @@ def test_the_timed_run_is_repeated_as_often_as_asked(
 
 def test_the_build_is_never_repeated(arguments: AutotunerArguments, calls: List[_RecordedCall], tmp_path: Any) -> None:
     """compile.sh produces no measurement, so a median of it would mean nothing."""
-    _configuration(tmp_path).compile_only(arguments, None, 2)
+    _configuration(tmp_path).compile_only(arguments, 2)
     builds = [call for call in calls if call.script_name == "compile.sh"]
     assert builds
     assert all(call.repetitions == 1 for call in builds)
