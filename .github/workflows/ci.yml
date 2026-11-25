@@ -66,11 +66,15 @@ jobs:
     # a maintainer pushes such a branch to this repository to have it checked.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # looks up which prerequisite images exist already
+      packages: read
     outputs:
       scope: ${{ steps.create_matrix.outputs.scope }}
       benchmarks: ${{ steps.create_matrix.outputs.benchmarks }}
       matrix: ${{ steps.create_matrix.outputs.matrix }}
-      images: ${{ steps.create_matrix.outputs.images }}
+      missing_images: ${{ steps.missing_images.outputs.missing_images }}
       build_environments: ${{ steps.create_matrix.outputs.build_environments }}
       tools_image: ${{ steps.create_matrix.outputs.tools_image }}
       primary_image: ${{ steps.create_matrix.outputs.primary_image }}
@@ -165,6 +169,36 @@ jobs:
             echo "leak_check_image=$(image_of "$e_leak")"
           } >> "$GITHUB_OUTPUT"
 
+          # only the images that do not exist yet are built (prepare_images): usually none, and then that job is skipped
+      # instead of taking a runner per image to find out
+      - name: Find the prerequisite images that do not exist yet
+        id: missing_images
+        shell: bash
+        env:
+          IMAGES: ${{ steps.create_matrix.outputs.images }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # local runs with act (scripts/dev/run_ci_locally.sh): no registry, the images are in the local docker store
+          if [ -z "${ACT:-}" ]; then
+            echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null
+          fi
+          missing="$(jq -c '.[]' <<< "$IMAGES" | while read -r environment; do
+            image="$(jq -r .image <<< "$environment")"
+            if [ -z "${ACT:-}" ]; then
+              exists() { docker manifest inspect "$1" > /dev/null 2>&1; }
+            else
+              exists() { docker image inspect "$1" > /dev/null 2>&1; }
+            fi
+            if exists "$image"; then
+              echo "$image exists" >&2
+            else
+              echo "$image has to be built" >&2
+              echo "$environment"
+            fi
+          done | jq -sc .)"
+          echo "missing_images=$missing" >> "$GITHUB_OUTPUT"
+
       # the versions the benchmarks compare (benchmark_report): a pull request against the tip of its target branch,
       # a push against the state before it; a manual run and the first push of a branch have nothing to compare with
       - name: Determine the versions to compare
@@ -201,11 +235,13 @@ jobs:
             echo "base_note=$base_note"
           } >> "$GITHUB_OUTPUT"
 
-  # builds the prerequisite images that do not exist in the registry yet (see create_matrix)
+  # builds the prerequisite images that do not exist in the registry yet (see create_matrix), on a GitHub-hosted runner:
+  # it needs no self-hosted resources. Skipped when all images exist, so the jobs that need it accept a skipped one.
   prepare_images:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: "Prepare image: ${{ matrix.id }}"
     needs: [create_matrix]
+    if: ${{ needs.create_matrix.outputs.missing_images != '[]' }}
     timeout-minutes: 60
     # the only job that writes to the registry; the others only read
     permissions:
@@ -214,7 +250,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.create_matrix.outputs.images) }}
+        include: ${{ fromJson(needs.create_matrix.outputs.missing_images) }}
     steps:
       - name: Build and push the image, unless it exists
         shell: bash
@@ -278,6 +314,8 @@ jobs:
     runs-on: self-hosted
     name: "Prepare build: ${{ matrix.id }}"
     needs: [create_matrix, prepare_images]
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -376,6 +414,8 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Profiler unit tests: runtime library and LLVM pass (${{ matrix.id }})"
     needs: [create_matrix, prepare_images]
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -429,6 +469,8 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Python tests: mypy, unit, profiler, end-to-end (${{ matrix.id }})"
     needs: [create_matrix, prepare_images, prepare_build]
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.prepare_build.result == 'success' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -481,7 +523,8 @@ jobs:
   runtime_unit_tests_sanitized:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # (prepare_images is skipped when all images exist; create_matrix is skipped for pull requests of forks)
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.static_checks.result == 'success' && needs.python_tests.result == 'success' && needs.profiler_unit_tests.result == 'success' }}
     permissions:
       contents: read
       packages: read
@@ -525,7 +568,8 @@ jobs:
   instrumented_programs_leak_check:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # (prepare_images is skipped when all images exist; create_matrix is skipped for pull requests of forks)
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.static_checks.result == 'success' && needs.python_tests.result == 'success' && needs.profiler_unit_tests.result == 'success' }}
     permissions:
       contents: read
       packages: read
@@ -553,7 +597,8 @@ jobs:
   rtlib_coverage:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # (prepare_images is skipped when all images exist; create_matrix is skipped for pull requests of forks)
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.static_checks.result == 'success' && needs.python_tests.result == 'success' && needs.profiler_unit_tests.result == 'success' }}
     permissions:
       contents: read
       packages: read
