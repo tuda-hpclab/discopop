@@ -1079,6 +1079,26 @@ def test_a_proven_incremental_script_that_fails_is_not_followed_by_compile_sh(pr
     assert outcome.result == BuildResult.BUILT and _kinds(project)[-1] == "incremental incremental"
 
 
+def test_after_a_failed_build_a_failing_incremental_script_falls_back_to_compile_sh_again(
+    project: Dict[str, Path],
+) -> None:
+    """A tree broken by a failed build (e.g. a configure step) must not make every later build fail without
+    compile.sh ever running again: the script counts as proven only after a successful compilation."""
+    _incremental_project(project, "if grep -q BROKEN main.c; then exit 1; fi\ncp main.c prog.out\n")
+    project["compile"].write_text(
+        project["compile"].read_text().replace("cp main.c", "! grep -q BROKEN main.c && cp main.c")
+    )
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    _build_with_messages(project)  # proves the script
+    (project["root"] / "main.c").write_text("BROKEN\n")
+    assert _build_with_messages(project)[0].result == BuildResult.COMPILE_FAILED  # no fallback: proven, tree clean
+    (project["root"] / "main.c").write_text("BROKEN again\n")
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.COMPILE_FAILED and "compile.sh is not run again" not in text
+    assert _kinds(project)[-3:] == ["incremental incremental", "incremental incremental", "full full"]
+
+
 def test_an_incremental_build_that_rebuilt_nothing_falls_back_even_when_the_script_is_proven(
     project: Dict[str, Path],
 ) -> None:

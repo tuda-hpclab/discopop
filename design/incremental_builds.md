@@ -31,7 +31,9 @@ Branch `design/incremental_builds` (off `master` 2a631c4a).
 8. When the incremental build rebuilt nothing although sources changed, it **falls back to a full build**.
 9. A compilation that failed with a compile error leaves the tree `failed`, and the next build is incremental
    again; interrupted / killed / timed out ones leave it `dirty`. A failing `compile_incremental.sh` that has
-   already compiled the tree in the same environment is not followed by a full build (the error is in the code).
+   already compiled the tree in the same environment is not followed by a full build (the error is in the code),
+   if the last compilation in the tree succeeded; after a failed one the fallback runs, so a tree broken by a
+   failed build (e.g. in a configure step) is repaired by compile.sh.
 
 ## 1. What happens today
 
