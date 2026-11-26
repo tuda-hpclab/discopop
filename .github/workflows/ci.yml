@@ -13,6 +13,8 @@ name: "DiscoPoP CI"
 # A commit is tested once: branches are tested through their pull request (which also covers the pull requests of a
 # stack, whose target is another feature branch), so a push only runs for the branches that code is merged into.
 # A branch without a pull request is tested by a manual run (workflow_dispatch).
+# A job only runs if the changes can affect it (create_matrix, step "Find out which jobs the changes affect"): e.g. a
+# pull request that only changes the explorer skips the profiler's C++ unit tests, runtime checks and benchmarks.
 on:
   push:
     branches:
@@ -85,6 +87,12 @@ jobs:
       base_sha: ${{ steps.versions.outputs.base_sha }}
       base_label: ${{ steps.versions.outputs.base_label }}
       base_note: ${{ steps.versions.outputs.base_note }}
+      # whether the changes affect a job (step "changes"): 'false' skips it, an empty value (the step failed) runs it
+      run_python_tests: ${{ steps.changes.outputs.run_python_tests }}
+      run_profiler_tests: ${{ steps.changes.outputs.run_profiler_tests }}
+      run_profiler_unit_tests: ${{ steps.changes.outputs.run_profiler_unit_tests }}
+      run_runtime_checks: ${{ steps.changes.outputs.run_runtime_checks }}
+      run_benchmarks: ${{ steps.changes.outputs.run_benchmarks }}
     steps:
       - name: Create build matrix
         id: create_matrix
@@ -245,6 +253,109 @@ jobs:
             fi
           done | jq -sc .)"
           echo "missing_images=$missing" >> "$GITHUB_OUTPUT"
+
+      # CHANGED PATHS: a job runs only if the changes can affect its result. irrelevant() below lists, per job, the
+      # paths that cannot: any other path runs the job, also one not named there (a new directory, the workflow, the
+      # build configuration), so a forgotten path costs time, not a check. The changes of a pull request are the ones
+      # GitHub shows (against the merge base with its target), those of a push to master the ones against the state
+      # before it. A manual run, a local run (act), a diff that cannot be determined and a failure of this step run
+      # every job: the jobs test the outputs for != 'false'.
+      - name: Find out which jobs the changes affect
+        id: changes
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # python_tests: the job (mypy, unit and end-to-end tests); profiler_tests: its steps for test/instrumentation
+          # and test/profiler; the others are the jobs of these names
+          jobs=(python_tests profiler_tests profiler_unit_tests runtime_checks benchmarks)
+
+          # irrelevant <job> <path>: whether a change of <path> cannot change the result of <job>
+          irrelevant() {
+            case "$2" in
+              # documentation and the configuration of editors and commit tools: only the license check (static_checks,
+              # which always runs) reads them. Not every .md file: the code loads some (e.g. the prompts of PatchRepair)
+              docs/*|design/*|*README.md|CLAUDE.md|.github/ISSUE_TEMPLATE/*|LICENSE) return 0 ;;
+              .clangd|.clang-format|.pre-commit-config.yaml|commitlint.config.js) return 0 ;;
+            esac
+            [ "$1" != python_tests ] || return 1
+            case "$2" in
+              # the Python packages besides the profiler and their tests: no profiler job builds, runs or tests them
+              # (test/instrumentation and test/profiler only call discopop_cc / discopop_cxx)
+              explorer/*|library/*|GUI/*|mcp_server/*|hotspot_detection/*|example/*|tools/*|mypy.ini) return 0 ;;
+              test/end_to_end/*|test/wip_end_to_end/*|test/project_manager/*|test/scripts/*|test/utils/*|test/old/*) return 0 ;;
+            esac
+            case "$1" in
+              profiler_tests)
+                # the C++ tests, the leak check, the benchmarks and the scripts of the other profiler jobs
+                case "$2" in test/unit_tests/*|test/pass_unit_tests/*|test/leak_check/*|benchmark/*|scripts/dev/*) return 0 ;; esac ;;
+              profiler_unit_tests|runtime_checks)
+                # the pytest suites; the benchmark sources (these jobs configure benchmark/CMakeLists.txt, but build
+                # only the unit tests and the runtime library); the leak check is a runtime check
+                case "$1:$2" in
+                  *:benchmark/CMakeLists.txt) return 1 ;;
+                  *:test/instrumentation/*|*:test/profiler/*|*:test/conftest.py|*:benchmark/*) return 0 ;;
+                  profiler_unit_tests:test/leak_check/*) return 0 ;;
+                esac ;;
+              benchmarks)
+                # the tests and the scripts of the other jobs: the benchmarks only measure the profiler
+                case "$2" in test/*|scripts/dev/*) return 0 ;; esac ;;
+            esac
+            return 1
+          }
+
+          everything=""
+          if [ -n "${ACT:-}" ]; then
+            everything="a local run (act)"
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # renamed files count with their old path, too: a file moved out of profiler/ changes the profiler
+            files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+                       -q '.[] | .filename, (.previous_filename // empty)')"
+            listed="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" -q '.[].filename' | wc -l)"
+            # the API lists at most 3000 files
+            if [ "$listed" -lt "${PR_CHANGED_FILES:-0}" ]; then
+              everything="the API listed only $listed of the $PR_CHANGED_FILES changed files"
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
+            compare="$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA")"
+            files="$(jq -r '.files[] | .filename, (.previous_filename // empty)' <<< "$compare")"
+            # the API lists at most 300 files; the state before a force push need not be an ancestor
+            if [ "$(jq '.files | length' <<< "$compare")" -ge 300 ]; then
+              everything="the push changes 300 files or more"
+            elif [ "$(jq -r .status <<< "$compare")" != "ahead" ]; then
+              everything="the push does not extend ${BEFORE:0:8}"
+            fi
+          else
+            everything="a $GITHUB_EVENT_NAME run"
+          fi
+          if [ -z "$everything" ] && [ -z "${files:-}" ]; then
+            everything="no changed files were listed"
+          fi
+
+          if [ -n "$everything" ]; then
+            echo "Every job runs: $everything"
+            for job in "${jobs[@]}"; do echo "run_$job=true" >> "$GITHUB_OUTPUT"; done
+            exit 0
+          fi
+          echo "Changed files: $(wc -l <<< "$files")"
+          for job in "${jobs[@]}"; do
+            reason=""
+            while read -r file; do
+              if ! irrelevant "$job" "$file"; then reason="$file"; break; fi
+            done <<< "$files"
+            if [ -n "$reason" ]; then
+              echo "$job: runs ($reason and maybe more affect it)"
+              echo "run_$job=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$job: skipped (no changed file affects it)"
+              echo "run_$job=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
       # the versions the benchmarks compare (job benchmarks): a pull request against the tip of its target branch,
       # a push against the state before it; a manual run and the first push of a branch have nothing to compare with
@@ -437,7 +548,7 @@ jobs:
     name: "Profiler unit tests: runtime library and LLVM pass (${{ matrix.id }})"
     needs: [create_matrix, prepare_images]
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' && needs.create_matrix.outputs.run_profiler_unit_tests != 'false' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -499,7 +610,7 @@ jobs:
     name: "Python tests: mypy, unit, profiler, end-to-end (${{ matrix.id }})"
     needs: [create_matrix, prepare_images]
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' && needs.create_matrix.outputs.run_python_tests != 'false' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -527,13 +638,13 @@ jobs:
           python3 -m pytest -n "$DP_TEST_WORKERS" -m "not e2e and not profiler"
 
       - name: Instrumentation tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.create_matrix.outputs.run_profiler_tests != 'false' }}
         run: |
           . venv/bin/activate
           python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/instrumentation
 
       - name: Profiler gold standard tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.create_matrix.outputs.run_profiler_tests != 'false' }}
         run: |
           . venv/bin/activate
           python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/profiler
@@ -598,7 +709,7 @@ jobs:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner: create_matrix is skipped for them;
     # prepare_images is skipped when all images exist
-    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' }}
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' && needs.create_matrix.outputs.run_runtime_checks != 'false' }}
     permissions:
       contents: read
       packages: read
@@ -665,7 +776,7 @@ jobs:
   benchmarks:
     runs-on: self-hosted
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.create_matrix.outputs.benchmarks == 'true' && needs.static_checks.result == 'success' && needs.profiler_unit_tests.result == 'success' && needs.python_tests.result == 'success' && needs.runtime_checks.result == 'success' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.create_matrix.outputs.benchmarks == 'true' && needs.create_matrix.outputs.run_benchmarks != 'false' && needs.static_checks.result == 'success' && (needs.profiler_unit_tests.result == 'success' || (needs.profiler_unit_tests.result == 'skipped' && needs.create_matrix.outputs.run_profiler_unit_tests == 'false')) && (needs.python_tests.result == 'success' || (needs.python_tests.result == 'skipped' && needs.create_matrix.outputs.run_python_tests == 'false')) && (needs.runtime_checks.result == 'success' || (needs.runtime_checks.result == 'skipped' && needs.create_matrix.outputs.run_runtime_checks == 'false')) }}
     permissions:
       contents: read
       packages: read
@@ -830,6 +941,34 @@ jobs:
               await github.rest.issues.createComment({ ...context.repo, issue_number, body });
             }
 
+  # a pull request whose changes no longer affect the benchmarks (e.g. its profiler changes were reverted): the comment
+  # an earlier run wrote would show the results of another version; it is replaced by a note. No comment is created.
+  benchmark_note:
+    runs-on: ubuntu-latest
+    name: Note on skipped benchmarks
+    needs: [create_matrix]
+    if: ${{ github.event_name == 'pull_request' && needs.create_matrix.outputs.benchmarks == 'true' && needs.create_matrix.outputs.run_benchmarks == 'false' }}
+    permissions:
+      pull-requests: write
+    timeout-minutes: 5
+    steps:
+      - name: Replace an earlier benchmark comment by a note
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          retries: 3
+          script: |
+            const marker = '<!-- discopop-benchmark-report -->';
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number });
+            const previous = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            if (previous) {
+              const sha = context.payload.pull_request.head.sha.substring(0, 8);
+              const body = `${marker}\n### Benchmarks\n\nSkipped for ${sha}: none of the changes of this pull request ` +
+                'affects the profiler or the benchmarks. Run the workflow manually to measure anyway.';
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            }
+
   checks_successful:
     # only evaluates the results of the other jobs: a GitHub-hosted runner, no self-hosted slot
     runs-on: ubuntu-latest
@@ -851,14 +990,27 @@ jobs:
             echo "This tree was tested by $TESTED_BY; its checks were skipped"
             exit 0
           fi
-          # the benchmark is skipped where create_matrix did not ask for it (a pull request of a stack); every other
-          # skipped job (e.g. all of them for a pull request from a fork) must not report success
+          # a job is skipped as planned where the changes do not affect it (create_matrix, step "changes"), the
+          # benchmark also where create_matrix did not ask for it (a pull request of a stack); every other skipped job
+          # (e.g. all of them for a pull request from a fork) must not report success
           benchmark_skipped_as_planned="${{ needs.create_matrix.outputs.benchmarks == 'false' && needs.benchmarks.result == 'skipped' }}"
-          others_skipped="${{ needs.create_matrix.result == 'skipped' || needs.static_checks.result == 'skipped' || needs.python_tests.result == 'skipped' || needs.profiler_unit_tests.result == 'skipped' || needs.runtime_checks.result == 'skipped' || (needs.benchmarks.result == 'skipped' && needs.create_matrix.outputs.benchmarks != 'false') }}"
+          others_skipped="${{ needs.create_matrix.result == 'skipped' || needs.static_checks.result == 'skipped' || (needs.python_tests.result == 'skipped' && needs.create_matrix.outputs.run_python_tests != 'false') || (needs.profiler_unit_tests.result == 'skipped' && needs.create_matrix.outputs.run_profiler_unit_tests != 'false') || (needs.runtime_checks.result == 'skipped' && needs.create_matrix.outputs.run_runtime_checks != 'false') || (needs.benchmarks.result == 'skipped' && needs.create_matrix.outputs.benchmarks != 'false' && needs.create_matrix.outputs.run_benchmarks != 'false') }}"
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" != "false" || "$others_skipped" != "false" ]]; then
             echo "Checks did not succeed, job results: ${{ join(needs.*.result, ', ') }}"
             exit 1
           fi
+          for job in python_tests profiler_tests profiler_unit_tests runtime_checks benchmarks; do
+            case "$job" in
+              python_tests) flag="${{ needs.create_matrix.outputs.run_python_tests }}" ;;
+              profiler_tests) flag="${{ needs.create_matrix.outputs.run_profiler_tests }}" ;;
+              profiler_unit_tests) flag="${{ needs.create_matrix.outputs.run_profiler_unit_tests }}" ;;
+              runtime_checks) flag="${{ needs.create_matrix.outputs.run_runtime_checks }}" ;;
+              benchmarks) flag="${{ needs.create_matrix.outputs.run_benchmarks }}" ;;
+            esac
+            if [ "$flag" = "false" ]; then
+              echo "Skipped, no change affects it: $job (the log of create_matrix, step \"Find out which jobs the changes affect\", lists why)"
+            fi
+          done
           if [ "$benchmark_skipped_as_planned" = "true" ]; then
             echo "The benchmarks are not part of this run (pull request into a feature branch); run the workflow manually for them"
           fi
