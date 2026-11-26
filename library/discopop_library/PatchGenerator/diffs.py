@@ -56,14 +56,28 @@ def apply_line_terminator(code: str, terminator: str) -> str:
 
 
 def get_diffs_from_modified_code(
-    file_mapping: Dict[int, Path], file_id_to_modified_code: Dict[int, str], arguments: PatchGeneratorArguments
+    file_mapping: Dict[int, Path],
+    file_id_to_modified_code: Dict[int, str],
+    arguments: PatchGeneratorArguments,
+    scratch_dir: Optional[Path] = None,
 ) -> Dict[int, str]:
+    """The diffs from the original files to the modified code, keyed by file id.
+
+    The modified code is written to a temporary file next to the original, unless ``scratch_dir`` is given: it is then
+    written there, so that nothing is written into the project. The headers of the diff are the same either way.
+    """
     patches: Dict[int, str] = dict()
     for file_id in file_id_to_modified_code:
         # get path to original code
         original_file_path = file_mapping[file_id]
         # create temporary modified code
-        modified_file_path = original_file_path.parent / (original_file_path.name + ".discopop_patch_generator.temp")
+        conventional_path = original_file_path.parent / (original_file_path.name + ".discopop_patch_generator.temp")
+        if scratch_dir is None:
+            modified_file_path = conventional_path
+        else:
+            # one directory per file id: files of the same name in different directories must not collide
+            (scratch_dir / str(file_id)).mkdir(parents=True, exist_ok=True)
+            modified_file_path = scratch_dir / str(file_id) / conventional_path.name
         if arguments.verbose:
             print("Original: ", original_file_path)
             print("Modified:  ", modified_file_path)
@@ -102,6 +116,8 @@ def get_diffs_from_modified_code(
             cwd=os.getcwd(),
         )
         diff_output = result.stdout.decode("utf-8", errors="replace")
+        if modified_file_path != conventional_path:
+            diff_output = _rename_new_file(diff_output, modified_file_path, conventional_path)
         if result.returncode != 0:
             if arguments.verbose:
                 print("RESULT: ", result.returncode)
@@ -120,3 +136,15 @@ def get_diffs_from_modified_code(
             os.remove(diff_name)
 
     return patches
+
+
+def _rename_new_file(diff_output: str, actual: Path, conventional: Path) -> str:
+    """the diff with the path of the modified file in its "+++" header replaced by the conventional one"""
+    lines = diff_output.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith("+++ " + actual.as_posix()):
+            lines[index] = "+++ " + conventional.as_posix() + line[len("+++ " + actual.as_posix()) :]
+            break
+        if line.startswith("@@"):
+            break
+    return "\n".join(lines)

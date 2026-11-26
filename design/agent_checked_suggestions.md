@@ -218,6 +218,16 @@ in it.
 * **DiscoPoP computes the patch** by comparing the copy with the original sources,
   with the patch generator's diffing. Only files with a file id
   (`FileMapping.txt`) may change; anything else is fed back.
+  * A changed file of the copy is matched to its file id by its path relative to
+    the project root. Both sides are resolved (`realpath`), so a project root
+    reached through a symbolic link, or a file mapping recorded under another path
+    to the same files, still match. Files with a file id outside the project root
+    are not in the copy and cannot be changed.
+  * Only the changed content is taken from the copy. It is diffed against the
+    original file named in the file mapping, so the patch's headers name the
+    project's files, exactly as in a generated patch; the copy's path appears
+    nowhere. The temporary file for the diff is written to a scratch directory,
+    not next to the original: the check never writes into the project.
 * **Tools are restricted on the agent's command line**, not by asking it: read and
   edit, no shell, no web access.
   * `claude`: `--tools Read,Edit,Write,Grep,Glob`, `--restricted` (file tools

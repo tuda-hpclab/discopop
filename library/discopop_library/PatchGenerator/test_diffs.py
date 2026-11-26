@@ -13,10 +13,13 @@ report the whole file as rewritten, and ``patch`` then rejected every such patch
 "different line endings" -- so no suggestion for a CRLF file was ever applicable.
 """
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+
+import pytest
 
 from discopop_library.PatchGenerator.PatchGeneratorArguments import PatchGeneratorArguments
 from discopop_library.PatchGenerator.diffs import (
@@ -119,3 +122,32 @@ def test_patch_for_an_lf_source_still_applies(tmp_path: Path) -> None:
     assert applied.returncode == 0, applied.stdout.decode() + applied.stderr.decode()
     with open(tmp_path / "main.c", "rb") as fb:
         assert b"\r\n" not in fb.read()
+
+
+def _without_timestamps(patch_text: str) -> str:
+    return "\n".join(ln.split("\t")[0] if ln.startswith(("---", "+++")) else ln for ln in patch_text.splitlines())
+
+
+def test_a_scratch_directory_keeps_the_project_untouched_and_the_patch_the_same(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "main.c"
+    source.write_text(LF.join(ORIGINAL_LINES))
+    modified = {1: LF.join(MODIFIED_LINES)}
+    usual = get_diffs_from_modified_code({1: source}, modified, _arguments())[1]
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    project.chmod(0o555)  # nothing may be written next to the original
+    try:
+        if os.access(project, os.W_OK):
+            pytest.skip("the directory stays writable (running as root?)")
+        in_scratch = get_diffs_from_modified_code({1: source}, modified, _arguments(), scratch)[1]
+    finally:
+        project.chmod(0o755)
+
+    assert sorted(p.name for p in project.iterdir()) == ["main.c"]
+    # the headers name the same files, the original and its conventional temporary copy
+    assert _without_timestamps(in_scratch) == _without_timestamps(usual)
+    assert "+++ " + source.as_posix() + ".discopop_patch_generator.temp\t" in in_scratch
+    assert scratch.as_posix() not in in_scratch

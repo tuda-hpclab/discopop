@@ -58,7 +58,9 @@ class Workspace:
     """a copy of the project's files (those git knows of, or all outside .discopop and .git)"""
 
     def __init__(self, project_root: str, files: SourceFiles, prefix: str = "discopop_suggestion_check_") -> None:
-        self.project_root = os.path.abspath(project_root)
+        # resolved, like the paths of the file mapping in relative(): a project reached through a symbolic link, or
+        # a file mapping recorded under another path to the same files, must still match
+        self.project_root = os.path.realpath(project_root)
         self.files = files
         self.root = tempfile.mkdtemp(prefix=prefix)
         self._copied: Dict[str, Tuple[int, int]] = dict()
@@ -74,8 +76,8 @@ class Workspace:
 
     def relative(self, original: Path) -> Optional[str]:
         """the path of a project file relative to the project root, None outside it"""
-        relative = os.path.relpath(os.path.abspath(str(original)), self.project_root)
-        return None if relative.startswith("..") else relative
+        relative = os.path.relpath(os.path.realpath(str(original)), self.project_root)
+        return None if relative == ".." or relative.startswith(".." + os.sep) else relative
 
     def write(self, changes: Dict[int, str]) -> None:
         """puts changed contents of files with a file id into the copy, e.g. for the review"""
@@ -128,7 +130,10 @@ def _same_content(a: str, b: str) -> bool:
 
 def patch_of(changes: Dict[int, str], files: SourceFiles, suggestion_id: int) -> PatchSet:
     """the patch from the original files to the changed ones, with the patch generator's own diffing"""
-    diffs = get_diffs_from_modified_code(dict(files.file_mapping), changes, _diff_arguments())
+    # the changed files are written to a scratch directory, not next to the originals: the check never writes into
+    # the project, not even briefly
+    with tempfile.TemporaryDirectory(prefix="discopop_suggestion_check_diff_") as scratch:
+        diffs = get_diffs_from_modified_code(dict(files.file_mapping), changes, _diff_arguments(), Path(scratch))
     patch = PatchSet(suggestion_id=suggestion_id)
     for file_id, text in sorted(diffs.items()):
         if text.strip():
