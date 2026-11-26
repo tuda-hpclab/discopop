@@ -71,6 +71,8 @@ class Results:
         entry["start_line"] = str(suggestion.start)
         entry["end_line"] = str(suggestion.end)
         entry["blockers"] = len(suggestion.blockers)
+        # which agent and settings judged it: results of several runs are kept side by side
+        entry.update(self.run_info)
         self.entries[suggestion.pattern_id] = entry
         approved_dir = os.path.join(self.path, APPROVED_DIR, str(suggestion.pattern_id))
         shutil.rmtree(approved_dir, ignore_errors=True)
@@ -95,13 +97,15 @@ class Results:
         approved: List[Dict[str, Any]] = [
             {
                 "pattern_id": e["pattern_id"],
-                "assumption": e["assumption"],
-                "verification": e["verification"],
-                "review": e["review"],
+                "assumption": e.get("assumption"),
+                "verification": e.get("verification"),
+                "review": e.get("review"),
+                "backend": e.get("backend"),
+                "model": e.get("model"),
                 "patch_dir": os.path.join(APPROVED_DIR, str(e["pattern_id"])),
             }
             for e in suggestions
-            if e["state"] == STATE_APPROVED
+            if e.get("state") == STATE_APPROVED
         ]
         self._write(
             APPROVED_FILE,

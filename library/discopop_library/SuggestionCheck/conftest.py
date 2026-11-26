@@ -81,8 +81,10 @@ def project(tmp_path: Path) -> Project:
 class ScriptedAgent:
     """answers with the given texts in turn; None stands for a call without an answer"""
 
-    def __init__(self, answers: List[Optional[str]]) -> None:
+    def __init__(self, answers: List[Optional[str]], sessions: bool = True) -> None:
         self.answers = list(answers)
+        # without, the agent reports no session, so a conversation cannot be continued
+        self.with_sessions = sessions
         self.prompts: List[str] = []
         self.sessions: List[Optional[str]] = []
 
@@ -94,7 +96,9 @@ class ScriptedAgent:
         answer = self.answers.pop(0)
         if answer is None:
             return AgentReply(text="", answered=False, failure="unreachable")
-        return AgentReply(text=answer, answered=True, session="s" + str(len(self.prompts)))
+        return AgentReply(
+            text=answer, answered=True, session="s" + str(len(self.prompts)) if self.with_sessions else None
+        )
 
 
 def json_answer(**fields: object) -> str:

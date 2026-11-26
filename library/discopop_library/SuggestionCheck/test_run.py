@@ -19,7 +19,9 @@ import pytest
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import SuggestionCheckArguments
 from discopop_library.SuggestionCheck.check import Agent
 from discopop_library.SuggestionCheck.conftest import Project, ScriptedAgent, approval, json_answer
-from discopop_library.SuggestionCheck.run import run
+from discopop_library.PatchRepair.llm_backends.base import Invocation
+from discopop_library.PatchRepair import llm_backends
+from discopop_library.SuggestionCheck.run import BackendAgent, run, without_tools
 from discopop_library.SuggestionCheck.test_check import APPROVED_SOURCE
 
 
@@ -114,3 +116,44 @@ def test_an_unknown_suggestion_is_an_error(project: Project, tmp_path: Path) -> 
 def test_verification_is_not_implemented_yet(tmp_path: Path, verify: str) -> None:
     with pytest.raises(ValueError, match="not implemented"):
         _arguments(tmp_path, verify=verify)
+
+
+def test_a_run_which_judged_nothing_fails(project: Project, tmp_path: Path) -> None:
+    dot = _dot_discopop(project, tmp_path, [5])
+    assert run(_arguments(dot, review=False), _factory({"check": [None, None, None], "review": []})) == 1
+
+
+def test_the_agent_gets_no_tools() -> None:
+    claude = without_tools({"backend": "claude", "extra_args": ["--x"]})
+    assert claude["extra_args"] == ["--x", "--tools", "", "--strict-mcp-config", "--restricted"]
+    opencode = without_tools({"backend": "opencode", "auto": True, "backend_options": {"auto": True}})
+    assert opencode["auto"] is False and opencode["backend_options"]["auto"] is False
+    denied = json.loads(opencode["env"]["OPENCODE_CONFIG_CONTENT"])["permission"]
+    assert denied == {"edit": "deny", "bash": "deny", "webfetch": "deny"}
+
+
+def test_a_conversation_keeps_its_directory_and_nothing_is_left_behind(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: List[Any] = []
+
+    class Module:
+        @staticmethod
+        def new_session_id() -> str:
+            return "new"
+
+    def fake_run_agent(module: Any, profile: Any, prompt: str, cwd: str, **kwargs: Any) -> Any:
+        calls.append((cwd, kwargs["session"], kwargs["new_session"]))
+        assert os.listdir(cwd) == []
+        return Invocation(text="answer", session_id="sid" if kwargs["session"] is None else None)
+
+    monkeypatch.setattr(llm_backends, "for_profile", lambda profile: Module)
+    monkeypatch.setattr(llm_backends, "run_agent", fake_run_agent)
+    agent = BackendAgent({"backend": "claude"}, 10)
+    first = agent("prompt", None)
+    second = agent("follow-up", first.session)
+    other = agent("prompt", None)
+    assert first.session == "sid" and second.session == "sid"
+    assert calls[0][0] == calls[1][0] != calls[2][0]
+    assert calls[0][1:] == (None, "new") and calls[1][1:] == ("sid", None)
+    agent.close()
+    assert not any(os.path.exists(c[0]) for c in calls)
+    assert other.answered

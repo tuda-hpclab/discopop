@@ -152,3 +152,38 @@ def test_the_prompt_states_facts_and_proposes_no_fix(project: Project) -> None:
     assert " 8 |     state = state * 3u + 1u;" in prompt
     for remedy in ("thread_local", "critical", "atomic", "threadprivate", "private("):
         assert remedy not in prompt
+
+
+def test_a_commented_out_directive_does_not_count(project: Project) -> None:
+    commented = with_line_before(SOURCE, LOOP_LINE, "  // #pragma omp parallel for\n")
+    outcome = run(project, ScriptedAgent([approved_answer(project, commented)]), retries=0, prompts=1)
+    assert outcome.state == STATE_FAILED
+    assert "not directly preceded by its OpenMP directive" in outcome.gates[0]["detail"]
+
+
+def test_a_directive_on_another_line_does_not_count(project: Project) -> None:
+    elsewhere = with_line_before(SOURCE, 6, PARALLEL)
+    outcome = run(project, ScriptedAgent([approved_answer(project, elsewhere)]), retries=0, prompts=1)
+    assert outcome.state == STATE_FAILED
+
+
+def test_without_a_session_a_follow_up_turn_starts_a_new_attempt(project: Project) -> None:
+    agent = ScriptedAgent(["no idea", json_answer(verdict="rejected", reason="no")], sessions=False)
+    outcome = run(project, agent, prompts=2, retries=2)
+    assert outcome.state == STATE_REJECTED
+    # the second call is a complete prompt, not a follow-up of a conversation which does not exist
+    assert agent.prompts[1] == agent.prompts[0]
+    assert {"attempt": 1, "turn": 0, "gate": "session", "detail": "none"} in outcome.gates
+
+
+def test_a_review_without_a_session_is_not_continued(project: Project) -> None:
+    reviewer = ScriptedAgent(["fine"], sessions=False)
+    outcome = run(project, ScriptedAgent([approved_answer(project)]), reviewer, retries=2)
+    assert outcome.state == STATE_REJECTED
+    assert len(reviewer.prompts) == 1
+
+
+def test_an_unreachable_reviewer_leaves_nothing_of_the_approval(project: Project) -> None:
+    outcome = run(project, ScriptedAgent([approved_answer(project)]), ScriptedAgent([None] * 3), agent_error_retries=2)
+    assert outcome.state == STATE_FAILED
+    assert (outcome.patch, outcome.verdict, outcome.assumption, outcome.justifications) == (None, None, "", [])

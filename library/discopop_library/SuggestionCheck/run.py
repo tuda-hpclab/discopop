@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
 import os
 import shutil
@@ -36,28 +38,67 @@ logger = logging.getLogger("SuggestionCheck")
 AgentFactory = Callable[[], Agent]
 
 
-def backend_agent(profile: Dict[str, Any], timeout: float) -> Agent:
-    """an agent which drives the backend of profile. Without tools for now: it runs in an empty directory, never in
-    the project, and gets everything in the prompt (design/agent_checked_suggestions.md, §5.2)."""
-    module = llm_backends.for_profile(profile)
+# the agent gets no tools: everything it may use is in the prompt (design/agent_checked_suggestions.md, §5.2)
+_CLAUDE_NO_TOOLS = ["--tools", "", "--strict-mcp-config", "--restricted"]
+_OPENCODE_DENY_ALL = json.dumps({"permission": {"edit": "deny", "bash": "deny", "webfetch": "deny"}})
 
-    def ask(prompt: str, session: Optional[str]) -> AgentReply:
-        new_session = None if session else module.new_session_id()
-        sandbox = tempfile.mkdtemp(prefix="discopop_suggestion_check_agent_")
-        try:
-            invocation = llm_backends.run_agent(
-                module, profile, prompt, cwd=sandbox, timeout=timeout, session=session, new_session=new_session
-            )
-        finally:
-            shutil.rmtree(sandbox, ignore_errors=True)
+
+def without_tools(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """profile with the agent's tools switched off on its command line, not only asked for in the prompt"""
+    restricted = copy.deepcopy(profile)
+    backend = llm_backends.backend_of(restricted)
+    if backend == "claude":
+        restricted["extra_args"] = list(restricted.get("extra_args") or []) + _CLAUDE_NO_TOOLS
+    elif backend == "opencode":
+        # never auto-approve, and deny what writes or runs. Not yet verified against a real opencode run.
+        restricted.setdefault("backend_options", {})["auto"] = False
+        restricted["auto"] = False
+        restricted["env"] = {**(restricted.get("env") or {}), "OPENCODE_CONFIG_CONTENT": _OPENCODE_DENY_ALL}
+    return restricted
+
+
+class BackendAgent:
+    """an agent which drives the backend of a profile. Each conversation runs in an empty directory of its own,
+    never in the project; a follow-up turn runs in the directory of its conversation, where the backends find their
+    session."""
+
+    def __init__(self, profile: Dict[str, Any], timeout: float) -> None:
+        self.profile = without_tools(profile)
+        self.module = llm_backends.for_profile(self.profile)
+        self.timeout = timeout
+        self._sandboxes: Dict[str, str] = dict()
+        self._created: List[str] = []
+
+    def __call__(self, prompt: str, session: Optional[str]) -> AgentReply:
+        sandbox = self._sandboxes.get(session) if session else None
+        if sandbox is None:
+            sandbox = tempfile.mkdtemp(prefix="discopop_suggestion_check_agent_")
+            self._created.append(sandbox)
+        new_session = None if session else self.module.new_session_id()
+        invocation = llm_backends.run_agent(
+            self.module,
+            self.profile,
+            prompt,
+            cwd=sandbox,
+            timeout=self.timeout,
+            session=session,
+            new_session=new_session,
+        )
+        next_session = session or invocation.session_id or new_session
+        if next_session:
+            self._sandboxes[next_session] = sandbox
         return AgentReply(
             text=invocation.text,
             answered=invocation.ok,
             failure=invocation.failure_reason(),
-            session=session or invocation.session_id or new_session,
+            session=next_session,
         )
 
-    return ask
+    def close(self) -> None:
+        for sandbox in self._created:
+            shutil.rmtree(sandbox, ignore_errors=True)
+        self._created.clear()
+        self._sandboxes.clear()
 
 
 def _select(suggestions: List[UnsureSuggestion], arguments: SuggestionCheckArguments) -> List[UnsureSuggestion]:
@@ -95,7 +136,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
         run_info["model"] = profile.get("model")
 
         def agent_factory() -> Agent:
-            return backend_agent(profile, arguments.agent_timeout)
+            return BackendAgent(profile, arguments.agent_timeout)
 
     budget = Budget(arguments.prompts, arguments.retries, arguments.agent_error_retries)
     results = Results(
@@ -111,15 +152,26 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
             except FileNotFoundError:
                 outcome = Outcome(suggestion.pattern_id, STATE_FAILED, reason="no plain patch; run the patch generator")
             else:
-                outcome = check_suggestion(
-                    suggestion,
-                    plain,
-                    files,
-                    agent_factory(),
-                    agent_factory() if arguments.review else None,
-                    budget,
-                    results.transcripts_dir(suggestion.pattern_id),
-                )
+                agent = agent_factory()
+                reviewer = agent_factory() if arguments.review else None
+                try:
+                    outcome = check_suggestion(
+                        suggestion,
+                        plain,
+                        files,
+                        agent,
+                        reviewer,
+                        budget,
+                        results.transcripts_dir(suggestion.pattern_id),
+                    )
+                except Exception as error:  # noqa: BLE001 - one suggestion must not end the run
+                    logger.exception("checking suggestion " + str(suggestion.pattern_id) + " failed")
+                    outcome = Outcome(suggestion.pattern_id, STATE_FAILED, reason="internal error: " + str(error))
+                finally:
+                    for made in (agent, reviewer):
+                        close = getattr(made, "close", None)
+                        if close is not None:
+                            close()
             results.record(suggestion, outcome)
             counts[outcome.state] = counts.get(outcome.state, 0) + 1
             results.progress("done", pattern_id=suggestion.pattern_id, state=outcome.state, reason=outcome.reason)
@@ -134,5 +186,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
         + ". Approvals rest on the agent's assumptions; see "
         + os.path.join(arguments.suggestion_check_path, "results.json")
     )
-    # rejections are results, not errors
+    # rejections are results, not errors; a run which judged nothing is one
+    if suggestions and counts.get(STATE_FAILED, 0) == len(suggestions):
+        return 1
     return 0

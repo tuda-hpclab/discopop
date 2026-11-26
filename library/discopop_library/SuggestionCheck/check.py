@@ -11,10 +11,14 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from discopop_library.PatchRepair.patching import (
+    apply_patch_set,
     canonicalize,
     canonicalize_delta,
     check_pragmas_preserved,
@@ -148,7 +152,39 @@ def candidate_patch(plain: PatchSet, replacements: Dict[int, str], files: Source
     return candidate
 
 
-def patch_gates(plain: PatchSet, answer: CheckAnswer, files: SourceFiles) -> Tuple[Optional[PatchSet], str]:
+# an OpenMP directive which makes the following loop a parallel or worksharing loop
+_LOOP_DIRECTIVE = re.compile(r"^#\s*pragma\s+omp\s+(?:parallel\s+)?for\b")
+
+
+def directive_at_loop(patch: PatchSet, suggestion: UnsureSuggestion, files: SourceFiles) -> bool:
+    """whether, in the patched code, the loop's header line is directly preceded by a parallel for directive. A
+    directive elsewhere, in a comment or on another loop does not count."""
+    header = files.line_text(suggestion.start)
+    entry = patch.entries.get(suggestion.start.file_id)
+    if not header or entry is None:
+        return False
+    applied = apply_patch_set(patch, dry_run=False)
+    if not applied.ok or applied.workspace is None:
+        return False
+    try:
+        patched = Path(applied.workspace) / str(entry.file_id) / os.path.basename(str(entry.target))
+        lines = [line.strip() for line in patched.read_text(errors="replace").splitlines()]
+    finally:
+        shutil.rmtree(applied.workspace, ignore_errors=True)
+    for index, line in enumerate(lines):
+        if line != header:
+            continue
+        previous = index - 1
+        while previous >= 0 and not lines[previous]:
+            previous -= 1
+        if previous >= 0 and _LOOP_DIRECTIVE.match(lines[previous]):
+            return True
+    return False
+
+
+def patch_gates(
+    plain: PatchSet, answer: CheckAnswer, files: SourceFiles, suggestion: UnsureSuggestion
+) -> Tuple[Optional[PatchSet], str]:
     """(the canonical patch, "") if the approved patch applies to the original code and keeps the loop's directive,
     otherwise (None, why) for the agent"""
     candidate = candidate_patch(plain, answer.patches, files)
@@ -167,6 +203,15 @@ def patch_gates(plain: PatchSet, answer: CheckAnswer, files: SourceFiles) -> Tup
     missing = check_pragmas_preserved(plain, canonical)
     if missing is not None:
         return None, missing + ". The patch must keep the loop's OpenMP directive."
+    if not directive_at_loop(canonical, suggestion, files):
+        return None, (
+            "In the patched code, the loop at "
+            + files.where(suggestion.start)
+            + " (`"
+            + files.line_text(suggestion.start)
+            + "`) is not directly preceded by its OpenMP directive. The patch must keep it there, and keep the "
+            "loop's header line as it is."
+        )
     return canonical, ""
 
 
@@ -184,6 +229,8 @@ def check_suggestion(
     outcome = Outcome(pattern_id=suggestion.pattern_id, state=STATE_FAILED)
     conversation = _Conversation(agent, outcome, budget, artifacts, "check")
     known_file_ids = sorted(files.file_mapping)
+    known_files = [files.display_path(i) for i in known_file_ids]
+    last_problem = ""
     try:
         for attempt in range(1, budget.prompts + 1):
             message = check_prompt(suggestion, plain, files)
@@ -193,9 +240,14 @@ def check_suggestion(
                 reply = conversation.ask(message, session, name)
                 session = reply.session
                 try:
-                    answer = parse_check_answer(reply.text, len(suggestion.blockers), known_file_ids)
+                    answer = parse_check_answer(reply.text, len(suggestion.blockers), known_file_ids, known_files)
                 except AnswerError as error:
                     outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "answer", "detail": str(error)})
+                    last_problem = str(error)
+                    if session is None:
+                        # a follow-up turn needs the conversation: on its own, it would ask about nothing
+                        outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "session", "detail": "none"})
+                        break
                     message = retry_prompt(str(error))
                     continue
                 outcome.verdict = answer.verdict
@@ -203,9 +255,13 @@ def check_suggestion(
                     outcome.state = STATE_REJECTED
                     outcome.reason = answer.reason
                     return outcome
-                canonical, failure = patch_gates(plain, answer, files)
+                canonical, failure = patch_gates(plain, answer, files, suggestion)
                 if canonical is None:
                     outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "patch", "detail": failure})
+                    last_problem = failure
+                    if session is None:
+                        outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "session", "detail": "none"})
+                        break
                     message = retry_prompt(failure)
                     continue
                 outcome.assumption = answer.assumption
@@ -213,10 +269,19 @@ def check_suggestion(
                 outcome.patch = canonical
                 outcome.patch_changed = canonical.changed_against(plain) != []
                 return _review(suggestion, canonical, files, reviewer, budget, artifacts, outcome)
-        outcome.reason = "no usable answer within the attempt budget"
+        outcome.reason = "no usable answer within the attempt budget" + (
+            "; the last problem: " + last_problem if last_problem else ""
+        )
     except _Unreachable as error:
         outcome.reason = "the agent did not answer: " + str(error)
+    # nothing of an approval which did not pass survives
+    outcome.state = STATE_FAILED
+    outcome.verdict = None
+    outcome.assumption = ""
+    outcome.justifications = []
+    outcome.review = None
     outcome.patch = None
+    outcome.patch_changed = False
     return outcome
 
 
@@ -244,6 +309,9 @@ def _review(
             review = parse_review_answer(reply.text)
         except AnswerError as error:
             outcome.gates.append({"review_turn": turn, "gate": "review answer", "detail": str(error)})
+            if session is None:
+                # a follow-up turn without the conversation would review nothing
+                break
             message = retry_prompt(str(error))
             continue
         outcome.review = {"verdict": review.verdict, "reason": review.reason}

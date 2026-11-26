@@ -10,8 +10,10 @@ final, and an approval has to justify every blocker (design/agent_checked_sugges
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional
 
 from discopop_library.PatchRepair.llm_backends.base import iter_json_objects
 from discopop_library.PatchRepair.patching import PATCH_BLOCK, ExtractionError, extract_patches
@@ -24,6 +26,30 @@ VERDICTS = (APPROVED, REJECTED, UNSURE)
 AGREE = "agree"
 DISAGREE = "disagree"
 REVIEW_VERDICTS = (AGREE, DISAGREE)
+
+
+# a cited line: path:line or path:first-last
+EVIDENCE = re.compile(r"^`?(?P<file>[^\s:`]+):(?P<line>\d+)(?:-\d+)?`?$")
+
+
+def _cited_lines(raw: Any, known_files: Optional[Collection[str]]) -> List[str]:
+    """the entries of raw which cite a line of a known file as path:line. Anything else, e.g. a string instead of a
+    list, null or "n/a", cites nothing."""
+    if not isinstance(raw, list):
+        return []
+    cited: List[str] = []
+    basenames = None if known_files is None else {os.path.basename(f) for f in known_files}
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        match = EVIDENCE.match(item.strip())
+        if match is None or int(match.group("line")) < 1:
+            continue
+        cited_file = match.group("file")
+        if known_files is not None and cited_file not in known_files and cited_file not in (basenames or set()):
+            continue
+        cited.append(item.strip().strip("`"))
+    return cited
 
 
 class AnswerError(ValueError):
@@ -74,7 +100,10 @@ def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def parse_check_answer(text: str, blocker_count: int, known_file_ids: List[int]) -> CheckAnswer:
+def parse_check_answer(
+    text: str, blocker_count: int, known_file_ids: List[int], known_files: Optional[Collection[str]] = None
+) -> CheckAnswer:
+    """known_files: the paths the agent was shown; evidence has to cite a line of one of them"""
     obj = _answer_object(text, "verdict")
     verdict = _text(obj.get("verdict")).lower()
     if verdict not in VERDICTS:
@@ -99,14 +128,18 @@ def parse_check_answer(text: str, blocker_count: int, known_file_ids: List[int])
         index = item.get("index")
         if not isinstance(index, int) or isinstance(index, bool):
             continue
-        evidence = [str(e).strip() for e in item.get("evidence") or [] if str(e).strip()]
+        evidence = _cited_lines(item.get("evidence"), known_files)
         justifications[index] = Justification(index, _text(item.get("justification")), evidence)
     for index in range(1, blocker_count + 1):
         given = justifications.get(index)
         if given is None or not given.text:
             problems.append("Blocker " + str(index) + " has no justification.")
         elif not given.evidence:
-            problems.append("The justification of blocker " + str(index) + ' cites no code ("evidence").')
+            problems.append(
+                "The justification of blocker "
+                + str(index)
+                + ' cites no code: "evidence" must list lines of the files shown, as path:line.'
+            )
     unknown = sorted(i for i in justifications if not 1 <= i <= blocker_count)
     if unknown:
         problems.append("There is no blocker " + ", ".join(str(i) for i in unknown) + ".")

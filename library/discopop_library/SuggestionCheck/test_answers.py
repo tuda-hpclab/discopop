@@ -33,10 +33,26 @@ def test_a_complete_approval() -> None:
     assert sorted(answer.patches) == [1]
 
 
-def test_the_json_object_with_the_verdict_counts_even_with_braces_in_the_patch() -> None:
-    patch = PATCH.replace("+y", "+{ int z = 0; }")
-    answer = parse_check_answer("Here: " + json_answer(**approval()) + "\n" + patch, 1, [1])
+def test_the_json_object_with_the_verdict_counts_among_other_braces() -> None:
+    prose = 'The loop {"note": 1} has a blocker. ' + json_answer(**approval()) + " and {} more."
+    answer = parse_check_answer(prose + "\n" + PATCH.replace("+y", "+{ int z = 0; }"), 1, [1])
     assert answer.verdict == APPROVED
+
+
+@pytest.mark.parametrize("evidence", ["code.cpp:8", [None], ["n/a"], ["code.cpp"], ["other.cpp:8"], ["code.cpp:0"]])
+def test_evidence_must_cite_lines_of_the_files_shown(evidence: object) -> None:
+    fields = approval()
+    fields["blockers"][0]["evidence"] = evidence  # type: ignore[index]
+    with pytest.raises(AnswerError, match="cites no code"):
+        parse_check_answer(json_answer(**fields) + "\n" + PATCH, 1, [1], ["src/code.cpp"])
+
+
+@pytest.mark.parametrize("evidence", ["src/code.cpp:8", "code.cpp:8-9", "`code.cpp:8`"])
+def test_evidence_by_path_or_file_name(evidence: str) -> None:
+    fields = approval()
+    fields["blockers"][0]["evidence"] = [evidence]  # type: ignore[index]
+    answer = parse_check_answer(json_answer(**fields) + "\n" + PATCH, 1, [1], ["src/code.cpp"])
+    assert answer.justifications[0].evidence == [evidence.strip("`")]
 
 
 @pytest.mark.parametrize(
