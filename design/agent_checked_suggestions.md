@@ -278,6 +278,13 @@ intent, not facts. "Intent" in a wider sense (e.g. "only the distribution of the
 random numbers matters") is deliberately not accepted: it would rest on the agent's
 reading of the program's purpose.
 
+**Correctness only.** Profitability is not the agent's question: it is measured
+later with production inputs, much larger than the profiled run. The prompts say so
+and tell the agent and the reviewer to assume the loop runs long enough, and never
+to reject because the body looks small or a correct version needs more work. (Found
+on relearn: a rejection "a restructuring the tiny body does not justify".)
+Additional dependencies of larger inputs are left to the profiler.
+
 Rounding differences are accepted by default, since they are usually acceptable,
 but an approval declares them (§5.4), the reviewer checks the declaration, and
 `--reject-rounding` rejects them. Small differences can grow where the results

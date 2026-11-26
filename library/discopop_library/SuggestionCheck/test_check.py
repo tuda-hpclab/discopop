@@ -240,6 +240,8 @@ def test_the_prompt_states_facts_and_proposes_no_fix(project: Project) -> None:
     assert " 8 |     state = state * 3u + 1u;" in prompt
     for remedy in ("thread_local", "critical", "atomic", "threadprivate", "private(state"):
         assert remedy not in prompt
+    # correctness only: profitability is measured later, with production inputs
+    assert "Whether\nparallelizing it pays off is not your question" in prompt
 
 
 ROUNDING_APPROVAL = json_answer(**approval(result_differences="rounding"))

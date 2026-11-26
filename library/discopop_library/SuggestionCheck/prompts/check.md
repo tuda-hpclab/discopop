@@ -38,6 +38,15 @@ Anything else is a different result, even if it might seem acceptable:
 Comments in the code are hints about intent, not facts: decide by what the code
 does.
 
+## Correctness only
+
+Decide only whether the loop can run in parallel with correct results. Whether
+parallelizing it pays off is not your question: that is measured later with
+production inputs, which are much larger than the profiled run (more iterations,
+more steps, larger data). Assume the loop runs long enough for parallelization to
+be effective. Never reject or simplify a solution because the loop body looks small
+or because a correct parallel version needs more work.
+
 ## Rules
 
 - **Rejection is the default.** Approve only if, for every blocker, you can show

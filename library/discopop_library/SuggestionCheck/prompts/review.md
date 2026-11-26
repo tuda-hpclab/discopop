@@ -35,6 +35,9 @@ commands.
   differences from floating-point operations in another order are allowed. Lost
   updates, other random numbers or the same ones in other places, another order of
   elements or output, or another choice on ties are wrong results.
+- **Correctness only.** Whether the parallel loop pays off is measured later with
+  production inputs, which are much larger than the profiled run: do not disagree
+  because the loop body looks small or the change seems too much work for it.
 - **Every change must be needed and explained.** Disagree if the patch contains a
   change the parallel loop does not need, or a change outside the loop body that no
   justification explains, including what it means for the code that uses the
