@@ -26,6 +26,8 @@ The patches are stored in `patch_generator/` (inside `.discopop`).
 For each parallel pattern, a folder named after the pattern `id` is created. It contains one patch file `<file id>.patch` for every modified file.
 See [File mapping](../data/Filemapping.md) for how to interpret the file ids.
 
+If the explorer wrote unsure suggestions (`--unsure-suggestions`), their plain patches go to `patch_generator_unsure/<id>/`. These patches are **not correct** as they are: they add the directive of a loop with dependencies between its iterations. They are the input of the [suggestion check](Suggestion_check.md), and no other tool reads them. The directory is replaced by every run that generates patches from `explorer/patterns.json`.
+
 ## Example
 ```bash
 cd .discopop && discopop_patch_generator

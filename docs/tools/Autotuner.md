@@ -2,7 +2,7 @@
 layout: default
 title: Empirical autotuner
 parent: Tools
-nav_order: 9
+nav_order: 10
 ---
 
 # Empirical autotuner
