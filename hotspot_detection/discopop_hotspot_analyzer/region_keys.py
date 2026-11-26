@@ -9,7 +9,8 @@
 """Build-independent identity of profiled code regions, and run merging.
 
 The instrumentation pass numbers code regions per *build*: it appends to
-``hotspot_detection/private/cs_id.txt`` and resumes numbering from ``temp.txt``,
+``hotspot_detection/private/cs_id.txt`` and resumes numbering after the larger of
+``temp.txt`` and the highest id in ``cs_id.txt``,
 so compiling a second time gives the same source region a second id, and the new
 binary writes ``0.0`` for every id of the previous build. Region ids are
 therefore only meaningful within one build, and joining runs by raw id -- which
@@ -402,7 +403,7 @@ def merged_dir(dot_dp: str) -> str:
 
     Kept separate from ``private/``, which belongs to the instrumentation pass and
     the runtime: they append to its ``cs_id.txt`` and resume region numbering from
-    its ``temp.txt``, so it must not be rewritten.
+    its ``temp.txt`` and ``cs_id.txt``, so it must not be rewritten.
     """
     return os.path.join(hotspot_dir(dot_dp), MERGED_DIRNAME)
 
