@@ -1,0 +1,236 @@
+# This file is part of the DiscoPoP software (http://www.discopop.tu-darmstadt.de)
+#
+# Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
+#
+# This software may be modified and distributed under the terms of
+# the 3-Clause BSD License.  See the LICENSE file in the package base
+# directory for details.
+
+name: "Release"
+
+# A release is a change of VERSION files merged into master. Once the CI of a push to master succeeded, this workflow
+# publishes every package whose VERSION is not on PyPI yet (scripts/dev/release.py plan), dependencies first and the
+# root package discopop last, tags the commit per published package (<prefix>_v<version>, v<version> for discopop) and
+# runs the check of the published packages (published_packages.yml). Whether a release is stable or a pre-release
+# follows from its version. A failed run can be started again manually: it publishes only what is still missing.
+# PyPI has to list this workflow (release.yml, environment "pypi") as a trusted publisher of every package.
+on:
+  workflow_run:
+    workflows: ["DiscoPoP CI"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one release at a time, and never cancel one that is uploading
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: "Plan: the packages whose VERSION is not on PyPI"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the CI runs of a manually released commit
+    # a successful CI run of a push to master, or a manual run on master
+    if: >-
+      ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push')
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') }}
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      plan: ${{ steps.plan.outputs.plan }}
+      versions: ${{ steps.plan.outputs.versions }}
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      # the commit the CI tested, even if master moved on since
+      - name: Determine the commit
+        id: commit
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.commit.outputs.sha }}
+
+      # a manual run (to repeat a failed release) publishes only a commit whose CI succeeded, like an automatic one
+      - name: Check the CI of a manually released commit
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          conclusions="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" --event push \
+            --json conclusion --jq '.[].conclusion')"
+          if ! grep -qx success <<< "$conclusions"; then
+            echo "::error title=Release::No successful CI run of the push of $SHA (found: ${conclusions:-none})." >&2
+            exit 1
+          fi
+
+      - name: Plan the release
+        id: plan
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install --quiet packaging
+          venv/bin/python scripts/dev/release.py plan
+
+  publish:
+    name: "Publish to PyPI and tag"
+    needs: plan
+    if: ${{ needs.plan.outputs.any == 'true' }}
+    runs-on: ubuntu-24.04
+    # PyPI's trusted publishers name this environment; protection rules on it (required reviewers) would add an
+    # approval before the upload
+    environment: pypi
+    permissions:
+      contents: write # the tags (and the disabled draft release)
+      id-token: write # trusted publishing
+    env:
+      SHA: ${{ needs.plan.outputs.sha }}
+      VERSIONS: ${{ needs.plan.outputs.versions }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # the source distributions of the profiler and the hotspot detection look for a supported clang
+      - name: Install clang for the source distributions of the profiler and the hotspot detection
+        if: ${{ fromJSON(needs.plan.outputs.plan).profiler || fromJSON(needs.plan.outputs.plan).hotspot_detection }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-20
+
+      # everything is built (into dist/release, which no package includes) before the first upload, so a package that
+      # does not build publishes nothing; the profiler and the hotspot detection as source distributions only (they are
+      # compiled on the user's machine)
+      - name: Build the packages
+        run: |
+          pip install build
+          build() { python -m build "$@" --outdir "dist/release/$key" "$dir"; }
+          for entry in hotspot_detection:hotspot_detection:--sdist profiler:profiler:--sdist gui:GUI: library:library: \
+                       explorer:explorer: mcp_server:mcp_server: discopop:.:; do
+            IFS=: read -r key dir flags <<< "$entry"
+            if [ "$(jq -r --arg k "$key" '.[$k] // empty' <<< "$VERSIONS")" != "" ]; then
+              build $flags
+            fi
+          done
+          ls -R dist/release
+
+      # one upload per package, in this order: every package after the DiscoPoP packages it requires; each upload is
+      # tagged at once (a rerun after a failed upload skips the packages on PyPI, so they would never be tagged
+      # otherwise), and a problem with a tag stops no upload: the last step reports it
+      - name: Publish discopop-hotspot-detection
+        if: ${{ fromJSON(needs.plan.outputs.plan).hotspot_detection }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/hotspot_detection/
+      - name: Tag discopop-hotspot-detection
+        id: tag_hotspot_detection
+        if: ${{ fromJSON(needs.plan.outputs.plan).hotspot_detection }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "hotspot_detection_v$(jq -r .hotspot_detection <<< "$VERSIONS")" "$SHA"
+
+      - name: Publish discopop-profiler
+        if: ${{ fromJSON(needs.plan.outputs.plan).profiler }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/profiler/
+      - name: Tag discopop-profiler
+        id: tag_profiler
+        if: ${{ fromJSON(needs.plan.outputs.plan).profiler }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "profiler_v$(jq -r .profiler <<< "$VERSIONS")" "$SHA"
+
+      - name: Publish discopop-gui
+        if: ${{ fromJSON(needs.plan.outputs.plan).gui }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/gui/
+      - name: Tag discopop-gui
+        id: tag_gui
+        if: ${{ fromJSON(needs.plan.outputs.plan).gui }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "gui_v$(jq -r .gui <<< "$VERSIONS")" "$SHA"
+
+      - name: Publish discopop-library
+        if: ${{ fromJSON(needs.plan.outputs.plan).library }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/library/
+      - name: Tag discopop-library
+        id: tag_library
+        if: ${{ fromJSON(needs.plan.outputs.plan).library }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "library_v$(jq -r .library <<< "$VERSIONS")" "$SHA"
+
+      - name: Publish discopop-explorer
+        if: ${{ fromJSON(needs.plan.outputs.plan).explorer }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/explorer/
+      - name: Tag discopop-explorer
+        id: tag_explorer
+        if: ${{ fromJSON(needs.plan.outputs.plan).explorer }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "explorer_v$(jq -r .explorer <<< "$VERSIONS")" "$SHA"
+
+      - name: Publish discopop-mcp-server
+        if: ${{ fromJSON(needs.plan.outputs.plan).mcp_server }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/mcp_server/
+      - name: Tag discopop-mcp-server
+        id: tag_mcp_server
+        if: ${{ fromJSON(needs.plan.outputs.plan).mcp_server }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "mcp_server_v$(jq -r .mcp_server <<< "$VERSIONS")" "$SHA"
+
+      - name: Publish discopop
+        if: ${{ fromJSON(needs.plan.outputs.plan).discopop }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/release/discopop/
+      - name: Tag discopop
+        id: tag_discopop
+        if: ${{ fromJSON(needs.plan.outputs.plan).discopop }}
+        continue-on-error: true
+        run: scripts/dev/tag_release.sh "v$(jq -r .discopop <<< "$VERSIONS")" "$SHA"
+
+      - name: Check that every published package was tagged
+        if: ${{ !cancelled() }}
+        run: |
+          for outcome in ${{ steps.tag_hotspot_detection.outcome }} ${{ steps.tag_profiler.outcome }} ${{ steps.tag_gui.outcome }} ${{ steps.tag_library.outcome }} ${{ steps.tag_explorer.outcome }} ${{ steps.tag_mcp_server.outcome }} ${{ steps.tag_discopop.outcome }}; do
+            if [ "$outcome" = "failure" ]; then
+              echo "::error title=Tags of the release::A published package could not be tagged, see the Tag steps." >&2
+              exit 1
+            fi
+          done
+
+      # disabled for now: a draft GitHub release per stable release of discopop
+      # - name: Create Release
+      #   if: ${{ fromJSON(needs.plan.outputs.plan).discopop }}
+      #   uses: actions/create-release@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   with:
+      #     tag_name: v${{ fromJSON(needs.plan.outputs.versions).discopop }}
+      #     release_name: Version ${{ fromJSON(needs.plan.outputs.versions).discopop }}
+      #     draft: true
+      #     prerelease: false
+
+  published_packages:
+    name: "Check the published packages"
+    needs: publish
+    uses: ./.github/workflows/published_packages.yml
+    with:
+      wait_for_index: true

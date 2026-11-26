@@ -37,9 +37,16 @@ For Arch-based distributions (`pacman`) and macOS (Homebrew), see the [installat
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install discopop
 ```
-To install from a checkout of this repository, see the [installation page](https://tuda-hpclab.github.io/discopop/setup/discopop/).
+Then install either the stable release or the pre-release:
+
+| | Stable release | Pre-release |
+|---|---|---|
+| Install | `pip install discopop` | `pip install --pre discopop` |
+| Installs | the newest final release | the newest version, pre-releases included |
+| Choose it | for a tested release | for the newest features and fixes |
+
+**There is no stable release of the current version yet:** `pip install discopop` installs 5.0.2, an outdated release that cannot be built. Install the pre-release until the first stable release is published. To install from a checkout of this repository, see the [installation page](https://tuda-hpclab.github.io/discopop/setup/discopop/).
 
 ## Starting the GUI
 Your project has to build with the compilers and flags given in `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS`. Start the GUI in the project directory:
