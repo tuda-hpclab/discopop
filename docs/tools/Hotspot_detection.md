@@ -7,7 +7,7 @@ nav_order: 4
 
 # Hotspot detection
 ## Executables
-`discopop_hotspot_cc`, `discopop_hotspot_cxx` and `discopop_hotspot_analyzer`. They are installed with the `discopop-hotspot-detection` package (part of `pip install discopop`).
+`discopop_hotspot_cc`, `discopop_hotspot_cxx` and `discopop_hotspot_analyzer`. They are installed with the `discopop-hotspot-detection` package (installed with the package `discopop`).
 
 ## Purpose
 Hotspot detection finds the code regions (loops and functions) that deserve your attention. It measures the time spent in every region and classifies each region by two criteria:

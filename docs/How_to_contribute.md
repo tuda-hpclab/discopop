@@ -96,6 +96,13 @@ Tests that check more than the detected patterns live in `test/end_to_end/<topic
 
 `.github/workflows/ci.yml` runs on pushes to `master` and `new_explorer`, on every pull request and manually. A commit is tested once: a feature branch is tested through its pull request. The full matrix (Ubuntu 24.04 with LLVM 19 and 20, Debian 13 with LLVM 21 and 22) only runs when merging into `master`; other pull requests and manual runs test Debian 13 with LLVM 21. The jobs cover the static checks (license tags, black, ruff), mypy, the unit tests, the instrumentation, profiler and end-to-end tests, the C++ unit tests, sanitizers, a leak check, coverage, and benchmarks with a comparison against the previous version.
 
+`.github/workflows/published_packages.yml` tests what users install instead of the code of a commit: on a clean Ubuntu 24.04 with the packages of the installation guide, it installs the newest stable release and the newest pre-release of `discopop` from PyPI with the commands of the installation guide (`pip install discopop`, `pip install --pre discopop`), checks that every DiscoPoP package is installed in its newest version without conflicting requirements and that every command starts, and runs the example (instrument, profile, explore). It runs after every publish workflow, on pull requests that change it, and manually. It is no part of the CI of pull requests, since a broken release would fail all of them. To run the same check locally (it needs the system packages of the installation guide):
+
+```bash
+python3 scripts/dev/check_published_installation.py --channel pre-release
+python3 scripts/dev/check_published_installation.py --channel stable
+```
+
 To run the pipeline locally (requires [act](https://github.com/nektos/act) and Docker):
 
 ```bash
@@ -123,8 +130,10 @@ Each package has its own `VERSION` file (`profiler/`, `explorer/`, `library/`, `
 | `gui_v<version>` | `discopop-gui` |
 | `hotspot_detection_v<version>` | `discopop-hotspot-detection` |
 | `mcp_server_v<version>` | `discopop-mcp-server` |
-| `v<version>` (e.g. `v5.0.3`), tagged on `master` | the root package `discopop` and a draft GitHub release |
+| `v<version>` (e.g. `v5.0.3`), tagged on `master` | the root package `discopop` (the draft GitHub release of `publish.yml` is disabled for now) |
 | `v<version>a<n>`, `v<version>b<n>`, `v<version>dev<n>` | the root package `discopop` as pre-release |
+
+After every publish workflow, the workflow "Published packages" (see [Continuous integration](#continuous-integration)) installs the newest releases from PyPI and runs the example; check its result after a release, as it shows whether the newly published package works with the published versions of the others.
 
 Use `1.2.3a4` as the version of an alpha release and `b` instead of `a` for a beta release. Version numbers: bug fixes and documentation only raise the last digit; compatible new features raise the middle digit and reset the last; changes of interfaces or data formats that are not compatible raise the first digit and reset the others.
 
@@ -135,6 +144,7 @@ The scripts in `scripts/dev` support development; run them from the root of the 
 | Script | Purpose |
 |---|---|
 | `run_ci_locally.sh` | runs the CI workflow locally with act |
+| `check_published_installation.py --channel <stable\|pre-release>` | installs the newest release of a channel from PyPI into a new venv and runs the example (workflow "Published packages") |
 | `check-commit-msg.py` | validates a commit message (commit-msg hook) |
 | `check-license.sh` | checks that files carry the license tag (pre-commit) |
 | `check_cpp_style.sh [build dir]` | clang-format (dry run), cpplint and clang-tidy on the profiler |

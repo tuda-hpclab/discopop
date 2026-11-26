@@ -203,6 +203,5 @@ add_custom_target(
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_sanity_checker ${DP_LOCAL_BIN_DIR}/discopop_sanity_checker
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_preprocessor ${DP_LOCAL_BIN_DIR}/discopop_preprocessor
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_project_manager ${DP_LOCAL_BIN_DIR}/discopop_project_manager
-    COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_configuration_manager ${DP_LOCAL_BIN_DIR}/discopop_configuration_manager
     COMMAND ln -sf ${DiscoPoP_SOURCE_DIR}/venv/bin/discopop_dependency_comparator ${DP_LOCAL_BIN_DIR}/discopop_dependency_comparator
 )

@@ -8,7 +8,7 @@ nav_order: 3
 The manual is the detailed reference of DiscoPoP. It is for users who want to go beyond the [graphical workflow](getting_started.md): install DiscoPoP in a non-standard way, run single tools on the command line, interpret the output files, or contribute to DiscoPoP.
 
 ## Components
-DiscoPoP consists of seven Python packages, which `pip install discopop` installs together (the package `discopop` depends on all others).
+DiscoPoP consists of seven Python packages, which are installed together: the package `discopop` depends on all others (see [Installation](setup/discopop.md)).
 
 | Folder | PyPI name | Console scripts | Purpose |
 |---|---|---|---|
