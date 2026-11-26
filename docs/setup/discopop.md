@@ -83,7 +83,7 @@ Then install either the stable release or the pre-release:
 
 | | Stable release | Pre-release |
 |---|---|---|
-| Install | `pip install discopop` | `pip install "discopop>=5.0.3a1"` |
+| Install | `pip install discopop` | `pip install --pre discopop` |
 | Installs | the newest final release | the newest version, pre-releases included |
 | Choose it | for a tested release | for the newest features and fixes |
 
@@ -93,7 +93,7 @@ There is no stable release of the current version yet: `pip install discopop` in
 The package `discopop` installs all other packages as dependencies: the profiler, the explorer, the library (with the project manager, the GUI and the other tools), the hotspot detection and the MCP server. The build of the profiler takes a few minutes.
 
 {: .note }
-The version requirement `>=5.0.3a1` makes pip consider the pre-releases of DiscoPoP and its packages. Do not use `pip install --pre discopop` instead: it also installs pre-releases of the other packages DiscoPoP depends on.
+`--pre` lets pip install pre-releases, of DiscoPoP and of the other packages it depends on.
 
 {: .note }
 Activate the virtual environment (`source venv/bin/activate`) in every new shell before you use DiscoPoP. The commands `discopop_cxx`, `discopop_explorer`, `discopop_gui` and the others are installed into `venv/bin`.

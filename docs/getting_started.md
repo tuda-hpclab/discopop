@@ -27,7 +27,7 @@ Then install either the stable release or the pre-release:
 
 | | Stable release | Pre-release |
 |---|---|---|
-| Install | `pip install discopop` | `pip install "discopop>=5.0.3a1"` |
+| Install | `pip install discopop` | `pip install --pre discopop` |
 | Installs | the newest final release | the newest version, pre-releases included |
 | Choose it | for a tested release | for the newest features and fixes |
 

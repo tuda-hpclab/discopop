@@ -12,10 +12,12 @@
 Shows whether the versions on PyPI work together, independently of the checkout: only the example program
 (``example/example.cpp``) is taken from it. Channels:
 
-- ``stable``: the newest final release of ``discopop``, i.e. what ``pip install discopop`` installs
-- ``pre-release``: the newest release including pre-releases, installed as ``discopop==<version>``; ``--pre`` is not
-  used, since it would also install pre-releases of the third-party dependencies, which a user does not get with the
-  documented installation or the update dialog of the GUI
+- ``stable``: ``pip install discopop``, the newest final release
+- ``pre-release``: ``pip install --pre discopop``, the newest release including pre-releases; ``--pre`` also takes
+  the pre-releases of the third-party dependencies, which this check therefore tests, too
+
+Both are the commands of the installation guide (``docs/setup/discopop.md``); the check verifies that they install
+the newest version of every DiscoPoP package of the channel.
 
 Checks, all of them are run and reported:
 
@@ -200,16 +202,15 @@ class Check:
         return self.finish()
 
     def install(self, target: str) -> bool:
-        self.group(f"pip install {META_PACKAGE}=={target}")
+        command = ["pip", "install"] + ([] if self.stable else ["--pre"]) + [META_PACKAGE]
+        self.group(" ".join(command))
         start = time.monotonic()
-        code, output = self.execute(
-            [sys.executable, "-m", "pip", "install", f"{META_PACKAGE}=={target}"], self.work_dir
-        )
+        code, output = self.execute([sys.executable, "-m"] + command, self.work_dir)
         duration = time.monotonic() - start
         if code != 0:
-            self.fail("installation", f"pip install {META_PACKAGE}=={target} failed (exit code {code})", output)
+            self.fail("installation", f"{' '.join(command)} failed (exit code {code})", output)
             return False
-        self.passed("installation", f"{META_PACKAGE}=={target} in {duration:.0f} s")
+        self.passed("installation", f"{' '.join(command)} in {duration:.0f} s (newest: {META_PACKAGE} {target})")
         return True
 
     def check_requirements(self) -> None:
