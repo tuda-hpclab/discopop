@@ -25,12 +25,11 @@ This design adds a second category of suggestions next to the safe ones:
 * the explorer emits **unsure suggestions**: loops rejected only because of
   dependencies between their iterations, together with those dependencies, stated
   as facts;
-* the patch generator writes the plain do-all patch for each of them, **marked as
-  incorrect** and stored where no existing tool looks;
 * a new tool, `discopop_suggestion_check`, built like
-  [patch repair](patch_repair.md), hands each one to an agent, which either
-  rejects it or changes the patch so the parallel version is correct, and states
-  the assumption this rests on;
+  [patch repair](patch_repair.md), describes each one to an agent working in a
+  throwaway copy of the project. The agent either rejects it, or changes the code
+  so that the loop runs in parallel correctly and states the assumption this rests
+  on. DiscoPoP computes the patch from the changed copy;
 * a suggestion the agent approved stays a **separate, labelled category**. Tools
   use it only on request and always show its assumption.
 
@@ -47,7 +46,7 @@ meaning.
 | Principle | Consequence |
 | --- | --- |
 | Safe suggestions are unchanged. | Nothing here adds, removes or reorders a safe suggestion, its pattern id or its patch. |
-| An unsure suggestion is not a suggestion. | Its patch is the plain do-all, known to be incorrect without a change. It never appears where tools look for suggestions (§3). |
+| An unsure suggestion is not a suggestion. | It has no patch: the plain directive would be incorrect. It never appears where tools look for suggestions (§3). |
 | The explorer states facts, never remedies. | No `thread_local`, `critical`, `atomic` or similar in its output or in the prompt. The agent decides how, and whether, the code can be parallelized. |
 | The assumption comes from the agent. | The explorer does not guess why a dependency could be harmless. The agent names the assumption its change rests on, citing code. |
 | The agent is conservative. | Rejection is the default. An approval must justify every blocker; anything left unclear is a rejection (§5.3). |
@@ -100,7 +99,6 @@ So unsure suggestions get files of their own, which no existing tool reads:
 | File | Content |
 | --- | --- |
 | `explorer/unsure_suggestions.json` | readable list (§4.3) |
-| `patch_generator_unsure/<id>/<file_id>.patch` | the plain patches, written by the patch generator (§4.4) |
 | `suggestion_check/` | the check tool's artifacts, its results and the approved patches (§5.6) |
 
 **Pattern ids** come from the same allocator as the safe ones, but are allocated
@@ -110,7 +108,7 @@ a safe one, so an opted-in consumer can put both into one `PatternStorage`.
 
 ---
 
-## 4. Explorer and patch generator
+## 4. Explorer
 
 ### 4.1 Which loops become unsure suggestions
 
@@ -136,7 +134,7 @@ pattern. The check tool filters by hotspot type again, like patch repair.
 too, independent of the decision log, and keeps for a rejected loop its first copy,
 iteration contexts and blockers. After the scan, each qualifying loop is classified
 exactly like a safe candidate (`detect_doall_sharing_clauses`, reductions from the
-reduction scan), so its plain patch carries the clauses a safe suggestion would
+reduction scan), so its description carries the clauses a safe suggestion would
 have.
 
 The detector returns these as data, not as `PatternInfo`: constructing one
@@ -184,13 +182,13 @@ unchanged (§3).
   list of them would be incomplete, and an empty list would read as "not read
   after the loop", a hint toward approval. The agent has to find out from the code.
 
-### 4.4 Patch generator
+### 4.4 No patches
 
-When `explorer/unsure_suggestions.json` exists, `discopop_patch_generator` also
-writes the plain patch of each unsure suggestion to
-`patch_generator_unsure/<id>/<file_id>.patch`, with the code generation used for
-safe do-all and reduction patterns. The directory is removed and rewritten on
-every run, like `patch_generator/`.
+Unsure suggestions get no patches. A first version wrote the plain do-all patch of
+each one (`patch_generator_unsure/`) and gave it to the agent to change. That was
+dropped (§5.2): the plain patch is incorrect by definition, its clauses come from a
+classification which ignored the blockers, and agents are better at changing code
+than at writing diffs against the right version of a file.
 
 ---
 
@@ -201,42 +199,48 @@ every run, like `patch_generator/`.
 * the agent backends and their configuration (`PatchRepair/llm_backends`,
   `llm_config.py`); the default configuration file is patch repair's, so a
   connection is set up once;
-* `patching.py`: dry-run apply, canonicalization against the pristine source,
-  pragma guard (the change must keep the loop's `parallel for`);
-* the attempt budget (`--prompts`, `--retries`, `--agent-error-retries`,
-  `--max-attempts`) and the hotspot filter (`--hotspot-types`, default `yes,maybe`).
+* the attempt budget (`--prompts`, `--retries`, `--agent-error-retries`) and the
+  hotspot filter (`--hotspot-types`, default `yes,maybe`);
+* the patch generator's diffing (`get_diffs_from_modified_code`), so an approved
+  patch has the same form as a generated one.
 
-### 5.2 What the agent gets
+### 5.2 The agent works in a copy, DiscoPoP computes the patch
 
-The agent needs to read code beyond the loop: who uses the appended requests, where
-the generator is declared, what a called function does. Unlike patch repair it
-therefore runs in a **throwaway copy of the project sources** with **read-only
-tools**, enforced on the agent's command line, not by asking it:
+The agent needs to read code beyond the loop (the declaration of the data, who uses
+the appended requests, what a called function does) and to change code. It
+therefore works in a **workspace: a throwaway copy of the project sources** (the
+files git knows of, or the project directory without `.discopop`, `.git` and build
+output). Every attempt gets a fresh copy; the follow-up turns of an attempt continue
+in it.
 
-* `claude`: `--allowedTools Read Grep Glob`, `--disallowedTools Edit Write
-  NotebookEdit Bash`;
-* `opencode`: an agent definition whose permissions deny `edit` and `bash`, and
-  never `--auto`.
+* **The agent changes the code itself**, including the OpenMP directive of the
+  loop. It writes no diff.
+* **DiscoPoP computes the patch** by comparing the copy with the original sources,
+  with the patch generator's diffing. Only files with a file id
+  (`FileMapping.txt`) may change; anything else is fed back.
+* **Tools are restricted on the agent's command line**, not by asking it: read and
+  edit, no shell, no web access.
+  * `claude`: `--tools Read,Edit,Write,Grep,Glob`, `--restricted` (file tools
+    confined to the working directory), `--strict-mcp-config`,
+    `--permission-mode acceptEdits`;
+  * `opencode`: no `--auto`, permissions `edit: allow`, `bash: deny`,
+    `webfetch: deny` (`OPENCODE_CONFIG_CONTENT`). Still to be verified with a real
+    run.
+* **Escape check:** the project's own source files are compared with their state
+  before every agent call; a change aborts the run.
+* The reviewer (§5.5) gets a copy with the changes applied and read-only tools.
 
-The restriction is part of the backend contract (`build_argv(..., read_only=True)`),
-unit tested on the generated argv, and a backend that cannot enforce it is refused.
-Detection stays as a second line: the tool checks afterwards that the project is
-unchanged. Patch repair went tool-less after a model edited the real source; this
-tool needs to read beyond the prompt, so it restricts instead. The first version of
-the core is tool-less as well (everything in the prompt), the read path comes
-behind this restriction.
+The prompt contains a description of the suggestion in the style of the MCP server
+(location, the directive DiscoPoP would generate without the blockers, noting that
+its data sharing ignores them), each blocker in words, the code of the loop and
+around the blockers with line numbers, the rules (§5.3) and the answer format
+(§5.4). It does not contain any proposal of a fix.
 
-The prompt contains:
-
-* the loop with line numbers, and the plain patch;
-* each blocker, in words: "Iteration *i* writes `this1` at
-  `CommunicationVector.h:184` (`neuron_requests_outgoing.append(...)`) and a later
-  iteration reads it at the same line" — with its origin (measured during
-  profiling, or reported by the static analysis);
-* for accesses inside called code: the line in the project that made the call;
-* the conservative rules (§5.3) and the answer format (§5.4).
-
-It does not contain any proposal of a fix.
+Each blocker is described as: "RAW dependency: in one iteration, the statement at
+`CommunicationVector.h:184` reads data which the statement at
+`CommunicationVector.h:184` wrote in an earlier iteration", with the text of the
+lines, the data involved and its origin (observed during profiling, or reported by
+the static analysis). If a line calls a function, the access may happen inside it.
 
 ### 5.3 Prompt rules
 
@@ -256,29 +260,32 @@ It does not contain any proposal of a fix.
 
 ### 5.4 Answer format
 
-One JSON object, extracted with patch repair's tolerant JSON reader:
+One JSON object, extracted with patch repair's tolerant JSON reader; the changes are
+in the workspace:
 
 ```json
 {
   "verdict": "approved | rejected | unsure",
   "reason": "for rejected / unsure",
-  "blockers": [ { "index": 0, "justification": "...", "evidence": ["file:line"] } ],
-  "assumption": "for approved",
-  "patch": "unified diff against the original source, for approved"
+  "blockers": [ { "index": 1, "justification": "...", "evidence": ["file:line"] } ],
+  "assumption": "for approved"
 }
 ```
 
-Gates, cheapest first; a failed gate is fed back as the next turn, like patch repair:
+Gates, cheapest first; a failed gate is fed back as the next turn:
 
 1. the answer parses, and the verdict is one of the three;
-2. an approval has a justification for every blocker index and an assumption;
-3. the patch applies, canonicalizes and keeps the loop's `parallel for` (patch
-   repair's gates).
+2. an approval has a justification with `path:line` evidence of a project file for
+   every blocker, and an assumption;
+3. only files with a file id changed, and in the changed code the loop's header line
+   is directly preceded by a `parallel for` directive (not a comment, not another
+   loop).
 
 ### 5.5 Review and verification
 
 1. **Review.** A second agent call with a fresh context gets the same facts, the
-   approved patch, the justifications and the assumption, under the same rules,
+   approved patch, a copy with the changes applied (read-only), the justifications
+   and the assumption, under the same rules,
    and answers `agree` or `disagree` with a reason. A disagreement rejects the
    suggestion. `--no-review` switches it off (the approval records that).
 2. **Build** (`--verify build|run|none`, default `run`): the approved patch is
@@ -298,7 +305,7 @@ suggestion_check/
                           and the fingerprint of the explorer output it belongs to
     progress.jsonl        one line per event, for the GUI
     transcripts/<id>/     prompts and answers
-    approved/<id>/        the approved, canonical patches
+    approved/<id>/        the approved patches, computed from the agent's copy
     approved.json         the approved suggestions, for consumers (§6)
 ```
 
@@ -372,9 +379,9 @@ Each step is reviewable on its own and leaves the tree working.
 
 1. Explorer: `--unsure-suggestions`, `--unsure-max-blockers`, detection (§4.1, §4.2),
    `unsure_suggestions.json`, unit tests, end-to-end test.
-2. Patch generator: `patch_generator_unsure/` (§4.4), tests.
-3. Check tool core: arguments, candidate selection, prompt and answer format, gates,
-   review, `results.json`, tests with a scripted backend (no model).
+2. ~~Patch generator: `patch_generator_unsure/`~~ (dropped, §4.4).
+3. Check tool core: arguments, candidate selection, workspace, prompt and answer
+   format, gates, review, `results.json`, tests with a scripted agent (no model).
 4. Autotuner opt-in `--include-agent-approved` and the verification step (§5.5, §6).
 5. Remaining consumers: patch applicator, MCP server, GUI suggestion table.
 6. GUI stage (§7).
