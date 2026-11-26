@@ -13,7 +13,9 @@ import pytest
 
 from discopop_library.SuggestionCheck.answers import (
     APPROVED,
+    NO_DIFFERENCES,
     REJECTED,
+    ROUNDING,
     AnswerError,
     parse_check_answer,
     parse_review_answer,
@@ -34,6 +36,12 @@ def test_a_complete_approval() -> None:
     assert [(j.index, j.evidence) for j in answer.justifications] == [(1, ["code.cpp:8"])]
 
 
+@pytest.mark.parametrize("declared, parsed", [("none", NO_DIFFERENCES), ("Rounding", ROUNDING)])
+def test_an_approval_declares_how_the_results_may_differ(declared: str, parsed: str) -> None:
+    answer = parse_check_answer(json_answer(**approval(result_differences=declared)), 1, FILES)
+    assert answer.result_differences == parsed
+
+
 def test_the_json_object_with_the_verdict_counts_among_other_braces() -> None:
     prose = 'The loop {"note": 1} has a blocker, see { x = 0; }. ' + json_answer(**approval()) + " and {} more."
     assert parse_check_answer(prose, 1, FILES).verdict == APPROVED
@@ -51,6 +59,8 @@ def _with(**changes: Any) -> Dict[str, Any]:
         (_with(assumption=""), "assumption"),
         (_with(blockers=[]), "Blocker 1 has no justification"),
         (approval(evidence=[" "]), "cites no code"),
+        (_with(result_differences=None), "result_differences"),
+        (_with(result_differences="small"), "result_differences"),
     ],
 )
 def test_an_incomplete_approval_is_an_error(fields: Dict[str, Any], problem: str) -> None:

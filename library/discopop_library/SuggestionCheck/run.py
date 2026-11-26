@@ -19,7 +19,16 @@ from discopop_library.PatchRepair import llm_backends, llm_config
 from discopop_library.PathManagement.PathManagement import load_file_mapping
 from discopop_library.ProjectManager.services.fingerprint_ignore import load_fingerprint_ignore
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import SuggestionCheckArguments
-from discopop_library.SuggestionCheck.check import STATE_FAILED, Agent, AgentReply, Budget, Outcome, check_suggestion
+from discopop_library.SuggestionCheck.check import (
+    STATE_FAILED,
+    Agent,
+    AgentReply,
+    Budget,
+    CheckOptions,
+    Outcome,
+    check_suggestion,
+)
+from discopop_library.SuggestionCheck.prompt_store import prompt_info
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.results import Results
 from discopop_library.SuggestionCheck.workspace import ProjectChanged, ProjectGuard
@@ -124,9 +133,19 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
     files = SourceFiles(load_file_mapping(os.path.join(dot, "FileMapping.txt")), project_root)
     guard = ProjectGuard(project_root)
     # what the fingerprint of a build ignores, e.g. a build directory inside the project, is not copied either
-    ignore = load_fingerprint_ignore(os.path.join(dot, "project"))
+    options = CheckOptions(
+        ignore=load_fingerprint_ignore(os.path.join(dot, "project")),
+        prompt_dir=arguments.effective_prompt_dir,
+        accept_rounding=arguments.accept_rounding,
+    )
 
-    run_info: Dict[str, Any] = {"review": arguments.review, "verify": arguments.verify}
+    run_info: Dict[str, Any] = {
+        "review": arguments.review,
+        "verify": arguments.verify,
+        "accept_rounding": arguments.accept_rounding,
+        # which templates were used: a project can replace them (prompt_store)
+        "prompts": prompt_info(options.prompt_dir),
+    }
     if agent_factory is None:
         config = llm_config.load_config(
             arguments.llm_config or llm_config.default_config_path(arguments.patch_repair_path)
@@ -159,7 +178,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
                     budget,
                     results.transcripts_dir(suggestion.pattern_id),
                     guard.check,
-                    ignore,
+                    options,
                 )
             except ProjectChanged:
                 raise

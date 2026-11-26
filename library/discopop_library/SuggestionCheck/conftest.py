@@ -125,11 +125,14 @@ def json_answer(**fields: object) -> str:
 
 
 def approval(
-    evidence: Optional[List[str]] = None, assumption: str = "the values only need to be random"
+    evidence: Optional[List[str]] = None,
+    assumption: str = "the values only need to be random",
+    result_differences: str = "none",
 ) -> Dict[str, object]:
     return {
         "verdict": "approved",
         "assumption": assumption,
+        "result_differences": result_differences,
         "blockers": [
             {
                 "index": 1,

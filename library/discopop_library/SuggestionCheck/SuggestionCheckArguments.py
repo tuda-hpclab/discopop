@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from discopop_library.ArgumentClasses.GeneralArguments import GeneralArguments
+from discopop_library.SuggestionCheck.prompt_store import custom_prompt_dir
 
 VERIFY_NONE = "none"
 VERIFY_BUILD = "build"
@@ -41,6 +42,10 @@ class SuggestionCheckArguments(GeneralArguments):
     model: Optional[str] = None
     agent_timeout: float = 600.0
     llm_config: Optional[str] = None
+    # whether approvals whose results may differ by rounding count (floating-point operations in another order)
+    accept_rounding: bool = True
+    # the project's own prompt templates; default: .discopop/project/prompts/suggestion_check (see prompt_store)
+    prompt_dir: Optional[str] = None
 
     def __post_init__(self) -> None:
         problems: List[str] = []
@@ -65,6 +70,10 @@ class SuggestionCheckArguments(GeneralArguments):
     def patch_repair_path(self) -> str:
         """the LLM configuration is shared with patch repair"""
         return os.path.join(self.dot_dp_path, "patch_repair")
+
+    @property
+    def effective_prompt_dir(self) -> str:
+        return self.prompt_dir or custom_prompt_dir(self.dot_dp_path)
 
     def suggestion_ids(self) -> Optional[List[int]]:
         if self.suggestions is None or not self.suggestions.strip():

@@ -46,6 +46,13 @@ def parse_args() -> SuggestionCheckArguments:
     parser.add_argument("--model", default=None, help="Model; overrides the connection.")
     parser.add_argument("--agent-timeout", type=float, default=600.0, help="Seconds per agent call. Default: 600")
     parser.add_argument("--llm-config", default=None, help="Alternative LLM configuration file.")
+    parser.add_argument("--reject-rounding", dest="accept_rounding", action="store_false", help="Reject approvals "
+                        "whose results may differ from the sequential program by rounding, i.e. through floating-point "
+                        "operations in another order. Accepted by default; such approvals are marked in the results.")
+    parser.add_argument("--prompt-dir", default=None, help="Directory with the project's own prompt "
+                        "templates (check.md, review.md, retry.md). Default: "
+                        ".discopop/project/prompts/suggestion_check, as edited in the GUI (Settings > Suggestion "
+                        "check prompts). A template not found there is the shipped one.")
     parser.add_argument("--log", dest="log_level", default="WARNING", help="Log level. Default: WARNING")
     parser.add_argument("--write-log", action="store_true", help="Create a log file.")
     # fmt: on
@@ -68,6 +75,8 @@ def parse_args() -> SuggestionCheckArguments:
             model=arguments.model,
             agent_timeout=arguments.agent_timeout,
             llm_config=arguments.llm_config,
+            accept_rounding=arguments.accept_rounding,
+            prompt_dir=arguments.prompt_dir,
         )
     except ValueError as error:
         parser.error(str(error))

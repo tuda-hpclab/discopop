@@ -20,6 +20,7 @@ from discopop_library.PatchRepair.patchset import PatchSet
 from discopop_library.SuggestionCheck.answers import (
     AGREE,
     APPROVED,
+    ROUNDING,
     AnswerError,
     Justification,
     parse_check_answer,
@@ -64,6 +65,16 @@ class Budget:
 
 
 @dataclass
+class CheckOptions:
+    # what is not copied into the workspace: the project's fingerprint ignore patterns
+    ignore: Sequence[str] = ()
+    # the project's own versions of the prompt templates (prompt_store), None for the shipped ones
+    prompt_dir: Optional[str] = None
+    # whether an approval whose results may differ by rounding (floating-point operations in another order) counts
+    accept_rounding: bool = True
+
+
+@dataclass
 class Outcome:
     pattern_id: int
     state: str
@@ -72,6 +83,8 @@ class Outcome:
     verdict: Optional[str] = None
     assumption: str = ""
     justifications: List[Justification] = field(default_factory=list)
+    # as declared by an approval: "none" or "rounding"
+    result_differences: Optional[str] = None
     review: Optional[Dict[str, str]] = None
     verification: Optional[str] = None
     patch: Optional[PatchSet] = None
@@ -87,6 +100,7 @@ class Outcome:
             "verdict": self.verdict,
             "assumption": self.assumption,
             "justifications": [j.to_dict() for j in self.justifications],
+            "result_differences": self.result_differences,
             "review": self.review,
             "verification": self.verification,
             "changed_files": sorted(self.patch.entries) if self.patch is not None else [],
@@ -195,19 +209,20 @@ def check_suggestion(
     budget: Budget,
     artifacts: Optional[str] = None,
     guard: Optional[Callable[[], None]] = None,
-    ignore: Sequence[str] = (),
+    options: Optional[CheckOptions] = None,
 ) -> Outcome:
     """asks the agent, applies the gates and, for an approval, the review. Never approves without a usable,
     complete answer: anything else is a rejection or a failure."""
+    options = options or CheckOptions()
     outcome = Outcome(pattern_id=suggestion.pattern_id, state=STATE_FAILED)
     conversation = _Conversation(agent, outcome, budget, artifacts, "check", guard)
     known_files = [files.display_path(i) for i in sorted(files.file_mapping)]
     last_problem = ""
     try:
         for attempt in range(1, budget.prompts + 1):
-            workspace = Workspace(project_root, files, ignore=ignore)
+            workspace = Workspace(project_root, files, ignore=options.ignore)
             try:
-                message = check_prompt(suggestion, files)
+                message = check_prompt(suggestion, files, options.prompt_dir)
                 session: Optional[str] = None
                 for turn in range(budget.retries + 1):
                     reply = conversation.ask(message, session, workspace.root, str(attempt) + "_" + str(turn))
@@ -233,11 +248,20 @@ def check_suggestion(
                             # a follow-up turn needs the conversation: on its own, it would ask about nothing
                             outcome.gates.append({"attempt": attempt, "turn": turn, "detail": "no session to continue"})
                             break
-                        message = retry_prompt(failure)
+                        message = retry_prompt(failure, options.prompt_dir)
                         continue
                     assert patch is not None
                     outcome.assumption = answer.assumption
                     outcome.justifications = answer.justifications
+                    outcome.result_differences = answer.result_differences
+                    if answer.result_differences == ROUNDING and not options.accept_rounding:
+                        # final: the approval is complete, only its kind is not accepted
+                        outcome.state = STATE_REJECTED
+                        outcome.reason = (
+                            "the results may differ from the sequential program by rounding, which is not accepted "
+                            "(--reject-rounding)"
+                        )
+                        return outcome
                     outcome.patch = patch
                     return _review(
                         suggestion,
@@ -249,7 +273,7 @@ def check_suggestion(
                         artifacts,
                         guard,
                         outcome,
-                        ignore,
+                        options,
                     )
             finally:
                 workspace.remove()
@@ -263,6 +287,7 @@ def check_suggestion(
     outcome.verdict = None
     outcome.assumption = ""
     outcome.justifications = []
+    outcome.result_differences = None
     outcome.review = None
     outcome.patch = None
     return outcome
@@ -278,7 +303,7 @@ def _review(
     artifacts: Optional[str],
     guard: Optional[Callable[[], None]],
     outcome: Outcome,
-    ignore: Sequence[str] = (),
+    options: CheckOptions,
 ) -> Outcome:
     assert outcome.patch is not None
     if reviewer is None:
@@ -286,8 +311,16 @@ def _review(
         outcome.verification = VERIFICATION_STATIC
         return outcome
     conversation = _Conversation(reviewer, outcome, budget, artifacts, "review", guard)
-    message = review_prompt(suggestion, outcome.patch, files, outcome.assumption, outcome.justifications)
-    workspace = Workspace(project_root, files, ignore=ignore)
+    message = review_prompt(
+        suggestion,
+        outcome.patch,
+        files,
+        outcome.assumption,
+        outcome.justifications,
+        outcome.result_differences or "",
+        options.prompt_dir,
+    )
+    workspace = Workspace(project_root, files, ignore=options.ignore)
     try:
         workspace.write(changed_code)
         session: Optional[str] = None
@@ -301,7 +334,7 @@ def _review(
                 if session is None:
                     # a follow-up turn without the conversation would review nothing
                     break
-                message = retry_prompt(str(error))
+                message = retry_prompt(str(error), options.prompt_dir)
                 continue
             outcome.review = {"verdict": review.verdict, "reason": review.reason}
             if review.verdict == AGREE:

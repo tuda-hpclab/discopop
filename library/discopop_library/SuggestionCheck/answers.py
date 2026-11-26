@@ -26,6 +26,12 @@ AGREE = "agree"
 DISAGREE = "disagree"
 REVIEW_VERDICTS = (AGREE, DISAGREE)
 
+# how the results of the parallel program may differ from the sequential one, as declared by an approval
+NO_DIFFERENCES = "none"
+# only through the order of floating-point operations, i.e. the results are the same in exact arithmetic
+ROUNDING = "rounding"
+RESULT_DIFFERENCES = (NO_DIFFERENCES, ROUNDING)
+
 
 # a cited line: path:line or path:first-last
 EVIDENCE = re.compile(r"^`?(?P<file>[^\s:`]+):(?P<line>\d+)(?:-\d+)?`?$")
@@ -71,6 +77,7 @@ class CheckAnswer:
     reason: str = ""
     assumption: str = ""
     justifications: List[Justification] = field(default_factory=list)
+    result_differences: Optional[str] = None
 
 
 @dataclass
@@ -114,6 +121,14 @@ def parse_check_answer(text: str, blocker_count: int, known_files: Optional[Coll
     if not assumption:
         problems.append('An approval must state the assumption it rests on ("assumption").')
 
+    result_differences = _text(obj.get("result_differences")).lower()
+    if result_differences not in RESULT_DIFFERENCES:
+        problems.append(
+            'An approval must state how the results may differ from the sequential program ("result_differences": '
+            + " or ".join('"' + d + '"' for d in RESULT_DIFFERENCES)
+            + ")."
+        )
+
     justifications: Dict[int, Justification] = {}
     raw = obj.get("blockers")
     for item in raw if isinstance(raw, list) else []:
@@ -150,6 +165,7 @@ def parse_check_answer(text: str, blocker_count: int, known_files: Optional[Coll
         reason=reason,
         assumption=assumption,
         justifications=[justifications[i] for i in range(1, blocker_count + 1)],
+        result_differences=result_differences,
     )
 
 

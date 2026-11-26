@@ -255,6 +255,22 @@ the static analysis). If a line calls a function, the access may happen inside i
 
 ### 5.3 Prompt rules
 
+**What counts as correct.** The same results as the sequential program in exact
+arithmetic, for every input (output, files, returned values, state visible after
+the loop). The only differences allowed are rounding differences from
+floating-point operations in another order. Lost or duplicated updates, other
+random numbers or the same ones in other places, another order of elements or
+output, and another choice on ties are different results. Comments are hints about
+intent, not facts. "Intent" in a wider sense (e.g. "only the distribution of the
+random numbers matters") is deliberately not accepted: it would rest on the agent's
+reading of the program's purpose.
+
+Rounding differences are accepted by default, since they are usually acceptable,
+but an approval declares them (§5.4), the reviewer checks the declaration, and
+`--reject-rounding` rejects them. Small differences can grow where the results
+decide comparisons or branches; the approval states whether they do, and only
+`--verify run` with a tolerance can settle it.
+
 * **Rejection is the default.** Approve only if every blocker is justified by code
   you have read. "Probably", "likely" or "usually" is a rejection.
 * **Each blocker separately.** For every listed blocker, state why it does not
@@ -279,7 +295,8 @@ in the workspace:
   "verdict": "approved | rejected | unsure",
   "reason": "for rejected / unsure",
   "blockers": [ { "index": 1, "justification": "...", "evidence": ["file:line"] } ],
-  "assumption": "for approved"
+  "assumption": "for approved",
+  "result_differences": "none | rounding, for approved"
 }
 ```
 
@@ -287,10 +304,22 @@ Gates, cheapest first; a failed gate is fed back as the next turn:
 
 1. the answer parses, and the verdict is one of the three;
 2. an approval has a justification with `path:line` evidence of a project file for
-   every blocker, and an assumption;
+   every blocker, an assumption, and declares `result_differences`;
 3. only files with a file id changed, and in the changed code the loop's header line
    is directly preceded by a `parallel for` directive (not a comment, not another
    loop).
+
+### 5.4a Prompt templates
+
+The templates (check, review, follow-up) ship in `SuggestionCheck/prompts/`. A
+project can replace each one; its version is stored in
+`.discopop/project/prompts/suggestion_check/<name>.md` (kept by "Reset Project")
+and edited in the GUI under Settings > Suggestion check prompts; `--prompt-dir`
+names another directory. Saving the shipped text removes the project's version, so
+later changes of the shipped template apply again. `results.json` records per
+template whether the project's version was used and a fingerprint of it, so results
+stay comparable. The rules of §5.3 then hold only as far as the project's version
+keeps them; the gates (§5.4) are enforced either way.
 
 ### 5.5 Review and verification
 

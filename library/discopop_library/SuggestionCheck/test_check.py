@@ -22,6 +22,7 @@ from discopop_library.SuggestionCheck.check import (
     STATE_REJECTED,
     VERIFICATION_STATIC,
     Budget,
+    CheckOptions,
     Outcome,
     check_suggestion,
 )
@@ -33,6 +34,7 @@ from discopop_library.SuggestionCheck.conftest import (
     PARALLEL,
     SOURCE,
     Project,
+    approval,
     ScriptedAgent,
     edits,
     json_answer,
@@ -41,7 +43,13 @@ from discopop_library.SuggestionCheck.conftest import (
 from discopop_library.SuggestionCheck.workspace import ProjectChanged, ProjectGuard
 
 
-def run(project: Project, agent: ScriptedAgent, reviewer: Optional[ScriptedAgent] = None, **budget: Any) -> Outcome:
+def run(
+    project: Project,
+    agent: ScriptedAgent,
+    reviewer: Optional[ScriptedAgent] = None,
+    options: Optional[CheckOptions] = None,
+    **budget: Any,
+) -> Outcome:
     return check_suggestion(
         project.suggestion,
         project.files,
@@ -50,6 +58,7 @@ def run(project: Project, agent: ScriptedAgent, reviewer: Optional[ScriptedAgent
         reviewer,
         Budget(**budget),
         guard=ProjectGuard(str(project.root)).check,
+        options=options,
     )
 
 
@@ -228,3 +237,49 @@ def test_the_prompt_states_facts_and_proposes_no_fix(project: Project) -> None:
     assert " 8 |     state = state * 3u + 1u;" in prompt
     for remedy in ("thread_local", "critical", "atomic", "threadprivate", "private(state"):
         assert remedy not in prompt
+
+
+ROUNDING_APPROVAL = json_answer(**approval(result_differences="rounding"))
+
+
+def test_a_rounding_approval_is_accepted_by_default_and_marked(project: Project) -> None:
+    reviewer = ScriptedAgent([AGREE])
+    outcome = run(project, ScriptedAgent([edits(APPROVED_SOURCE, ROUNDING_APPROVAL)]), reviewer)
+    assert outcome.state == STATE_APPROVED
+    assert outcome.result_differences == "rounding"
+    assert outcome.to_dict()["result_differences"] == "rounding"
+    # the reviewer checks the declaration
+    assert "Result differences: rounding" in reviewer.prompts[0]
+
+
+def test_a_rounding_approval_is_rejected_if_rounding_is_not_accepted(project: Project) -> None:
+    reviewer = ScriptedAgent([AGREE])
+    outcome = run(
+        project,
+        ScriptedAgent([edits(APPROVED_SOURCE, ROUNDING_APPROVAL)]),
+        reviewer,
+        CheckOptions(accept_rounding=False),
+    )
+    assert outcome.state == STATE_REJECTED
+    assert "rounding" in outcome.reason
+    assert outcome.patch is None
+    # no review is spent on it
+    assert reviewer.prompts == []
+
+
+def test_an_approval_without_differences_passes_even_if_rounding_is_not_accepted(project: Project) -> None:
+    outcome = run(project, ScriptedAgent([approve()]), ScriptedAgent([AGREE]), CheckOptions(accept_rounding=False))
+    assert (outcome.state, outcome.result_differences) == (STATE_APPROVED, "none")
+
+
+def test_the_projects_own_prompts_are_used(project: Project, tmp_path: Path) -> None:
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "check.md").write_text("MY CHECK PROMPT\n{description}\n{blockers}\n{code}\n")
+    (prompt_dir / "review.md").write_text("MY REVIEW PROMPT {result_differences}\n{patch}\n")
+    agent = ScriptedAgent([approve()])
+    reviewer = ScriptedAgent([AGREE])
+    outcome = run(project, agent, reviewer, CheckOptions(prompt_dir=str(prompt_dir)))
+    assert outcome.state == STATE_APPROVED
+    assert agent.prompts[0].startswith("MY CHECK PROMPT\nSuggestion 5")
+    assert reviewer.prompts[0].startswith("MY REVIEW PROMPT none")

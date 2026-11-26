@@ -98,6 +98,7 @@ class Results:
             {
                 "pattern_id": e["pattern_id"],
                 "assumption": e.get("assumption"),
+                "result_differences": e.get("result_differences"),
                 "verification": e.get("verification"),
                 "review": e.get("review"),
                 "backend": e.get("backend"),

@@ -30,6 +30,7 @@ from discopop_library.SuggestionCheck.conftest import (
     edits,
     json_answer,
 )
+from discopop_library.SuggestionCheck.prompt_store import custom_prompt_dir, default_template, save_template
 from discopop_library.SuggestionCheck.run import EDIT, READ, BackendAgent, restricted, run
 
 
@@ -199,3 +200,15 @@ def test_the_fingerprint_ignore_patterns_are_not_copied(project: Project) -> Non
 
     assert run(_arguments(dot), _factory({EDIT: [look], READ: []})) == 0
     assert seen == [False]
+
+
+def test_the_results_record_the_prompts_and_whether_rounding_is_accepted(project: Project) -> None:
+    dot = _dot_discopop(project, [5])
+    prompt_dir = custom_prompt_dir(str(dot))
+    save_template(prompt_dir, "check", default_template("check") + "\nBe brief.\n")
+    factory = _factory({EDIT: [json_answer(verdict="rejected", reason="no")], READ: []})
+    assert run(_arguments(dot, accept_rounding=False), factory) == 0
+    results = json.loads((dot / "suggestion_check" / "results.json").read_text())
+    assert results["accept_rounding"] is False
+    assert results["prompts"]["check"]["custom"] is True
+    assert results["prompts"]["review"]["custom"] is False

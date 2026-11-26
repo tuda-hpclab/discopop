@@ -15,9 +15,28 @@ below depend on each other. These dependencies are listed as **blockers**. Becau
 of them, simply adding an OpenMP directive to the loop would make the program
 incorrect.
 
-Your task: decide whether the program, by what it is meant to do, allows this loop
-to run in parallel. If it does, change the code so that the loop runs in parallel
-correctly. If it does not, or if you cannot tell, say so.
+Your task: decide whether this loop can run in parallel with correct results. If it
+can, change the code so that the loop runs in parallel correctly. If it cannot, or
+if you cannot tell, say so.
+
+## What counts as correct
+
+The parallel program must compute the same results as the sequential one, for every
+input: output, written files, returned values and the state visible after the loop.
+"The same" means the same in exact arithmetic. The only differences allowed are
+rounding differences that come from performing floating-point operations in another
+order, for example a sum that each thread accumulates on its own and that is
+combined afterwards.
+
+Anything else is a different result, even if it might seem acceptable:
+
+- lost or duplicated updates;
+- other random numbers, or the same random numbers in other places;
+- elements of a container, or lines of output, in another order;
+- another choice among equally good candidates, e.g. on ties.
+
+Comments in the code are hints about intent, not facts: decide by what the code
+does.
 
 ## Rules
 
@@ -75,9 +94,15 @@ When you are done, answer with a JSON object in a ```json block:
   "blockers": [
     {"index": 1, "justification": "why blocker 1 does not make the parallel loop wrong", "evidence": ["path:line"]}
   ],
-  "assumption": "the property of the program an approval relies on"
+  "assumption": "the property of the program an approval relies on",
+  "result_differences": "none | rounding"
 }
 ```
 
 For "rejected" or "unsure", "reason" is enough. For "approved", give one entry in
-"blockers" for every blocker.
+"blockers" for every blocker, and declare in "result_differences" how the results
+can differ from the sequential program: "none" if they are identical, "rounding" if
+floating-point operations can happen in another order. For "rounding", name in the
+assumption which operations change their order, and whether their results decide
+comparisons or branches later on: there, small differences can grow into large
+ones.

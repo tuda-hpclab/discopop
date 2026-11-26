@@ -30,6 +30,15 @@ commands.
   justification says, disagree.
 - A wrong approval makes the program compute wrong results; a disagreement only
   costs a missed speedup.
+- **Correct means the same results in exact arithmetic.** The parallel program
+  must compute what the sequential one computes, for every input. Only rounding
+  differences from floating-point operations in another order are allowed. Lost
+  updates, other random numbers or the same ones in other places, another order of
+  elements or output, or another choice on ties are wrong results.
+- **The declared differences must be right.** The approval declares
+  "result_differences": "none" (identical results) or "rounding". Disagree if the
+  results can differ more than declared, e.g. "none" although floating-point
+  operations change their order.
 
 ## The suggestion
 
@@ -50,6 +59,8 @@ commands.
 ## The approval
 
 Assumption: {assumption}
+
+Result differences: {result_differences}
 
 {justifications}
 
