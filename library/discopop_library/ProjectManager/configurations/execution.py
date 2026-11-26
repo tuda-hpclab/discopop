@@ -44,7 +44,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     project_directories_of,
     record_instrumented_directories,
 )
-from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
+from discopop_library.ProjectManager.services import build_thread_count, callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -320,6 +320,7 @@ def execute_configuration(
     result_annotations: Optional[Dict[str, Any]] = None,
     output_callback: Optional[Callable[[str], None]] = None,
     callpath_pruning_environment: Optional[Dict[str, str]] = None,
+    extra_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -358,6 +359,8 @@ def execute_configuration(
     in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
 
     ``output_callback`` receives the output of the script (stdout and stderr, line by line) while it runs.
+
+    ``extra_environment`` is added to the environment of the script last (``DP_BUILD_KIND`` of a build).
 
     ``callpath_pruning_environment`` is the call path pruning a ``dp`` compilation gets (the variables of
     :func:`callpath_pruning.environment`); the builds compute it once for their fingerprint and the compilation. If
@@ -447,7 +450,11 @@ def execute_configuration(
         if text is not None:
             openmp_warnings.append(text)
         my_env.update(openmp_handling.environment(arguments))
-    my_env["OMP_NUM_THREADS"] = str(thread_count)
+    # nproc honors OMP_NUM_THREADS: a compile script only gets the thread count of the run if the project says so,
+    # otherwise `make -j $(nproc)` of a par:8 build would run 8 jobs. A value of the environment or the settings file
+    # is left alone
+    if not script_name.startswith("compile") or build_thread_count.passes_thread_count_to_builds(arguments):
+        my_env["OMP_NUM_THREADS"] = str(thread_count)
     if dot_discopop is not None:
         my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
 
@@ -469,6 +476,9 @@ def execute_configuration(
         if resolved != original:
             logger.info("Resolved %s=%s to %s (no bare %s on PATH)", compiler_key, original, resolved, original)
             my_env[compiler_key] = resolved
+
+    # set by the caller last (DP_BUILD_KIND of a build, configurations/building.py)
+    my_env.update(extra_environment or {})
 
     # print("MYENV:")
     # for key in my_env:

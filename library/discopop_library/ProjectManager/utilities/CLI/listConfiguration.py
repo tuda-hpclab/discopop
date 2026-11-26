@@ -20,7 +20,13 @@ from discopop_library.ProjectManager.configurations.compile_script import (
 from discopop_library.PatchApplicator.PatchApplicationResult import clear_application_result
 from discopop_library.ProjectManager.configurations.building import build_lock, ensure_build
 from discopop_library.ProjectManager.configurations.build_sharing import build_inputs_for, build_owner_of
-from discopop_library.ProjectManager.configurations.builds import BuildKey, BuildPolicy, BuildRecord, invalidate_build
+from discopop_library.ProjectManager.configurations.builds import (
+    BuildKey,
+    BuildPolicy,
+    BuildRecord,
+    invalidate_build,
+    key_of,
+)
 from discopop_library.ProjectManager.configurations.running import execute_in_build
 from discopop_library.ProjectManager.configurations.copying import (
     patch_applicator_dir_of,
@@ -442,7 +448,7 @@ def _execute_and_validate(
         )
         if validation.compile_required and build is not None:
             # the validation build overwrote the build of the tree: the next run has to compile again
-            invalidate_build(arguments.project_dir, BuildKey(build.configuration, build.mode, tuple(build.suggestions)))
+            invalidate_build(arguments.project_dir, key_of(build))
         outcome.validate_compile_successful = not validation.compile_required or validation.compile_successful
         outcome.validate_successful = validation.verdict(outcome.execute_successful)
 

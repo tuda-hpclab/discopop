@@ -371,3 +371,71 @@ def test_a_member_of_a_shared_build_cannot_add_a_compile_script(panel: EditorPan
     panel._toggle_compile_override()
     assert not (configs / "other" / "compile.sh").exists()
     assert "builds from" in dialog_answers.messages("show_warning")[-1]
+
+
+def test_the_incremental_script_is_proposed_from_compile_sh_and_written_only_when_saved(
+    panel: EditorPanel, dialog_answers: DialogRecorder
+) -> None:
+    Path(panel.arguments.project_config_dir, "compile.sh").write_text(
+        "#!/bin/bash\nrm -rf build\ncmake -S . -B build\ncmake --build build -j\n"
+    )
+    select(panel)
+    assert panel.editors["compile_incremental.sh"].isReadOnly()
+    assert panel.notebook.tabText(4) == "compile_incremental.sh (override)"
+    panel.incremental_compile_button.click()
+    script = config_dir(panel) / "compile_incremental.sh"
+    editor = panel.editors["compile_incremental.sh"]
+    # shown and editable, but no file yet
+    assert not script.exists() and not editor.isReadOnly()
+    assert "cmake --build build -j" in editor.text() and "cmake -S" not in editor.text()
+    assert panel.has_unsaved_changes() and panel.notebook.tabText(4) == "compile_incremental.sh (override) *"
+    assert panel.incremental_compile_button.text() == "Discard Draft"
+    # a refresh of the selection keeps the draft
+    select(panel)
+    assert "cmake --build build -j" in editor.text()
+    assert panel.save()
+    assert "cmake --build build -j" in script.read_text()
+    assert panel.incremental_compile_button.text() == "Remove Override" and not panel.has_unsaved_changes()
+    dialog_answers.answer("ask_yes_no", True)
+    panel.incremental_compile_button.click()
+    assert not script.exists() and panel.incremental_compile_button.text() == "Add Override"
+    assert panel.editors["compile_incremental.sh"].isReadOnly()
+
+
+def test_the_incremental_script_without_a_recognized_build_line_starts_from_a_template(panel: EditorPanel) -> None:
+    Path(panel.arguments.project_config_dir, "compile.sh").write_text("$CC x.c\n")
+    select(panel)
+    panel.incremental_compile_button.click()
+    assert "only rebuild" in panel.editors["compile_incremental.sh"].text()
+    assert not (config_dir(panel) / "compile_incremental.sh").exists()
+
+
+def test_a_proposed_incremental_script_can_be_discarded(panel: EditorPanel) -> None:
+    Path(panel.arguments.project_config_dir, "compile.sh").write_text("make -j\n")
+    select(panel)
+    panel.incremental_compile_button.click()
+    panel.incremental_compile_button.click()
+    assert not panel.has_unsaved_changes()
+    assert panel.incremental_compile_button.text() == "Add Override"
+    assert panel.editors["compile_incremental.sh"].isReadOnly()
+
+
+def test_an_incremental_script_is_refused_for_a_configuration_that_builds_from_another(
+    panel: EditorPanel, dialog_answers: DialogRecorder
+) -> None:
+    Path(panel.arguments.project_config_dir, "owner").mkdir()
+    Path(panel.arguments.project_config_dir, CONFIG, "build_from.json").write_text('{"build_from": "owner"}')
+    select(panel)
+    panel.incremental_compile_button.click()
+    assert dialog_answers.titles("show_warning") == ["Shared Build"]
+    assert panel.editors["compile_incremental.sh"].isReadOnly() and not panel.has_unsaved_changes()
+
+
+def test_the_incremental_script_help_button_opens_its_help(qtbot: QtBot, panel: EditorPanel) -> None:
+    panel.show()
+    panel.notebook.setCurrentIndex(4)
+    page = panel.notebook.widget(4)
+    assert page is not None
+    buttons = [b for b in page.findChildren(widgets.QPushButton) if b.text() == "Help"]  # type: ignore[attr-defined]
+    buttons[0].click()
+    assert [d for d in panel.findChildren(HelpDialog) if d.windowTitle() == "compile_incremental.sh Help"]

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.compile_script import (
+    INCREMENTAL_COMPILE_SCRIPT_NAME,
     VALIDATION_COMPILE_SCRIPT_NAME,
     get_shared_compile_script_path,
     get_shared_validation_compile_script_path,
@@ -48,16 +49,17 @@ from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.tabs import TAB_SETUP
 from discopop_library.ProjectManager.services.editor_files import (
-    COMPILATION_FILES,
     DERIVE_TOOLTIP_SUFFIX,
     DERIVED_FILES,
     OPTIONAL_FILE_PLACEHOLDERS,
     OPTIONAL_FILES,
+    SETUP_FILES,
     TAB_TOOLTIPS,
     describe_compilation_test,
     format_json_content,
     run_test_compilation,
 )
+from discopop_library.ProjectManager.services.incremental_script import incremental_draft
 from discopop_library.ProjectManager.services.jobs import WorkContext, WorkEvent, WorkFinished
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
@@ -133,7 +135,8 @@ class SetupPanel(Panel):
 
         self.notebook = QTabWidget()
         self.shared_validation_compile_button = widgets.create_button("Add", self._toggle_shared_validation_compile)
-        for name in COMPILATION_FILES:
+        self.shared_incremental_compile_button = widgets.create_button("Add", self._toggle_shared_incremental_compile)
+        for name in SETUP_FILES:
             editor = widgets.ScriptEditor()
             editor.document().modificationChanged.connect(lambda _modified: self._on_modification_changed())
             self.editors[name] = editor
@@ -144,6 +147,7 @@ class SetupPanel(Panel):
                     widgets.heading_label(name),
                     None,
                     self.shared_validation_compile_button if name == VALIDATION_COMPILE_SCRIPT_NAME else None,
+                    self.shared_incremental_compile_button if name == INCREMENTAL_COMPILE_SCRIPT_NAME else None,
                     help_button(self, name),
                     margins=5,
                 )
@@ -381,7 +385,7 @@ class SetupPanel(Panel):
         self._update_tabs()
 
     def _current_name(self) -> str:
-        return COMPILATION_FILES[self.notebook.currentIndex()]
+        return SETUP_FILES[self.notebook.currentIndex()]
 
     def _update_buttons(self) -> None:
         """Test Compilation shows on the compile.sh tab, Derive on the seq_settings.json tab."""
@@ -393,6 +397,7 @@ class SetupPanel(Panel):
         unsaved = self.has_unsaved_changes()
         self.derive_button.setEnabled(not unsaved)
         self.derive_button.setToolTip(DERIVE_DISABLED_TOOLTIP if unsaved else "")
+        self._update_shared_incremental_button()
 
     # ── the shared validation build script ──────────────────────────────────
 
@@ -427,6 +432,71 @@ class SetupPanel(Panel):
         self.project_state.publish(ConfigurationsChanged())
         self.status.set(message, widgets.STATUS_OK, reset_ms=2000)
 
+    # ── the shared incremental build script ─────────────────────────────────
+
+    def _shared_incremental_path(self) -> str:
+        return self._path(INCREMENTAL_COMPILE_SCRIPT_NAME)
+
+    def _is_incremental_draft(self) -> bool:
+        """Whether the editor holds a proposal that is not saved yet (a modified editor of a missing file)."""
+        return not os.path.exists(self._shared_incremental_path()) and (
+            self.editors[INCREMENTAL_COMPILE_SCRIPT_NAME].document().isModified()
+        )
+
+    def _update_shared_incremental_button(self) -> None:
+        if os.path.exists(self._shared_incremental_path()):
+            text = "Remove"
+        else:
+            text = "Discard Draft" if self._is_incremental_draft() else "Add"
+        self.shared_incremental_compile_button.setText(text)
+
+    def _toggle_shared_incremental_compile(self) -> None:
+        """Add the shared incremental build script (a proposal in the editor, written when saved), discard that
+        draft, or remove the saved script."""
+        path = self._shared_incremental_path()
+        editor = self.editors[INCREMENTAL_COMPILE_SCRIPT_NAME]
+        if os.path.exists(path):
+            if not dialogs.ask_yes_no(
+                self,
+                "Remove compile_incremental.sh",
+                "Remove the shared compile_incremental.sh?\n\n"
+                "The compile_incremental.sh overrides of single configurations stay. Every build of a\n"
+                "configuration without one then runs compile.sh in full.",
+            ):
+                return
+            os.remove(path)
+            # a removed file has nothing left to keep, unsaved edits of it included
+            self._load_file(INCREMENTAL_COMPILE_SCRIPT_NAME)
+            self._update_tabs()
+            self.project_state.publish(ConfigurationsChanged())
+            self.status.set("Removed shared compile_incremental.sh", widgets.STATUS_OK, reset_ms=2000)
+            return
+        if self._is_incremental_draft():
+            self._load_file(INCREMENTAL_COMPILE_SCRIPT_NAME)
+            self._update_tabs()
+            self.status.set("Discarded the proposed compile_incremental.sh", widgets.STATUS_OK, reset_ms=2000)
+            return
+        # the compile.sh as it is shown (with unsaved changes), else as it is saved
+        compile_editor = self.editors["compile.sh"]
+        if compile_editor.document().isModified() or os.path.exists(self._path("compile.sh")):
+            compile_text = compile_editor.text()
+        else:
+            compile_text = ""
+        draft, found = incremental_draft(compile_text)
+        editor.setReadOnly(False)
+        editor.set_text(draft)
+        editor.document().setModified(True)
+        self.notebook.setCurrentIndex(self.tab_index[INCREMENTAL_COMPILE_SCRIPT_NAME])
+        self._update_tabs()
+        self.status.set(
+            (
+                "Check the proposed compile_incremental.sh and save it"
+                if found
+                else "No build line found in compile.sh: write compile_incremental.sh and save it"
+            ),
+            widgets.STATUS_OK,
+        )
+
     # ── saving ──────────────────────────────────────────────────────────────
 
     def _save_clicked(self) -> None:
@@ -438,7 +508,8 @@ class SetupPanel(Panel):
         os.makedirs(comp_dir, exist_ok=True)
         saved_files: List[str] = []
         for name, editor in self.editors.items():
-            if not editor.document().isModified():
+            if not editor.document().isModified() or editor.isReadOnly():
+                # a placeholder (read-only) is no file content
                 continue
             path = os.path.join(comp_dir, name)
             content = editor.text().rstrip()

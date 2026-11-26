@@ -16,11 +16,14 @@ import json
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from discopop_library.ProjectManager.configurations.build_sharing import detach_members, repoint_members
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.compile_script import get_per_config_validation_compile_script_path
+from discopop_library.ProjectManager.configurations.compile_script import (
+    INCREMENTAL_COMPILE_SCRIPT_NAME,
+    get_per_config_validation_compile_script_path,
+)
 from discopop_library.ProjectManager.utilities.initializeFiles import (
     initial_script_content,
     initialize_configuration_files,
@@ -125,6 +128,36 @@ def _write_executable(path: str, content: str) -> None:
 def write_shared_compile_script(project_config_dir: str, data: WizardData) -> None:
     os.makedirs(project_config_dir, exist_ok=True)
     _write_executable(os.path.join(project_config_dir, "compile.sh"), data.compile_sh)
+
+
+def shared_incremental_script_path(project_config_dir: str) -> str:
+    return os.path.join(project_config_dir, INCREMENTAL_COMPILE_SCRIPT_NAME)
+
+
+def existing_shared_incremental_script(project_config_dir: str) -> Optional[str]:
+    """The content of the shared compile_incremental.sh, None if there is none."""
+    path = shared_incremental_script_path(project_config_dir)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r") as f:
+        return f.read()
+
+
+def write_shared_incremental_script(project_config_dir: str, text: str) -> None:
+    """Write the shared compile_incremental.sh (executable); blank content is a :class:`ConfigurationError`."""
+    if not text.strip():
+        raise ConfigurationError(
+            "Empty Incremental Build Script",
+            "The incremental build script is empty. Write the rebuild command, or uncheck the box to skip it.",
+        )
+    os.makedirs(project_config_dir, exist_ok=True)
+    _write_executable(shared_incremental_script_path(project_config_dir), text if text.endswith("\n") else text + "\n")
+
+
+def remove_shared_incremental_script(project_config_dir: str) -> None:
+    path = shared_incremental_script_path(project_config_dir)
+    if os.path.exists(path):
+        os.remove(path)
 
 
 def write_seq_settings(project_config_dir: str, data: WizardData) -> None:
