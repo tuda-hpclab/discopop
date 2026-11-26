@@ -209,8 +209,9 @@ than at writing diffs against the right version of a file.
 The agent needs to read code beyond the loop (the declaration of the data, who uses
 the appended requests, what a called function does) and to change code. It
 therefore works in a **workspace: a throwaway copy of the project sources** (the
-files git knows of, or the project directory without `.discopop`, `.git` and build
-output). Every attempt gets a fresh copy; the follow-up turns of an attempt continue
+files git knows of, or the project directory without `.discopop` and `.git`;
+without the files the project's fingerprint ignore patterns name, e.g. a build
+directory, but always with the source files that have a file id). Every attempt gets a fresh copy; the follow-up turns of an attempt continue
 in it.
 
 * **The agent changes the code itself**, including the OpenMP directive of the

@@ -183,3 +183,19 @@ def test_the_backend_agent_runs_in_the_directory_it_is_given(monkeypatch: pytest
     second = agent("follow-up", first.session, str(tmp_path))
     assert (first.session, second.session) == ("sid", "sid")
     assert calls == [(str(tmp_path), None, "new"), (str(tmp_path), "sid", None)]
+
+
+def test_the_fingerprint_ignore_patterns_are_not_copied(project: Project) -> None:
+    dot = _dot_discopop(project, [5])
+    (dot / "project").mkdir()
+    (dot / "project" / "fingerprint_ignore.json").write_text(json.dumps({"patterns": ["dp_build/"]}))
+    (project.root / "dp_build").mkdir()
+    (project.root / "dp_build" / "huge.o").write_text("object code")
+    seen: List[bool] = []
+
+    def look(workdir: Path) -> str:
+        seen.append((workdir / "dp_build").exists())
+        return json_answer(verdict="rejected", reason="no")
+
+    assert run(_arguments(dot), _factory({EDIT: [look], READ: []})) == 0
+    assert seen == [False]

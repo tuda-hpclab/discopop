@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.PatchRepair.patchset import PatchSet
 from discopop_library.SuggestionCheck.answers import (
@@ -195,6 +195,7 @@ def check_suggestion(
     budget: Budget,
     artifacts: Optional[str] = None,
     guard: Optional[Callable[[], None]] = None,
+    ignore: Sequence[str] = (),
 ) -> Outcome:
     """asks the agent, applies the gates and, for an approval, the review. Never approves without a usable,
     complete answer: anything else is a rejection or a failure."""
@@ -204,7 +205,7 @@ def check_suggestion(
     last_problem = ""
     try:
         for attempt in range(1, budget.prompts + 1):
-            workspace = Workspace(project_root, files)
+            workspace = Workspace(project_root, files, ignore=ignore)
             try:
                 message = check_prompt(suggestion, files)
                 session: Optional[str] = None
@@ -239,7 +240,16 @@ def check_suggestion(
                     outcome.justifications = answer.justifications
                     outcome.patch = patch
                     return _review(
-                        suggestion, files, project_root, changes.mapped, reviewer, budget, artifacts, guard, outcome
+                        suggestion,
+                        files,
+                        project_root,
+                        changes.mapped,
+                        reviewer,
+                        budget,
+                        artifacts,
+                        guard,
+                        outcome,
+                        ignore,
                     )
             finally:
                 workspace.remove()
@@ -268,6 +278,7 @@ def _review(
     artifacts: Optional[str],
     guard: Optional[Callable[[], None]],
     outcome: Outcome,
+    ignore: Sequence[str] = (),
 ) -> Outcome:
     assert outcome.patch is not None
     if reviewer is None:
@@ -276,7 +287,7 @@ def _review(
         return outcome
     conversation = _Conversation(reviewer, outcome, budget, artifacts, "review", guard)
     message = review_prompt(suggestion, outcome.patch, files, outcome.assumption, outcome.justifications)
-    workspace = Workspace(project_root, files)
+    workspace = Workspace(project_root, files, ignore=ignore)
     try:
         workspace.write(changed_code)
         session: Optional[str] = None

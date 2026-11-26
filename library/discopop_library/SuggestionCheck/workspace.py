@@ -15,12 +15,13 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.PatchGenerator.diffs import get_diffs_from_modified_code
 from discopop_library.PatchRepair.patching import _diff_arguments
 from discopop_library.PatchRepair.patchset import PatchEntry, PatchSet
 from discopop_library.ProjectManager.configurations.builds import source_entries
+from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored
 from discopop_library.SuggestionCheck.facts import SourceFiles
 
 
@@ -55,18 +56,29 @@ class Changes:
 
 
 class Workspace:
-    """a copy of the project's files (those git knows of, or all outside .discopop and .git)"""
+    """a copy of the project's files (those git knows of, or all outside .discopop and .git), without those matching
+    one of the ignore patterns (the project's fingerprint_ignore.json, e.g. a build directory inside the project),
+    except for source files with a file id"""
 
-    def __init__(self, project_root: str, files: SourceFiles, prefix: str = "discopop_suggestion_check_") -> None:
+    def __init__(
+        self,
+        project_root: str,
+        files: SourceFiles,
+        prefix: str = "discopop_suggestion_check_",
+        ignore: Sequence[str] = (),
+    ) -> None:
         # resolved, like the paths of the file mapping in relative(): a project reached through a symbolic link, or
         # a file mapping recorded under another path to the same files, must still match
         self.project_root = os.path.realpath(project_root)
         self.files = files
         self.root = tempfile.mkdtemp(prefix=prefix)
         self._copied: Dict[str, Tuple[int, int]] = dict()
+        mapped = {name for path in files.file_mapping.values() if (name := self.relative(path)) is not None}
         for name in sorted(source_entries(self.project_root)):
             source = os.path.join(self.project_root, name)
             if not os.path.isfile(source):
+                continue
+            if ignore and name not in mapped and is_ignored(name.replace(os.sep, "/"), ignore):
                 continue
             target = os.path.join(self.root, name)
             os.makedirs(os.path.dirname(target), exist_ok=True)

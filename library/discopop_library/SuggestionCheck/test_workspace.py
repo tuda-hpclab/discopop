@@ -93,3 +93,19 @@ def test_the_project_stays_untouched_even_if_it_is_read_only(project: Project, t
     finally:
         project.root.chmod(0o755)
     _applies(text, project.root / "code.cpp", tmp_path)
+
+
+def test_ignored_files_are_not_copied_but_source_files_always_are(project: Project, tmp_path: Path) -> None:
+    (project.root / "dp_build").mkdir()
+    (project.root / "dp_build" / "huge.o").write_text("object code")
+    (project.root / "notes.log").write_text("log")
+    # code.cpp has a file id: an ignore pattern covering it must not take it away from the agent
+    workspace = Workspace(str(project.root), project.files, ignore=["dp_build/", "*.log", "*.cpp"])
+    try:
+        copied = sorted(
+            os.path.relpath(os.path.join(d, n), workspace.root) for d, _, ns in os.walk(workspace.root) for n in ns
+        )
+        assert copied == ["README", "code.cpp"]
+        assert workspace.changes().unmapped == []
+    finally:
+        workspace.remove()
