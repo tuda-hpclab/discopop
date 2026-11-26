@@ -193,12 +193,13 @@ def needs_extraction(dot_dp: str) -> bool:
 
 def extract_suggestion_extents(dot_dp: str) -> Dict[int, SuggestionExtent]:
     """Decode the detection result dump of ``dot_dp`` and write its extents file. Slow and memory hungry (the
-    whole detection result is decoded): run it in a process of its own, never in the GUI."""
-    import jsonpickle  # type: ignore
+    detection result is decoded, without the callpath tree of the PET, which the extents do not need, see
+    ``result_classes/loading.py``; the tree of the PET fails on any use): run it in a process of its own, never in the
+    GUI."""
+    from discopop_library.result_classes.loading import load_detection_result
 
     dump_path = dump_path_of(dot_dp)
-    with open(dump_path, "r") as f:
-        detection_result = jsonpickle.decode(f.read(), keys=True)
+    detection_result = load_detection_result(dump_path)
     extents = suggestion_extents(detection_result)
     write_suggestion_extents(dump_path, extents)
     return extents
