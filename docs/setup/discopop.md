@@ -72,18 +72,28 @@ Homebrew installs LLVM keg-only, which is why the three `export` lines are neede
 
 ## Install from PyPI
 
-Use this route to run DiscoPoP on your own programs.
+Use this route to run DiscoPoP on your own programs. Create and activate a virtual environment:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install "discopop>=5.0.3a1"
 ```
+
+Then install either the stable release or the pre-release:
+
+| | Stable release | Pre-release |
+|---|---|---|
+| Install | `pip install discopop` | `pip install "discopop>=5.0.3a1"` |
+| Installs | the newest final release | the newest version, pre-releases included |
+| Choose it | for a tested release | for the newest features and fixes |
+
+{: .warning }
+There is no stable release of the current version yet: `pip install discopop` installs 5.0.2, an outdated release that cannot be built. Install the pre-release until the first stable release is published.
 
 The package `discopop` installs all other packages as dependencies: the profiler, the explorer, the library (with the project manager, the GUI and the other tools), the hotspot detection and the MCP server. The build of the profiler takes a few minutes.
 
 {: .note }
-The current version of DiscoPoP is only published as a pre-release so far. The version requirement `>=5.0.3a1` selects it; without it, pip installs the outdated release 5.0.2, which cannot be built. Do not use `pip install --pre` instead: it also installs pre-releases of other packages DiscoPoP depends on.
+The version requirement `>=5.0.3a1` makes pip consider the pre-releases of DiscoPoP and its packages. Do not use `pip install --pre discopop` instead: it also installs pre-releases of the other packages DiscoPoP depends on.
 
 {: .note }
 Activate the virtual environment (`source venv/bin/activate`) in every new shell before you use DiscoPoP. The commands `discopop_cxx`, `discopop_explorer`, `discopop_gui` and the others are installed into `venv/bin`.
