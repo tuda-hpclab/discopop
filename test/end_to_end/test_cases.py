@@ -14,6 +14,7 @@ expected suggestions in ``expected.toml``::
     enable_patterns = "doall,reduction"   # optional, passed to discopop_explorer --enable-patterns
     run_args = "64"                       # optional, the arguments of the profiled run (./prog 64)
     xfail = "why the case fails today"    # optional, the case is expected to fail (strict: a pass is reported)
+    flaky = "why the result varies"       # optional, the case may fail or pass (xfail, not strict)
 
     [do_all]                              # one table per pattern type expected to be found
     lines = ["1:9"]                       # start lines (file id:line) of the expected patterns, exactly these
@@ -46,7 +47,7 @@ from test.end_to_end.pipeline import run_pipeline
 CASES_DIR = Path(__file__).parent / "cases"
 DEFAULT_ENABLE_PATTERNS = "doall,reduction"
 
-_CASE_KEYS = {"enable_patterns", "run_args", "xfail"}
+_CASE_KEYS = {"enable_patterns", "run_args", "xfail", "flaky"}
 _PATTERN_KEYS = {"lines", "includes", "excludes", "clauses", "allowed_clauses"}
 # the clause lists of a pattern checked for unexpected entries; "reduction" is only checked for missing ones
 _SHARING_CLAUSES = ["private", "shared", "first_private", "last_private"]
@@ -76,6 +77,8 @@ def _collect_cases() -> list[Any]:
         marks = []
         if "xfail" in expectation:
             marks.append(pytest.mark.xfail(reason=expectation["xfail"], strict=True))
+        elif "flaky" in expectation:
+            marks.append(pytest.mark.xfail(reason=expectation["flaky"], strict=False))
         params.append(pytest.param(case_dir, id=case_dir.relative_to(CASES_DIR).as_posix(), marks=marks))
     return params
 
