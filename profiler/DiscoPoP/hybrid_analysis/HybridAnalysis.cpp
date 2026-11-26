@@ -141,7 +141,7 @@ bool HybridAnalysis::AnalyzeFunction(Function& f, ModuleAnalysisManager& mam,
       // Remove from staticallyPredictableValues those which are passed to
       // other functions (by ref/ptr)
       // invokes as well (calls in the scope of a cleanup), and pointers into the local (a member, an element):
-      // the callee may access it, e.g. library code (DP_LIBRARY_DIRS) whose accesses are profiled
+      // the callee may access it, e.g. library code (outside the project) whose accesses are profiled
       if (auto* call_inst = dyn_cast<llvm::CallBase>(&i)) {
         {  // indirect calls, too
           for (uint i = 0; i < call_inst->arg_size(); ++i) {

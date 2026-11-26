@@ -294,7 +294,7 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
                                         std::map<std::string, std::vector<CU*>>& bb_id_to_cu_ids_map);
 
   bool IsInstrumentedFunction(llvm::Function& f);
-  // library code (DP_LIBRARY_DIRS), instrumented by InstrumentLibraryAccesses only
+  // library code (outside the project), instrumented by InstrumentLibraryAccesses only
   bool IsLibraryFunction(llvm::Function& f);
   // __dp_read / __dp_write with kLibraryAccessInstructionId for the accesses of a library function that may reach
   // memory of its callers, nothing else

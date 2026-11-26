@@ -1,7 +1,3 @@
-# The C++ standard library headers are library code: the profiler instruments their memory accesses only and
-# attributes them to the project call site that entered the library (see DP_LIBRARY_DIRS).
-export DP_LIBRARY_DIRS := /usr/include/c++
-
 all: clean prog
 
 prog: code.o

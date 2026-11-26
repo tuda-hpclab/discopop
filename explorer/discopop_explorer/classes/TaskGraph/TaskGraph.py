@@ -2408,7 +2408,7 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 if (loop_indices is not None and v[0] in loop_indices) or v in advanced_on_header_line
             ]
             # loop control variables written by the header only, wherever its code ended up: an iterator advanced
-            # by library calls on the header line (++it, ++__begin of a range-for, profiled with DP_LIBRARY_DIRS)
+            # by library calls on the header line (++it, ++__begin of a range-for, library code outside the project)
             # is never read in the body by project code, and its increment may lie in a context of the iterations
             for v in self.__header_controlled_variables(
                 loop_ctx, loop_iteration_ctxs, None if self.__is_single_line_loop(loop_ctx) else header_line

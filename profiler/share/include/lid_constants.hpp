@@ -40,10 +40,10 @@ constexpr int kMaxLno = 1 << kLidSize;
 // Highest file id that can be encoded. File id 0 means "no file".
 constexpr int kMaxFileId = (1 << kFileIdSize) - 1;
 
-// The instruction id the pass passes to __dp_read / __dp_write for an access in library code (DP_LIBRARY_DIRS, see
-// dputil::IsInLibraryDirs). Library code has no instruction ids of its own (they start at 2): the runtime attributes
-// the access to the last call instruction of the innermost frame of project code, i.e. to the call that entered the
-// library.
+// The instruction id the pass passes to __dp_read / __dp_write for an access in library code (see
+// DiscoPoP::IsLibraryFunction). Library code has no instruction ids of its own (they start at 2): the runtime
+// attributes the access to the last call instruction of the innermost frame of project code, i.e. to the call that
+// entered the library.
 constexpr std::int64_t kLibraryAccessInstructionId = 0;
 
 static_assert(kLidLocationSize == 32, "the location of a LID is 32 bits wide: the runtime masks it with 0xFFFFFFFF");

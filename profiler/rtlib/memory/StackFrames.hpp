@@ -176,7 +176,7 @@ class StackFrames {
     }
   }
 
-  // The instruction id an access of library code (kLibraryAccessInstructionId, see dputil::IsInLibraryDirs) is
+  // The instruction id an access of library code (kLibraryAccessInstructionId, see DiscoPoP::IsLibraryFunction) is
   // attributed to: the last call of the innermost frame of project code, i.e. the call that entered the library, as
   // library code has no frames of its own; a callback from the library into project code pushes one, so its accesses
   // and calls are its own, and the call it returns into is still the one of the frame below. 0 drops the access:

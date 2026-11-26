@@ -7,13 +7,14 @@
 # directory for details.
 
 
-"""Code in the directories of ``DP_LIBRARY_DIRS`` is library code: instrumented for memory accesses only.
+"""Code outside the project is library code: instrumented for memory accesses only.
 
 The accesses of a library function are reported with the constant instruction id 0 (``kLibraryAccessInstructionId``),
 so that the runtime attributes them to the project call site that entered the library. The function itself gets no
 entry, exit, loop, call or allocation callbacks, no instruction ids, and no ``__dp_read`` / ``__dp_write`` for the
-stack slots it owns. Library files get no entry in ``FileMapping.txt``. Code that lies below the project root (or
-below ``DP_PROJECT_INCLUDE_DIRS``) is project code, whatever ``DP_LIBRARY_DIRS`` says.
+stack slots it owns. Library files get no entry in ``FileMapping.txt``. Project code lies below the project root or
+below ``DP_PROJECT_INCLUDE_DIRS``; code below ``DP_PROJECT_EXCLUDE_DIRS`` is library code. ``DP_LIBRARY_ACCESSES=off``
+turns the library analysis off: library code is then not instrumented at all.
 """
 
 from pathlib import Path
@@ -79,14 +80,13 @@ def _function(program: InstrumentedProgram, name: str) -> str:
 
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for variable in ["DP_LIBRARY_DIRS", "DP_PROJECT_INCLUDE_DIRS", "DP_PROJECT_EXCLUDE_DIRS"]:
+    for variable in ["DP_LIBRARY_ACCESSES", "DP_PROJECT_INCLUDE_DIRS", "DP_PROJECT_EXCLUDE_DIRS"]:
         monkeypatch.delenv(variable, raising=False)
 
 
 @pytest.fixture
-def library_program(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> InstrumentedProgram:
+def library_program(tmp_path: Path) -> InstrumentedProgram:
     project, library = _project(tmp_path)
-    monkeypatch.setenv("DP_LIBRARY_DIRS", str(library))
     return _compile(project, library)
 
 
@@ -130,14 +130,32 @@ def test_the_project_caller_is_instrumented_as_usual(library_program: Instrument
     ), library_program.describe()
 
 
-def test_without_library_dirs_the_header_function_is_not_instrumented(tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", ["off", "OFF", "0", "false", "no"])
+def test_with_library_accesses_off_the_header_function_is_not_instrumented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
     project, library = _project(tmp_path)
+    monkeypatch.setenv("DP_LIBRARY_ACCESSES", value)
     program = _compile(project, library)
     assert program.callback_counts(function=_function(program, "lib_copy")) == {}
 
 
+def test_code_in_an_excluded_directory_is_library_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project, _ = _project(tmp_path)
+    excluded = project / "third_party"
+    excluded.mkdir()
+    (excluded / "lib.hpp").write_text(LIBRARY)
+    monkeypatch.setenv("DP_PROJECT_EXCLUDE_DIRS", "third_party")
+    program = _compile(project, excluded)
+    function = _function(program, "lib_copy")
+    counts = program.callback_counts(function=function)
+    assert "__dp_func_entry" not in counts, program.describe()
+    assert counts.get("__dp_read", 0) == 1 and counts.get("__dp_write", 0) == 1, program.describe()
+    assert "lib.hpp" not in [Path(path).name for path in program.file_mapping.values()]
+
+
 @pytest.mark.parametrize("inside", ["project root", "included directory"])
-def test_library_directory_that_is_project_code_is_instrumented_as_project(
+def test_header_that_is_project_code_is_instrumented_as_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inside: str
 ) -> None:
     project, library = _project(tmp_path)
@@ -149,7 +167,6 @@ def test_library_directory_that_is_project_code_is_instrumented_as_project(
         library = inner
     else:
         monkeypatch.setenv("DP_PROJECT_INCLUDE_DIRS", str(library))
-    monkeypatch.setenv("DP_LIBRARY_DIRS", str(library))
     program = _compile(project, library)
     counts = program.callback_counts(function=_function(program, "lib_copy"))
     assert counts.get("__dp_func_entry", 0) > 0, program.describe()
@@ -178,12 +195,9 @@ extern template struct Box<int>;
 """
 
 
-def test_always_inline_function_of_an_extern_template_is_still_inlined(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_always_inline_function_of_an_extern_template_is_still_inlined(tmp_path: Path) -> None:
     project, library = _project(tmp_path)
     (library / "box.hpp").write_text(EXTERN_TEMPLATE_LIBRARY)
-    monkeypatch.setenv("DP_LIBRARY_DIRS", str(library))
     program = compile_to_ir(EXTERN_TEMPLATE_SOURCE, directory=str(project), extra_arguments=["-I", str(library)])
     main = _function(program, "main")
     assert not [call for call in program.calls(function=main) if "3set" in call.callee], program.describe()

@@ -1,4 +1,4 @@
-# Constructs a std::string from a char pointer in every iteration (DP_LIBRARY_DIRS in the Makefile). With libstdc++ 13,
+# Constructs a std::string from a char pointer in every iteration. With libstdc++ 13,
 # basic_string::_M_init_local_buf is an always_inline member of an extern template that libstdc++.so does not export:
 # it must stay inlinable, or the program does not link. The string is a local of the iteration and its accesses by
 # the library are attributed to line 11, so the loop on line 10 stays do-all.

@@ -1,5 +1,5 @@
-# The loop sums the elements read through std::vector::operator[] and size() (library code, DP_LIBRARY_DIRS in the
-# Makefile). The reads of the library are attributed to the loop and must not hide the reduction on sum. The fill by
-# std::iota is library code, too, and no pattern target.
+# The loop sums the elements read through std::vector::operator[] and size() (library code). The reads of the
+# library are attributed to the loop and must not hide the reduction on sum. The fill by std::iota is library code,
+# too, and no pattern target.
 [reduction]
 includes = ["1:11"]

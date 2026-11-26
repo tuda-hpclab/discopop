@@ -164,7 +164,7 @@ TEST(StackFramesTest, DeepCallChainsKeepTheirKeys) {
   EXPECT_EQ(frames.Depth(), 0u);
 }
 
-// Library code (DP_LIBRARY_DIRS) has no frames: its accesses are attributed to the last call of the innermost frame of
+// Library code (outside the project) has no frames: its accesses are attributed to the last call of the innermost frame of
 // project code, see StackFrames::LibraryAccessAttribution. probe stands for the frame of the callback, below all
 // frames.
 TEST(StackFramesTest, LibraryAccessesAreAttributedToTheCallOfTheInnermostFrame) {

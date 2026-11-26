@@ -95,15 +95,17 @@ bool DiscoPoP::IsInstrumentedFunction(Function& f) {
   return GetCachedFileId(f) != 0;
 }
 
-// Library code (DP_LIBRARY_DIRS) is instrumented for its memory accesses only: the runtime attributes them to the call
-// in project code that entered the library, so the library's own structure (CUs, loops, functions, call path states,
-// file ids) never shows up. Project code takes precedence.
+// Code outside the project (not below the project root or an included directory, or below an excluded one) is library
+// code, e.g. the C++ standard library, header-only libraries or excluded dependencies: it is instrumented for its
+// memory accesses only, and the runtime attributes them to the call in project code that entered the library, so the
+// library's own structure (CUs, loops, functions, call path states, file ids) never shows up. Needs debug information
+// to tell where a function is defined; off with DP_LIBRARY_ACCESSES=off.
 bool DiscoPoP::IsLibraryFunction(Function& f) {
-  if (f.isDeclaration() || IsExcludedByName(f.getName()) || IsInstrumentedFunction(f)) {
+  if (f.isDeclaration() || IsExcludedByName(f.getName()) || !dputil::LibraryAccessesEnabled() ||
+      IsInstrumentedFunction(f)) {
     return false;
   }
-  const std::vector<std::string> paths = SubprogramPaths(f);
-  return std::any_of(paths.begin(), paths.end(), [](const std::string& path) { return dputil::IsInLibraryDirs(path); });
+  return !SubprogramPaths(f).empty();
 }
 
 std::int32_t DiscoPoP::GetCachedFileId(Function& f) {

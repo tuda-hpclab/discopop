@@ -1,4 +1,4 @@
-# std::map::operator[] inserts a node, which is library code (DP_LIBRARY_DIRS in the Makefile). The insertion updates
+# std::map::operator[] inserts a node, which is library code. The insertion updates
 # the tree's header (root, node count, rebalancing) in every iteration, a loop-carried dependency attributed to the
 # loop, so the loop must not be suggested as do-all.
 [do_all]

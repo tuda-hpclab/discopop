@@ -1,4 +1,4 @@
-# std::vector::push_back is library code (DP_LIBRARY_DIRS in the Makefile). Its accesses are attributed to the call
+# std::vector::push_back is library code. Its accesses are attributed to the call
 # site in the loop: every iteration reads and writes the vector's _M_finish pointer, a loop-carried dependency, so the
 # loop must not be suggested as do-all. Only the exclusion is pinned, other findings do not matter here.
 [do_all]

@@ -1,4 +1,4 @@
-# Known limitation of DP_LIBRARY_DIRS (see the Makefile): ostream::operator<<(int) and __ostream_insert are compiled
+# Known limitation of the library analysis: ostream::operator<<(int) and __ostream_insert are compiled
 # into libstdc++.so (extern templates of basic_ostream<char>), so the writes to the stream's buffer are not seen.
 # Each iteration appends to out, which must keep the loop on line 10 from being a do-all.
 xfail = "stream output of numbers happens in libstdc++.so, which is not instrumented: the loop is reported as do-all"
