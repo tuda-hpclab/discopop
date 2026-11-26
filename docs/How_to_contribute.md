@@ -94,7 +94,7 @@ Tests that check more than the detected patterns live in `test/end_to_end/<topic
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pushes to `master` and `new_explorer`, on every pull request and manually. A commit is tested once: a feature branch is tested through its pull request. The full matrix (Ubuntu 24.04 with LLVM 19 and 20, Debian 13 with LLVM 21 and 22) only runs when merging into `master`; other pull requests and manual runs test Debian 13 with LLVM 21. The jobs cover the static checks (license tags, black, ruff), mypy, the unit tests, the instrumentation, profiler and end-to-end tests, the C++ unit tests, sanitizers, a leak check, coverage, and benchmarks with a comparison against the previous version.
+`.github/workflows/ci.yml` runs on pushes to `master` and `new_explorer`, on every pull request and manually. A commit is tested once: a feature branch is tested through its pull request. The full matrix (Ubuntu 24.04 with LLVM 19 and 20, Debian 13 with LLVM 21 and 22) only runs when merging into `master`; other pull requests and manual runs test Debian 13 with LLVM 21. The jobs cover the static checks (license tags, black, ruff), mypy, the unit tests, the instrumentation, profiler and end-to-end tests, the C++ unit tests, sanitizers, a leak check, coverage, and benchmarks with a comparison against the previous version. A job only runs if the changes of the pull request can affect it: a change of the Python packages besides the profiler (or of the documentation) skips the profiler's C++ unit tests, runtime checks and benchmarks; a manual run always runs everything.
 
 To run the pipeline locally (requires [act](https://github.com/nektos/act) and Docker):
 
