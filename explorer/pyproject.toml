@@ -29,7 +29,7 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "discopop-library>=0.0.1a11",
+    "discopop-library>=0.0.1a12",
     "filelock",
     "jsonpickle",
     "lxml>=4.3.3",
@@ -44,7 +44,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # the graph visualizers (--enable-visualizer, Plottable graphs); without it they are unavailable
-gui = ["discopop-gui>=0.0.1a3"]
+gui = ["discopop-gui>=0.0.1a4"]
 dev = ["mypy", "black", "data-science-types", "pre-commit"]
 ci = ["mypy", "black", "data-science-types"]
 
