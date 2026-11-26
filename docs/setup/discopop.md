@@ -77,10 +77,13 @@ Use this route to run DiscoPoP on your own programs.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install discopop
+pip install "discopop>=5.0.3a1"
 ```
 
 The package `discopop` installs all other packages as dependencies: the profiler, the explorer, the library (with the project manager, the GUI and the other tools), the hotspot detection and the MCP server. The build of the profiler takes a few minutes.
+
+{: .note }
+The current version of DiscoPoP is only published as a pre-release so far. The version requirement `>=5.0.3a1` selects it; without it, pip installs the outdated release 5.0.2, which cannot be built. Do not use `pip install --pre` instead: it also installs pre-releases of other packages DiscoPoP depends on.
 
 {: .note }
 Activate the virtual environment (`source venv/bin/activate`) in every new shell before you use DiscoPoP. The commands `discopop_cxx`, `discopop_explorer`, `discopop_gui` and the others are installed into `venv/bin`.
