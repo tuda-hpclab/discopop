@@ -16,8 +16,10 @@ on:
       - "!v*[0-9]*.[0-9]*.[0-9]*b[0-9]*"
       - "!v*[0-9]*.[0-9]*.[0-9]*dev[0-9]*"
 
+# the draft GitHub release (disabled for now, see below) needs "contents: write" in addition
 permissions:
-  contents: write
+  contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -27,9 +29,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-#        with:
-#          submodules: recursive
-#          fetch-depth: 1
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -48,44 +47,29 @@ jobs:
           fi
         shell: bash
 
-      - name: Extract Version
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+      # the root package is metadata only (it depends on the other packages), built like the pre-release
+      - name: Build discopop
+        run: pip install build && python -m build .
 
-      - name: Build Debian Package
-        run: bash create_package.sh -r
+      # disabled for now: a draft GitHub release per stable release
+      # - name: Extract Version
+      #   id: get_version
+      #   run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+      #
+      # - name: Create Release
+      #   id: create_release
+      #   uses: actions/create-release@v1
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   with:
+      #     tag_name: ${{ github.ref_name }}
+      #     release_name: Version ${{ steps.get_version.outputs.VERSION }}
+      #     draft: true
+      #     prerelease: false
 
-      - name: Build Python Package
-        run: python setup.py sdist
-
-      - name: Get .deb filename
-        id: deb_file
-        run: |
-          FILE=$(ls packages/*.deb)
-          echo "file=$FILE" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Version ${{ steps.get_version.outputs.VERSION }}
-          draft: true
-          prerelease: false
-
-      - name: Upload .deb asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.deb_file.outputs.file }}
-          asset_name: discopop.deb
-          asset_content_type: application/vnd.debian.binary-package
-
+      # trusted publishing, as the other publish workflows: the project discopop on PyPI has to list this workflow
+      # (publish.yml) as a trusted publisher
       - name: Publish Distribution to PyPI
-        uses: pypa/gh-action-pypi-publish@master
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.pypi_password }}
+          packages-dir: dist/

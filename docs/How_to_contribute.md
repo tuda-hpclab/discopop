@@ -130,7 +130,7 @@ Each package has its own `VERSION` file (`profiler/`, `explorer/`, `library/`, `
 | `gui_v<version>` | `discopop-gui` |
 | `hotspot_detection_v<version>` | `discopop-hotspot-detection` |
 | `mcp_server_v<version>` | `discopop-mcp-server` |
-| `v<version>` (e.g. `v5.0.3`), tagged on `master` | the root package `discopop` and a draft GitHub release |
+| `v<version>` (e.g. `v5.0.3`), tagged on `master` | the root package `discopop` (the draft GitHub release of `publish.yml` is disabled for now) |
 | `v<version>a<n>`, `v<version>b<n>`, `v<version>dev<n>` | the root package `discopop` as pre-release |
 
 After every publish workflow, the workflow "Published packages" (see [Continuous integration](#continuous-integration)) installs the newest releases from PyPI and runs the example; check its result after a release, as it shows whether the newly published package works with the published versions of the others.
