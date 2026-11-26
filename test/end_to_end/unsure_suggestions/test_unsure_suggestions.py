@@ -36,6 +36,8 @@ class TestUnsureSuggestions(unittest.TestCase):
     unsure: Dict[str, Any]
     patches_without: Set[str]
     patches_with_unsure: Set[str]
+    unsure_patches: Dict[str, List[str]]
+    unsure_patches_after_rerun: bool
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -55,6 +57,14 @@ class TestUnsureSuggestions(unittest.TestCase):
         cls.with_unsure = json.loads((explorer / "patterns.json").read_text())
         cls.patches_with_unsure = {p.name for p in patches.iterdir()}
         cls.unsure = json.loads((explorer / "unsure_suggestions.json").read_text())
+        unsure_patches = cls.dot_discopop / "patch_generator_unsure"
+        cls.unsure_patches = {
+            d.name: [p.read_text() for p in sorted(d.glob("*.patch"))] for d in unsure_patches.iterdir()
+        }
+
+        # a run without the option removes the unsure patches of the run before
+        _run("explorer", "discopop_explorer", cls.dot_discopop, env)
+        cls.unsure_patches_after_rerun = unsure_patches.exists()
 
     def _unsure_at(self, line: int) -> List[Dict[str, Any]]:
         return [s for s in self.unsure["suggestions"] if _line(s["start_line"]) == line]
@@ -103,6 +113,16 @@ class TestUnsureSuggestions(unittest.TestCase):
         # allocated after all suggestions
         self.assertGreater(min(unsure_ids), max(safe_ids))
         self.assertEqual({str(i) for i in unsure_ids} & self.patches_with_unsure, set())
+
+    def test_every_unsure_suggestion_has_its_plain_patch_apart_from_the_suggestions(self) -> None:
+        unsure_ids = {str(s["pattern_id"]) for s in self.unsure["suggestions"]}
+        self.assertEqual(set(self.unsure_patches), unsure_ids)
+        for pattern_id, patches in self.unsure_patches.items():
+            self.assertTrue(patches, pattern_id)
+            self.assertTrue(any("+#pragma omp parallel for" in p for p in patches), patches)
+
+    def test_unsure_patches_do_not_outlive_their_explorer_run(self) -> None:
+        self.assertFalse(self.unsure_patches_after_rerun)
 
 
 if __name__ == "__main__":
