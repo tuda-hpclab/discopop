@@ -1,0 +1,4 @@
+# std::copy of ints is a memmove in library code. It reads what the previous iteration of the loop on line 9 wrote
+# to previous: a loop-carried RAW that is only seen through the reads of the memmove's source.
+[do_all]
+excludes = ["1:9"]

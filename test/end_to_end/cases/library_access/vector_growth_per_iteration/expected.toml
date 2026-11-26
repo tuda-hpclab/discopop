@@ -1,0 +1,6 @@
+# Every call of collect fills a vector of its own; it grows past its capacity several times, and std::vector moves
+# the elements to the new buffer with memmove (library code). The buffers of one call are freed and come back at the
+# same addresses in the next iteration of the loop on line 19. The moved elements must count as written by the
+# memmove, not by the push_back of the previous iteration, or the reads of line 10 would make the loop look carried.
+[do_all]
+includes = ["1:19"]

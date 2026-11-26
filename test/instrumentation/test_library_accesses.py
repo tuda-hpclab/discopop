@@ -201,3 +201,38 @@ def test_always_inline_function_of_an_extern_template_is_still_inlined(tmp_path:
     program = compile_to_ir(EXTERN_TEMPLATE_SOURCE, directory=str(project), extra_arguments=["-I", str(library)])
     main = _function(program, "main")
     assert not [call for call in program.calls(function=main) if "3set" in call.callee], program.describe()
+
+
+# memmove and memset become memory intrinsics: the source is read and the destination written byte by byte at run
+# time (__dp_read_range / __dp_write_range), unless the memory is a local of the library function itself
+INTRINSICS_SOURCE = """\
+#include "move.hpp"
+
+int main() {
+  int in[4] = {1, 2, 3, 4};
+  int out[4];
+  lib_move(out, in, 4);
+  return out[3] == 4 ? 0 : 1;
+}
+"""
+
+INTRINSICS_LIBRARY = """\
+inline void lib_move(int* dst, const int* src, int count) {
+  int scratch[4];
+  __builtin_memset(scratch, 0, sizeof scratch);
+  __builtin_memmove(dst, src, count * sizeof(int));
+}
+"""
+
+
+def test_memory_intrinsics_of_library_code_are_ranges_with_instruction_id_zero(tmp_path: Path) -> None:
+    project, library = _project(tmp_path)
+    (library / "move.hpp").write_text(INTRINSICS_LIBRARY)
+    program = compile_to_ir(INTRINSICS_SOURCE, directory=str(project), extra_arguments=["-I", str(library)])
+    function = _function(program, "lib_move")
+    counts = program.callback_counts(function=function)
+    # the memmove reads its source and writes its destination; the memset of scratch, an own local, is left out
+    assert counts.get("__dp_read_range") == 1 and counts.get("__dp_write_range") == 1, program.describe()
+    for call in program.calls(function=function):
+        if call.callee in ("__dp_read_range", "__dp_write_range"):
+            assert call.arg_int(0) == 0, call.text

@@ -211,6 +211,7 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
   // Callbacks to run-time library
   llvm::FunctionCallee dp_finalize_;
   llvm::FunctionCallee dp_read_, dp_write_;
+  llvm::FunctionCallee dp_read_range_, dp_write_range_;  // memory intrinsics of library code
   llvm::FunctionCallee dp_alloca_, dp_new_, dp_delete_;  //, DpDecl;
   llvm::FunctionCallee dp_call_or_invoke_;
   llvm::FunctionCallee dp_func_entry_, dp_func_exit_;

@@ -31,9 +31,11 @@ set(DiscoPoP_CALLBACK_SOURCES
         injected_functions/dp_loop_incr.cpp
         injected_functions/dp_new.cpp
         injected_functions/dp_read.cpp
+        injected_functions/dp_read_range.cpp
         injected_functions/dp_report_bb.cpp
         injected_functions/dp_report_bb_pair.cpp
         injected_functions/dp_write.cpp
+        injected_functions/dp_write_range.cpp
 
         lifecycle/runtime_shutdown.cpp
         )

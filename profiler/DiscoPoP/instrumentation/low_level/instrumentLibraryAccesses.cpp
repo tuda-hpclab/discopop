@@ -10,9 +10,13 @@
  *
  */
 
+#include <algorithm>
+#include <cstdint>
 #include <vector>
 
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
 
 #include "DiscoPoP.hpp"
 #include "lid_constants.hpp"
@@ -24,8 +28,12 @@ using llvm::ConstantInt;
 using llvm::Function;
 using llvm::FunctionCallee;
 using llvm::Instruction;
+using llvm::IRBuilder;
 using llvm::isa;
 using llvm::LoadInst;
+using llvm::MemIntrinsic;
+using llvm::MemSetInst;
+using llvm::MemTransferInst;
 using llvm::PtrToIntInst;
 using llvm::StoreInst;
 using llvm::Value;
@@ -69,9 +77,12 @@ void DiscoPoP::InstrumentLibraryAccesses(Function& f) {
     f.addFnAttr(llvm::Attribute::NoInline);
   }
   std::vector<Instruction*> accesses;
+  std::vector<MemIntrinsic*> intrinsics;
   for (BasicBlock& bb : f) {
     for (Instruction& inst : bb) {
-      if (auto* load = llvm::dyn_cast<LoadInst>(&inst)) {
+      if (isa<MemTransferInst>(&inst) || isa<MemSetInst>(&inst)) {
+        intrinsics.push_back(llvm::cast<MemIntrinsic>(&inst));
+      } else if (auto* load = llvm::dyn_cast<LoadInst>(&inst)) {
         if (!AddressesOwnLocal(load->getPointerOperand())) {
           accesses.push_back(load);
         }
@@ -96,5 +107,31 @@ void DiscoPoP::InstrumentLibraryAccesses(Function& f) {
     args.push_back(ConstantInt::get(int64_, 0));
 #endif
     CallInst::Create(is_store ? dp_write_ : dp_read_, args, "", access->getIterator());
+  }
+  // memcpy, memmove and memset (also the .inline variants), e.g. the relocation of the elements of a std::vector that
+  // grows: without them, the copied elements would keep the writes of whatever was stored at their new addresses
+  // before, e.g. a buffer of the same size freed in the previous iteration. The source is read before the destination
+  // is written, as the ranges of memmove may overlap.
+  for (MemIntrinsic* intrinsic : intrinsics) {
+    IRBuilder<> builder(intrinsic);
+    Value* length = builder.CreateZExtOrTrunc(intrinsic->getLength(), int64_);
+    // the guaranteed alignment of both ranges, at most 8: the step of the recorded addresses, see __dp_read_range
+    std::uint64_t alignment = intrinsic->getDestAlign().valueOrOne().value();
+    if (auto* transfer = llvm::dyn_cast<MemTransferInst>(intrinsic)) {
+      alignment = std::min(alignment, transfer->getSourceAlign().valueOrOne().value());
+    }
+    Value* stride = ConstantInt::get(int64_, std::min<std::uint64_t>(alignment, 8));
+    const auto record = [&](FunctionCallee callee, Value* pointer) {
+      if (AddressesOwnLocal(pointer)) {
+        return;
+      }
+      Value* name = GetOrInsertVarNameDynamic(pointer->hasName() ? pointer->getName().str() : "*", builder);
+      builder.CreateCall(callee, {ConstantInt::get(int64_, kLibraryAccessInstructionId),
+                                  builder.CreatePtrToInt(pointer, int64_), length, stride, name});
+    };
+    if (auto* transfer = llvm::dyn_cast<MemTransferInst>(intrinsic)) {
+      record(dp_read_range_, transfer->getRawSource());
+    }
+    record(dp_write_range_, intrinsic->getRawDest());
   }
 }

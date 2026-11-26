@@ -68,6 +68,11 @@ void DiscoPoP::SetupCallbacks() {
                                                 int64_, int64_, char_ptr_);
 #endif
 
+  dp_read_range_ =
+      this_module_->getOrInsertFunction("__dp_read_range", void_type_, int64_, int64_, int64_, int64_, char_ptr_);
+  dp_write_range_ =
+      this_module_->getOrInsertFunction("__dp_write_range", void_type_, int64_, int64_, int64_, int64_, char_ptr_);
+
   dp_alloca_ = this_module_->getOrInsertFunction("__dp_alloca", void_type_,
 
                                                  int64_, char_ptr_, int64_, int64_, int64_, int64_);
