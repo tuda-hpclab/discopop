@@ -38,6 +38,7 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 from discopop_library.ProjectManager.qt_gui import theme, widgets
 from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.panel import Panel
+from discopop_library.ProjectManager.qt_gui.prompt_settings_dialog import PromptSettingsDialog
 from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
@@ -80,6 +81,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ProjectState,
     ResultsChanged,
 )
+from discopop_library.SuggestionCheck.prompt_store import custom_prompt_dir
 from discopop_library.ProjectManager.services.workflow_status import forget_build_states, stage_statuses
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
@@ -247,13 +249,31 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _build_menu_bar(self) -> None:
-        """The menu bar: "View" with "Reset" (the layout as at the start)."""
+        """The menu bar: "View" with "Reset" (the layout as at the start), "Settings" with the prompts of the suggestion
+        check."""
         # in the window, at its top (not in the global menu bar of the desktop)
         self.menuBar().setNativeMenuBar(False)
         self.view_menu = self.menuBar().addMenu("&View")
         self.reset_view_action = self.view_menu.addAction("&Reset")
         self.reset_view_action.setToolTip("Undo manual changes of the layout: box heights, splitters, the output pane")
         self.reset_view_action.triggered.connect(lambda _checked=False: self.reset_view())
+        self.settings_menu = self.menuBar().addMenu("&Settings")
+        self.prompt_settings_action = self.settings_menu.addAction("Suggestion check prompts\u2026")
+        self.prompt_settings_action.setToolTip("Edit the prompts the suggestion check sends to the LLM agent")
+        self.prompt_settings_action.triggered.connect(lambda _checked=False: self.open_prompt_settings())
+        self.prompt_settings_dialog: Optional[PromptSettingsDialog] = None
+
+    def open_prompt_settings(self) -> PromptSettingsDialog:
+        """Open (or raise) the dialog editing the prompt templates of the suggestion check of this project."""
+        dialog = self.prompt_settings_dialog
+        if dialog is None:
+            dialog = PromptSettingsDialog(custom_prompt_dir(self.arguments.dot_dp), self)
+            self.prompt_settings_dialog = dialog
+            dialog.finished.connect(lambda _result=0: setattr(self, "prompt_settings_dialog", None))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
 
     def reset_view(self) -> None:
         """Undo the manual changes of the layout: resized boxes, splitter positions, the height of the output pane."""
@@ -544,6 +564,10 @@ class MainWindow(QMainWindow):
             panel.cancel_jobs()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt's name)
+        # an open prompt editor asks about its unsaved edits first; Cancel there keeps the window open
+        if self.prompt_settings_dialog is not None and not self.prompt_settings_dialog.close():
+            event.ignore()
+            return
         self._closing = True
         self._status_timer.stop()
         self.cancel_running_jobs()

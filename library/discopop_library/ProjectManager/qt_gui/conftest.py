@@ -35,6 +35,7 @@ _QT_GUI_DIR = Path(__file__).parent
 
 _QUESTIONS = {
     "ask_yes_no",
+    "ask_save_discard",
     "ask_string",
     "ask_choice",
     "ask_open_file",

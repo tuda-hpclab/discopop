@@ -329,7 +329,7 @@ def test_view_menu_reset_undoes_manual_resizing(qtbot: QtBot, tmp_path: Path) ->
 
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
-    assert [a.text() for a in window.menuBar().actions()] == ["&View"]
+    assert [a.text() for a in window.menuBar().actions()] == ["&View", "&Settings"]
     assert not window.menuBar().isNativeMenuBar()
     handles = window.findChildren(widgets.ResizeHandle)
     assert handles
