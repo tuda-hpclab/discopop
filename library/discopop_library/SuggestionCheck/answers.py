@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Any, Collection, Dict, List, Optional
 
 from discopop_library.PatchRepair.llm_backends.base import iter_json_objects
-from discopop_library.PatchRepair.patching import PATCH_BLOCK, ExtractionError, extract_patches
 
 APPROVED = "approved"
 REJECTED = "rejected"
@@ -72,8 +71,6 @@ class CheckAnswer:
     reason: str = ""
     assumption: str = ""
     justifications: List[Justification] = field(default_factory=list)
-    # file id -> unified diff against the original source, for an approval
-    patches: Dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -83,10 +80,9 @@ class ReviewAnswer:
 
 
 def _answer_object(text: str, required_key: str) -> Dict[str, Any]:
-    """the last JSON object of the answer which has required_key, outside the patch blocks"""
-    without_patches = PATCH_BLOCK.sub("", text or "")
+    """the last JSON object of the answer which has required_key"""
     found: Optional[Dict[str, Any]] = None
-    for obj in iter_json_objects(without_patches):
+    for obj in iter_json_objects(text or ""):
         if isinstance(obj, dict) and required_key in obj:
             found = obj
     if found is None:
@@ -100,9 +96,7 @@ def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def parse_check_answer(
-    text: str, blocker_count: int, known_file_ids: List[int], known_files: Optional[Collection[str]] = None
-) -> CheckAnswer:
+def parse_check_answer(text: str, blocker_count: int, known_files: Optional[Collection[str]] = None) -> CheckAnswer:
     """known_files: the paths the agent was shown; evidence has to cite a line of one of them"""
     obj = _answer_object(text, "verdict")
     verdict = _text(obj.get("verdict")).lower()
@@ -144,12 +138,6 @@ def parse_check_answer(
     if unknown:
         problems.append("There is no blocker " + ", ".join(str(i) for i in unknown) + ".")
 
-    patches: Dict[int, str] = {}
-    try:
-        patches = extract_patches(text, known_file_ids)
-    except ExtractionError as error:
-        problems.append(str(error))
-
     if problems:
         raise AnswerError(
             "The approval is incomplete:\n"
@@ -162,7 +150,6 @@ def parse_check_answer(
         reason=reason,
         assumption=assumption,
         justifications=[justifications[i] for i in range(1, blocker_count + 1)],
-        patches=patches,
     )
 
 

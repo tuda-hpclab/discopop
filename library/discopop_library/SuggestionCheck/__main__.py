@@ -25,6 +25,8 @@ def parse_args() -> SuggestionCheckArguments:
     # fmt: off
     parser.add_argument("--dot-dp-path", default=os.getcwd(), help="Path to the .discopop folder. Default: current "
                         "directory.")
+    parser.add_argument("--project-root", default=None, help="The project; the agent works in a copy of its files. "
+                        "Default: the directory holding the .discopop folder.")
     parser.add_argument("-s", "--suggestions", default=None, help="Comma separated pattern ids of unsure suggestions "
                         "to check. Default: all.")
     parser.add_argument("--max-suggestions", type=int, default=0, help="Check at most this many. Default: 0, no limit.")
@@ -53,6 +55,7 @@ def parse_args() -> SuggestionCheckArguments:
             log_level=arguments.log_level.upper(),
             write_log=arguments.write_log,
             dot_dp_path=arguments.dot_dp_path,
+            project_root=arguments.project_root,
             suggestions=arguments.suggestions,
             max_suggestions=arguments.max_suggestions,
             prompts=arguments.prompts,

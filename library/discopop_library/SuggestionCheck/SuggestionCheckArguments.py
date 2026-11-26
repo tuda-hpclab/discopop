@@ -24,6 +24,8 @@ class SuggestionCheckArguments(GeneralArguments):
     """the arguments of discopop_suggestion_check"""
 
     dot_dp_path: str
+    # the project whose copy the agent works in; default: the directory holding .discopop
+    project_root: Optional[str] = None
     # explicit pattern ids, comma separated; all unsure suggestions without
     suggestions: Optional[str] = None
     # stop after checking this many suggestions; 0: no limit

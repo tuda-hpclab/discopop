@@ -5,31 +5,22 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""Checking one unsure suggestion: the agent's verdict, the patch gates and the review
-(design/agent_checked_suggestions.md, §5). The agent is a callable, so the logic is tested without a model."""
+"""Checking one unsure suggestion: the agent works in a copy of the project, DiscoPoP computes the patch from its
+changes, applies the gates and has an approval reviewed (design/agent_checked_suggestions.md, §5). The agent is a
+callable, so the logic is tested without a model."""
 
 from __future__ import annotations
 
 import os
 import re
-import shutil
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from discopop_library.PatchRepair.patching import (
-    apply_patch_set,
-    canonicalize,
-    canonicalize_delta,
-    check_pragmas_preserved,
-    dry_run_apply,
-)
-from discopop_library.PatchRepair.patchset import PatchEntry, PatchSet
+from discopop_library.PatchRepair.patchset import PatchSet
 from discopop_library.SuggestionCheck.answers import (
     AGREE,
     APPROVED,
     AnswerError,
-    CheckAnswer,
     Justification,
     parse_check_answer,
     parse_review_answer,
@@ -37,6 +28,7 @@ from discopop_library.SuggestionCheck.answers import (
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.prompts import check_prompt, retry_prompt, review_prompt
 from discopop_library.SuggestionCheck.unsure import UnsureSuggestion
+from discopop_library.SuggestionCheck.workspace import Changes, Workspace, patch_of
 
 # the states of a checked suggestion
 STATE_APPROVED = "approved"
@@ -57,15 +49,15 @@ class AgentReply:
     session: Optional[str] = None
 
 
-# (prompt, session to continue or None) -> reply
-Agent = Callable[[str, Optional[str]], AgentReply]
+# (prompt, session to continue or None, the directory the agent works in) -> reply
+Agent = Callable[[str, Optional[str], str], AgentReply]
 
 
 @dataclass
 class Budget:
-    # independent attempts, each with a fresh conversation
+    # independent attempts, each with a fresh conversation and a fresh copy of the project
     prompts: int = 2
-    # follow-up turns inside one attempt, for answers which cannot be used
+    # follow-up turns inside one attempt, for answers or changes which cannot be used
     retries: int = 2
     # calls without an answer allowed per suggestion; they do not use up the budget above
     agent_error_retries: int = 2
@@ -83,8 +75,6 @@ class Outcome:
     review: Optional[Dict[str, str]] = None
     verification: Optional[str] = None
     patch: Optional[PatchSet] = None
-    # whether the approved patch differs from the plain one
-    patch_changed: bool = False
     calls: int = 0
     unanswered: int = 0
     gates: List[Dict[str, Any]] = field(default_factory=list)
@@ -99,7 +89,7 @@ class Outcome:
             "justifications": [j.to_dict() for j in self.justifications],
             "review": self.review,
             "verification": self.verification,
-            "patch_changed": self.patch_changed,
+            "changed_files": sorted(self.patch.entries) if self.patch is not None else [],
             "calls": self.calls,
             "unanswered": self.unanswered,
             "gates": self.gates,
@@ -111,20 +101,33 @@ class _Unreachable(Exception):
 
 
 class _Conversation:
-    """the calls of one suggestion, with the transcripts and the allowance for calls without an answer"""
+    """the calls of one role, with the transcripts, the allowance for calls without an answer and the check that the
+    project itself did not change"""
 
-    def __init__(self, agent: Agent, outcome: Outcome, budget: Budget, artifacts: Optional[str], role: str) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        outcome: Outcome,
+        budget: Budget,
+        artifacts: Optional[str],
+        role: str,
+        guard: Optional[Callable[[], None]],
+    ) -> None:
         self.agent = agent
         self.outcome = outcome
         self.budget = budget
         self.artifacts = artifacts
         self.role = role
+        self.guard = guard
 
-    def ask(self, prompt: str, session: Optional[str], name: str) -> AgentReply:
+    def ask(self, prompt: str, session: Optional[str], workdir: str, name: str) -> AgentReply:
         while True:
             self.outcome.calls += 1
-            reply = self.agent(prompt, session)
             self._write(name + "_prompt.txt", prompt)
+            reply = self.agent(prompt, session, workdir)
+            if self.guard is not None:
+                # raises ProjectChanged, which ends the whole run
+                self.guard()
             self._write(name + "_answer.txt", reply.text if reply.answered else "(no answer) " + reply.failure)
             if reply.answered:
                 return reply
@@ -140,39 +143,16 @@ class _Conversation:
             f.write(text)
 
 
-def candidate_patch(plain: PatchSet, replacements: Dict[int, str], files: SourceFiles) -> PatchSet:
-    """the plain patch with the files of the answer replaced or added. A file the answer does not mention keeps its
-    plain patch, so the loop's directive cannot get lost by omission."""
-    candidate = PatchSet(suggestion_id=plain.suggestion_id)
-    for file_id, entry in plain.entries.items():
-        candidate.entries[file_id] = PatchEntry(file_id, replacements.get(file_id, entry.text), entry.target)
-    for file_id, text in replacements.items():
-        if file_id not in candidate.entries:
-            candidate.entries[file_id] = PatchEntry(file_id, text, files.file_mapping[file_id])
-    return candidate
-
-
 # an OpenMP directive which makes the following loop a parallel or worksharing loop
 _LOOP_DIRECTIVE = re.compile(r"^#\s*pragma\s+omp\s+(?:parallel\s+)?for\b")
 
 
-def directive_at_loop(patch: PatchSet, suggestion: UnsureSuggestion, files: SourceFiles) -> bool:
-    """whether, in the patched code, the loop's header line is directly preceded by a parallel for directive. A
+def directive_at_loop(code: str, header: str) -> bool:
+    """whether, in code, a line equal to the loop's header line is directly preceded by a parallel for directive. A
     directive elsewhere, in a comment or on another loop does not count."""
-    header = files.line_text(suggestion.start)
-    entry = patch.entries.get(suggestion.start.file_id)
-    if not header or entry is None:
-        return False
-    applied = apply_patch_set(patch, dry_run=False)
-    if not applied.ok or applied.workspace is None:
-        return False
-    try:
-        patched = Path(applied.workspace) / str(entry.file_id) / os.path.basename(str(entry.target))
-        lines = [line.strip() for line in patched.read_text(errors="replace").splitlines()]
-    finally:
-        shutil.rmtree(applied.workspace, ignore_errors=True)
+    lines = [line.strip() for line in code.splitlines()]
     for index, line in enumerate(lines):
-        if line != header:
+        if not header or line != header:
             continue
         previous = index - 1
         while previous >= 0 and not lines[previous]:
@@ -182,93 +162,87 @@ def directive_at_loop(patch: PatchSet, suggestion: UnsureSuggestion, files: Sour
     return False
 
 
-def patch_gates(
-    plain: PatchSet, answer: CheckAnswer, files: SourceFiles, suggestion: UnsureSuggestion
-) -> Tuple[Optional[PatchSet], str]:
-    """(the canonical patch, "") if the approved patch applies to the original code and keeps the loop's directive,
-    otherwise (None, why) for the agent"""
-    candidate = candidate_patch(plain, answer.patches, files)
-    applied = dry_run_apply(candidate)
-    if applied.ok:
-        try:
-            canonical = canonicalize(candidate)
-        except ValueError as error:
-            return None, str(error)
-    else:
-        # an answer written against the patched code instead of the original, as in patch repair
-        delta = canonicalize_delta(plain, answer.patches) if set(answer.patches) <= set(plain.entries) else None
-        if delta is None:
-            return None, applied.message + "\nThe patch must be a unified diff against the original source."
-        canonical = delta
-    missing = check_pragmas_preserved(plain, canonical)
-    if missing is not None:
-        return None, missing + ". The patch must keep the loop's OpenMP directive."
-    if not directive_at_loop(canonical, suggestion, files):
+def change_gates(changes: Changes, suggestion: UnsureSuggestion, files: SourceFiles) -> Tuple[Optional[PatchSet], str]:
+    """(the patch, "") if the agent's changes are usable, otherwise (None, why) for the agent"""
+    if changes.unmapped:
         return None, (
-            "In the patched code, the loop at "
+            "Only source files of the project may change, and no file may be added or removed. These cannot be "
+            "part of the change: " + ", ".join(changes.unmapped) + ". Undo these changes."
+        )
+    loop_file = suggestion.start.file_id
+    if loop_file in changes.mapped:
+        code = changes.mapped[loop_file]
+    else:
+        code = "\n".join(files.lines(loop_file))
+    if not directive_at_loop(code, files.line_text(suggestion.start)):
+        return None, (
+            "The loop at "
             + files.where(suggestion.start)
             + " (`"
             + files.line_text(suggestion.start)
-            + "`) is not directly preceded by its OpenMP directive. The patch must keep it there, and keep the "
-            "loop's header line as it is."
+            + "`) is not directly preceded by its OpenMP directive (`#pragma omp parallel for ...`), or its header "
+            "line was changed. Add the directive directly before the loop and keep the header line as it is."
         )
-    return canonical, ""
+    return patch_of(changes.mapped, files, suggestion.pattern_id), ""
 
 
 def check_suggestion(
     suggestion: UnsureSuggestion,
-    plain: PatchSet,
     files: SourceFiles,
+    project_root: str,
     agent: Agent,
     reviewer: Optional[Agent],
     budget: Budget,
     artifacts: Optional[str] = None,
+    guard: Optional[Callable[[], None]] = None,
 ) -> Outcome:
     """asks the agent, applies the gates and, for an approval, the review. Never approves without a usable,
     complete answer: anything else is a rejection or a failure."""
     outcome = Outcome(pattern_id=suggestion.pattern_id, state=STATE_FAILED)
-    conversation = _Conversation(agent, outcome, budget, artifacts, "check")
-    known_file_ids = sorted(files.file_mapping)
-    known_files = [files.display_path(i) for i in known_file_ids]
+    conversation = _Conversation(agent, outcome, budget, artifacts, "check", guard)
+    known_files = [files.display_path(i) for i in sorted(files.file_mapping)]
     last_problem = ""
     try:
         for attempt in range(1, budget.prompts + 1):
-            message = check_prompt(suggestion, plain, files)
-            session: Optional[str] = None
-            for turn in range(budget.retries + 1):
-                name = str(attempt) + "_" + str(turn)
-                reply = conversation.ask(message, session, name)
-                session = reply.session
-                try:
-                    answer = parse_check_answer(reply.text, len(suggestion.blockers), known_file_ids, known_files)
-                except AnswerError as error:
-                    outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "answer", "detail": str(error)})
-                    last_problem = str(error)
-                    if session is None:
-                        # a follow-up turn needs the conversation: on its own, it would ask about nothing
-                        outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "session", "detail": "none"})
-                        break
-                    message = retry_prompt(str(error))
-                    continue
-                outcome.verdict = answer.verdict
-                if answer.verdict != APPROVED:
-                    outcome.state = STATE_REJECTED
-                    outcome.reason = answer.reason
-                    return outcome
-                canonical, failure = patch_gates(plain, answer, files, suggestion)
-                if canonical is None:
-                    outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "patch", "detail": failure})
-                    last_problem = failure
-                    if session is None:
-                        outcome.gates.append({"attempt": attempt, "turn": turn, "gate": "session", "detail": "none"})
-                        break
-                    message = retry_prompt(failure)
-                    continue
-                outcome.assumption = answer.assumption
-                outcome.justifications = answer.justifications
-                outcome.patch = canonical
-                outcome.patch_changed = canonical.changed_against(plain) != []
-                return _review(suggestion, canonical, files, reviewer, budget, artifacts, outcome)
+            workspace = Workspace(project_root, files)
+            try:
+                message = check_prompt(suggestion, files)
+                session: Optional[str] = None
+                for turn in range(budget.retries + 1):
+                    reply = conversation.ask(message, session, workspace.root, str(attempt) + "_" + str(turn))
+                    session = reply.session
+                    try:
+                        answer = parse_check_answer(reply.text, len(suggestion.blockers), known_files)
+                        failure = ""
+                    except AnswerError as error:
+                        failure = str(error)
+                    if not failure:
+                        outcome.verdict = answer.verdict
+                        if answer.verdict != APPROVED:
+                            outcome.state = STATE_REJECTED
+                            outcome.reason = answer.reason
+                            return outcome
+                        changes = workspace.changes()
+                        patch, failure = change_gates(changes, suggestion, files)
+                    if failure:
+                        outcome.gates.append({"attempt": attempt, "turn": turn, "detail": failure})
+                        last_problem = failure
+                        outcome.verdict = None
+                        if session is None:
+                            # a follow-up turn needs the conversation: on its own, it would ask about nothing
+                            outcome.gates.append({"attempt": attempt, "turn": turn, "detail": "no session to continue"})
+                            break
+                        message = retry_prompt(failure)
+                        continue
+                    assert patch is not None
+                    outcome.assumption = answer.assumption
+                    outcome.justifications = answer.justifications
+                    outcome.patch = patch
+                    return _review(
+                        suggestion, files, project_root, changes.mapped, reviewer, budget, artifacts, guard, outcome
+                    )
+            finally:
+                workspace.remove()
         outcome.reason = "no usable answer within the attempt budget" + (
             "; the last problem: " + last_problem if last_problem else ""
         )
@@ -281,48 +255,54 @@ def check_suggestion(
     outcome.justifications = []
     outcome.review = None
     outcome.patch = None
-    outcome.patch_changed = False
     return outcome
 
 
 def _review(
     suggestion: UnsureSuggestion,
-    approved: PatchSet,
     files: SourceFiles,
+    project_root: str,
+    changed_code: Dict[int, str],
     reviewer: Optional[Agent],
     budget: Budget,
     artifacts: Optional[str],
+    guard: Optional[Callable[[], None]],
     outcome: Outcome,
 ) -> Outcome:
+    assert outcome.patch is not None
     if reviewer is None:
         outcome.state = STATE_APPROVED
         outcome.verification = VERIFICATION_STATIC
-        outcome.review = None
         return outcome
-    conversation = _Conversation(reviewer, outcome, budget, artifacts, "review")
-    message = review_prompt(suggestion, approved, files, outcome.assumption, outcome.justifications)
-    session: Optional[str] = None
-    for turn in range(budget.retries + 1):
-        reply = conversation.ask(message, session, str(turn))
-        session = reply.session
-        try:
-            review = parse_review_answer(reply.text)
-        except AnswerError as error:
-            outcome.gates.append({"review_turn": turn, "gate": "review answer", "detail": str(error)})
-            if session is None:
-                # a follow-up turn without the conversation would review nothing
-                break
-            message = retry_prompt(str(error))
-            continue
-        outcome.review = {"verdict": review.verdict, "reason": review.reason}
-        if review.verdict == AGREE:
-            outcome.state = STATE_APPROVED
-            outcome.verification = VERIFICATION_STATIC
-        else:
-            outcome.state = STATE_REJECTED
-            outcome.reason = "the review disagreed: " + review.reason
-            outcome.patch = None
-        return outcome
+    conversation = _Conversation(reviewer, outcome, budget, artifacts, "review", guard)
+    message = review_prompt(suggestion, outcome.patch, files, outcome.assumption, outcome.justifications)
+    workspace = Workspace(project_root, files)
+    try:
+        workspace.write(changed_code)
+        session: Optional[str] = None
+        for turn in range(budget.retries + 1):
+            reply = conversation.ask(message, session, workspace.root, str(turn))
+            session = reply.session
+            try:
+                review = parse_review_answer(reply.text)
+            except AnswerError as error:
+                outcome.gates.append({"review_turn": turn, "detail": str(error)})
+                if session is None:
+                    # a follow-up turn without the conversation would review nothing
+                    break
+                message = retry_prompt(str(error))
+                continue
+            outcome.review = {"verdict": review.verdict, "reason": review.reason}
+            if review.verdict == AGREE:
+                outcome.state = STATE_APPROVED
+                outcome.verification = VERIFICATION_STATIC
+            else:
+                outcome.state = STATE_REJECTED
+                outcome.reason = "the review disagreed: " + review.reason
+                outcome.patch = None
+            return outcome
+    finally:
+        workspace.remove()
     # a review which cannot be read is not an agreement
     outcome.state = STATE_REJECTED
     outcome.reason = "the review gave no usable answer"

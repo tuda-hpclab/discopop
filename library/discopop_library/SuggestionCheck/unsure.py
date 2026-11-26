@@ -5,21 +5,16 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""The unsure suggestions as the explorer writes them (explorer/unsure_suggestions.json) and their plain patches
-(patch_generator_unsure/<id>/)."""
+"""The unsure suggestions as the explorer writes them (explorer/unsure_suggestions.json)."""
 
 from __future__ import annotations
 
 import json
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from discopop_library.PatchRepair.patchset import PatchSet, load_patch_set
-
 UNSURE_SUGGESTIONS_FILE = os.path.join("explorer", "unsure_suggestions.json")
-UNSURE_PATCH_DIR = "patch_generator_unsure"
 SUPPORTED_FORMAT_VERSION = 1
 
 
@@ -136,8 +131,3 @@ def load_unsure_suggestions(dot_dp_path: str) -> List[UnsureSuggestion]:
             )
         )
     return suggestions
-
-
-def load_plain_patch(dot_dp_path: str, pattern_id: int, file_mapping: Dict[int, Path]) -> PatchSet:
-    """the plain do-all patch of an unsure suggestion, as the patch generator wrote it"""
-    return load_patch_set(os.path.join(dot_dp_path, UNSURE_PATCH_DIR), pattern_id, file_mapping)

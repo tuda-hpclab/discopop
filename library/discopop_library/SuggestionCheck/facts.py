@@ -5,7 +5,7 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""The facts about an unsure suggestion, as the agent is shown them: the loop, the plain patch and every blocker in
+"""The facts about an unsure suggestion, as the agent is shown them: its description, the loop and every blocker in
 words. Facts only: nothing here proposes how a blocker could be resolved (design/agent_checked_suggestions.md, §1)."""
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from discopop_library.PatchRepair.patchset import PatchSet
 from discopop_library.SuggestionCheck.unsure import Blocker, Location, UnsureSuggestion
 
 # lines shown around a blocker's statement outside the loop
@@ -161,27 +160,57 @@ def code_excerpts(suggestion: UnsureSuggestion, files: SourceFiles) -> str:
     return "\n\n".join(sections)
 
 
-def patch_blocks(patch_set: PatchSet, files: SourceFiles) -> str:
-    blocks: List[str] = []
-    for file_id, entry in sorted(patch_set.entries.items()):
-        blocks.append(
-            "File id "
-            + str(file_id)
-            + " (`"
-            + files.display_path(file_id)
-            + "`):\n\n===BEGIN PATCH "
-            + str(file_id)
-            + "===\n"
-            + entry.text.rstrip("\n")
-            + "\n===END PATCH "
-            + str(file_id)
-            + "==="
-        )
-    return "\n\n".join(blocks)
+_CLAUSES = (
+    ("private", "private"),
+    ("first_private", "firstprivate"),
+    ("last_private", "lastprivate"),
+    ("shared", "shared"),
+)
 
 
-def file_list(files: SourceFiles) -> str:
-    """the file ids a patch may use"""
-    return "\n".join(
-        "- " + str(file_id) + ": `" + files.display_path(file_id) + "`" for file_id in sorted(files.file_mapping)
-    )
+def directive_without_blockers(suggestion: UnsureSuggestion) -> str:
+    """the directive DiscoPoP would suggest for the loop if it had no blockers"""
+    data = suggestion.data
+    parts = [suggestion.pragma or "#pragma omp parallel for"]
+    for key, clause in _CLAUSES:
+        names = [str(v) for v in data.get(key) or []]
+        if names:
+            parts.append(clause + "(" + ", ".join(names) + ")")
+    reductions: Dict[str, List[str]] = dict()
+    for entry in data.get("reduction") or []:
+        operation, _, name = str(entry).rpartition(":")
+        reductions.setdefault(operation or "+", []).append(name)
+    for operation, names in sorted(reductions.items()):
+        parts.append("reduction(" + operation + ":" + ", ".join(names) + ")")
+    return " ".join(parts)
+
+
+def describe_suggestion(suggestion: UnsureSuggestion, files: SourceFiles) -> str:
+    """the suggestion as the MCP server describes suggestions to agents: where, which pattern, which directive"""
+    pattern = "reduction" if suggestion.type == "reduction" else "doall"
+    lines = [
+        "Suggestion "
+        + str(suggestion.pattern_id)
+        + ": loop "
+        + files.display_path(suggestion.start.file_id)
+        + ":"
+        + str(suggestion.start.line)
+        + "-"
+        + str(suggestion.end.line)
+        + ": "
+        + pattern
+        + ", "
+        + str(len(suggestion.blockers))
+        + " blocker"
+        + ("" if len(suggestion.blockers) == 1 else "s")
+        + ".",
+        "",
+        "Without the blockers, DiscoPoP would suggest this directive for the loop:",
+        "",
+        "    " + directive_without_blockers(suggestion),
+        "",
+        "Its data sharing clauses were derived as if the blockers did not exist.",
+    ]
+    for note in suggestion.data.get("sharing_notes") or []:
+        lines.append("Note: " + str(note))
+    return "\n".join(lines)

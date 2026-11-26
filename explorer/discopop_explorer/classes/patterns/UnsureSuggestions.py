@@ -9,7 +9,8 @@
 iterations, see design/agent_checked_suggestions.md.
 
 They are kept apart from the detection result on purpose. Many tools walk every list of the PatternStorage, and an
-unsure suggestion must never be taken for a parallelization suggestion: its patch is incorrect without a change."""
+unsure suggestion must never be taken for a parallelization suggestion: adding its directive alone would be incorrect.
+"""
 
 from __future__ import annotations
 
@@ -26,8 +27,8 @@ from discopop_explorer.classes.patterns.PatternInfo import PatternInfo
 FORMAT_VERSION = 1
 DEFAULT_MAX_BLOCKERS = 4
 NOTE = (
-    "Not parallelization suggestions: each loop below has dependencies between its iterations (blockers), and its "
-    "patch is incorrect as it is."
+    "Not parallelization suggestions: each loop below has dependencies between its iterations (blockers), so adding "
+    "its directive alone would make the program incorrect."
 )
 
 

@@ -16,13 +16,7 @@ from typing import Dict, List
 from discopop_library.PatchRepair.patchset import PatchSet
 from discopop_library.PatchRepair.prompts import strip_license_header
 from discopop_library.SuggestionCheck.answers import Justification
-from discopop_library.SuggestionCheck.facts import (
-    SourceFiles,
-    code_excerpts,
-    describe_blockers,
-    file_list,
-    patch_blocks,
-)
+from discopop_library.SuggestionCheck.facts import SourceFiles, code_excerpts, describe_blockers, describe_suggestion
 from discopop_library.SuggestionCheck.unsure import UnsureSuggestion
 
 PROMPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
@@ -39,33 +33,29 @@ def substitute(template: str, values: Dict[str, str]) -> str:
     return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), template)
 
 
-def identity(suggestion: UnsureSuggestion, files: SourceFiles) -> str:
-    return (
-        "The loop: `"
-        + files.display_path(suggestion.start.file_id)
-        + "` lines "
-        + str(suggestion.start.line)
-        + "-"
-        + str(suggestion.end.line)
-        + " (DiscoPoP suggestion "
-        + str(suggestion.pattern_id)
-        + ", "
-        + str(len(suggestion.blockers))
-        + " blocker"
-        + ("" if len(suggestion.blockers) == 1 else "s")
-        + ")."
-    )
+def patch_text(patch: PatchSet, files: SourceFiles) -> str:
+    """the patch with the paths the agent sees, instead of the paths it was computed with"""
+    blocks: List[str] = []
+    for file_id, entry in sorted(patch.entries.items()):
+        name = files.display_path(file_id)
+        lines = []
+        for line in entry.text.splitlines():
+            if line.startswith("--- "):
+                line = "--- a/" + name
+            elif line.startswith("+++ "):
+                line = "+++ b/" + name
+            lines.append(line)
+        blocks.append("```diff\n" + "\n".join(lines) + "\n```")
+    return "\n\n".join(blocks)
 
 
-def check_prompt(suggestion: UnsureSuggestion, plain: PatchSet, files: SourceFiles) -> str:
+def check_prompt(suggestion: UnsureSuggestion, files: SourceFiles) -> str:
     return substitute(
         load_template("check"),
         {
-            "identity": identity(suggestion, files),
+            "description": describe_suggestion(suggestion, files),
             "blockers": describe_blockers(suggestion, files),
             "code": code_excerpts(suggestion, files),
-            "patch": patch_blocks(plain, files),
-            "files": file_list(files),
         },
     )
 
@@ -80,10 +70,10 @@ def review_prompt(
     return substitute(
         load_template("review"),
         {
-            "identity": identity(suggestion, files),
+            "description": describe_suggestion(suggestion, files),
             "blockers": describe_blockers(suggestion, files),
             "code": code_excerpts(suggestion, files),
-            "patch": patch_blocks(approved, files),
+            "patch": patch_text(approved, files),
             "assumption": assumption,
             "justifications": "\n\n".join(
                 "Blocker " + str(j.index) + ": " + j.text + "\nEvidence: " + ", ".join(j.evidence)

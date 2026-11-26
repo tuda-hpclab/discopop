@@ -5,20 +5,18 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""A tiny project with one unsure loop, its plain patch and a scripted agent, for testing the check without a
-model."""
+"""A tiny project with one unsure loop and a scripted agent which may change its workspace, for testing the check
+without a model."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import pytest
 
-from discopop_library.PatchGenerator.diffs import get_diffs_from_modified_code
-from discopop_library.PatchRepair.patching import _diff_arguments
-from discopop_library.PatchRepair.patchset import PatchEntry, PatchSet
 from discopop_library.SuggestionCheck.check import AgentReply
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.unsure import Access, Blocker, Location, UnsureSuggestion
@@ -40,30 +38,32 @@ LOOP_LINE = 7
 PARALLEL = "  #pragma omp parallel for\n"
 
 
-def diff(files: SourceFiles, file_id: int, modified: str) -> str:
-    return get_diffs_from_modified_code(files.file_mapping, {file_id: modified}, _diff_arguments())[file_id]
-
-
 def with_line_before(text: str, line: int, inserted: str) -> str:
     lines = text.splitlines(keepends=True)
     return "".join(lines[: line - 1] + [inserted] + lines[line - 1 :])
 
 
+# the code of an approval: the loop's directive and a change elsewhere
+APPROVED_SOURCE = with_line_before(
+    with_line_before(SOURCE, LOOP_LINE, PARALLEL), 3, "// each thread has its own state\n"
+)
+
+
 @dataclass
 class Project:
+    root: Path
     files: SourceFiles
     suggestion: UnsureSuggestion
-    plain: PatchSet
-
-    def patch_block(self, modified: str) -> str:
-        return "===BEGIN PATCH 1===\n" + diff(self.files, 1, modified) + "\n===END PATCH 1==="
 
 
 @pytest.fixture
 def project(tmp_path: Path) -> Project:
-    source = tmp_path / "code.cpp"
+    root = tmp_path / "project"
+    root.mkdir()
+    source = root / "code.cpp"
     source.write_text(SOURCE)
-    files = SourceFiles({1: source}, str(tmp_path))
+    (root / "README").write_text("not a source file\n")
+    files = SourceFiles({1: source}, str(root))
     blocker = Blocker("RAW", Location(1, 8), Location(1, 8), "dynamic", (Access("_ZL5state", "42"),))
     suggestion = UnsureSuggestion(
         pattern_id=5,
@@ -72,38 +72,55 @@ def project(tmp_path: Path) -> Project:
         end=Location(1, 10),
         pragma="#pragma omp parallel for",
         blockers=[blocker],
+        data={"first_private": ["drawn"], "shared": [], "reduction": []},
     )
-    plain = PatchSet(suggestion_id=5)
-    plain.entries[1] = PatchEntry(1, diff(files, 1, with_line_before(SOURCE, LOOP_LINE, PARALLEL)), source)
-    return Project(files, suggestion, plain)
+    return Project(root, files, suggestion)
+
+
+# what a scripted turn does: answer with a text, change the workspace and answer, or not answer at all (None)
+Step = Union[str, Callable[[Path], str], None]
+
+
+def edits(code: str, answer: str, name: str = "code.cpp") -> Callable[[Path], str]:
+    """a turn which writes code to the file name of its workspace and answers"""
+
+    def step(workdir: Path) -> str:
+        (workdir / name).write_text(code)
+        return answer
+
+    return step
 
 
 class ScriptedAgent:
-    """answers with the given texts in turn; None stands for a call without an answer"""
+    """takes the given turns in order"""
 
-    def __init__(self, answers: List[Optional[str]], sessions: bool = True) -> None:
-        self.answers = list(answers)
+    def __init__(self, steps: List[Step], sessions: bool = True) -> None:
+        self.steps = list(steps)
         # without, the agent reports no session, so a conversation cannot be continued
         self.with_sessions = sessions
         self.prompts: List[str] = []
         self.sessions: List[Optional[str]] = []
+        self.workdirs: List[str] = []
+        # the code of code.cpp in the workspace, when the turn began
+        self.seen_code: List[str] = []
 
-    def __call__(self, prompt: str, session: Optional[str]) -> AgentReply:
+    def __call__(self, prompt: str, session: Optional[str], workdir: str) -> AgentReply:
         self.prompts.append(prompt)
         self.sessions.append(session)
-        if not self.answers:
+        self.workdirs.append(workdir)
+        source = Path(workdir) / "code.cpp"
+        self.seen_code.append(source.read_text() if source.exists() else "")
+        if not self.steps:
             raise AssertionError("the agent was asked more often than scripted")
-        answer = self.answers.pop(0)
-        if answer is None:
+        step = self.steps.pop(0)
+        if step is None:
             return AgentReply(text="", answered=False, failure="unreachable")
-        return AgentReply(
-            text=answer, answered=True, session="s" + str(len(self.prompts)) if self.with_sessions else None
-        )
+        text = step(Path(workdir)) if callable(step) else step
+        session_id = "s" + str(len(self.prompts)) if self.with_sessions else None
+        return AgentReply(text=text, answered=True, session=session_id)
 
 
 def json_answer(**fields: object) -> str:
-    import json
-
     return "```json\n" + json.dumps(fields) + "\n```"
 
 
@@ -121,3 +138,7 @@ def approval(
             }
         ],
     }
+
+
+APPROVAL = json_answer(**approval())
+AGREE = json_answer(verdict="agree", reason="holds")
