@@ -45,6 +45,7 @@ from discopop_explorer.json_serializer import PatternBaseSerializer
 from discopop_explorer.utilities.PEGraphConstruction.parser import parse_inputs
 from discopop_explorer.utilities.callpath_states import read_callpath_tree
 from discopop_explorer.pattern_detection import PatternDetectorX
+from discopop_explorer.classes.patterns.UnsureSuggestions import DEFAULT_MAX_BLOCKERS, UnsureSuggestions
 from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 
 from discopop_library.HostpotLoader.hostpot_loader import run as load_hotspots
@@ -90,6 +91,10 @@ class ExplorerArguments(GeneralArguments):
     doall_default_none: bool = True
     # record every dependency preventing a do-all loop in the pattern decisions, not only the first one
     all_blocking_dependencies: bool = False
+    # None means no file, otherwise the path. Loops which are parallelizable only if a few dependencies between their
+    # iterations are harmless, see design/agent_checked_suggestions.md
+    enable_unsure_suggestions_file: Optional[str] = None
+    unsure_max_blockers: int = DEFAULT_MAX_BLOCKERS
 
     def __post_init__(self) -> None:
         self.__validate()
@@ -145,6 +150,7 @@ def __run(
     pattern_decisions: Optional[PatternDecisionLog] = None,
     doall_default_none: bool = True,
     all_blocking_dependencies: bool = False,
+    unsure_suggestions: Optional[UnsureSuggestions] = None,
 ) -> DetectionResult:
     """pattern_decisions, if given, receives which candidates the pattern detection considered and
     why it rejected them. It stays empty when existing patterns are loaded."""
@@ -183,7 +189,7 @@ def __run(
         with stage(f"Running plugin: {plugin_name}"):
             pet = p.run_before(pet)
 
-    pattern_detector = PatternDetectorX(pet, pattern_decisions)
+    pattern_detector = PatternDetectorX(pet, pattern_decisions, unsure_suggestions)
 
     if load_existing_doall_and_reduction_patterns:
         res: DetectionResult = pattern_detector.load_existing_doall_and_reduction_patterns(
@@ -267,6 +273,12 @@ def run(arguments: ExplorerArguments) -> None:
 
         start = time.time()
         pattern_decisions = PatternDecisionLog() if arguments.enable_pattern_decisions_file is not None else None
+        unsure_suggestions = (
+            UnsureSuggestions(arguments.unsure_max_blockers)
+            if arguments.enable_unsure_suggestions_file is not None
+            and not arguments.load_existing_doall_and_reduction_patterns
+            else None
+        )
 
         with stage("Detecting patterns"):
             res = __run(
@@ -291,6 +303,7 @@ def run(arguments: ExplorerArguments) -> None:
                 pattern_decisions=pattern_decisions,
                 doall_default_none=arguments.doall_default_none,
                 all_blocking_dependencies=arguments.all_blocking_dependencies,
+                unsure_suggestions=unsure_suggestions,
             )
 
         end = time.time()
@@ -335,6 +348,10 @@ def run(arguments: ExplorerArguments) -> None:
         if pattern_decisions is not None and decisions_file is not None:
             if not arguments.load_existing_doall_and_reduction_patterns:
                 pattern_decisions.save(decisions_file)
+
+        # read by the patch generator below, so written before it runs
+        if unsure_suggestions is not None and arguments.enable_unsure_suggestions_file is not None:
+            unsure_suggestions.save(arguments.enable_unsure_suggestions_file)
 
         # create applicable patch files from the found suggestions
         # The patch generator reports its own stages and progress bars on the console. They are not captured, and

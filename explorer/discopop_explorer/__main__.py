@@ -13,6 +13,7 @@ from discopop_library.GlobalLogger.setup import setup_logger
 
 from discopop_library.HostpotLoader.HotspotType import parse_hotspot_types
 from discopop_library.PathManagement.PathManagement import get_path, get_path_or_none
+from discopop_explorer.classes.patterns.UnsureSuggestions import DEFAULT_MAX_BLOCKERS
 from discopop_explorer.discopop_explorer import ExplorerArguments, run
 
 
@@ -133,6 +134,17 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "their iterations; for finding out what has to change before a loop can be parallelized.",
     )
     experimental_parser.add_argument(
+        "--unsure-suggestions", type=str, nargs="?", default=None, const="explorer/unsure_suggestions.json",
+        help="Also write the loops which are not parallelizable only because of a few dependencies between their "
+        "iterations, with these dependencies, to this JSON file (default: explorer/unsure_suggestions.json). They are "
+        "not suggestions: their patches are incorrect as they are. See design/agent_checked_suggestions.md.",
+    )
+    experimental_parser.add_argument(
+        "--unsure-max-blockers", type=int, default=DEFAULT_MAX_BLOCKERS,
+        help="The largest number of distinct blocking dependencies a loop of --unsure-suggestions may have. Default: "
+        + str(DEFAULT_MAX_BLOCKERS),
+    )
+    experimental_parser.add_argument(
         "--plot-pet", type=str, nargs="?", default=None, const="explorer/pet_plot.gexf",
         help="Plots PET as a GEXF file. If a path is given (file extension has to be .gexf), the PET Graph is written "
         "to the given file, otherwise to pet_plot.gexf"
@@ -154,6 +166,9 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
     # fmt: on
 
     arguments = parser.parse_args(argv)
+
+    if arguments.unsure_max_blockers < 1:
+        parser.error("--unsure-max-blockers must be at least 1")
 
     try:
         hotspot_types = parse_hotspot_types(arguments.hotspot_types)
@@ -213,6 +228,8 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         visualize_on=None,
         doall_default_none=arguments.doall_default_none,
         all_blocking_dependencies=arguments.all_blocking_dependencies,
+        enable_unsure_suggestions_file=arguments.unsure_suggestions,
+        unsure_max_blockers=arguments.unsure_max_blockers,
         enable_pattern_decisions_file=arguments.pattern_decisions,
     )
 
