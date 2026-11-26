@@ -10,19 +10,33 @@ what it changed. Recorded with the transcripts, so that a claim like "I read the
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional
+import os
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from discopop_library.PatchRepair.llm_backends.base import iter_json_objects
 
 # the argument which says the most about a call, in this order
-_KEY_ARGUMENTS = ("file_path", "filePath", "path", "pattern", "command", "url", "query")
+_KEY_ARGUMENTS = ("file_path", "filePath", "function", "path", "pattern", "command", "url", "query")
+# the arguments which name a file
+_PATH_ARGUMENTS = ("file_path", "filePath", "path")
+# tools which show the content of a file, or answer about one: they count as having opened it
+_OPENING_TOOLS = ("read", "view", "edit", "write", "multiedit")
 
 
 @dataclass(frozen=True)
 class ToolCall:
     name: str
     argument: str
+    # the files (or directories) the call names
+    paths: Tuple[str, ...] = field(default=(), compare=False)
+
+    def opens_files(self) -> bool:
+        """whether the call shows the content of the files it names (a search in a directory does not count)"""
+        # imported here: discopop_tools has no dependencies on the check, but keep this module standalone
+        from discopop_library.SuggestionCheck.discopop_tools import is_discopop_tool
+
+        return self.name.lower() in _OPENING_TOOLS or is_discopop_tool(self.name)
 
     def __str__(self) -> str:
         return self.name + (" " + self.argument if self.argument else "")
@@ -48,15 +62,22 @@ def _argument(arguments: Any) -> str:
     return next(iter(values.values()), "")
 
 
+def _paths(arguments: Any) -> Tuple[str, ...]:
+    if not isinstance(arguments, dict):
+        return ()
+    return tuple(v for k in _PATH_ARGUMENTS if isinstance(v := arguments.get(k), str) and v)
+
+
 def _call(node: Dict[str, Any]) -> Optional[ToolCall]:
     # claude: {"type": "tool_use", "name": "Read", "input": {"file_path": ...}}
     if node.get("type") == "tool_use" and isinstance(node.get("name"), str):
-        return ToolCall(node["name"], _argument(node.get("input")))
+        return ToolCall(node["name"], _argument(node.get("input")), _paths(node.get("input")))
     # opencode: {"type": "tool", "tool": "read", "callID": ..., "state": {"input": {"filePath": ...}}}; written
     # against no promised schema, like the backend's own parser, and not yet checked against a real run
     if isinstance(node.get("tool"), str) and ("state" in node or "callID" in node):
         state = node.get("state")
-        return ToolCall(node["tool"], _argument(state.get("input") if isinstance(state, dict) else None))
+        arguments = state.get("input") if isinstance(state, dict) else None
+        return ToolCall(node["tool"], _argument(arguments), _paths(arguments))
     return None
 
 
@@ -76,3 +97,19 @@ def tool_calls(raw: str) -> List[ToolCall]:
                 seen.add(key)
             calls.append(call)
     return calls
+
+
+def opened_files(calls: List[ToolCall], workdir: str) -> Set[str]:
+    """the files the calls showed the content of, relative to the copy the agent worked in (paths outside it are
+    left out; relative paths are taken as relative to it)"""
+    root = os.path.realpath(workdir)
+    opened: Set[str] = set()
+    for call in calls:
+        if not call.opens_files():
+            continue
+        for path in call.paths:
+            absolute = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
+            relative = os.path.relpath(absolute, root)
+            if relative != ".." and not relative.startswith(".." + os.sep):
+                opened.add(relative)
+    return opened

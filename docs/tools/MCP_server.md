@@ -69,7 +69,9 @@ The server offers 12 tools. In workflow order:
 | `get_side_effects` | Describe in a text the data a function reads and writes outside of itself, including its callees. |
 | `run_configuration` | Build the project as it is and run a configuration with a given thread count; reports the time, the result of `validate.sh`, and the errors and warnings of the build and the run. |
 
-`--tools analysis` hides the four project setup tools (`initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration`, `delete_execution_configuration`). Use it against a project that is already configured. The default is `--tools all`.
+`--tools analysis` hides the four project setup tools (`initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration`, `delete_execution_configuration`). Use it against a project that is already configured. `--tools readonly` offers only the tools marked read-only (`get_project_status`, `get_configurations`, `get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects`): nothing that profiles, builds, runs or sets up a project. The default is `--tools all`.
+
+`--project <path>` binds the server to one project: every tool works on it, whatever `project_path` the caller passes, and the tools are listed without `project_path`. It implies `--no-daemon`, which runs every call in the server's own process and never forwards to a daemon, even if one is listening. The [suggestion check](Suggestion_check.md) starts the server this way for its agents.
 
 The analysis tools answer in short text, one line per hotspot, suggestion or effect. The setup and pipeline tools answer in JSON that holds the facts of the call and, where useful, a `next_step` hint; an error is `{"status": "error", "message": ..., "next_step": ...}`.
 

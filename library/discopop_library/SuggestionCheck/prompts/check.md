@@ -46,8 +46,15 @@ does.
 - **Every blocker on its own.** For each blocker, state why it does not make the
   parallel loop wrong, and cite the lines (path:line) this rests on. One blocker
   without a justification means the answer is a rejection.
-- **Only facts about the code.** Do not rely on typical inputs. Read the code you
-  need, e.g. declarations and what the callers do with a result. If the answer
+- **Read before you decide.** The code excerpts below are incomplete. Before you
+  answer, open for every blocker:
+  - the declarations of the data it involves, with their storage class and type;
+  - the definitions of the functions called on its lines;
+  - the code after the loop that uses this data.
+
+  DiscoPoP records which files you open; an approval without the files of the
+  blockers is sent back.
+- **Only facts about the code.** Do not rely on typical inputs. If the answer
   depends on code you cannot find, answer "unsure".
 - **Both mistakes are not equal.** A rejected loop only costs a missed speedup. A
   wrong approval makes the program compute wrong results. "unsure" is a valid
@@ -70,6 +77,10 @@ You can read all of it and change files in it. Do not run commands.
 - The suggested directive below is a starting point, not a requirement: its
   clauses may be wrong once the blockers are taken into account.
 - For a rejection, or if you are unsure, change nothing.
+
+## DiscoPoP's data
+
+{discopop_tools}
 
 ## The suggestion
 

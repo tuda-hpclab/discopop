@@ -237,6 +237,19 @@ in it.
   * `opencode`: no `--auto`, permissions `edit: allow`, `bash: deny`,
     `webfetch: deny` (`OPENCODE_CONFIG_CONTENT`). Still to be verified with a real
     run.
+* **DiscoPoP's data (MCP).** The agents get DiscoPoP's MCP server, started with
+  `--tools readonly --project <project>`: only tools marked read-only can be listed,
+  every call works on the project (the agent never needs its real path), and the
+  server never forwards to a daemon of the user. For `claude`, only
+  `get_side_effects` and `explain_parallelization` are allowed (`--allowedTools`);
+  `--strict-mcp-config` keeps every other MCP server away. `--no-discopop-tools`
+  switches it off. The answers are about the profiled runs: evidence, not proof.
+* **Reading is checked where it can be.** The prompt requires opening, per blocker,
+  the declarations of the data, the called functions and the code after the loop.
+  From the reported tool calls the check knows which files were opened: an approval
+  without the files of the blockers' lines is sent back, every result records
+  `read_blocker_files` (`null` without reported tool calls). That the declaration
+  itself was read cannot be checked.
 * **Escape check:** the project's own source files are compared with their state
   before every agent call; a change aborts the run.
 * The reviewer (§5.5) gets a copy with the changes applied and read-only tools.

@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from discopop_library.PatchRepair.patchset import PatchSet
 from discopop_library.SuggestionCheck.answers import (
@@ -28,7 +28,7 @@ from discopop_library.SuggestionCheck.answers import (
 )
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.prompts import check_prompt, retry_prompt, review_prompt
-from discopop_library.SuggestionCheck.tool_calls import tool_calls
+from discopop_library.SuggestionCheck.tool_calls import opened_files, tool_calls
 from discopop_library.SuggestionCheck.unsure import UnsureSuggestion
 from discopop_library.SuggestionCheck.workspace import Changes, Workspace, patch_of
 
@@ -75,6 +75,8 @@ class CheckOptions:
     prompt_dir: Optional[str] = None
     # whether an approval whose results may differ by rounding (floating-point operations in another order) counts
     accept_rounding: bool = True
+    # whether the agents can query DiscoPoP's data (the MCP server, see discopop_tools)
+    discopop_tools: bool = False
 
 
 @dataclass
@@ -95,6 +97,9 @@ class Outcome:
     unanswered: int = 0
     # tool calls of all agent calls (reading, searching, editing), as far as the backend reports them
     tool_calls: int = 0
+    # whether the agent opened every file holding a blocker's line in the attempt that decided; None if its backend
+    # reports no tool calls, so that it cannot be told
+    read_blocker_files: Optional[bool] = None
     gates: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -112,6 +117,7 @@ class Outcome:
             "calls": self.calls,
             "unanswered": self.unanswered,
             "tool_calls": self.tool_calls,
+            "read_blocker_files": self.read_blocker_files,
             "gates": self.gates,
         }
 
@@ -214,6 +220,39 @@ def change_gates(changes: Changes, suggestion: UnsureSuggestion, files: SourceFi
     return patch_of(changes.mapped, files, suggestion.pattern_id), ""
 
 
+def blocker_files(suggestion: UnsureSuggestion, files: SourceFiles) -> List[str]:
+    """the files holding the lines of the blockers, as the agent sees them in its copy. Files outside the project are
+    not in the copy, so they cannot be required."""
+    names = set()
+    for blocker in suggestion.blockers:
+        for location in (blocker.source, blocker.sink):
+            if location is not None and location.file_id in files.file_mapping:
+                name = files.display_path(location.file_id)
+                if not os.path.isabs(name):
+                    names.add(name)
+    return sorted(names)
+
+
+class _Reading:
+    """what the agent opened during one attempt"""
+
+    def __init__(self, required: List[str]) -> None:
+        self.required = required
+        self.reported = False
+        self.opened: Set[str] = set()
+
+    def add(self, reply: AgentReply, workdir: str) -> None:
+        if reply.events:
+            self.reported = True
+            self.opened |= opened_files(tool_calls(reply.events), workdir)
+
+    def missing(self) -> List[str]:
+        return [name for name in self.required if name not in self.opened] if self.reported else []
+
+    def verdict(self) -> Optional[bool]:
+        return (not self.missing()) if self.reported else None
+
+
 def check_suggestion(
     suggestion: UnsureSuggestion,
     files: SourceFiles,
@@ -231,16 +270,20 @@ def check_suggestion(
     outcome = Outcome(pattern_id=suggestion.pattern_id, state=STATE_FAILED)
     conversation = _Conversation(agent, outcome, budget, artifacts, "check", guard)
     known_files = [files.display_path(i) for i in sorted(files.file_mapping)]
+    required_files = blocker_files(suggestion, files)
     last_problem = ""
     try:
         for attempt in range(1, budget.prompts + 1):
             workspace = Workspace(project_root, files, ignore=options.ignore)
             try:
-                message = check_prompt(suggestion, files, options.prompt_dir)
+                message = check_prompt(suggestion, files, options.prompt_dir, options.discopop_tools)
+                reading = _Reading(required_files)
                 session: Optional[str] = None
                 for turn in range(budget.retries + 1):
                     reply = conversation.ask(message, session, workspace.root, str(attempt) + "_" + str(turn))
                     session = reply.session
+                    reading.add(reply, workspace.root)
+                    outcome.read_blocker_files = reading.verdict()
                     try:
                         answer = parse_check_answer(reply.text, len(suggestion.blockers), known_files)
                         failure = ""
@@ -252,8 +295,15 @@ def check_suggestion(
                             outcome.state = STATE_REJECTED
                             outcome.reason = answer.reason
                             return outcome
-                        changes = workspace.changes()
-                        patch, failure = change_gates(changes, suggestion, files)
+                        if reading.missing():
+                            # only what can be checked: the files were opened, not that the declarations were read
+                            failure = (
+                                "Before approving, open the files of the blockers and read the declarations of the "
+                                "data involved. Not opened: " + ", ".join(reading.missing()) + "."
+                            )
+                        else:
+                            changes = workspace.changes()
+                            patch, failure = change_gates(changes, suggestion, files)
                     if failure:
                         outcome.gates.append({"attempt": attempt, "turn": turn, "detail": failure})
                         last_problem = failure
@@ -302,6 +352,7 @@ def check_suggestion(
     outcome.assumption = ""
     outcome.justifications = []
     outcome.result_differences = None
+    outcome.read_blocker_files = None
     outcome.review = None
     outcome.patch = None
     return outcome
@@ -333,6 +384,7 @@ def _review(
         outcome.justifications,
         outcome.result_differences or "",
         options.prompt_dir,
+        options.discopop_tools,
     )
     workspace = Workspace(project_root, files, ignore=options.ignore)
     try:

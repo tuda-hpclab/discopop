@@ -47,13 +47,37 @@ def patch_text(patch: PatchSet, files: SourceFiles) -> str:
     return "\n\n".join(blocks)
 
 
-def check_prompt(suggestion: UnsureSuggestion, files: SourceFiles, prompt_dir: Optional[str] = None) -> str:
+DISCOPOP_TOOLS_ON = """DiscoPoP's profiling data of this project can be queried with two tools. They only
+read, and always work on this project:
+
+- `get_side_effects` (a function name; a file and a line inside its definition to
+  pick one of several): the data the function was observed to read and write
+  outside of itself, including through the functions it calls, with the kind of
+  each (global, parameter, other) and the lines of the accesses. Use it for the
+  functions called on the blocker lines.
+- `explain_parallelization` (a file and lines): why DiscoPoP did or did not
+  suggest a parallelization for these lines, with the dependencies.
+
+Their answers describe the profiled runs: they are evidence, not proof, and do not
+replace reading the code. Justifications still cite code (path:line)."""
+
+DISCOPOP_TOOLS_OFF = "DiscoPoP's profiling data is not available in this run: rely on the code."
+
+
+def discopop_tools_text(enabled: bool) -> str:
+    return DISCOPOP_TOOLS_ON if enabled else DISCOPOP_TOOLS_OFF
+
+
+def check_prompt(
+    suggestion: UnsureSuggestion, files: SourceFiles, prompt_dir: Optional[str] = None, discopop_tools: bool = False
+) -> str:
     return substitute(
         load_template("check", prompt_dir),
         {
             "description": describe_suggestion(suggestion, files),
             "blockers": describe_blockers(suggestion, files),
             "code": code_excerpts(suggestion, files),
+            "discopop_tools": discopop_tools_text(discopop_tools),
         },
     )
 
@@ -66,6 +90,7 @@ def review_prompt(
     justifications: List[Justification],
     result_differences: str = "",
     prompt_dir: Optional[str] = None,
+    discopop_tools: bool = False,
 ) -> str:
     return substitute(
         load_template("review", prompt_dir),
@@ -76,6 +101,7 @@ def review_prompt(
             "patch": patch_text(approved, files),
             "assumption": assumption,
             "result_differences": result_differences,
+            "discopop_tools": discopop_tools_text(discopop_tools),
             "justifications": "\n\n".join(
                 "Blocker " + str(j.index) + ": " + j.text + "\nEvidence: " + ", ".join(j.evidence)
                 for j in justifications

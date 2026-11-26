@@ -45,6 +45,7 @@ TEMPLATES: Tuple[Template, ...] = (
             ("description", "the suggestion: location and the directive DiscoPoP would suggest without the blockers"),
             ("blockers", "the blockers in words, with the lines and the data involved"),
             ("code", "the loop and the code around every blocker, with line numbers"),
+            ("discopop_tools", "which of DiscoPoP's data the agent can query, or that it cannot in this run"),
         ),
     ),
     Template(
@@ -59,6 +60,7 @@ TEMPLATES: Tuple[Template, ...] = (
             ("assumption", "the assumption the approval states"),
             ("result_differences", 'how the results may differ, as the approval declares: "none" or "rounding"'),
             ("justifications", "the justification of every blocker, with its evidence"),
+            ("discopop_tools", "which of DiscoPoP's data the agent can query, or that it cannot in this run"),
         ),
     ),
     Template(

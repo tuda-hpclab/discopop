@@ -23,6 +23,7 @@ Primary use cases:
 """
 
 import asyncio
+import os
 import json
 import logging
 import sys
@@ -204,9 +205,18 @@ _SETUP_TOOLS = [
     delete_execution_configuration,
 ]
 
+
+def _read_only(tool: Any) -> bool:
+    annotations = getattr(tool.TOOL, "annotations", None)
+    return bool(annotations is not None and annotations.readOnlyHint)
+
+
 TOOL_SETS = {
     "all": _ALL_TOOLS,
     "analysis": [tool for tool in _ALL_TOOLS if tool not in _SETUP_TOOLS],
+    # only the tools marked read-only: no profiling, no building or running, no changes to the project. For callers
+    # that must not change anything, e.g. the agents of discopop_suggestion_check
+    "readonly": [tool for tool in _ALL_TOOLS if _read_only(tool)],
 }
 DEFAULT_TOOL_SET = "all"
 
@@ -333,12 +343,24 @@ def _is_daemon_running(port: int) -> bool:
         return False
 
 
+def bound_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The input schema without project_path, which a server bound to a project fills in itself."""
+    result = dict(schema)
+    result["properties"] = {k: v for k, v in (schema.get("properties") or {}).items() if k != "project_path"}
+    if "required" in schema:
+        result["required"] = [r for r in schema["required"] if r != "project_path"]
+    return result
+
+
 class DiscoPopMCPServer:
-    def __init__(self, debug: bool = False, tool_set: str = DEFAULT_TOOL_SET):
+    def __init__(self, debug: bool = False, tool_set: str = DEFAULT_TOOL_SET, project: Optional[str] = None):
         self.server = Server("discopop_mcp_server", instructions=_SERVER_INSTRUCTIONS)
         self.debug = debug
         self.tool_set = tool_set
         self._tools = TOOL_SETS[tool_set]
+        # bound to one project: every call works on it, whatever project_path the caller gives, and the tools are
+        # listed without project_path
+        self.project = os.path.abspath(project) if project else None
         _setup_logging(debug=debug)
         self._ctx = ToolContext(debug=debug)
         self._limiter: Optional[anyio.CapacityLimiter] = None
@@ -364,6 +386,8 @@ class DiscoPopMCPServer:
         # the argument and the type expected, which the SDK's does not.
         @self.server.call_tool(validate_input=False)  # type: ignore[misc, untyped-decorator]
         async def handle_tool_call(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+            if self.project is not None:
+                arguments = {**(arguments or {}), "project_path": self.project}
             handler = _dispatch.get(name)
             if not handler:
                 self._ctx.log_call(name, arguments)
@@ -412,6 +436,8 @@ class DiscoPopMCPServer:
         @self.server.list_tools()  # type: ignore[misc, untyped-decorator]
         async def list_tools() -> list[Tool]:
             tools = [mod.TOOL for mod in self._tools]
+            if self.project is not None:
+                tools = [t.model_copy(update={"inputSchema": bound_schema(t.inputSchema)}) for t in tools]
             logger.debug(f"Listed {len(tools)} available tools (tool set: {self.tool_set})")
             return tools
 
@@ -695,8 +721,21 @@ Available agents: {', '.join(agent_choices)}
             "the project setup tools (initialize_discopop_directory, set_compile_script, "
             "create_execution_configuration, delete_execution_configuration) — use it against a project that is "
             "already "
-            "configured, so those tools can neither be listed nor called"
+            "configured, so those tools can neither be listed nor called; 'readonly' offers only the tools that "
+            "change nothing (no profiling, building, running or project setup)"
         ),
+    )
+    parser.add_argument(
+        "--no-daemon",
+        action="store_true",
+        help="Execute every tool call in this process; never forward to a daemon, even if one is listening",
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        metavar="PATH",
+        help="Bind the server to this project: every tool works on it, whatever project_path the caller gives "
+        "(implies --no-daemon)",
     )
     parser.add_argument(
         "--daemon-port",
@@ -787,6 +826,16 @@ Available agents: {', '.join(agent_choices)}
             sys.exit(0)
         except Exception as e:
             logger.error(f"Daemon fatal error: {e}", exc_info=True)
+            sys.exit(1)
+    elif args.no_daemon or args.project:
+        server = DiscoPopMCPServer(debug=args.debug, tool_set=args.tools, project=args.project)
+        try:
+            asyncio.run(server.run())
+        except KeyboardInterrupt:
+            logger.info("Server shutting down...")
+            sys.exit(0)
+        except Exception as e:
+            logger.error(f"Fatal error: {e}", exc_info=True)
             sys.exit(1)
     else:
         proxy = DiscoPopMCPProxy(daemon_port=args.daemon_port, debug=args.debug, tool_set=args.tools)

@@ -49,6 +49,9 @@ def parse_args() -> SuggestionCheckArguments:
     parser.add_argument("--reject-rounding", dest="accept_rounding", action="store_false", help="Reject approvals "
                         "whose results may differ from the sequential program by rounding, i.e. through floating-point "
                         "operations in another order. Accepted by default; such approvals are marked in the results.")
+    parser.add_argument("--no-discopop-tools", dest="discopop_tools", action="store_false", help="Do not give "
+                        "the agents DiscoPoP's data (side effects of functions, why code was not parallelized) through "
+                        "the MCP server. By default they get it if discopop_mcp_server is found, read-only.")
     parser.add_argument("--prompt-dir", default=None, help="Directory with the project's own prompt "
                         "templates (check.md, review.md, retry.md). Default: "
                         ".discopop/project/prompts/suggestion_check, as edited in the GUI (Settings > Suggestion "
@@ -77,6 +80,7 @@ def parse_args() -> SuggestionCheckArguments:
             llm_config=arguments.llm_config,
             accept_rounding=arguments.accept_rounding,
             prompt_dir=arguments.prompt_dir,
+            discopop_tools=arguments.discopop_tools,
         )
     except ValueError as error:
         parser.error(str(error))

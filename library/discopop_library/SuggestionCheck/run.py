@@ -28,6 +28,9 @@ from discopop_library.SuggestionCheck.check import (
     Outcome,
     check_suggestion,
 )
+from discopop_library.SuggestionCheck.discopop_tools import EXECUTABLE as DISCOPOP_TOOLS_EXECUTABLE
+from discopop_library.SuggestionCheck.discopop_tools import DiscoPoPTools
+from discopop_library.SuggestionCheck.discopop_tools import locate as locate_discopop_tools
 from discopop_library.SuggestionCheck.prompt_store import prompt_info
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.results import Results
@@ -54,8 +57,9 @@ _OPENCODE_PERMISSIONS = {
 }
 
 
-def restricted(profile: Dict[str, Any], mode: str) -> Dict[str, Any]:
-    """profile with the agent's tools restricted to mode (EDIT or READ) in its working directory"""
+def restricted(profile: Dict[str, Any], mode: str, tools: Optional[DiscoPoPTools] = None) -> Dict[str, Any]:
+    """profile with the agent's tools restricted to mode (EDIT or READ) in its working directory, and to the
+    described tools of DiscoPoP's MCP server if tools is given"""
     result = copy.deepcopy(profile)
     backend = llm_backends.backend_of(result)
     if backend == "claude":
@@ -63,15 +67,17 @@ def restricted(profile: Dict[str, Any], mode: str) -> Dict[str, Any]:
         if mode == EDIT:
             # nobody answers permission prompts: edits in the working directory must not need one
             arguments += ["--permission-mode", "acceptEdits"]
+        if tools is not None:
+            arguments += tools.claude_arguments()
         result["extra_args"] = list(result.get("extra_args") or []) + arguments
     elif backend == "opencode":
         # never auto-approve; what is not allowed is denied. Not yet verified against a real opencode run.
         result.setdefault("backend_options", {})["auto"] = False
         result["auto"] = False
-        result["env"] = {
-            **(result.get("env") or {}),
-            "OPENCODE_CONFIG_CONTENT": json.dumps({"permission": _OPENCODE_PERMISSIONS[mode]}),
-        }
+        config: Dict[str, Any] = {"permission": _OPENCODE_PERMISSIONS[mode]}
+        if tools is not None:
+            config.update(tools.opencode_config())
+        result["env"] = {**(result.get("env") or {}), "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
     else:
         raise ValueError("the suggestion check cannot restrict the tools of the backend " + str(backend))
     return result
@@ -80,8 +86,10 @@ def restricted(profile: Dict[str, Any], mode: str) -> Dict[str, Any]:
 class BackendAgent:
     """an agent which drives the backend of a profile in the directory it is given"""
 
-    def __init__(self, profile: Dict[str, Any], timeout: float, mode: str) -> None:
-        self.profile = restricted(profile, mode)
+    def __init__(
+        self, profile: Dict[str, Any], timeout: float, mode: str, tools: Optional[DiscoPoPTools] = None
+    ) -> None:
+        self.profile = restricted(profile, mode, tools)
         self.module = llm_backends.for_profile(self.profile)
         self.timeout = timeout
 
@@ -134,16 +142,31 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
     files = SourceFiles(load_file_mapping(os.path.join(dot, "FileMapping.txt")), project_root)
     guard = ProjectGuard(project_root)
     # what the fingerprint of a build ignores, e.g. a build directory inside the project, is not copied either
+    # DiscoPoP's data through its MCP server, bound to the project which holds the .discopop
+    tools: Optional[DiscoPoPTools] = None
+    tools_state = "off"
+    if arguments.discopop_tools:
+        tools = locate_discopop_tools(os.path.dirname(dot))
+        tools_state = "on" if tools is not None else "unavailable"
+        if tools is None:
+            message = (
+                "DiscoPoP's MCP server (" + DISCOPOP_TOOLS_EXECUTABLE + ") was not found: the agents work without "
+                "DiscoPoP's data. Install it, or pass --no-discopop-tools to silence this."
+            )
+            logger.warning(message)
+            print(message)
     options = CheckOptions(
         ignore=load_fingerprint_ignore(os.path.join(dot, "project")),
         prompt_dir=arguments.effective_prompt_dir,
         accept_rounding=arguments.accept_rounding,
+        discopop_tools=tools is not None,
     )
 
     run_info: Dict[str, Any] = {
         "review": arguments.review,
         "verify": arguments.verify,
         "accept_rounding": arguments.accept_rounding,
+        "discopop_tools": tools_state,
         # which templates were used: a project can replace them (prompt_store)
         "prompts": prompt_info(options.prompt_dir),
     }
@@ -158,7 +181,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
         run_info["model"] = profile.get("model")
 
         def agent_factory(mode: str) -> Agent:
-            return BackendAgent(profile, arguments.agent_timeout, mode)
+            return BackendAgent(profile, arguments.agent_timeout, mode, tools)
 
     budget = Budget(arguments.prompts, arguments.retries, arguments.agent_error_retries)
     results = Results(

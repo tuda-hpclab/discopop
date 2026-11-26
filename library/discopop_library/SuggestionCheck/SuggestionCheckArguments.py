@@ -44,6 +44,8 @@ class SuggestionCheckArguments(GeneralArguments):
     llm_config: Optional[str] = None
     # whether approvals whose results may differ by rounding count (floating-point operations in another order)
     accept_rounding: bool = True
+    # DiscoPoP's data for the agents, through its MCP server (read-only, bound to the project); on if it is found
+    discopop_tools: bool = True
     # the project's own prompt templates; default: .discopop/project/prompts/suggestion_check (see prompt_store)
     prompt_dir: Optional[str] = None
 

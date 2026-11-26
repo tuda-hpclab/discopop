@@ -62,7 +62,7 @@ def test_saving_the_shipped_text_removes_the_project_version(tmp_path: Path) -> 
 
 
 def test_placeholders_which_are_missing_or_unknown() -> None:
-    assert missing_placeholders("check", "{description} {code}") == ["blockers"]
+    assert missing_placeholders("check", "{description} {code} {discopop_tools}") == ["blockers"]
     assert unknown_placeholders("check", "{description} {blockers} {code} {patch} {x_y}") == ["patch", "x_y"]
 
 

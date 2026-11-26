@@ -40,6 +40,10 @@ commands.
   results can differ more than declared, e.g. "none" although floating-point
   operations change their order.
 
+## DiscoPoP's data
+
+{discopop_tools}
+
 ## The suggestion
 
 {description}
