@@ -23,7 +23,7 @@ UNSURE_SUGGESTIONS_FILE = "unsure_suggestions.json"
 # suggestion, and these patches are incorrect as they are.
 UNSURE_PATCH_DIR = "patch_generator_unsure"
 # the members of an unsure suggestion which are not part of its pattern
-_UNSURE_ONLY_KEYS = ("type", "blockers", "read_after_loop")
+_UNSURE_ONLY_KEYS = ("type", "blockers")
 
 
 def unsure_patterns_by_type(path: str) -> Dict[str, List[str]]:

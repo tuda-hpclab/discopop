@@ -17,7 +17,7 @@ import copy
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from discopop_explorer.aliases.NodeID import NodeID
 from discopop_explorer.classes.patterns.PatternDecisions import DependencyRecord
@@ -31,15 +31,63 @@ NOTE = (
 )
 
 
+@dataclass(frozen=True)
+class Blocker:
+    """the dependencies between iterations with the same ends: one statement depending on another (or itself) in an
+    earlier iteration. Its accesses are the variables and memory regions involved, e.g. the size, the data pointer and
+    the elements of a vector a push_back changes; counting them separately would make one problem look like several."""
+
+    type: Optional[str]
+    source_line: Optional[str]
+    sink_line: Optional[str]
+    origin: Optional[str]
+    accesses: Tuple[DependencyRecord, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        accesses: List[Dict[str, Any]] = []
+        for record in self.accesses:
+            access: Dict[str, Any] = {"variable": record.variable, "memory_region": record.memory_region}
+            if record.element_access:
+                access["element_access"] = True
+            accesses.append(access)
+        return {
+            "type": self.type,
+            "source_line": self.source_line,
+            "sink_line": self.sink_line,
+            "origin": self.origin,
+            "accesses": accesses,
+        }
+
+
+def _sort_key(values: Iterable[Any]) -> Tuple[str, ...]:
+    return tuple("" if v is None else str(v) for v in values)
+
+
+def group_blockers(records: Iterable[DependencyRecord]) -> List[Blocker]:
+    """the dependencies grouped by their type, ends and origin, without repetitions, sorted: the order in which they
+    are found follows sets of the task graph, and varies between runs"""
+    groups: Dict[Tuple[Optional[str], ...], Set[DependencyRecord]] = dict()
+    for record in records:
+        key = (record.type, record.source_line, record.sink_line, record.origin)
+        groups.setdefault(key, set()).add(record)
+    return [
+        Blocker(
+            key[0],
+            key[1],
+            key[2],
+            key[3],
+            tuple(sorted(groups[key], key=lambda r: _sort_key(r.to_dict().values()))),
+        )
+        for key in sorted(groups, key=_sort_key)
+    ]
+
+
 @dataclass
 class UnsureLoop:
     """a loop rejected only because of dependencies between its iterations, as found by a detector"""
 
     pet_node_id: NodeID
-    # distinct, sorted
-    blockers: List[DependencyRecord]
-    # the blocker variables which are read after the loop with a value written inside it
-    read_after_loop: List[str]
+    blockers: List[Blocker]
     # builds the pattern the loop would have had without its blockers. Called only once every detector has run,
     # since building a pattern allocates its pattern id (see UnsureSuggestions.build).
     build_pattern: Callable[[], PatternInfo]
@@ -56,7 +104,7 @@ class UnsureSuggestions:
         self.suggestions: List[Tuple[PatternInfo, UnsureLoop]] = []
 
     def accepts(self, blocker_count: int) -> bool:
-        """whether a loop with this many distinct blockers is a near miss"""
+        """whether a loop with this many blockers is a near miss"""
         return 0 < blocker_count <= self.max_blockers
 
     def add(self, loop: UnsureLoop) -> None:
@@ -87,7 +135,6 @@ class UnsureSuggestions:
             entry: Dict[str, Any] = json.loads(json.dumps(copy.copy(pattern), cls=PatternBaseSerializer))
             entry["type"] = pattern_type_of(pattern)
             entry["blockers"] = [b.to_dict() for b in loop.blockers]
-            entry["read_after_loop"] = list(loop.read_after_loop)
             entries.append(entry)
         return {
             "format_version": FORMAT_VERSION,

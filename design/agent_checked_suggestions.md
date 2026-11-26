@@ -62,7 +62,7 @@ meaning.
 | --- | --- |
 | **safe suggestion** | What DiscoPoP reports today: `patterns.json`, `patch_generator/<id>/`. |
 | **unsure suggestion** | A loop rejected only for dependencies between its iterations, with at most `--unsure-max-blockers` distinct blockers. |
-| **blocker** | One such dependency: type, variable, memory region, source and sink line, origin (dynamic or static), element access. |
+| **blocker** | The dependencies between iterations with the same type, source line, sink line and origin (dynamic or static): one statement depending on another, or on itself, in an earlier iteration. Its *accesses* are the variables and memory regions involved; a `push_back` alone touches the size, the data pointer and the elements of a vector, which are one problem, not three. |
 
 State of an unsure suggestion, kept by the check tool (§5.6):
 
@@ -100,7 +100,6 @@ So unsure suggestions get files of their own, which no existing tool reads:
 | File | Content |
 | --- | --- |
 | `explorer/unsure_suggestions.json` | readable list (§4.3) |
-| `explorer/unsure_suggestions_dump.json` | the same suggestions as jsonpickled `DoAllInfo` / `ReductionInfo`, for the autotuner opt-in (§6) |
 | `patch_generator_unsure/<id>/<file_id>.patch` | the plain patches, written by the patch generator (§4.4) |
 | `suggestion_check/` | the check tool's artifacts, its results and the approved patches (§5.6) |
 
@@ -121,8 +120,10 @@ Off by default; `--unsure-suggestions` turns it on. A loop qualifies when
    `loop_carried_dependency` or `unprivatizable_static_dependency`. A loop also
    rejected for an early exit, too few iterations, a missing pattern node or as a
    duplicate does not qualify: an agent cannot change those facts;
-2. it has at most `--unsure-max-blockers` distinct blockers (default 4). A loop with
-   many dependencies between its iterations is not a near miss;
+2. it has at most `--unsure-max-blockers` blockers (default 4). A loop with many
+   dependencies between its iterations is not a near miss. relearn's
+   BarnesHut:57 has 2 (the append, the random number generator), made of 5
+   dependency records;
 3. no copy of it was reported as a safe suggestion.
 
 The hotspot filter of the explorer (`--hotspot-types`) applies as for every other
@@ -160,24 +161,28 @@ unchanged (§3).
       "first_private": [], "private": [], "last_private": [], "shared": ["..."], "reduction": [],
       "blockers": [
         {
-          "type": "RAW", "variable": "this1", "memory_region": "...",
-          "source_line": "12:184", "sink_line": "12:184", "origin": "dynamic",
-          "source_code": "neuron_requests_outgoing.append(...)",
-          "sink_code": "neuron_requests_outgoing.append(...)"
+          "type": "RAW", "source_line": "31:184", "sink_line": "31:184", "origin": "dynamic",
+          "accesses": [
+            { "variable": "*", "memory_region": "..." },
+            { "variable": "__i", "memory_region": "..." },
+            { "variable": "this1", "memory_region": "..." }
+          ]
         }
-      ],
-      "read_after_loop": ["..."]
+      ]
     }
   ]
 }
 ```
 
-* `blockers` are the `DependencyRecord`s of `pattern_decisions.json`, plus the text
-  of the source and sink lines, de-duplicated.
-* `read_after_loop` lists the blocker variables that are also read after the loop
-  with a value written inside it (`last_private` candidates among the blockers). It
-  is a measured fact, and decisive for state carried across iterations.
-* Lines are `file_id:line`; the check tool resolves them with `FileMapping.txt`.
+* `blockers` group the `DependencyRecord`s of `pattern_decisions.json` (§2), sorted,
+  so the file is the same for the same profile.
+* Lines are `file_id:line`; the check tool resolves them with `FileMapping.txt` and
+  adds the text of the lines to the prompt. Variables keep the names of the
+  profile, e.g. a mangled global (`_ZL5state`) or a library-internal name (`this1`).
+* Whether the data of a blocker is read after the loop is **not** reported. The
+  classification only knows it for variables it classifies `lastprivate`, so a
+  list of them would be incomplete, and an empty list would read as "not read
+  after the loop", a hint toward approval. The agent has to find out from the code.
 
 ### 4.4 Patch generator
 
@@ -205,9 +210,21 @@ every run, like `patch_generator/`.
 
 The agent needs to read code beyond the loop: who uses the appended requests, where
 the generator is declared, what a called function does. Unlike patch repair it
-therefore runs in a **throwaway copy of the project sources**, with permission to
-read. Anything it writes lands in the copy and is discarded; the tool checks that
-the project itself is unchanged afterwards.
+therefore runs in a **throwaway copy of the project sources** with **read-only
+tools**, enforced on the agent's command line, not by asking it:
+
+* `claude`: `--allowedTools Read Grep Glob`, `--disallowedTools Edit Write
+  NotebookEdit Bash`;
+* `opencode`: an agent definition whose permissions deny `edit` and `bash`, and
+  never `--auto`.
+
+The restriction is part of the backend contract (`build_argv(..., read_only=True)`),
+unit tested on the generated argv, and a backend that cannot enforce it is refused.
+Detection stays as a second line: the tool checks afterwards that the project is
+unchanged. Patch repair went tool-less after a model edited the real source; this
+tool needs to read beyond the prompt, so it restricts instead. The first version of
+the core is tool-less as well (everything in the prompt), the read path comes
+behind this restriction.
 
 The prompt contains:
 
@@ -217,7 +234,6 @@ The prompt contains:
   iteration reads it at the same line" — with its origin (measured during
   profiling, or reported by the static analysis);
 * for accesses inside called code: the line in the project that made the call;
-* which blocker variables are read after the loop;
 * the conservative rules (§5.3) and the answer format (§5.4).
 
 It does not contain any proposal of a fix.
@@ -295,8 +311,8 @@ are stale; tools then ignore `approved.json`, and the GUI says so.
 ## 6. Consumers: opt in only
 
 * **Autotuner:** `--include-agent-approved` reads `suggestion_check/approved.json`
-  and `explorer/unsure_suggestions_dump.json`, adds the approved ones to the
-  pattern storage under the key `agent_approved` and copies their patches from
+  and `explorer/unsure_suggestions.json`, adds the approved ones to the pattern
+  storage under the key `agent_approved` and copies their patches from
   `suggestion_check/approved/<id>/` into each configuration's `patch_generator/`.
   Without the flag, nothing changes. The check tool's verification (§5.5) uses the
   same mechanism, pointed at one candidate.
@@ -341,6 +357,10 @@ A Qt panel after *Patch Repair* in the workflow sidebar, built like it
 * **Library code in the facts.** The explorer knows the line of the call in project
   code, not the library function the access happened in. If agents struggle with
   `this1` or `__i`, the profiler could record the callee.
+* **Reads after the loop.** A measured "the data of this blocker is (not) read
+  after the loop" would help the agent with state carried across iterations. It
+  needs the dependencies from inside the loop to code after it, per blocker, not
+  the classification (§4.3).
 * **Determinism.** As for patch repair, agent answers are not reproducible;
   `results.json` records backend, model and transcripts.
 
@@ -351,7 +371,7 @@ A Qt panel after *Patch Repair* in the workflow sidebar, built like it
 Each step is reviewable on its own and leaves the tree working.
 
 1. Explorer: `--unsure-suggestions`, `--unsure-max-blockers`, detection (§4.1, §4.2),
-   `unsure_suggestions.json` and its dump, unit tests, end-to-end test.
+   `unsure_suggestions.json`, unit tests, end-to-end test.
 2. Patch generator: `patch_generator_unsure/` (§4.4), tests.
 3. Check tool core: arguments, candidate selection, prompt and answer format, gates,
    review, `results.json`, tests with a scripted backend (no model).

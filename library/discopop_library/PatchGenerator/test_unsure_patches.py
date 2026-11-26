@@ -23,9 +23,8 @@ def test_unsure_suggestions_are_read_as_patterns_without_their_blockers(tmp_path
                         "type": "do_all",
                         "pragma": "#pragma omp parallel for",
                         "blockers": [{"type": "RAW"}],
-                        "read_after_loop": [],
                     },
-                    {"pattern_id": 8, "type": "reduction", "blockers": [], "read_after_loop": ["x"]},
+                    {"pattern_id": 8, "type": "reduction", "blockers": []},
                 ],
             }
         )

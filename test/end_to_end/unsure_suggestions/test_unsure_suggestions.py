@@ -88,7 +88,9 @@ class TestUnsureSuggestions(unittest.TestCase):
 
     def test_the_blockers_are_the_dependencies_between_iterations(self) -> None:
         [random_loop] = self._unsure_at(RANDOM_LOOP)
-        self.assertIn("state", {b["variable"] for b in random_loop["blockers"]})
+        # the global, by its mangled name (_ZL5state)
+        variables = {a["variable"] for b in random_loop["blockers"] for a in b["accesses"]}
+        self.assertTrue(any("state" in v for v in variables), variables)
         for suggestion in self.unsure["suggestions"]:
             self.assertGreater(len(suggestion["blockers"]), 0)
             self.assertLessEqual(len(suggestion["blockers"]), self.unsure["max_blockers"])

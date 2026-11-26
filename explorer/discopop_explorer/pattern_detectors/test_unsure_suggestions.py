@@ -90,7 +90,7 @@ def test_a_loop_with_few_dynamic_blockers_is_an_unsure_suggestion(graph: Any, is
     assert isinstance(pattern, DoAllInfo)
     assert pattern.node_id == loop.id
     assert unsure_loop.pet_node_id == loop.id
-    assert [(b.type, b.variable, b.source_line, b.origin) for b in unsure_loop.blockers] == [
+    assert [(b.type, b.accesses[0].variable, b.source_line, b.origin) for b in unsure_loop.blockers] == [
         ("RAW", "x", "1:7", "dynamic"),
         ("RAW", "y", "1:8", "dynamic"),
     ]
@@ -113,11 +113,23 @@ def test_repetitions_of_a_blocker_count_once(graph: Any, isolated_pattern_id_cwd
     assert len(unsure.suggestions[0][1].blockers) == 1
 
 
+def test_dependencies_between_the_same_statements_are_one_blocker(graph: Any, isolated_pattern_id_cwd: Any) -> None:
+    # e.g. a push_back changing the size, the data pointer and the elements of a vector
+    tg, _loop_node = graph([_dependency("size", "1:7"), _dependency("data", "1:7"), _dependency("y", "1:8")])
+    unsure = UnsureSuggestions(max_blockers=2)
+    _detect(tg, unsure)
+    [(_pattern, unsure_loop)] = unsure.suggestions
+    assert [(b.source_line, [a.variable for a in b.accesses]) for b in unsure_loop.blockers] == [
+        ("1:7", ["data", "size"]),
+        ("1:8", ["y"]),
+    ]
+
+
 def test_an_unprivatizable_static_dependency_is_a_blocker(graph: Any, isolated_pattern_id_cwd: Any) -> None:
     tg, _loop_node = graph([_dependency("x", "1:7", DepOrigin.STATIC_ANALYSIS)])
     unsure = UnsureSuggestions()
     assert _detect(tg, unsure) == []
-    assert [(b.variable, b.origin) for b in unsure.suggestions[0][1].blockers] == [("x", "static")]
+    assert [(b.accesses[0].variable, b.origin) for b in unsure.suggestions[0][1].blockers] == [("x", "static")]
 
 
 def test_a_parallelizable_loop_is_no_unsure_suggestion(graph: Any, isolated_pattern_id_cwd: Any) -> None:
@@ -166,14 +178,12 @@ def test_unsure_suggestions_are_written_with_their_blockers(
     assert entry["blockers"] == [
         {
             "type": "RAW",
-            "variable": "x",
-            "memory_region": None,
             "source_line": "1:7",
             "sink_line": "1:7",
             "origin": "dynamic",
+            "accesses": [{"variable": "x", "memory_region": None}],
         }
     ]
-    assert entry["read_after_loop"] == []
     assert not any(key.startswith("_") for key in entry)
 
 

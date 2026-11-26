@@ -24,7 +24,7 @@ from discopop_explorer.classes.TaskGraph.Contexts.LoopParentContext import LoopP
 from discopop_explorer.classes.TaskGraph.TGNode import TGNode
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
 from discopop_explorer.classes.PEGraph.LoopNode import LoopNode
-from discopop_explorer.classes.patterns.UnsureSuggestions import UnsureLoop, UnsureSuggestions
+from discopop_explorer.classes.patterns.UnsureSuggestions import Blocker, UnsureLoop, UnsureSuggestions, group_blockers
 from discopop_explorer.classes.patterns.PatternDecisions import (
     CUT_EARLY_EXIT,
     CUT_EXCEPTION_HANDLER,
@@ -649,7 +649,7 @@ def identify_simple_doall_and_reduction(
             # node is not a valid doall loop
             prevented_loops.add(node.pet_node_id)
             counts["skipped_dependency_found"] += 1
-            if unsure is not None and unsure.accepts(len(_distinct_records(blocking_dependencies))):
+            if unsure is not None and unsure.accepts(len(_blockers(blocking_dependencies))):
                 unsure_candidates.append(
                     _UnsureCandidate(
                         node,
@@ -841,13 +841,8 @@ class _UnsureCandidate:
     potential_breaking_dependencies: List[Tuple[Context, Context, Dependency]]
 
 
-def _distinct_records(dependencies: List[Dependency]) -> List[DependencyRecord]:
-    """the dependencies as they are reported, without repetitions, sorted: the order in which they are found
-    follows sets of the task graph, and varies between runs"""
-    return sorted(
-        set(DependencyRecord.from_dependency(dep) for dep in dependencies),
-        key=lambda r: tuple("" if v is None else str(v) for v in r.to_dict().values()),
-    )
+def _blockers(dependencies: List[Dependency]) -> List[Blocker]:
+    return group_blockers(DependencyRecord.from_dependency(dep) for dep in dependencies)
 
 
 def _unsure_loop(
@@ -862,14 +857,11 @@ def _unsure_loop(
     sharing_notes: Tuple[Tuple[str, str], ...],
 ) -> UnsureLoop:
     assert node.pet_node_id is not None
-    records = _distinct_records(blockers)
-    # a variable classified lastprivate is read after the loop with a value written inside it
-    read_after_loop = sorted({r.variable for r in records if r.variable is not None and r.variable in lastprivate})
 
     def build() -> DoAllInfo | ReductionInfo:
         return build_loop_pattern(tg, node, reduction_vars, firstprivate, private, lastprivate, shared, sharing_notes)
 
-    return UnsureLoop(node.pet_node_id, records, read_after_loop, build)
+    return UnsureLoop(node.pet_node_id, _blockers(blockers), build)
 
 
 def add_unsure_loops(
