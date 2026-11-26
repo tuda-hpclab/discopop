@@ -247,6 +247,11 @@ To execute the CI pipeline locally, use the following command from the root fold
 - the matrix created by the `create_matrix` job in `.github/workflows/ci.yml` covers each of these once instead of the full cross product: ubuntu 24.04 / LLVM 19 / Python 3.11 (deadsnakes PPA), ubuntu 24.04 / LLVM 20 / Python 3.12, debian 13 / LLVM 21 (apt.llvm.org) / Python 3.13, debian 13 / LLVM 22 / Python 3.13
 - when changing the supported range, update the matrix, `requires-python`, the black `target-version` in the root `pyproject.toml` and `docs/setup/discopop.md` together
 
+### Published packages (PyPI)
+- `.github/workflows/published_packages.yml` tests the published packages instead of the checkout: on a GitHub-hosted Ubuntu 24.04 with the apt packages of `docs/setup/discopop.md`, `scripts/dev/check_published_installation.py --channel stable|pre-release` installs the newest `discopop` of the channel from PyPI into a new venv (`discopop==<version>`, never `--pre`, which would also take pre-releases of third-party dependencies), and checks `pip check`, that every DiscoPoP package is installed at least in the newest version of its channel, that every command starts (`--help`, except the compiler wrappers) and that the example (`example/`) is instrumented, profiled and explored with at least one suggestion; only `example/` is taken from the checkout
+- it runs after every publish workflow (`workflow_run`), on pull requests changing the workflow, the script or `example/`, and manually; it is not part of `ci.yml`, as its result does not depend on the commit and a broken release would fail every pull request
+- the install command in the docs (`README.md`, `docs/getting_started.md`, `docs/setup/discopop.md`) and the channels of this check must agree: while the current version is only published as a pre-release, the docs install `"discopop>=5.0.3a1"`
+
 ## Benchmarks
 ### Runtime library micro-benchmarks
 - Google Benchmark micro-benchmarks for the runtime library data structures live in `benchmark/`
