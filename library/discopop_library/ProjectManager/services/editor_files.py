@@ -20,7 +20,10 @@ import os
 from typing import Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.configurations.compile_script import VALIDATION_COMPILE_SCRIPT_NAME
+from discopop_library.ProjectManager.configurations.compile_script import (
+    INCREMENTAL_COMPILE_SCRIPT_NAME,
+    VALIDATION_COMPILE_SCRIPT_NAME,
+)
 
 # the shared files of the Project Setup stage (the Tk compilation editor), in the order of its tabs
 COMPILATION_FILES = [
@@ -31,10 +34,21 @@ COMPILATION_FILES = [
     "hd_settings.json",
     "par_settings.json",
 ]
+# the tabs of the Qt Project Setup stage: the files above and the optional shared incremental build script (the Tk
+# compilation editor, which is frozen, has no tab for it)
+SETUP_FILES = [
+    "compile.sh",
+    VALIDATION_COMPILE_SCRIPT_NAME,
+    INCREMENTAL_COMPILE_SCRIPT_NAME,
+    "seq_settings.json",
+    "dp_settings.json",
+    "hd_settings.json",
+    "par_settings.json",
+]
 BASE_FILES = ["compile.sh", "execute.sh", "seq_settings.json"]
 DERIVED_FILES = ["dp_settings.json", "hd_settings.json", "par_settings.json"]
 # Shared scripts that are absent by default and created on demand.
-OPTIONAL_FILES = [VALIDATION_COMPILE_SCRIPT_NAME]
+OPTIONAL_FILES = [VALIDATION_COMPILE_SCRIPT_NAME, INCREMENTAL_COMPILE_SCRIPT_NAME]
 
 OPTIONAL_FILE_PLACEHOLDERS = {
     VALIDATION_COMPILE_SCRIPT_NAME: (
@@ -45,12 +59,21 @@ OPTIONAL_FILE_PLACEHOLDERS = {
         "# measured runtime. It applies to every configuration that does not define its own\n"
         "# compile_validate.sh override, and is ignored for configurations without a\n"
         "# validate.sh.\n"
-    )
+    ),
+    INCREMENTAL_COMPILE_SCRIPT_NAME: (
+        "# This project has no shared compile_incremental.sh.\n"
+        "# Without it, every build of the modes seq and par runs compile.sh in full.\n"
+        "# Click 'Add' above to continue the kept build tree instead (also for the candidates of the\n"
+        "# autotuner): the script must only rebuild (no clean), so the build system compiles just what\n"
+        "# changed. It is proposed from compile.sh and written only when you save it. It applies to every\n"
+        "# configuration that uses the shared compile.sh and has no compile_incremental.sh of its own.\n"
+    ),
 }
 
 TAB_TOOLTIPS = {
     "compile.sh": "Compilation instructions",
     VALIDATION_COMPILE_SCRIPT_NAME: "Optional: separate compilation instructions for validate.sh runs",
+    INCREMENTAL_COMPILE_SCRIPT_NAME: "Optional: rebuild only what changed in the kept build tree (modes seq and par)",
     "execute.sh": "Execution instructions",
     "seq_settings.json": "Settings for sequential execution",
     "dp_settings.json": "Settings for DiscoPoP instrumented execution",
@@ -81,6 +104,14 @@ VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER = (
     "# Click 'Add Override' above to build separately for validation: the override\n"
     "# is compiled after the timed execute.sh run and before validate.sh, so it\n"
     "# never affects the measured runtime. It is ignored while no validate.sh exists.\n"
+)
+INCREMENTAL_COMPILE_OVERRIDE_PLACEHOLDER = (
+    "# This configuration has no compile_incremental.sh.\n"
+    "# Without it (and without a shared one) every compilation of the modes seq and par runs compile.sh\n"
+    "# in a freshly updated build tree.\n"
+    "# Click 'Add Override' above to continue the kept build tree instead: the script must only rebuild\n"
+    "# (no clean), so the build system compiles just what changed. It is proposed from compile.sh and\n"
+    "# written only when you save it.\n"
 )
 
 COMPILE_SCRIPT_WARNING_TITLE = "Compilation Script Warning"

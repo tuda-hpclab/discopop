@@ -44,7 +44,7 @@ def execute_in_build(
     :func:`execute_configuration` returns and the run, if there is one.
     """
     run: Optional[RunRecord] = None
-    annotations: Dict[str, Any] = {"build_id": build.build_id}
+    annotations: Dict[str, Any] = {"build_id": build.build_id, "build_kind": build.build_kind}
     dot_discopop: Optional[str] = None
     if build.mode in PROFILING_MODES:
         run = prepare_run(

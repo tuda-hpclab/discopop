@@ -39,6 +39,17 @@ from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManag
 from discopop_library.ProjectManager.configurations.build_sharing import RUN_ONLY_FILES
 from discopop_library.ProjectManager.configurations.project_environment import project_directories_of
 from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
+from discopop_library.ProjectManager.configurations.compile_script import resolve_incremental_compile_script_path
+from discopop_library.ProjectManager.configurations.copy_exclusions import drop_below, left_out_paths
+from discopop_library.ProjectManager.configurations.tree_sync import (
+    CLEAN,
+    DIRTY,
+    read_tree_state,
+    remove_tree_state,
+    set_tree_state,
+    tree_states_dir_of,
+)
+from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored, load_fingerprint_ignore
 
 PATH = str
@@ -76,6 +87,8 @@ class BuildKey:
     mode: str
     # the ids of the suggestions applied to the sources; only they make builds of the same mode differ
     suggestions: Tuple[str, ...] = ()
+    # what the build is for: "" (the runs of the mode) or ROLE_VALIDATE (the validation build, compile_validate.sh)
+    role: str = ""
 
     @property
     def build_id(self) -> str:
@@ -83,7 +96,12 @@ class BuildKey:
         if self.suggestions:
             digest = hashlib.sha1(",".join(sorted(self.suggestions)).encode()).hexdigest()[:8]
             build_id += "_s" + digest
+        if self.role:
+            build_id += "_" + self.role
         return build_id
+
+
+ROLE_VALIDATE = "validate"
 
 
 @dataclass
@@ -103,6 +121,16 @@ class BuildRecord:
     version: int = MANIFEST_VERSION
     # what the fingerprint was made of, to tell what changed when a build is stale
     fingerprint_parts: Dict[str, str] = field(default_factory=dict)
+    # BuildKey.role (manifests written before it have none: the runs of the mode)
+    role: str = ""
+    # how the tree was compiled last: "full" (compile.sh) or "incremental" (compile_incremental.sh)
+    build_kind: str = "full"
+
+
+def key_of(record: BuildRecord) -> BuildKey:
+    """The key of the build ``record`` describes. The one place that turns a manifest back into a key, so that a
+    field added to :class:`BuildKey` cannot be forgotten by its callers."""
+    return BuildKey(record.configuration, record.mode, tuple(record.suggestions), record.role)
 
 
 @dataclass
@@ -116,6 +144,9 @@ class BuildFiles:
     # the fingerprint of the manifest these files belong to: a manifest written without them (by an older version
     # of DiscoPoP, which keeps no file list) must not be compared with the files of the build before
     fingerprint: str = ""
+    # the paths the copy left out and the fingerprint did not count (configured build directories, copy_exclude),
+    # so that such a directory deleted later does not count as removed files
+    left_out: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -147,6 +178,41 @@ class BuildChanges:
     files: Optional[FileChanges] = None
     # (part, why) for parts whose change has a cause elsewhere (callpath_pruning: outdated hotspot results)
     causes: Tuple[Tuple[str, str], ...] = ()
+
+    @property
+    def content_only(self) -> bool:
+        """Whether only what the tree holds changed (:data:`CONTENT_PARTS`): the tree can be brought up to date
+        by writing the changed files into it. Any other part changes how the code is compiled."""
+        return all(part in CONTENT_PARTS for part in self.parts)
+
+
+# The parts of the fingerprint (compute_fingerprint), split by what a change of them means for a kept build tree:
+# - content: the files the tree holds (the sources of the project and of the included directories, the patches
+#   of the applied suggestions, what the copy leaves out); writing the changed files into the tree suffices
+# - environment: how the tree is compiled (scripts, settings, compilers, profiler, what is instrumented and how);
+#   the tree has to be built from scratch
+# Every part belongs to exactly one of them (checked by test_builds.py).
+# not computed but found: the kept tree holds the code of another build (BuildStatus of build_status)
+TREE_PART = "tree"
+CONTENT_PARTS = frozenset({"sources", "included_sources", "patches", "copy_exclude", TREE_PART})
+ENVIRONMENT_PARTS = frozenset(
+    {
+        "compile_script",
+        "settings",
+        "project_directories",
+        "configuration",
+        "toolchain",
+        "callpath_pruning",
+        "openmp",
+        "incremental_compile_script",
+    }
+)
+
+
+def environment_fingerprint(parts: Dict[str, str]) -> str:
+    """The hash of the environment parts of ``parts``: a tree compiled with another one cannot be compiled again
+    incrementally."""
+    return combine_fingerprint({name: value for name, value in parts.items() if name in ENVIRONMENT_PARTS})
 
 
 @dataclass(frozen=True)
@@ -184,6 +250,26 @@ def build_trees_dir_of(project_root: PATH) -> PATH:
 
 def build_tree_path_of(project_root: PATH, key: BuildKey) -> PATH:
     return os.path.join(build_trees_dir_of(project_root), key.build_id)
+
+
+def tree_key(key: BuildKey) -> BuildKey:
+    """The key whose kept tree the build ``key`` is compiled in: one tree per configuration, mode and role holds the
+    builds of every set of suggestions, one at a time (``configurations/tree_sync.py``)."""
+    return BuildKey(key.configuration, key.mode, (), key.role)
+
+
+def kept_tree_path_of(project_root: PATH, key: BuildKey) -> PATH:
+    return build_tree_path_of(project_root, tree_key(key))
+
+
+def build_lock_path_of(project_dir: PATH, key: BuildKey) -> PATH:
+    """The lock that serializes everything using or changing the tree of ``key``; the builds of all sets of
+    suggestions share it, as they share the tree."""
+    return manifest_path_of(project_dir, tree_key(key)) + ".build.lock"
+
+
+def _same_path(first: PATH, second: PATH) -> bool:
+    return os.path.abspath(first) == os.path.abspath(second)
 
 
 def _hash_file(path: PATH) -> str:
@@ -242,6 +328,35 @@ def without_ignored(entries: Dict[str, str], patterns: Sequence[str]) -> Dict[st
     if not patterns:
         return entries
     return {name: value for name, value in entries.items() if not is_ignored(name, patterns)}
+
+
+def left_out_of(
+    arguments: ProjectManagerArguments, entries: Dict[str, str], patterns: Optional[Sequence[str]] = None
+) -> List[str]:
+    """The paths a copy of the project leaves out (configured build directories and the paths of
+    ``copy_exclude.json``, ``configurations/copy_exclusions.py``), as far as they concern ``entries`` (those of
+    :func:`source_entries` that the ignore patterns ``patterns``, by default the project's, keep)."""
+    if patterns is None:
+        patterns = load_fingerprint_ignore(arguments.project_dir)
+    return left_out_paths(
+        arguments.project_root, without_ignored(entries, patterns), load_copy_exclude(arguments.project_dir)
+    )
+
+
+def counted_entries(
+    arguments: ProjectManagerArguments,
+    entries: Dict[str, str],
+    patterns: Optional[Sequence[str]] = None,
+    left_out: Optional[Sequence[str]] = None,
+) -> Dict[str, str]:
+    """The ``entries`` of the project (:func:`source_entries`) that its builds depend on: without those the ignore
+    patterns (``patterns``, by default the project's) leave out, and without those a copy of the project leaves out
+    (``left_out``, by default :func:`left_out_of`): they are no input of a build."""
+    if patterns is None:
+        patterns = load_fingerprint_ignore(arguments.project_dir)
+    if left_out is None:
+        left_out = left_out_of(arguments, entries, patterns)
+    return drop_below(without_ignored(entries, patterns), left_out)
 
 
 def source_fingerprint(project_root: PATH, ignore: Sequence[str] = ()) -> str:
@@ -342,6 +457,19 @@ def _patch_fingerprint(dot_dp: PATH) -> str:
     return digest.hexdigest()
 
 
+def incremental_compile_script_of(arguments: ProjectManagerArguments, key: BuildKey) -> Optional[PATH]:
+    """The ``compile_incremental.sh`` the build ``key`` is compiled again with, None if it is always compiled in
+    full: modes ``seq`` and ``par`` (an instrumented build is always compiled in full) of the runs (no validation
+    build) only."""
+    if key.mode not in INCREMENTAL_MODES or key.role:
+        return None
+    return resolve_incremental_compile_script_path(arguments.project_config_dir, key.configuration)
+
+
+# the modes whose builds compile_incremental.sh may compile again
+INCREMENTAL_MODES = ("seq", "par")
+
+
 def compute_fingerprint_parts(
     arguments: ProjectManagerArguments,
     key: BuildKey,
@@ -365,7 +493,9 @@ def compute_fingerprint(
     the build as well).
 
     - the files of the project (path, size, modification time) without those the project's ignore patterns
-      (``services/fingerprint_ignore.py``) leave out
+      (``services/fingerprint_ignore.py``) or the copy (configured build directories, ``copy_exclude.json``) leave
+      out (:func:`counted_entries`)
+    - the paths of ``copy_exclude.json``, if it lists any
     - the compile script and the settings file of the mode (compiler, flags)
     - what is project code (included and excluded directories), as it decides what is instrumented, and the files
       of the included directories
@@ -376,15 +506,15 @@ def compute_fingerprint(
       the runs take from the project)
     - the installed profiler and the compilers
 
-    The thread count is no part of it: it only reaches the compilation as ``OMP_NUM_THREADS``, which a
-    build script has no business to depend on.
+    The thread count is no part of it: it only reaches a compilation as ``OMP_NUM_THREADS`` when the
+    project setting asks for it (``services/build_thread_count.py``), which a build script has no business to depend on.
     """
     directories = project_directories_of(
         arguments.project_dir, arguments.project_root, arguments.project_include_dirs, arguments.project_exclude_dirs
     )
     entries = source_entries(arguments.project_root)
     parts = {
-        "sources": hash_of_entries(without_ignored(entries, load_fingerprint_ignore(arguments.project_dir))),
+        "sources": hash_of_entries(counted_entries(arguments, entries)),
         "compile_script": _hash_file(compile_script),
         "settings": _hash_file(settings_path),
         "project_directories": json.dumps(
@@ -407,6 +537,14 @@ def compute_fingerprint(
             parts["openmp"] = openmp_part
     if key.suggestions:
         parts["patches"] = _patch_fingerprint(arguments.dot_dp)
+    incremental_script = incremental_compile_script_of(arguments, key)
+    if incremental_script is not None:
+        # how the tree is compiled again (no part without the script, so that the builds before it stay current)
+        parts["incremental_compile_script"] = _hash_file(incremental_script)
+    copy_exclude = load_copy_exclude(arguments.project_dir)
+    if copy_exclude:
+        # what the copy leaves out (no part without a list, so that the builds before it stay current)
+        parts["copy_exclude"] = json.dumps(copy_exclude)
     return parts, entries
 
 
@@ -435,7 +573,7 @@ def read_build(project_dir: PATH, key: BuildKey) -> Optional[BuildRecord]:
 def write_build(project_dir: PATH, record: BuildRecord, files: Optional[BuildFiles] = None) -> None:
     """Write the manifest of ``record`` and, if given, its :class:`BuildFiles` (before the manifest, so that a
     manifest never goes with the files of an older build)."""
-    key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
+    key = key_of(record)
     os.makedirs(builds_dir_of(project_dir), exist_ok=True)
     path = manifest_path_of(project_dir, key)
     with FileLock(path + ".lock"):
@@ -457,10 +595,12 @@ def read_build_files(project_dir: PATH, key: BuildKey) -> Optional[BuildFiles]:
         accepted = data.get("accepted", [])
         if not isinstance(sources, dict) or not isinstance(accepted, list):
             return None
+        left_out = data.get("left_out", [])
         return BuildFiles(
             {str(k): str(v) for k, v in sources.items()},
             [a for a in accepted if isinstance(a, dict)],
             str(data.get("fingerprint", "")),
+            [str(path) for path in left_out] if isinstance(left_out, list) else [],
         )
     except (OSError, ValueError, AttributeError):
         return None
@@ -573,6 +713,23 @@ def describe_changes(changes: BuildChanges) -> str:
     return text
 
 
+def _tree_holds_other_code(arguments: ProjectManagerArguments, key: BuildKey, record: BuildRecord) -> Optional[str]:
+    """Why the kept tree of ``record`` does not hold the build ``key`` any more (None if it does, or if the build has
+    a tree of its own)."""
+    if not _same_path(record.tree, kept_tree_path_of(arguments.project_root, key)):
+        return None
+    state = read_tree_state(arguments.project_dir, tree_key(key).build_id)
+    if state is None:
+        return None  # compiled before trees were kept
+    if state.state != CLEAN:
+        return "its tree was changed after the compilation (" + state.state + ")"
+    if sorted(state.applied) != sorted(key.suggestions):
+        if state.applied:
+            return "its tree holds the build with the suggestions " + ", ".join(state.applied) + " now"
+        return "its tree holds the build without suggestions now"
+    return None
+
+
 def build_status(
     arguments: ProjectManagerArguments, key: BuildKey, compile_script: PATH, settings_path: PATH
 ) -> BuildStatus:
@@ -587,13 +744,24 @@ def build_status(
         return BuildStatus(BuildState.NONE, "No build yet.")
     if not os.path.isdir(record.tree):
         return BuildStatus(BuildState.NONE, "The build tree " + record.tree + " does not exist any more.", record)
+    tree_cause = _tree_holds_other_code(arguments, key, record)
+    if tree_cause is not None:
+        changes = BuildChanges((TREE_PART,), causes=((TREE_PART, tree_cause),))
+        return BuildStatus(BuildState.STALE, describe_changes(changes), record, changes)
     parts, entries = compute_fingerprint(arguments, key, compile_script, settings_path)
     patterns = load_fingerprint_ignore(arguments.project_dir)
     recorded_parts = dict(record.fingerprint_parts)
     stored = read_build_files(arguments.project_dir, key)
     recorded_sources: Optional[Dict[str, str]] = None
+    current_left_out = left_out_of(arguments, entries, patterns)
     if stored is not None and stored.fingerprint == record.fingerprint and "sources" in recorded_parts:
-        recorded_sources = without_ignored(stored.sources, patterns)
+        # what the copy leaves out now, and what it left out then (a build directory deleted since the build does
+        # not count as removed files; one that turned into sources counts as added)
+        recorded_left_out = set(current_left_out) | set(stored.left_out)
+        if not stored.left_out:
+            # a file list written before the paths were kept: classify its names by the project of now
+            recorded_left_out |= set(left_out_of(arguments, stored.sources, patterns))
+        recorded_sources = counted_entries(arguments, stored.sources, patterns, sorted(recorded_left_out))
         recorded_parts["sources"] = hash_of_entries(recorded_sources)
     changed = tuple(
         sorted(name for name in set(parts) | set(recorded_parts) if parts.get(name) != recorded_parts.get(name))
@@ -602,7 +770,14 @@ def build_status(
         return BuildStatus(BuildState.CURRENT, "", record)
     files = (
         _file_changes(
-            record, recorded_sources, without_ignored(entries, patterns) if recorded_sources is not None else entries
+            record,
+            recorded_sources,
+            # without a recorded file list, the recorded hash covered every file: name them all
+            (
+                counted_entries(arguments, entries, patterns, current_left_out)
+                if recorded_sources is not None
+                else entries
+            ),
         )
         if "sources" in changed
         else None
@@ -635,6 +810,7 @@ def make_record(
     tree: PATH,
     compile_seconds: float,
     parts: Optional[Dict[str, str]] = None,
+    build_kind: str = "full",
 ) -> BuildRecord:
     if parts is None:
         parts = compute_fingerprint_parts(arguments, key, compile_script, settings_path)
@@ -649,6 +825,8 @@ def make_record(
         compile_seconds=compile_seconds,
         compile_script=os.path.abspath(compile_script),
         fingerprint_parts=parts,
+        role=key.role,
+        build_kind=build_kind,
     )
 
 
@@ -673,8 +851,7 @@ def accept_build(
     Returns the status before the acceptance (CURRENT: nothing to accept, NONE: no build). Raises
     :class:`BuildInUseError` while a run or a compilation holds the build.
     """
-    manifest = manifest_path_of(arguments.project_dir, key)
-    lock = FileLock(manifest + ".build.lock")
+    lock = FileLock(build_lock_path_of(arguments.project_dir, key))
     try:
         lock.acquire(timeout=0)
     except Timeout:
@@ -692,6 +869,11 @@ def accept_build(
                 + ". Accepting cannot change how its code is pruned: compile it again"
                 + (", or first accept or rebuild the hd build named above" if "_hd is stale" in cause else "")
                 + "."
+            )
+        if TREE_PART in status.changes.parts:
+            raise BuildAcceptError(
+                "The build tree holds the code of another build now (other suggestions, or an interrupted "
+                "compilation). Accepting cannot change that: compile it again."
             )
         if "openmp" in status.changes.parts:
             # the tree was compiled with or without the OpenMP flags; accepting would make its data claim the other
@@ -711,6 +893,7 @@ def accept_build(
             note["file_count"] = len(changed_files)
             note["files"] = list(changed_files.paths[:_ACCEPTED_FILES_KEPT])
         files.sources = entries
+        files.left_out = left_out_of(arguments, entries)
         files.accepted.append(note)
         record = status.record
         record.fingerprint_parts = parts
@@ -742,7 +925,18 @@ def accepted_changes_text(project_dir: PATH, key: BuildKey) -> str:
 
 def invalidate_build(project_dir: PATH, key: BuildKey) -> None:
     """Forget the manifest of the build ``key``, so that the next run compiles. For a tree that was changed after
-    its compilation (e.g. by the separate build of a validation), which the fingerprint cannot see."""
+    its compilation (e.g. by the separate build of a validation), which the fingerprint cannot see. Its tree is
+    copied anew by the next build (``configurations/tree_sync.py``)."""
+    try:
+        os.remove(manifest_path_of(project_dir, key))
+    except OSError:
+        pass
+    remove_build_files(project_dir, key)
+    set_tree_state(project_dir, tree_key(key).build_id, DIRTY)
+
+
+def forget_build(project_dir: PATH, key: BuildKey) -> None:
+    """Remove the manifest of the build ``key`` but not its tree: another build was compiled into it."""
     try:
         os.remove(manifest_path_of(project_dir, key))
     except OSError:
@@ -763,7 +957,7 @@ def delete_build(arguments: ProjectManagerArguments, key: BuildKey) -> bool:
     record = read_build(arguments.project_dir, key)
     manifest = manifest_path_of(arguments.project_dir, key)
     existed = record is not None or os.path.exists(manifest)
-    lock = FileLock(manifest + ".build.lock")
+    lock = FileLock(build_lock_path_of(arguments.project_dir, key))
     try:
         lock.acquire(timeout=0)
     except Timeout:
@@ -793,6 +987,8 @@ def _delete_build_locked(
         except OSError:
             pass
     remove_build_files(arguments.project_dir, key)
+    if record is not None and _same_path(record.tree, kept_tree_path_of(arguments.project_root, key)):
+        remove_tree_state(arguments.project_dir, tree_key(key).build_id)
 
 
 def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequence[str]] = None) -> List[str]:
@@ -801,10 +997,40 @@ def delete_builds(arguments: ProjectManagerArguments, build_ids: Optional[Sequen
     for record in list_builds(arguments.project_dir):
         if build_ids is not None and record.build_id not in build_ids:
             continue
-        key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
+        key = key_of(record)
         try:
             if delete_build(arguments, key):
                 deleted.append(record.build_id)
         except BuildInUseError:
             logger.warning("not deleting the build " + record.build_id + ": a run is using it")
+    if build_ids is None:
+        _delete_trees_without_build(arguments)
     return deleted
+
+
+def _delete_trees_without_build(arguments: ProjectManagerArguments) -> None:
+    """Delete the kept trees no build uses (their last compilation failed, so no manifest names them)."""
+    states_dir = tree_states_dir_of(arguments.project_dir)
+    if not os.path.isdir(states_dir):
+        return
+    used = {os.path.abspath(record.tree) for record in list_builds(arguments.project_dir)}
+    for name in sorted(os.listdir(states_dir)):
+        if not name.endswith(".json"):
+            continue
+        tree_id = name[: -len(".json")]
+        tree = os.path.abspath(os.path.join(build_trees_dir_of(arguments.project_root), tree_id))
+        if tree in used:
+            continue
+        # build_lock_path_of of the builds of the tree
+        lock = FileLock(os.path.join(builds_dir_of(arguments.project_dir), tree_id + ".json.build.lock"))
+        try:
+            lock.acquire(timeout=0)
+        except Timeout:
+            continue
+        try:
+            if os.path.isdir(tree):
+                shutil.rmtree(tree)
+                logger.info("removed build tree without a build: " + tree)
+            remove_tree_state(arguments.project_dir, tree_id)
+        finally:
+            lock.release()

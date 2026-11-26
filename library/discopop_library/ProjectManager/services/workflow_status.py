@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
-from discopop_library.ProjectManager.configurations.builds import list_builds
+from discopop_library.ProjectManager.configurations.builds import ROLE_VALIDATE, list_builds
 from discopop_library.ProjectManager.configurations.project_environment import stale_directories_message
 from discopop_library.ProjectManager.plots import hotspot_data
 from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
@@ -174,7 +174,13 @@ def _build_status(arguments: ProjectManagerArguments, config: Optional[str]) -> 
     if not config:
         return StageStatus(StageState.NOT_RUN, "no configuration selected")
     owner = build_owner_of(arguments.project_config_dir, config)
-    modes = sorted({build.mode for build in list_builds(arguments.project_dir) if build.configuration == owner})
+    modes = sorted(
+        {
+            build.mode
+            for build in list_builds(arguments.project_dir)
+            if build.configuration == owner and build.role != ROLE_VALIDATE
+        }
+    )
     if not modes:
         return StageStatus(StageState.NOT_RUN, "no build")
     return StageStatus(StageState.DONE, "built: " + ", ".join(modes))
