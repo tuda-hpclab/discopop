@@ -68,7 +68,7 @@ For a rejected region, `outcome` says so and `reasons` explains why. A do-all lo
 
 ## unsure_suggestions.json
 
-`explorer/unsure_suggestions.json` (option `--unsure-suggestions`) lists the loops that were rejected only because of a few dependencies between their iterations. Each entry has the fields of a do-all or reduction pattern of `patterns.json`, the `type` it would have, and its `blockers`: the dependencies, grouped by type, source line, sink line and origin, with the variables and memory regions involved (`accesses`). These loops are **not** parallelization suggestions, and their pattern ids are allocated after those of all suggestions. They are checked by the [suggestion check](../tools/Suggestion_check.md).
+`explorer/unsure_suggestions.json` (option `--unsure-suggestions`) lists the loops that were rejected only because of a few dependencies between their iterations. Each entry has the fields of a do-all or reduction pattern of `patterns.json`, the `type` it would have, and its `blockers`: the dependencies, grouped by type, source line, sink line and origin, with the variables and memory regions involved (`accesses`). `region` is the code the loop covers (`file_id`, `start_line`, `end_line`, `kind`), as in `pattern_decisions.json`: unlike `end_line`, which is that of the loop's entry CU, it ends at the last line of the loop. These loops are **not** parallelization suggestions, and their pattern ids are allocated after those of all suggestions. They are checked by the [suggestion check](../tools/Suggestion_check.md).
 
 ## detection_result_dump.json
 

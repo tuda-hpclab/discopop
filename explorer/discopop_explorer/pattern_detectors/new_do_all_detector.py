@@ -861,7 +861,7 @@ def _unsure_loop(
     def build() -> DoAllInfo | ReductionInfo:
         return build_loop_pattern(tg, node, reduction_vars, firstprivate, private, lastprivate, shared, sharing_notes)
 
-    return UnsureLoop(node.pet_node_id, _blockers(blockers), build)
+    return UnsureLoop(node.pet_node_id, _blockers(blockers), build, region_of_pet_node(tg.pet, node.pet_node_id))
 
 
 def add_unsure_loops(

@@ -116,7 +116,7 @@ def load_unsure_suggestions(dot_dp_path: str) -> List[UnsureSuggestion]:
     suggestions: List[UnsureSuggestion] = []
     for entry in data.get("suggestions", []):
         start = Location.parse(entry.get("start_line"))
-        end = Location.parse(entry.get("end_line"))
+        end = _loop_end(entry, start)
         if start is None or end is None:
             raise UnsureSuggestionsError("unsure suggestion without a location: " + str(entry.get("pattern_id")))
         suggestions.append(
@@ -131,3 +131,18 @@ def load_unsure_suggestions(dot_dp_path: str) -> List[UnsureSuggestion]:
             )
         )
     return suggestions
+
+
+def _loop_end(entry: Dict[str, Any], start: Optional[Location]) -> Optional[Location]:
+    """the last line of the loop: from its region if recorded, since the pattern's end_line is that of the loop's
+    entry CU, i.e. mostly its first line"""
+    region = entry.get("region")
+    if start is not None and isinstance(region, dict):
+        try:
+            file_id, end_line = int(region["file_id"]), int(region["end_line"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        else:
+            if file_id == start.file_id and end_line >= start.line:
+                return Location(file_id, end_line)
+    return Location.parse(entry.get("end_line"))

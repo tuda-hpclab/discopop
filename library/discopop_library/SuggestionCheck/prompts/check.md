@@ -41,10 +41,15 @@ correctly. If it does not, or if you cannot tell, say so.
 The current directory is a copy of the project; paths below are relative to it.
 You can read all of it and change files in it. Do not run commands.
 
-- For an approval, change the code in this copy: the loop must be directly
-  preceded by its OpenMP directive (`#pragma omp parallel for ...`), and its header
-  line must stay as it is. Change only source files of the project. DiscoPoP
+- For an approval, change the code in this copy so that the loop runs in parallel
+  correctly. You are not limited to the directive: change the loop body, the data
+  it uses or other code of the project as far as needed. Two things must hold
+  afterwards: the loop is directly preceded by its OpenMP directive
+  (`#pragma omp parallel for ...`), and its header line stays exactly as it is, so
+  that DiscoPoP finds the loop. Change only source files of the project. DiscoPoP
   computes the patch from your changes.
+- The suggested directive below is a starting point, not a requirement: its
+  clauses may be wrong once the blockers are taken into account.
 - For a rejection, or if you are unsure, change nothing.
 
 ## The suggestion

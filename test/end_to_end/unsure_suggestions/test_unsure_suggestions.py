@@ -85,6 +85,12 @@ class TestUnsureSuggestions(unittest.TestCase):
             self.assertGreater(len(suggestion["blockers"]), 0)
             self.assertLessEqual(len(suggestion["blockers"]), self.unsure["max_blockers"])
 
+    def test_the_region_covers_the_whole_loop(self) -> None:
+        [append_loop] = self._unsure_at(APPEND_LOOP)
+        [random_loop] = self._unsure_at(RANDOM_LOOP)
+        self.assertEqual((append_loop["region"]["start_line"], append_loop["region"]["end_line"]), (17, 19))
+        self.assertEqual((random_loop["region"]["start_line"], random_loop["region"]["end_line"]), (21, 23))
+
     def test_parallelizable_loops_are_suggestions_not_unsure(self) -> None:
         do_all_lines = {_line(p["start_line"]) for p in self.with_unsure["patterns"]["do_all"]}
         reduction_lines = {_line(p["start_line"]) for p in self.with_unsure["patterns"]["reduction"]}

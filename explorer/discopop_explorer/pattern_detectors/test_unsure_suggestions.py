@@ -21,7 +21,7 @@ from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
-from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
+from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog, region_of_pet_node
 from discopop_explorer.classes.patterns.UnsureSuggestions import NOTE, UnsureSuggestions
 from discopop_explorer.enums.DepOrigin import DepOrigin
 from discopop_explorer.enums.DepType import DepType
@@ -185,6 +185,14 @@ def test_unsure_suggestions_are_written_with_their_blockers(
         }
     ]
     assert not any(key.startswith("_") for key in entry)
+    # the whole loop, as in the pattern decisions: the pattern's end_line is that of the loop's entry CU
+    region = region_of_pet_node(tg.pet, loop.id)
+    assert entry["region"] == {
+        "file_id": region.file_id,
+        "start_line": region.start_line,
+        "end_line": region.end_line,
+        "kind": region.kind,
+    }
 
 
 @pytest.mark.parametrize("all_blocking_dependencies", [False, True])

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from discopop_explorer.aliases.NodeID import NodeID
-from discopop_explorer.classes.patterns.PatternDecisions import DependencyRecord
+from discopop_explorer.classes.patterns.PatternDecisions import CodeRegion, DependencyRecord
 from discopop_explorer.classes.patterns.PatternInfo import PatternInfo
 
 FORMAT_VERSION = 1
@@ -92,6 +92,9 @@ class UnsureLoop:
     # builds the pattern the loop would have had without its blockers. Called only once every detector has run,
     # since building a pattern allocates its pattern id (see UnsureSuggestions.build).
     build_pattern: Callable[[], PatternInfo]
+    # the code the loop covers, as in the pattern decisions. The pattern's own end_line is that of the loop's entry
+    # CU, i.e. mostly its first line.
+    region: Optional[CodeRegion] = None
 
 
 class UnsureSuggestions:
@@ -135,6 +138,13 @@ class UnsureSuggestions:
             # the serializer removes the private members from the dict it is given, so it gets a copy
             entry: Dict[str, Any] = json.loads(json.dumps(copy.copy(pattern), cls=PatternBaseSerializer))
             entry["type"] = pattern_type_of(pattern)
+            if loop.region is not None:
+                entry["region"] = {
+                    "file_id": loop.region.file_id,
+                    "start_line": loop.region.start_line,
+                    "end_line": loop.region.end_line,
+                    "kind": loop.region.kind,
+                }
             entry["blockers"] = [b.to_dict() for b in loop.blockers]
             entries.append(entry)
         return {
