@@ -279,8 +279,9 @@ jobs:
           irrelevant() {
             case "$2" in
               # documentation and the configuration of editors and commit tools: only the license check (static_checks,
-              # which always runs) reads them
-              docs/*|design/*|*.md|LICENSE|.clangd|.clang-format|.pre-commit-config.yaml|commitlint.config.js) return 0 ;;
+              # which always runs) reads them. Not every .md file: the code loads some (e.g. the prompts of PatchRepair)
+              docs/*|design/*|*README.md|CLAUDE.md|.github/ISSUE_TEMPLATE/*|LICENSE) return 0 ;;
+              .clangd|.clang-format|.pre-commit-config.yaml|commitlint.config.js) return 0 ;;
             esac
             [ "$1" != python_tests ] || return 1
             case "$2" in
