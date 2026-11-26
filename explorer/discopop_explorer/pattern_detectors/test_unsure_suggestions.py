@@ -21,13 +21,17 @@ from discopop_explorer.classes.PEGraph.Dependency import Dependency
 from discopop_explorer.classes.PEGraph.Node import Node
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
+from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 from discopop_explorer.classes.patterns.UnsureSuggestions import NOTE, UnsureSuggestions
 from discopop_explorer.enums.DepOrigin import DepOrigin
 from discopop_explorer.enums.DepType import DepType
 from discopop_explorer.enums.EdgeType import EdgeType
 from discopop_explorer.functions.PEGraph.queries.data_edge_index import DataEdgeIndex
 from discopop_explorer.pattern_detectors.do_all_detector import DoAllInfo
-from discopop_explorer.pattern_detectors.new_do_all_detector import identify_simple_doall_and_reduction
+from discopop_explorer.pattern_detectors.new_do_all_detector import (
+    DECISION_DETECTOR,
+    identify_simple_doall_and_reduction,
+)
 from discopop_explorer.pattern_detectors.test_new_do_all_detector import _build_two_iteration_loop
 from discopop_explorer.utilities.ASTUtils.ASTPatternDetectionIntegration import ASTPatternDetectionHelper
 
@@ -171,6 +175,36 @@ def test_unsure_suggestions_are_written_with_their_blockers(
     ]
     assert entry["read_after_loop"] == []
     assert not any(key.startswith("_") for key in entry)
+
+
+@pytest.mark.parametrize("all_blocking_dependencies", [False, True])
+def test_the_decisions_do_not_depend_on_unsure_suggestions(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+    all_blocking_dependencies: bool,
+) -> None:
+    def reasons(unsure: Optional[UnsureSuggestions]) -> List[Any]:
+        tg, loop = _loop(
+            make_node,
+            build_pet_graph,
+            build_task_graph,
+            make_tg_node,
+            [_dependency("x", "1:7"), _dependency("y", "1:8")],
+        )
+        decisions = PatternDecisionLog()
+        identify_simple_doall_and_reduction(
+            tg, ASTPatternDetectionHelper(), DataEdgeIndex(tg.pet), decisions, all_blocking_dependencies, unsure
+        )
+        decision = decisions.get(DECISION_DETECTOR, loop.id)
+        assert decision is not None
+        return sorted(str(r.dependency) for r in decision.reasons)
+
+    without = reasons(None)
+    assert len(without) == (2 if all_blocking_dependencies else 1)
+    assert reasons(UnsureSuggestions()) == without
 
 
 def test_max_blockers_must_be_positive() -> None:

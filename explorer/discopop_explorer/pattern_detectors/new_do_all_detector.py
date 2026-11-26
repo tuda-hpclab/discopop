@@ -584,8 +584,9 @@ def identify_simple_doall_and_reduction(
                     + str(dep.carried_by_pet_loops)
                 )
             if dep.origin == DepOrigin.DYNAMIC_ANALYSIS:
-                # dependency is trustworthy and definitely breaks doall
-                if decisions is not None:
+                # dependency is trustworthy and definitely breaks doall. Unless all of them were asked for, the
+                # decisions name the first one only, also when the scan goes on for the unsure suggestions.
+                if decisions is not None and (all_blocking_dependencies or len(blocking_dependencies) == 0):
                     record = DependencyRecord.from_dependency(dep)
                     record_rejection(
                         node.pet_node_id,
