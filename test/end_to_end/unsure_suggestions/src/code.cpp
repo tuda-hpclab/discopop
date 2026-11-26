@@ -15,9 +15,7 @@ int main() {
   std::vector<int> doubled(n);
   // APPEND: the order of the requests changes in a parallel loop
   for (int i = 0; i < n; i++) {
-    if (i % 3 == 0) {
-      requests.push_back(i);
-    }
+    requests.push_back(3 * i);
   }
   // RANDOM: each iteration advances the generator
   for (int i = 0; i < n; i++) {

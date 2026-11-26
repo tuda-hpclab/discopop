@@ -10,6 +10,7 @@ parallelizable only because of a few dependencies between their iterations are w
 explorer/unsure_suggestions.json, and nowhere else. See design/agent_checked_suggestions.md."""
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,10 +20,11 @@ from test.end_to_end.pipeline import _environment, _run, build_and_profile
 
 HERE = Path(__file__).parent
 
+PARALLEL_FOR = re.compile(r"^\+\s*#pragma omp parallel for", re.MULTILINE)
 APPEND_LOOP = 17
-RANDOM_LOOP = 23
-INDEPENDENT_LOOP = 27
-REDUCTION_LOOP = 31
+RANDOM_LOOP = 21
+INDEPENDENT_LOOP = 25
+REDUCTION_LOOP = 29
 
 
 def _line(location: str) -> int:
@@ -121,7 +123,7 @@ class TestUnsureSuggestions(unittest.TestCase):
         self.assertEqual(set(self.unsure_patches), unsure_ids)
         for pattern_id, patches in self.unsure_patches.items():
             self.assertTrue(patches, pattern_id)
-            self.assertTrue(any("+#pragma omp parallel for" in p for p in patches), patches)
+            self.assertTrue(any(PARALLEL_FOR.search(p) for p in patches), patches)
 
     def test_unsure_patches_do_not_outlive_their_explorer_run(self) -> None:
         self.assertFalse(self.unsure_patches_after_rerun)
