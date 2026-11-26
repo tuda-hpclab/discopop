@@ -101,6 +101,7 @@ class BackendAgent:
             answered=invocation.ok,
             failure=invocation.failure_reason(),
             session=session or invocation.session_id or new_session,
+            events=invocation.raw,
         )
 
 

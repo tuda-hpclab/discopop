@@ -28,6 +28,7 @@ from discopop_library.SuggestionCheck.answers import (
 )
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.prompts import check_prompt, retry_prompt, review_prompt
+from discopop_library.SuggestionCheck.tool_calls import tool_calls
 from discopop_library.SuggestionCheck.unsure import UnsureSuggestion
 from discopop_library.SuggestionCheck.workspace import Changes, Workspace, patch_of
 
@@ -48,6 +49,8 @@ class AgentReply:
     answered: bool
     failure: str = ""
     session: Optional[str] = None
+    # the raw event stream of the backend, for the transcript and the tool calls; empty if there is none
+    events: str = ""
 
 
 # (prompt, session to continue or None, the directory the agent works in) -> reply
@@ -90,6 +93,8 @@ class Outcome:
     patch: Optional[PatchSet] = None
     calls: int = 0
     unanswered: int = 0
+    # tool calls of all agent calls (reading, searching, editing), as far as the backend reports them
+    tool_calls: int = 0
     gates: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -106,6 +111,7 @@ class Outcome:
             "changed_files": sorted(self.patch.entries) if self.patch is not None else [],
             "calls": self.calls,
             "unanswered": self.unanswered,
+            "tool_calls": self.tool_calls,
             "gates": self.gates,
         }
 
@@ -143,6 +149,14 @@ class _Conversation:
                 # raises ProjectChanged, which ends the whole run
                 self.guard()
             self._write(name + "_answer.txt", reply.text if reply.answered else "(no answer) " + reply.failure)
+            if reply.events:
+                calls = tool_calls(reply.events)
+                self.outcome.tool_calls += len(calls)
+                self._write(name + "_events.jsonl", reply.events)
+                # paths relative to the copy the agent worked in
+                prefix = os.path.join(os.path.realpath(workdir), "")
+                listed = "".join(str(c).replace(prefix, "").replace(workdir + os.sep, "") + "\n" for c in calls)
+                self._write(name + "_tools.txt", listed or "(no tool calls)\n")
             if reply.answered:
                 return reply
             self.outcome.unanswered += 1

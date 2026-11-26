@@ -36,7 +36,7 @@ In `.discopop/suggestion_check/`:
 | `results.json` | Every checked suggestion: state (`approved`, `rejected`, `failed`), the agent's verdict and reason, the assumption, the justifications, the declared result differences, the review, the verification level and the number of agent calls. |
 | `approved.json` | The approved suggestions with their assumptions and declared result differences, for tools that use them on request. |
 | `approved/<id>/<file id>.patch` | The approved patches, computed from the agent's changes. |
-| `transcripts/<id>/` | Every prompt and answer. |
+| `transcripts/<id>/` | Every prompt and answer; per agent call also the backend's event stream (`*_events.jsonl`) and the tool calls taken from it (`*_tools.txt`: which files the agent read, what it searched for, what it changed). `results.json` counts them per suggestion (`tool_calls`). |
 | `progress.jsonl` | One line per event. |
 
 `failed` means that no usable answer was obtained (agent unreachable, or no answer that could be read within the attempt budget). It is not an approval either.
