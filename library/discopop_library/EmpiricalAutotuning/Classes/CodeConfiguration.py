@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArguments
 from discopop_library.EmpiricalAutotuning.Classes.ExecutionResult import ExecutionResult
 from discopop_library.EmpiricalAutotuning.Statistics.StatisticsGraph import NodeColor
@@ -24,8 +24,67 @@ from discopop_library.ProjectManager.configurations.copying import copy_configur
 from discopop_library.ProjectManager.configurations.execution import execute_configuration
 from discopop_library.ProjectManager.configurations.execution_time import resolve_execution_time_regex
 from discopop_library.ProjectManager.configurations.validation import run_validation_phase
+from discopop_library.ProjectManager.configurations.build_sharing import build_owner_of
+from discopop_library.ProjectManager.configurations.building import (
+    BuildResult,
+    build_lock,
+    check_suggestions,
+    ensure_build,
+)
+from discopop_library.ProjectManager.configurations.builds import (
+    INCREMENTAL_MODES,
+    BuildKey,
+    BuildPolicy,
+    invalidate_build,
+    kept_tree_path_of,
+)
 
 logger = logging.getLogger("CodeConfiguration")
+
+# the directories of the project's .discopop a candidate does not need
+AUTOTUNER_LEFT_OUT_OF_COPIES = ("profiler", "explorer")
+
+# the modes of the settings files a candidate is compiled with
+_MODE_OF_SETTINGS = {"seq_settings.json": "seq", "par_settings.json": "par"}
+
+
+def uses_kept_build_trees(arguments: AutotunerArguments, settings_name: str) -> bool:
+    """Whether candidates with ``settings_name`` are compiled in the kept build tree of their mode (one after the
+    other, incrementally if the configuration has a compile_incremental.sh) instead of in copies of their own.
+
+    Not with ``--skip-cleanup`` (which keeps every candidate's code), not with ``--no-kept-build-trees`` and not for
+    instrumented candidates (``hd``: the hotspot comparison needs two of them at once)."""
+    return (
+        arguments.kept_build_trees
+        and not arguments.skip_cleanup
+        and _MODE_OF_SETTINGS.get(settings_name) in INCREMENTAL_MODES
+    )
+
+
+def _project_manager_arguments(
+    arguments: AutotunerArguments, timeout: Optional[float], suggestions: Sequence[str] = ()
+) -> ProjectManagerArguments:
+    return ProjectManagerArguments(
+        log_level=arguments.log_level,
+        write_log=arguments.write_log,
+        project_root=arguments.project_path,
+        full_execute=False,
+        list=False,
+        execute_configurations=arguments.configuration,
+        execute_inplace=False,
+        skip_cleanup=arguments.skip_cleanup,
+        generate_report=False,
+        show_report=False,
+        initialize_directory=False,
+        apply_suggestions=",".join(suggestions) if suggestions else None,
+        reset=False,
+        reset_execution_results=False,
+        gui=False,
+        label_prefix="",
+        timeout_compilation=timeout,
+        timeout_execution=timeout,
+        timeout_validation=timeout,
+    )
 
 
 class CodeConfiguration(object):
@@ -48,10 +107,22 @@ class CodeConfiguration(object):
             self.config_dot_dp_path = self.config_dot_dp_path[:-1]
         self.execution_result = None
         self.suggestion_application = None
+        # the build of a candidate in a kept build tree (uses_kept_build_trees), None for a copy of its own
+        self.kept_key: Optional[BuildKey] = None
+        # recorded with the measurements of a candidate in a kept build tree (build id, build kind)
+        self.build_annotations: Dict[str, Any] = {}
         logger.debug("Created configuration: " + root_path)
 
     def __str__(self) -> str:
-        return self.root_path
+        return self.label
+
+    @property
+    def label(self) -> str:
+        """What names the configuration in logs and the statistics graph: its directory, or, in a kept build tree
+        that holds every candidate in turn, the build tree with the applied suggestions."""
+        if self.kept_key is None:
+            return self.root_path
+        return self.root_path + " [" + (", ".join(self.kept_key.suggestions) or "no suggestions") + "]"
 
     def execute(
         self, arguments: AutotunerArguments, timeout: Optional[float], thread_count: int, is_initial: bool = False
@@ -61,6 +132,12 @@ class CodeConfiguration(object):
         # ``timeout`` is derived from the reference configuration's *runtime*, which
         # says nothing about how long a build may take: a program running for a second
         # may well take minutes to compile. Builds are therefore never bounded by it.
+        if self.kept_key is not None and not arguments.compile_only:
+            # the tree holds one candidate at a time: build and run it without another build in between
+            with build_lock(_project_manager_arguments(arguments, timeout), self.kept_key):
+                if self._compile_in_kept_tree(arguments, thread_count):
+                    self.execute_only(arguments, timeout, thread_count, is_initial)
+            return
         compilation_successful = self.compile_only(arguments, thread_count, is_initial)
         if arguments.compile_only:
             # The build is the whole answer here. A failed build already stored its
@@ -102,6 +179,9 @@ class CodeConfiguration(object):
         A build has no time limit: the autotuner's timeout is derived from the runtime
         of the reference configuration and bounds runs, never compilations.
         """
+        if self.kept_key is not None:
+            with build_lock(_project_manager_arguments(arguments, None), self.kept_key):
+                return self._compile_in_kept_tree(arguments, thread_count)
         cm_args = ProjectManagerArguments(
             log_level=arguments.log_level,
             write_log=arguments.write_log,
@@ -156,6 +236,44 @@ class CodeConfiguration(object):
             compilation_successful = False
         return compilation_successful
 
+    def _compile_in_kept_tree(self, arguments: AutotunerArguments, thread_count: int) -> bool:
+        """Make the kept build tree hold this candidate (``configurations/building.py``: the tree is updated, and
+        compiled incrementally if the configuration has a compile_incremental.sh). The caller holds the lock. Like
+        every build of the autotuner, it has no time limit (see compile_only)."""
+        assert self.kept_key is not None
+        key = self.kept_key
+        pm_arguments = _project_manager_arguments(arguments, None, key.suggestions)
+        project_config_dir = pm_arguments.project_config_dir
+        settings_path = os.path.join(project_config_dir, self.settings_name)
+        if not os.path.exists(settings_path):
+            settings_path = os.path.join(project_config_dir, arguments.configuration, self.settings_name)
+        outcome = ensure_build(
+            pm_arguments,
+            key,
+            os.path.join(project_config_dir, key.configuration),
+            settings_path,
+            resolve_compile_script_path(project_config_dir, key.configuration),
+            thread_count,
+            BuildPolicy.AUTO,
+            timeout=None,
+            message=lambda text: logger.debug(text.rstrip()),
+        )
+        if outcome.result in (BuildResult.BUILT, BuildResult.REUSED) and outcome.tree is not None:
+            self.build_annotations = {"build_id": key.build_id}
+            if outcome.record is not None:
+                self.build_annotations["build_kind"] = outcome.record.build_kind
+            self.root_path = outcome.tree
+            self.config_dot_dp_path = os.path.join(outcome.tree, ".discopop")
+            return True
+        if outcome.result == BuildResult.APPLICATION_FAILED and outcome.application_result is not None:
+            self.suggestion_application = outcome.application_result
+            self.record_failed_application()
+            return False
+        stderr = outcome.compile_result[3] if outcome.compile_result is not None else outcome.message
+        print("Error during compilation!\nSTDERR: " + stderr)
+        self.execution_result = ExecutionResult(0.1, 1, False, False, compilation_failed=True)
+        return False
+
     def execute_only(
         self, arguments: AutotunerArguments, timeout: Optional[float], thread_count: int, is_initial: bool = False
     ) -> None:
@@ -208,6 +326,7 @@ class CodeConfiguration(object):
             execution_time_regex=resolve_execution_time_regex(config_path, arguments.execution_time_regex),
             measurement=measurement,
             repetitions=arguments.execution_repetitions,
+            result_annotations=self.build_annotations or None,
         )
         if ret is None:
             result_returncode = 1
@@ -238,6 +357,9 @@ class CodeConfiguration(object):
                 timeout_compilation=None,
                 timeout_validation=timeout,
             )
+            if validation.compile_required and self.kept_key is not None:
+                # the validation build changed the kept tree: the next candidate is compiled in full
+                invalidate_build(cm_args.project_dir, self.kept_key)
             if validation.compile_required and not validation.compile_successful:
                 logger.debug("Validation build failed; treating the configuration as invalid.")
             result_valid = validation.verdict(result_valid)
@@ -268,6 +390,16 @@ class CodeConfiguration(object):
     def create_copy(
         self, arguments: AutotunerArguments, settings_name: str, get_new_configuration_id: Callable[[], int]
     ) -> CodeConfiguration:
+        if uses_kept_build_trees(arguments, settings_name):
+            # nothing is copied: the candidate is compiled in the kept build tree of its mode when it is executed
+            project_config_dir = os.path.join(arguments.dot_dp_path, "project", "configs")
+            key = BuildKey(
+                build_owner_of(project_config_dir, arguments.configuration), _MODE_OF_SETTINGS[settings_name]
+            )
+            tree = kept_tree_path_of(arguments.project_path, key)
+            configuration = CodeConfiguration(tree, os.path.join(tree, ".discopop"), settings_name)
+            configuration.kept_key = key
+            return configuration
         # create a copy of the project folder
         cm_args = ProjectManagerArguments(
             log_level=arguments.log_level,
@@ -303,6 +435,9 @@ class CodeConfiguration(object):
             arguments.configuration,
             settings_path,
             get_new_configuration_id(),
+            # the profiling data and the pattern detection results are not needed by a candidate (it compiles and
+            # runs, the patches are in patch_generator); the hotspot data stays for the comparison of hd candidates
+            leave_out_of_dot_discopop=AUTOTUNER_LEFT_OUT_OF_COPIES,
         )
         new_dot_discopop_path = os.path.join(dest_path, ".discopop")
 
@@ -310,6 +445,8 @@ class CodeConfiguration(object):
         return CodeConfiguration(dest_path, new_dot_discopop_path, settings_name)
 
     def deleteFolder(self) -> None:
+        if self.kept_key is not None:
+            return  # the kept build tree serves the next candidate
         # delete the root folder.
         if not os.path.exists(self.root_path):
             raise FileNotFoundError(self.root_path)
@@ -331,6 +468,17 @@ class CodeConfiguration(object):
         sub_logger.debug("Applying patch applicator for: " + str(suggestion_ids))
         suggestion_ids_str = [str(id) for id in suggestion_ids]
 
+        if self.kept_key is not None:
+            # applied when the candidate is compiled; checked now, so that callers see a failure as before
+            self.kept_key = BuildKey(self.kept_key.configuration, self.kept_key.mode, tuple(suggestion_ids_str))
+            application_result = check_suggestions(
+                _project_manager_arguments(arguments, None, suggestion_ids_str), self.kept_key
+            )
+            self.suggestion_application = application_result
+            if application_result is not None and application_result.failure:
+                sub_logger.error(application_result.summary())
+            return application_result
+
         save_dir = os.getcwd()
         os.chdir(self.config_dot_dp_path)
         try:
@@ -351,7 +499,7 @@ class CodeConfiguration(object):
         return application_result
 
     def get_statistics_graph_label(self) -> str:
-        res_str = "" + self.root_path + "\n"
+        res_str = "" + self.label + "\n"
         if self.execution_result is not None and self.execution_result.application_failed:
             res_str += "Suggestions not applied."
         elif self.execution_result is None:

@@ -6,8 +6,8 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The Editor tab: execute.sh, the compile.sh override, validate.sh and the compile_validate.sh override of the
-selected configuration, and the execution time setting stored next to execute.sh.
+"""The Editor tab: execute.sh, the compile.sh override, validate.sh and the compile_validate.sh override and the
+compile_incremental.sh override of the selected configuration, and the execution time setting stored next to execute.sh.
 
 Ported from ``gui/mixins/file_editor.py`` and the Editor part of ``gui/ConfigManagerApp.py``.
 """
@@ -29,6 +29,7 @@ from discopop_library.ProjectManager.configurations.build_sharing import declare
 from discopop_library.ProjectManager.configurations.compile_script import (
     get_per_config_compile_script_path,
     get_per_config_validation_compile_script_path,
+    INCREMENTAL_COMPILE_SCRIPT_NAME,
     get_shared_compile_script_path,
     resolve_compile_script_path,
 )
@@ -50,11 +51,13 @@ from discopop_library.ProjectManager.services.editor_files import (
     COMPILE_OVERRIDE_PLACEHOLDER,
     COMPILE_SCRIPT_WARNING,
     COMPILE_SCRIPT_WARNING_TITLE,
+    INCREMENTAL_COMPILE_OVERRIDE_PLACEHOLDER,
     VALIDATE_SCRIPT_PLACEHOLDER,
     VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER,
     last_recorded_execution_output,
     uses_compiler_variables,
 )
+from discopop_library.ProjectManager.services.incremental_script import incremental_draft
 from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
@@ -62,24 +65,27 @@ from discopop_library.ProjectManager.services.project_state import (
 )
 from discopop_library.ProjectManager.utilities.scriptFiles import write_script_file
 
-FILES = ("execute.sh", "compile.sh", "validate.sh", "compile_validate.sh")
+FILES = ("execute.sh", "compile.sh", "validate.sh", "compile_validate.sh", "compile_incremental.sh")
 # the per-configuration files other than execute.sh may be absent; the editor then shows a read-only placeholder
 PLACEHOLDERS = {
     "compile.sh": COMPILE_OVERRIDE_PLACEHOLDER,
     "validate.sh": VALIDATE_SCRIPT_PLACEHOLDER,
     "compile_validate.sh": VALIDATION_COMPILE_OVERRIDE_PLACEHOLDER,
+    "compile_incremental.sh": INCREMENTAL_COMPILE_OVERRIDE_PLACEHOLDER,
 }
 BASE_LABELS = {
     "execute.sh": "execute.sh",
     "compile.sh": "compile.sh (override)",
     "validate.sh": "validate.sh",
     "compile_validate.sh": "compile_validate.sh (override)",
+    "compile_incremental.sh": "compile_incremental.sh (override)",
 }
 HEADINGS = {
     "execute.sh": "Execution script",
     "compile.sh": "Compilation script override",
     "validate.sh": "Output validation script",
     "compile_validate.sh": "Validation build script override",
+    "compile_incremental.sh": "Incremental build script override",
 }
 EXECUTION_TIME_TOOLTIP = (
     "Off: the wall clock time of execute.sh is measured, including setup,\n"
@@ -128,10 +134,14 @@ class EditorPanel(Panel):
         self.validation_compile_override_button = widgets.create_button(
             "Add Override", self._toggle_validation_compile_override
         )
+        self.incremental_compile_button = widgets.create_button("Add Override", self._toggle_incremental_compile)
+        # the proposal shown after "Add Override" is no file until it is saved
+        self._incremental_draft = False
         toggles = {
             "compile.sh": self.compile_override_button,
             "validate.sh": self.validate_script_button,
             "compile_validate.sh": self.validation_compile_override_button,
+            "compile_incremental.sh": self.incremental_compile_button,
         }
 
         self.notebook = QTabWidget()
@@ -282,6 +292,7 @@ class EditorPanel(Panel):
 
     def _clear(self) -> None:
         self._loaded_config = None
+        self._incremental_draft = False
         for editor in self.editors.values():
             editor.setReadOnly(True)
             editor.set_text("")
@@ -297,6 +308,7 @@ class EditorPanel(Panel):
         self.compile_override_button.setText("Add Override")
         self.validate_script_button.setText("Add validate.sh")
         self.validation_compile_override_button.setText("Add Override")
+        self.incremental_compile_button.setText("Add Override")
         self.sub_tab_labels["compile_validate.sh"] = BASE_LABELS["compile_validate.sh"]
         self._refresh_marks()
 
@@ -311,6 +323,7 @@ class EditorPanel(Panel):
         self._load_compile_override()
         self._load_validate_script()
         self._load_validation_compile_override()
+        self._load_incremental_compile()
         self._load_execution_time_settings()
         self._refresh_marks()
         # no ResultsChanged: showing other files changes no results, and the panels that follow the selection
@@ -369,6 +382,11 @@ class EditorPanel(Panel):
         )
         self.validation_compile_override_button.setText("Remove Override" if exists else "Add Override")
         self._refresh_marks()
+
+    def _load_incremental_compile(self) -> None:
+        self._incremental_draft = False
+        exists = self._load_file("compile_incremental.sh")
+        self.incremental_compile_button.setText("Remove Override" if exists else "Add Override")
 
     def _load_execution_time_settings(self) -> None:
         """Show the execution time setting stored for the selected configuration."""
@@ -510,6 +528,54 @@ class EditorPanel(Panel):
         self.project_state.publish(ConfigurationsChanged())
         self.status.set(message, widgets.STATUS_OK, reset_ms=2000)
 
+    def _toggle_incremental_compile(self) -> None:
+        """Add the incremental build script (a proposal in the editor, written when saved) or remove it again."""
+        config = self.project_state.current_config
+        if not config:
+            return
+        path = self._file_path(INCREMENTAL_COMPILE_SCRIPT_NAME)
+        if os.path.exists(path):
+            if not dialogs.ask_yes_no(
+                self,
+                "Remove Override",
+                "Remove the compile_incremental.sh override for this configuration?\n\n"
+                "The shared compile_incremental.sh applies instead, if the configuration uses the shared compile.sh;\n"
+                "otherwise compile.sh runs for every compilation.",
+            ):
+                return
+            os.remove(path)
+            self._load_incremental_compile()
+            self.project_state.publish(ConfigurationsChanged())
+            self.status.set(
+                "Removed compile_incremental.sh override for this configuration", widgets.STATUS_OK, reset_ms=2000
+            )
+            return
+        if self._incremental_draft:
+            self._load_incremental_compile()
+            self._refresh_marks()
+            self.status.set("Discarded the proposed compile_incremental.sh", widgets.STATUS_OK, reset_ms=2000)
+            return
+        if self._refuse_for_shared_build(config, INCREMENTAL_COMPILE_SCRIPT_NAME):
+            return
+        source = resolve_compile_script_path(self.arguments.project_config_dir, config)
+        draft, found = incremental_draft(self._read(source))
+        editor = self.editors[INCREMENTAL_COMPILE_SCRIPT_NAME]
+        editor.setReadOnly(False)
+        editor.set_text(draft)
+        editor.document().setModified(True)
+        self._incremental_draft = True
+        self.incremental_compile_button.setText("Discard Draft")
+        self.notebook.setCurrentWidget(self._sub_tab_widgets[INCREMENTAL_COMPILE_SCRIPT_NAME])
+        self._refresh_marks()
+        self.status.set(
+            (
+                "Check the proposed compile_incremental.sh and save it"
+                if found
+                else "No build line found in compile.sh: write compile_incremental.sh and save it"
+            ),
+            widgets.STATUS_OK,
+        )
+
     # ── saving ──────────────────────────────────────────────────────────────
 
     def _save_clicked(self) -> None:
@@ -542,6 +608,9 @@ class EditorPanel(Panel):
                 return False
             editor.document().setModified(False)
             saved_files.append(name)
+            if name == INCREMENTAL_COMPILE_SCRIPT_NAME:
+                self._incremental_draft = False
+                self.incremental_compile_button.setText("Remove Override")
 
         self._refresh_marks()
         if not saved_files:

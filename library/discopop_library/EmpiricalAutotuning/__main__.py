@@ -80,6 +80,10 @@ def parse_args() -> AutotunerArguments:
     "execute none of them. Nothing is measured, so no candidate is ranked and no speedup is reported; the run only "
     "answers whether each configuration compiles. Intended for checking the applicability of suggestions, e.g. by "
     "discopop_patch_repair.")
+    parser.add_argument("--no-kept-build-trees", dest="kept_build_trees", action="store_false", help="Compile every "
+    "candidate in a copy of the project of its own (deleted after its run) instead of one after the other in the "
+    "kept build tree of its mode, which the project manager's builds use as well and which compile_incremental.sh "
+    "compiles incrementally. Needs a copy of the project per candidate at a time.")
     parser.add_argument("--skip-cleanup", action="store_true", help="Disable the deletion of created code variants. "
     "May require a lot of disk space.")
     parser.add_argument("--sanitize", action="store_true", help="Enable the invocation of ThreadSanitizer if "
@@ -134,6 +138,7 @@ def parse_args() -> AutotunerArguments:
         hotspot_types=arguments.hotspot_types,
         algorithm=arguments.algorithm,
         compile_only=arguments.compile_only,
+        kept_build_trees=arguments.kept_build_trees,
         noise_threshold=arguments.noise_threshold,
         hs_min_share=arguments.hs_min_share,
         max_measurements=arguments.max_measurements,

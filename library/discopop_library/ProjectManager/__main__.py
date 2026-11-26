@@ -151,6 +151,13 @@ def _build_parser() -> ArgumentParser:
                         "and the compilation warns about them. --no-strip-openmp keeps them even if the setting "
                         "removes them.")
 
+    parser.add_argument("--build-thread-count", action=argparse.BooleanOptionalAction, default=None,
+                        help="Pass the thread count of the run to the compile scripts as OMP_NUM_THREADS, for this "
+                        "invocation; overrides the stored setting (.discopop/project/build_thread_count.json, GUI: "
+                        "Build stage). By default only execute.sh / validate.sh get it, so that $(nproc) in a compile "
+                        "script returns the number of CPUs. --no-build-thread-count keeps it away even if the setting "
+                        "passes it.")
+
     parser.add_argument("--log", type=str, default="WARNING", help="Specify log level: DEBUG, INFO, WARNING, ERROR, "
     "CRITICAL")
     parser.add_argument("--write-log", action="store_true", help="Create Logfile.")
@@ -215,6 +222,7 @@ def parse_args(force_gui: bool = False) -> ProjectManagerArguments:
         project_include_dirs=arguments.project_include_dirs,
         project_exclude_dirs=arguments.project_exclude_dirs,
         strip_openmp=arguments.strip_openmp,
+        build_thread_count=arguments.build_thread_count,
         build_policy="rebuild" if arguments.rebuild else "reuse" if arguments.reuse_build else "auto",
         build_only=arguments.build_only,
         share_build=arguments.share_build,
