@@ -96,7 +96,7 @@ Tests that check more than the detected patterns live in `test/end_to_end/<topic
 
 `.github/workflows/ci.yml` runs on pushes to `master` and `new_explorer`, on every pull request and manually. A commit is tested once: a feature branch is tested through its pull request. The full matrix (Ubuntu 24.04 with LLVM 19 and 20, Debian 13 with LLVM 21 and 22) only runs when merging into `master`; other pull requests and manual runs test Debian 13 with LLVM 21. The jobs cover the static checks (license tags, black, ruff), mypy, the unit tests, the instrumentation, profiler and end-to-end tests, the C++ unit tests, sanitizers, a leak check, coverage, and benchmarks with a comparison against the previous version.
 
-`.github/workflows/published_packages.yml` tests what users install instead of the code of a commit: on a clean Ubuntu 24.04 with the packages of the installation guide, it installs the newest stable release and the newest pre-release of `discopop` from PyPI with the commands of the installation guide (`pip install discopop`, `pip install --pre discopop`), checks that every DiscoPoP package is installed in its newest version without conflicting requirements and that every command starts, and runs the example (instrument, profile, explore). It runs after every publish workflow, on pull requests that change it, and manually. It is no part of the CI of pull requests, since a broken release would fail all of them. To run the same check locally (it needs the system packages of the installation guide):
+`.github/workflows/published_packages.yml` tests what users install instead of the code of a commit: on a clean Ubuntu 24.04 with the packages of the installation guide, it installs the newest stable release and the newest pre-release of `discopop` from PyPI with the commands of the installation guide (`pip install discopop`, `pip install --pre discopop`), checks that every DiscoPoP package is installed in its newest version without conflicting requirements and that every command starts, and runs the example (instrument, profile, explore). It runs at the end of every release (see [Releases](#releases)), on pull requests that change it, and manually. It is no part of the CI of pull requests, since a broken release would fail all of them. To run the same check locally (it needs the system packages of the installation guide):
 
 ```bash
 python3 scripts/dev/check_published_installation.py --channel pre-release
@@ -120,20 +120,22 @@ Every source file carries the DiscoPoP license header in its first 20 lines (`sc
 
 ## Releases
 
-Each package has its own `VERSION` file (`profiler/`, `explorer/`, `library/`, `GUI/`, `hotspot_detection/`, `mcp_server/`, and the root `VERSION` for `discopop`), which its `pyproject.toml` reads. Update it before tagging. A tag publishes to PyPI:
+Each package has its own `VERSION` file (`profiler/`, `explorer/`, `library/`, `GUI/`, `hotspot_detection/`, `mcp_server/`, and the root `VERSION` for `discopop`), which its `pyproject.toml` reads. **A release is a change of `VERSION` files merged into `master`**; no tags are set by hand.
 
-| Tag | Publishes |
-|---|---|
-| `profiler_v<version>` | `discopop-profiler` |
-| `explorer_v<version>` | `discopop-explorer` |
-| `library_v<version>` | `discopop-library` |
-| `gui_v<version>` | `discopop-gui` |
-| `hotspot_detection_v<version>` | `discopop-hotspot-detection` |
-| `mcp_server_v<version>` | `discopop-mcp-server` |
-| `v<version>` (e.g. `v5.0.3`), tagged on `master` | the root package `discopop` (the draft GitHub release of `publish.yml` is disabled for now) |
-| `v<version>a<n>`, `v<version>b<n>`, `v<version>dev<n>` | the root package `discopop` as pre-release |
+Once the CI of the push to `master` has succeeded, the workflow "Release" (`.github/workflows/release.yml`):
 
-After every publish workflow, the workflow "Published packages" (see [Continuous integration](#continuous-integration)) installs the newest releases from PyPI and runs the example; check its result after a release, as it shows whether the newly published package works with the published versions of the others.
+1. publishes every package whose `VERSION` is not on PyPI yet (`scripts/dev/release.py plan`). The packages are uploaded in the order hotspot detection, profiler, GUI, library, explorer, MCP server and `discopop` last, so a package never reaches PyPI before the DiscoPoP packages it requires;
+2. tags the commit per published package: `hotspot_detection_v<version>`, `profiler_v<version>`, `gui_v<version>`, `library_v<version>`, `explorer_v<version>`, `mcp_server_v<version>`, and `v<version>` for `discopop`;
+3. runs the workflow "Published packages" (see [Continuous integration](#continuous-integration)), which installs the newest stable release and pre-release from PyPI and runs the example.
+
+Whether a release is a pre-release follows from its version alone. A failed run can be started again manually (*Actions → Release → Run workflow* on `master`): it publishes only what is still missing, and only if the CI of the push of the current `master` commit succeeded. Every package is tagged right after its upload, so a rerun leaves no published package untagged. The draft GitHub release of a stable `discopop` release is disabled for now (commented out in `release.yml`). PyPI has to list `release.yml` with the environment `pypi` as a trusted publisher of every package.
+
+When raising versions:
+
+- raise the minimum versions of the requirements between the packages along with them (e.g. `discopop-library>=0.0.1a12` in `explorer/pyproject.toml`), at least where a package needs the new version of another one. A package released alone is combined with the versions of the others on PyPI;
+- release the packages that use a changed interface together with the package that changed it.
+
+`scripts/dev/release.py check` (a step of the CI job `static_checks`) fails if a minimum version excludes the `VERSION` of the required package in the checkout, if `discopop` does not require every package, or if a package with a final version requires a DiscoPoP package with a minimum that names a pre-release (pip would install pre-releases of it for users of the stable release).
 
 Use `1.2.3a4` as the version of an alpha release and `b` instead of `a` for a beta release. Version numbers: bug fixes and documentation only raise the last digit; compatible new features raise the middle digit and reset the last; changes of interfaces or data formats that are not compatible raise the first digit and reset the others.
 
@@ -144,6 +146,7 @@ The scripts in `scripts/dev` support development; run them from the root of the 
 | Script | Purpose |
 |---|---|
 | `run_ci_locally.sh` | runs the CI workflow locally with act |
+| `release.py check\|plan` | checks the versions and the requirements between the packages (CI); lists the packages a release would publish |
 | `check_published_installation.py --channel <stable\|pre-release>` | installs the newest release of a channel from PyPI into a new venv and runs the example (workflow "Published packages") |
 | `check-commit-msg.py` | validates a commit message (commit-msg hook) |
 | `check-license.sh` | checks that files carry the license tag (pre-commit) |

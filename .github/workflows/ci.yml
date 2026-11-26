@@ -364,7 +364,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    name: "Static checks: license tags, formatting (black), lint (ruff)"
+    name: "Static checks: license tags, formatting (black), lint (ruff), package versions"
     # only for skipping a tested push (create_matrix takes seconds on a hosted runner)
     needs: [create_matrix]
     if: ${{ needs.create_matrix.outputs.tested_by == '' }}
@@ -415,6 +415,12 @@ jobs:
       - name: Lint the Python code (ruff)
         run: |
           venv/bin/python3 -m ruff check
+
+      # a VERSION change is a release (release.yml): the requirements between the packages must fit the versions
+      - name: Check the versions and the requirements between the packages (scripts/dev/release.py check)
+        run: |
+          venv/bin/pip install --quiet packaging
+          venv/bin/python3 scripts/dev/release.py check
 
   # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
   # built from the root CMakeLists.txt, they need no venv

@@ -13,21 +13,17 @@ name: "Published packages"
 # (scripts/dev/check_published_installation.py). It shows whether the published versions of the packages work
 # together; the result does not depend on the code of a commit, so it is no part of the CI of pull requests (a broken
 # release would fail every one of them). It runs:
-# - after every publish workflow (a release of one package can break the combination with the others),
+# - at the end of the workflow "Release" (release.yml), when it published a package (a release of one package can
+#   break the combination with the others),
 # - on pull requests changing the check itself, and on request (workflow_dispatch).
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - "Publish DiscoPoP Package"
-      - "Publish DiscoPoP Package (Pre-release)"
-      - "Publish discopop-profiler to PyPI"
-      - "Publish discopop-library to PyPI"
-      - "Publish discopop-explorer to PyPI"
-      - "Publish discopop-gui to PyPI"
-      - "Publish discopop-hotspot-detection to PyPI"
-      - "Publish discopop-mcp-server to PyPI"
-    types: [completed]
+  workflow_call:
+    inputs:
+      wait_for_index:
+        description: "Wait for PyPI's index to show packages uploaded just before"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - ".github/workflows/published_packages.yml"
@@ -45,7 +41,6 @@ jobs:
   published_installation:
     # a GitHub-hosted runner: a clean system as a user has it, and no wait for the self-hosted runners
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     name: "Newest ${{ matrix.channel }} from PyPI: install and run the example"
     timeout-minutes: 60
     strategy:
@@ -62,9 +57,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip python3-venv python3-tk build-essential cmake git llvm-19-dev clang-19 clang-tools-19 libclang-19-dev libomp-19-dev libboost-dev
 
-      # PyPI's index can lag behind the upload of a publish workflow for a short time
+      # PyPI's index can lag behind an upload for a short time
       - name: Wait for the index after a release
-        if: ${{ github.event_name == 'workflow_run' }}
+        if: ${{ inputs.wait_for_index }}
         run: sleep 120
 
       - name: Install the newest ${{ matrix.channel }} and run the example
