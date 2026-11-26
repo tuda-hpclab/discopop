@@ -1,0 +1,10 @@
+# std::for_each is library code (DP_LIBRARY_DIRS in the Makefile) that calls back into project code: the lambda adds
+# to total, a variable of main, in every iteration. The dependency on total crosses the iterations of the loop on
+# line 10, which must not be suggested as do-all. Only the exclusion is pinned.
+# The dependency is recorded, but in the call path state the lambda gets when entered from code without function
+# entries (library or uninstrumented code), which is not tied to the iterations of the loop. Without DP_LIBRARY_DIRS
+# the loop is reported as do-all as well.
+xfail = "a project function called back from library code loses the loop state of its caller: the loop is reported as do-all"
+
+[do_all]
+excludes = ["1:10"]
