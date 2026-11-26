@@ -35,6 +35,10 @@ commands.
   differences from floating-point operations in another order are allowed. Lost
   updates, other random numbers or the same ones in other places, another order of
   elements or output, or another choice on ties are wrong results.
+- **Every change must be needed and explained.** Disagree if the patch contains a
+  change the parallel loop does not need, or a change outside the loop body that no
+  justification explains, including what it means for the code that uses the
+  changed data.
 - **The declared differences must be right.** The approval declares
   "result_differences": "none" (identical results) or "rounding". Disagree if the
   results can differ more than declared, e.g. "none" although floating-point

@@ -74,6 +74,11 @@ You can read all of it and change files in it. Do not run commands.
   (`#pragma omp parallel for ...`), and its header line stays exactly as it is, so
   that DiscoPoP finds the loop. Change only source files of the project. DiscoPoP
   computes the patch from your changes.
+- Change only what the parallel loop needs: nothing else, not even small
+  improvements. Every change outside the loop body belongs to the justification of
+  the blocker it resolves, with the lines it affects in "evidence". A changed file
+  that holds neither the loop nor a blocker's line, and that no evidence names, is
+  sent back.
 - The suggested directive below is a starting point, not a requirement: its
   clauses may be wrong once the blockers are taken into account.
 - For a rejection, or if you are unsure, change nothing.

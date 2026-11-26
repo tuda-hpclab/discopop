@@ -320,7 +320,14 @@ Gates, cheapest first; a failed gate is fed back as the next turn:
    every blocker, an assumption, and declares `result_differences`;
 3. only files with a file id changed, and in the changed code the loop's header line
    is directly preceded by a `parallel for` directive (not a comment, not another
-   loop).
+   loop);
+4. every changed file that holds neither the loop nor a blocker's line is cited in
+   the evidence of some justification: changes outside the loop body belong to the
+   blocker they resolve (the prompt asks for only what the parallel loop needs, the
+   reviewer disagrees with unneeded or unexplained changes).
+
+A rejection needs no evidence and is final, whatever the agent read: when unsure,
+the safe side wins.
 
 ### 5.4a Prompt templates
 

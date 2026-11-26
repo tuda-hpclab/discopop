@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 import pytest
 
+from discopop_library.SuggestionCheck.answers import parse_check_answer
+from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.check import (
     STATE_APPROVED,
     STATE_FAILED,
@@ -24,6 +26,7 @@ from discopop_library.SuggestionCheck.check import (
     Budget,
     CheckOptions,
     Outcome,
+    unexplained_files,
     check_suggestion,
 )
 from discopop_library.SuggestionCheck.conftest import (
@@ -283,3 +286,43 @@ def test_the_projects_own_prompts_are_used(project: Project, tmp_path: Path) -> 
     assert outcome.state == STATE_APPROVED
     assert agent.prompts[0].startswith("MY CHECK PROMPT\nSuggestion 5")
     assert reviewer.prompts[0].startswith("MY REVIEW PROMPT none")
+
+
+def _with_header(project: Project) -> Project:
+    header = project.root / "other.h"
+    header.write_text("int unrelated = 0;\n")
+    files = SourceFiles({1: project.root / "code.cpp", 2: header}, str(project.root))
+    return Project(project.root, files, project.suggestion)
+
+
+def _edits_both(answer: str) -> Any:
+    def step(workdir: Path) -> str:
+        (workdir / "code.cpp").write_text(APPROVED_SOURCE)
+        (workdir / "other.h").write_text("int unrelated = 1;\n")
+        return answer
+
+    return step
+
+
+def test_a_change_no_justification_explains_is_sent_back(project: Project) -> None:
+    project = _with_header(project)
+    cited = json_answer(**approval(evidence=["code.cpp:8", "other.h:1"]))
+    agent = ScriptedAgent([_edits_both(APPROVAL), cited])
+    outcome = run(project, agent, ScriptedAgent([AGREE]))
+    assert "no justification cites them: other.h" in outcome.gates[0]["detail"]
+    assert "other.h" in agent.prompts[1]
+    # cited in the evidence: the change is part of the approval
+    assert outcome.state == STATE_APPROVED
+    assert outcome.patch is not None and sorted(outcome.patch.entries) == [1, 2]
+
+
+def test_files_of_the_loop_and_the_blockers_need_no_citation(project: Project) -> None:
+    project = _with_header(project)
+    approval_ = approval(evidence=["code.cpp:8"])
+    justifications = parse_check_answer(json_answer(**approval_), 1, ["code.cpp", "other.h"]).justifications
+    assert unexplained_files([1], project.suggestion, project.files, justifications) == []
+    assert unexplained_files([1, 2], project.suggestion, project.files, justifications) == ["other.h"]
+    by_name = parse_check_answer(
+        json_answer(**approval(evidence=["code.cpp:8", "`other.h:1`"])), 1, ["code.cpp", "other.h"]
+    ).justifications
+    assert unexplained_files([1, 2], project.suggestion, project.files, by_name) == []

@@ -220,6 +220,33 @@ def change_gates(changes: Changes, suggestion: UnsureSuggestion, files: SourceFi
     return patch_of(changes.mapped, files, suggestion.pattern_id), ""
 
 
+def unexplained_files(
+    changed: Sequence[int], suggestion: UnsureSuggestion, files: SourceFiles, justifications: List[Justification]
+) -> List[str]:
+    """the changed files which hold neither the loop nor a blocker's line, and which no justification cites: a
+    change there is explained by nothing. Evidence names a file by its path or its file name, as the answer
+    parser accepts it."""
+    expected = {suggestion.start.file_id}
+    for blocker in suggestion.blockers:
+        for location in (blocker.source, blocker.sink):
+            if location is not None:
+                expected.add(location.file_id)
+    cited = set()
+    for justification in justifications:
+        for evidence in justification.evidence:
+            name = evidence.strip("`").split(":")[0]
+            cited.add(name)
+            cited.add(os.path.basename(name))
+    result = []
+    for file_id in sorted(changed):
+        if file_id in expected:
+            continue
+        path = files.display_path(file_id)
+        if path not in cited and os.path.basename(path) not in cited:
+            result.append(path)
+    return result
+
+
 def blocker_files(suggestion: UnsureSuggestion, files: SourceFiles) -> List[str]:
     """the files holding the lines of the blockers, as the agent sees them in its copy. Files outside the project are
     not in the copy, so they cannot be required."""
@@ -304,6 +331,18 @@ def check_suggestion(
                         else:
                             changes = workspace.changes()
                             patch, failure = change_gates(changes, suggestion, files)
+                            unexplained = unexplained_files(
+                                list(changes.mapped), suggestion, files, answer.justifications
+                            )
+                            if not failure and unexplained:
+                                patch = None
+                                failure = (
+                                    "These files changed although they hold neither the loop nor a blocker's line, "
+                                    "and no justification cites them: "
+                                    + ", ".join(unexplained)
+                                    + ". Undo changes the parallel loop does not need; cite the lines of a needed "
+                                    "change in the evidence of the blocker it resolves."
+                                )
                     if failure:
                         outcome.gates.append({"attempt": attempt, "turn": turn, "detail": failure})
                         last_problem = failure
