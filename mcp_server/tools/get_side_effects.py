@@ -49,6 +49,11 @@ _SOURCE_RANK = {"observed": 0, "static": 1}
 _KIND_TEXT = {"global": "global", "parameter": "parameter", "other": "other memory"}
 
 PROFILED_INPUTS_NOTE = "Valid for the profiled inputs only."
+THREAD_LOCAL_NOTE = (
+    "Thread-local data (thread_local storage) exists once per thread: each thread accesses its own copy."
+)
+# the coverage of a copy of a definition, best first, to pick the copy profiling saw most of
+_COVERAGE_RANK = {"executed": 3, "partial": 2, "untracked": 1, "not_executed": 0}
 # Only added if the analysis' own note on missing source-level facts is absent.
 NO_AST_NOTE = (
     "No source-level facts are available for this function or a callee, so its names could not be classified "
@@ -189,7 +194,8 @@ def _outside_text(
 
 
 def _effect_text(effect: Effect, function: FunctionInfo, files: dict[int, Optional[str]], project_path: str) -> str:
-    qualifiers = [_KIND_TEXT.get(effect.kind, effect.kind)]
+    kind = _KIND_TEXT.get(effect.kind, effect.kind)
+    qualifiers = ["thread-local " + kind if getattr(effect, "thread_local", False) else kind]
     if effect.through_pointer:
         qualifiers.append("through pointer")
     if effect.source == "static":
@@ -259,6 +265,8 @@ def build_text(
     notes = [note for note in effects.notes if note != PROFILED_INPUTS_NOTE]
     if not effects.ast_facts and not any(note.startswith(_NO_AST_NOTE_MARKER) for note in effects.notes):
         notes.append(NO_AST_NOTE)
+    if any(getattr(effect, "thread_local", False) for effect in shown):
+        notes.append(THREAD_LOCAL_NOTE)
     lines += [f"Note: {note}" for note in dict.fromkeys(notes)]
     lines.append(PROFILED_INPUTS_NOTE)
     return "\n".join(lines)
@@ -315,6 +323,20 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 TOOL_NAME,
                 next_step="Pass the file_path and line of one of the definitions.",
             )
+        copies_note = ""
+        if len(narrowed) > 1 and _copies_of_one_definition(narrowed):
+            # e.g. an inline or template function of a header, compiled into several files: one definition in the
+            # source, so the agent cannot pick one. The copy profiling saw most of describes it best.
+            computed = [index.compute(info.id) for info in narrowed]
+            best = max(
+                range(len(computed)),
+                key=lambda i: (_COVERAGE_RANK.get(computed[i].coverage, 0), len(computed[i].effects)),
+            )
+            narrowed = [narrowed[best]]
+            copies_note = (
+                f"Note: the definition was compiled {len(computed)} times (e.g. a header included by several files); "
+                "described is the copy profiling observed most."
+            )
         if len(narrowed) > 1:
             listed = [f"- {_place(project_path, info)}" for info in narrowed[:MAX_CANDIDATES]]
             text = "\n".join(
@@ -329,6 +351,8 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
 
         effects = index.compute(narrowed[0].id)
         text = build_text(project_path, effects, _file_table(index), limit)
+        if copies_note:
+            text = text + "\n" + copies_note
         ctx.log_action(project_path, TOOL_NAME, f"Described the side effects of {narrowed[0].display_name}")
         return [TextContent(type="text", text=text)]
 
@@ -336,6 +360,11 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         error_msg = f"Error computing side effects: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return ctx.error(error_msg, arguments.get("project_path", ""), TOOL_NAME)
+
+
+def _copies_of_one_definition(functions: list[FunctionInfo]) -> bool:
+    """whether the functions are copies of one definition: the same name, file and lines"""
+    return len({(f.display_name, f.file, f.start_line, f.end_line) for f in functions}) == 1
 
 
 def _file_table(index: Any) -> dict[int, Optional[str]]:

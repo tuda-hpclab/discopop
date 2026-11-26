@@ -125,6 +125,34 @@ class TestGetSideEffects(unittest.TestCase):
     def __lines(self, effects: list[Effect], **arguments: Any) -> list[str]:
         return self.__query(effects, **arguments).splitlines()
 
+    # --- thread-local storage and copies of one definition
+
+    def test_thread_local_data_is_marked(self) -> None:
+        text = self.__query([_effect("generators", thread_local=True), _effect("counter")])
+        self.assertIn("- generators (thread-local global)", text)
+        self.assertIn("- counter (global)", text)
+        self.assertIn("Note: Thread-local data (thread_local storage) exists once per thread", text)
+        self.assertNotIn("thread", self.__query([_effect("counter")]).lower())
+
+    def test_copies_of_one_definition_are_one_function(self) -> None:
+        # an inline function of a header, compiled into two files: the copy profiling saw is described
+        unseen, seen = _function("1:5"), _function("1:6")
+        index = FakeIndex(
+            [unseen, seen],
+            {"1:5": _result([], coverage="not_executed"), "1:6": _result([_effect("state")])},
+        )
+        text = self.__call(index)
+        self.assertIn("- state (global)", text)
+        self.assertIn("Note: the definition was compiled 2 times", text)
+        self.assertNotIn("matches", text)
+
+    def test_different_definitions_still_have_to_be_chosen(self) -> None:
+        index = FakeIndex(
+            [_function("1:5", start=10, end=20), _function("1:6", start=30, end=40)],
+            {"1:5": _result([]), "1:6": _result([])},
+        )
+        self.assertIn("matches 2 functions", self.__call(index))
+
     # --- name resolution
 
     def test_a_unique_name_is_resolved_with_or_without_signature(self) -> None:

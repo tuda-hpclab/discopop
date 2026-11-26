@@ -106,7 +106,7 @@ def parse_cu(node: ObjectifiedElement) -> Node:
     else:
         assert False, "invalid NodeType"
 
-    _, n.start_line = parse_id(node.get("startsAtLine"))
+    n.source_file_id, n.start_line = parse_id(node.get("startsAtLine"))
     _, n.end_line = parse_id(node.get("endsAtLine"))
     if node_type == NodeType.CU and n.start_line == 0:
         # an instruction without a source location (e.g. the phi of a short-circuit condition)

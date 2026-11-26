@@ -246,11 +246,18 @@ def _read_file_mapping(path: str) -> Dict[int, str]:
 def _function_file_ids(
     pet: PEGraphX, pet_functions: List[FunctionNode], files: Dict[int, str]
 ) -> Dict[FunctionNode, int]:
-    """File id of every function. The PET takes a node's file id from its node id, which is wrong for
-    the node "0:0" (the first function of a module); such functions get the file id their CUs agree on."""
+    """File id of every function: the file of its first line (startsAtLine). The PET takes a node's file id
+    from its node id, which is the file the function was compiled in: wrong for a function defined in a header
+    (most template and inline functions), and for the node "0:0" (the first function of a module). Without a
+    known first line, the node id's file counts, or else the file id the function's CUs agree on."""
     result: Dict[FunctionNode, int] = {}
     for function in pet_functions:
-        file_id = int(function.file_id)
+        source_file_id = getattr(function, "source_file_id", None)
+        file_id = (
+            int(source_file_id)
+            if source_file_id is not None and int(source_file_id) in files
+            else int(function.file_id)
+        )
         if file_id not in files:
             votes: Dict[int, int] = {}
             for cu_id in function.children_cu_ids or []:
@@ -694,7 +701,13 @@ class _AstFacts:
                 name = str(attrs["name"])
                 global_ids[node_id] = name
                 self._add_linker_name(attrs, name)
-                self.globals.append({"name": name, "const": _is_top_level_const(attrs.get("type"))})
+                self.globals.append(
+                    {
+                        "name": name,
+                        "const": _is_top_level_const(attrs.get("type")),
+                        "thread_local": attrs.get("tls") is not None,
+                    }
+                )
             if kind == "EnumDecl" and attrs.get("name"):
                 self.enum_names.add(str(attrs["name"]))
             if kind in _FUNCTION_DECL_KINDS:
@@ -715,7 +728,12 @@ class _AstFacts:
             if g["name"] not in unique:
                 unique[g["name"]] = g
             else:
-                unique[g["name"]] = {"name": g["name"], "const": unique[g["name"]]["const"] and g["const"]}
+                unique[g["name"]] = {
+                    "name": g["name"],
+                    "const": unique[g["name"]]["const"] and g["const"],
+                    # thread_local only if every declaration is
+                    "thread_local": unique[g["name"]]["thread_local"] and g["thread_local"],
+                }
         self.globals = [unique[name] for name in sorted(unique)]
 
         # pass 2: facts per function definition
@@ -723,7 +741,7 @@ class _AstFacts:
             facts = _FunctionFacts()
             facts.found = True
             facts.display_name = decl_attrs.get("name")
-            local_seen: Set[Tuple[str, bool, bool]] = set()
+            local_seen: Set[Tuple[str, bool, bool, bool]] = set()
             if decl_attrs.get("kind") != "FunctionDecl":
                 facts.params.append({"name": "this", "reachable": True})
             for child in children(decl_id):
@@ -755,9 +773,12 @@ class _AstFacts:
                     static = attrs.get("storage_class") in ("static", "extern") or attrs.get("tls") is not None
                     # every distinct declaration of a name (e.g. in sibling blocks), so that the
                     # analysis can merge them: the profiler's variable names carry no scope
-                    if (name, pointer, static) not in local_seen:
-                        local_seen.add((name, pointer, static))
-                        facts.locals.append({"name": name, "pointer": pointer, "static": static})
+                    thread_local = attrs.get("tls") is not None
+                    if (name, pointer, static, thread_local) not in local_seen:
+                        local_seen.add((name, pointer, static, thread_local))
+                        facts.locals.append(
+                            {"name": name, "pointer": pointer, "static": static, "thread_local": thread_local}
+                        )
                 elif kind == "MemberExpr" and attrs.get("name") and line is not None:
                     facts.member_accesses.setdefault(str(line), {})[str(attrs["name"])] = self._member_base(
                         graph, node_id

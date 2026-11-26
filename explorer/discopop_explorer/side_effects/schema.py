@@ -51,6 +51,8 @@ class GlobalVariable(TypedDict):
     name: str
     # const-qualified: reading it does not depend on mutable state
     const: bool
+    # thread_local storage: one copy per thread. Absent in exports written before it was recorded
+    thread_local: bool
 
 
 class Parameter(TypedDict):
@@ -72,6 +74,8 @@ class LocalVariable(TypedDict):
     pointer: bool
     # static or thread_local storage: persistent state, classified like a global
     static: bool
+    # thread_local storage: one copy per thread. Absent in exports written before it was recorded
+    thread_local: bool
 
 
 class GlobalReference(TypedDict):

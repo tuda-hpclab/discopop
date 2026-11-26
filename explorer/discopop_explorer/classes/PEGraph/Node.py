@@ -44,6 +44,9 @@ class Node:
     tp_contains_taskwait: bool = False
     tp_omittable: bool = False
     mw_type = MWType.FORK
+    # the file of the node's first line (startsAtLine), which can differ from file_id, the file of its node id: a
+    # function defined in a header gets the node id of the file it was compiled in. None if unknown
+    source_file_id: Optional[int] = None
 
     def __init__(self, node_id: NodeID):
         self.id = node_id

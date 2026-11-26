@@ -236,6 +236,15 @@ class SideEffectIndex:
         for g in export.get("globals", []):
             # a name declared const and non-const (different scopes) counts as mutable
             self._globals[g["name"]] = self._globals.get(g["name"], True) and bool(g["const"])
+        # name -> thread_local storage, over all its persistent declarations: only if every one is thread_local,
+        # as the profiler's names carry no scope
+        self._thread_local: Dict[str, bool] = {}
+        for g in export.get("globals", []):
+            self._vote_thread_local(g["name"], bool(g.get("thread_local", False)))
+        for function in export.get("functions", []):
+            for local in function.get("locals", []):
+                if local.get("static"):
+                    self._vote_thread_local(local["name"], bool(local.get("thread_local", False)))
 
         self._instance_function: Dict[int, str] = {}
         self._instance_parent: Dict[int, Optional[int]] = {}
@@ -532,8 +541,14 @@ class SideEffectIndex:
         if function_id not in self._functions:
             raise KeyError(function_id)
         result = self._compute(function_id)
+        for effect in result.effects:
+            if effect.kind == "global" and self._thread_local.get(effect.name, False):
+                effect.thread_local = True
         self._cache[function_id] = result
         return result
+
+    def _vote_thread_local(self, name: str, thread_local: bool) -> None:
+        self._thread_local[name] = self._thread_local.get(name, True) and thread_local
 
     # ------------------------------------------------------------------ computation
 

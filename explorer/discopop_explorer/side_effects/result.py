@@ -68,6 +68,9 @@ class Effect:
     sites: List[EffectSite] = field(default_factory=list)
     # names under which the other end of crossing records refers to the same data
     outside_names: List[OutsideName] = field(default_factory=list)
+    # a global (or static local) with thread_local storage: every thread has its own copy. Only where every
+    # declaration of the name is thread_local
+    thread_local: bool = False
 
     @property
     def is_own(self) -> bool:

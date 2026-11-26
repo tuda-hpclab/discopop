@@ -515,10 +515,10 @@ def test_ast_facts_of_a_function() -> None:
     assert facts.called_names - facts_by_function.defined_function_names == {"memset", "operator=", "basic_string"}
     # only top-level const counts: gp points to const data but can itself be changed
     assert facts_by_function.globals == [
-        {"name": "g", "const": False},
-        {"name": "gp", "const": False},
-        {"name": "gq", "const": True},
-        {"name": "t", "const": True},
+        {"name": "g", "const": False, "thread_local": False},
+        {"name": "gp", "const": False, "thread_local": False},
+        {"name": "gq", "const": True, "thread_local": False},
+        {"name": "t", "const": True, "thread_local": False},
     ]
     # the profiler records function-static locals under their linker name
     assert facts_by_function.linker_names == {"_ZZ1fPiiE5calls": "calls"}
@@ -923,3 +923,32 @@ def test_build_export_reads_the_explorers_file_mapping(tmp_path: Path, monkeypat
         export_module.build_export(str(tmp_path), None, None, None)  # type: ignore[arg-type]
 
     assert read == [fmap, str(tmp_path / "FileMapping.txt")]
+
+
+def test_a_function_is_in_the_file_of_its_first_line_not_of_its_node_id() -> None:
+    from discopop_explorer.side_effects.export import _function_file_ids
+
+    class SimpleNamespace:  # hashable, like a FunctionNode
+        def __init__(self, **fields: Any) -> None:
+            self.__dict__.update(fields)
+
+    files = {3: "/p/Base.h", 7: "/p/user.cpp"}
+    # defined in Base.h, compiled in user.cpp: the node id carries the file it was compiled in
+    in_header = SimpleNamespace(file_id=7, source_file_id=3, children_cu_ids=[])
+    plain = SimpleNamespace(file_id=7, source_file_id=7, children_cu_ids=[])
+    # an unknown first line: the node id counts
+    unknown = SimpleNamespace(file_id=7, source_file_id=16383, children_cu_ids=[])
+    result = _function_file_ids(None, [in_header, plain, unknown], files)  # type: ignore[arg-type, list-item]
+    assert [result[f] for f in (in_header, plain, unknown)] == [3, 7, 7]  # type: ignore[index]
+
+
+def test_thread_local_globals_are_recorded() -> None:
+    ast = _ast()
+    ast["inner"].append(
+        {"id": "0x15", "kind": "VarDecl", "name": "gen", "tls": "dynamic", "type": {"qualType": "unsigned int"}}
+    )
+    function = _Named("1:5", "_Z1fPii", 1, 3)
+    facts = _AstFacts(_AstHelper(ast), {1: "/src/code.cpp"}, [function])  # type: ignore[arg-type, list-item]
+    by_name = {g["name"]: g["thread_local"] for g in facts.globals}
+    assert by_name["gen"] is True
+    assert by_name["g"] is False

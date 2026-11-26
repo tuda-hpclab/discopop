@@ -244,15 +244,15 @@ TaskGraph + PET + AST + dependency dict
   "ignore_dependency_states": false,
   "dependency_file": {"mtime": 1727870000.0, "size": 374103},
   "files": {"1": "/abs/path/code.cpp"},
-  "globals": [{"name": "g_counter", "const": false},         // AST display names, incl.
-              {"name": "g_table", "const": true}],           // static data members
+  "globals": [{"name": "g_counter", "const": false, "thread_local": false},  // AST display names, incl.
+              {"name": "g_table", "const": true, "thread_local": false}],   // static data members
   "functions": [{
      "id": "1:5",                                            // PET function node id
      "name": "_Z12write_globali", "display_name": "write_global(int)",
      "file_id": 1, "start_line": 19, "end_line": 19,
      "ast_facts": true,                                      // AST knows this function
      "params": [{"name": "v", "reachable": false}],          // pointer/reference/array/this
-     "locals": [{"name": "i", "pointer": false, "static": false}],
+     "locals": [{"name": "i", "pointer": false, "static": false, "thread_local": false}],
      "member_accesses": {"27": {"second": "s"}},             // line -> member -> base name
      "performs_file_io": false,
      "static_callees": ["1:11"],                             // PET CALLSNODE
@@ -458,9 +458,14 @@ in-process; the scripts live outside the repository.
   (`_ZZ11count_callsvE5calls`).
 - No explicit deletion of an old export: `setup_explorer` removes the whole
   `explorer/` directory at the start of every run.
-- The PET takes a node's file id from its node id, which is wrong for node `"0:0"`
-  (the first function); the export takes the file id its CUs agree on
-  (`export._function_file_ids`). Pre-existing bug, not fixed in the PET.
+- The PET takes a node's file id from its node id, the file the function was compiled
+  in. That is wrong for a function defined in a header (most template and inline
+  functions: 11,039 of 15,743 functions of relearn) and for node `"0:0"` (the first
+  function). The export takes the file of the function's first line (`startsAtLine`,
+  kept as `Node.source_file_id`), else the node id's, else the one its CUs agree on
+  (`export._function_file_ids`). Before, records in such functions were matched to
+  no function, and the functions reported as never executed. The PET's `file_id`
+  itself is unchanged.
 - The MCP documentation lives in `mcp_server/README.md` (there is no page in `docs/`).
 - The tool lists entries with `access: "unknown"` (static fallback) in a separate
   `unknown_access` list.
