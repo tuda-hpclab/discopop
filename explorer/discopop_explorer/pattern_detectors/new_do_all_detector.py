@@ -71,16 +71,20 @@ def run_detection(
     task_graph: TaskGraph,
     ast_helper: ASTPatternDetectionHelper,
     decisions: Optional[PatternDecisionLog] = None,
+    all_blocking_dependencies: bool = False,
 ) -> List[DoAllInfo | ReductionInfo]:
     """decisions, if given, receives every loop considered and why it was rejected. It is not
-    finalized here, since the caller decides which of the returned patterns are reported."""
+    finalized here, since the caller decides which of the returned patterns are reported.
+    all_blocking_dependencies: see identify_simple_doall_and_reduction."""
     logger.info("Starting new do_all and reduction detection...")
     result: List[DoAllInfo | ReductionInfo] = []
     # built once, since the PET graph is not modified during pattern detection
     data_edges = DataEdgeIndex(pet)
 
     with stage("Identifying doall and reduction loops", 1, total=2):
-        result += identify_simple_doall_and_reduction(task_graph, ast_helper, data_edges, decisions)
+        result += identify_simple_doall_and_reduction(
+            task_graph, ast_helper, data_edges, decisions, all_blocking_dependencies
+        )
     # collapsible nests are derived from the identified patterns, so this must run afterwards
     with stage("Identifying collapsible loop nests", 2, total=2):
         result += identify_collapsible_loop_nests(task_graph, ast_helper, result)
@@ -340,11 +344,15 @@ def identify_simple_doall_and_reduction(
     ast_helper: ASTPatternDetectionHelper,
     data_edges: DataEdgeIndex,
     decisions: Optional[PatternDecisionLog] = None,
+    all_blocking_dependencies: bool = False,
 ) -> List[DoAllInfo | ReductionInfo]:
     """Analyzes the results of the graph simplification and create simple doall patterns.
     Implementation is fundamentally similar to the original doall detector, but implemented in a more maintainable
     fashion.
-    Checks for clean doall opportunities."""
+    Checks for clean doall opportunities.
+    A loop is rejected at its first dependency observed between its iterations. With all_blocking_dependencies (and
+    decisions), the scan goes on and every such dependency is recorded, which tells what has to change before the loop
+    can be parallelized; the detected patterns are the same."""
     patterns: List[DoAllInfo | ReductionInfo] = []
     # everything a pattern's tag is derived from, for the patterns collected in `patterns` - see
     # the duplicate check below. Kept alongside the tags themselves, which are only known once a
@@ -359,6 +367,8 @@ def identify_simple_doall_and_reduction(
     show_plot(tg)
 
     prevented_loops: Set[NodeID] = set()
+    # only the decisions show the dependencies after the first one
+    collect_all = all_blocking_dependencies and decisions is not None
     # the region of each loop, for recording decisions. The task graph holds several copies of a
     # loop, so this is looked up once per loop rather than once per copy.
     decision_regions: Dict[NodeID, CodeRegion] = dict()
@@ -590,10 +600,11 @@ def identify_simple_doall_and_reduction(
                 continue
             if prevents_doall(source_ctx, out_dep_target, dep):
                 dependency_found = True
-                break
+                if not collect_all:
+                    break
         # the dependencies without a known carrying loop, by the iteration copies of their ends
         for source_index, ic_source in enumerate(iteration_contexts):
-            if dependency_found:
+            if dependency_found and not collect_all:
                 break
             # check for do-all preventing dependencies
             for subnode in subtrees[ic_source]:
@@ -618,8 +629,9 @@ def identify_simple_doall_and_reduction(
                         )
                     if crosses_iterations and prevents_doall(subnode, out_dep_target, dep):
                         dependency_found = True
-                        break
-                if dependency_found:
+                        if not collect_all:
+                            break
+                if dependency_found and not collect_all:
                     break
         if dependency_found:
             # node is not a valid doall loop

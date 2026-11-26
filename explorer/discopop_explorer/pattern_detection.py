@@ -119,9 +119,11 @@ class PatternDetectorX(object):
         visualizer: Visualizer | None = None,
         ignore_dependency_states: bool = False,
         doall_default_none: bool = True,
+        all_blocking_dependencies: bool = False,
     ) -> DetectionResult:
         """Runs pattern discovery on the CU graph. doall_default_none marks the do-all and reduction patterns for a
-        pragma with default(none)."""
+        pragma with default(none). all_blocking_dependencies records every dependency preventing a do-all loop in the
+        pattern decisions, not only the first one."""
         with stage("Loading AST"):
             self.ast_helper.load_ast_from_project(project_path)
         # self.ast_helper.print_ast_structure()
@@ -176,7 +178,11 @@ class PatternDetectorX(object):
         ):
             with stage("Detecting do-all and reduction patterns"):
                 tmp_result = detect_do_all_and_reduction_new(
-                    self.pet, task_graph, self.ast_helper, decisions=self.pattern_decisions
+                    self.pet,
+                    task_graph,
+                    self.ast_helper,
+                    decisions=self.pattern_decisions,
+                    all_blocking_dependencies=all_blocking_dependencies,
                 )
             if "*" in enable_patterns or "doall" in enable_patterns:
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]

@@ -94,6 +94,7 @@ These options may change or be removed.
 | `--generate-data-cu-inst <dir>` | none | Generate `Data_CUInst.txt` in the given directory and stop. Requires `--cu-xml`, `--dep-file`, `--loop-counter` and `--reduction`. |
 | `--enable-statistics` | off | Calculate and store statistics for the code and the generated suggestions. |
 | `--ignore-dependency-states` | off | Ignore the callpath state markers (`@<state_id>`) in the dependency data. The affected dependencies are then reclassified from dynamic to static. The explorer writes no `side_effects.json.gz` in this mode. |
+| `--all-blocking-dependencies` | off | Record every dependency between iterations that prevents a do-all loop in `pattern_decisions.json`, not only the first one found. Shows what has to change before a loop can be parallelized; slower for loops with many such dependencies. The suggestions are the same. |
 | `--plot-pet [path]` | off | Write the program execution graph as GEXF file (`explorer/pet_plot.gexf` if no path is given). |
 | `--plot-task-graph` | off | Plot the task graph interactively. |
 | `--plot-context-graph` | off | Plot the context graph interactively. |

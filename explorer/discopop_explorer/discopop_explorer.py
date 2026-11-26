@@ -88,6 +88,8 @@ class ExplorerArguments(GeneralArguments):
     enable_pattern_decisions_file: Optional[str] = None
     # add default(none) to the pragmas of the do-all and reduction suggestions
     doall_default_none: bool = True
+    # record every dependency preventing a do-all loop in the pattern decisions, not only the first one
+    all_blocking_dependencies: bool = False
 
     def __post_init__(self) -> None:
         self.__validate()
@@ -142,6 +144,7 @@ def __run(
     ignore_dependency_states: bool = False,
     pattern_decisions: Optional[PatternDecisionLog] = None,
     doall_default_none: bool = True,
+    all_blocking_dependencies: bool = False,
 ) -> DetectionResult:
     """pattern_decisions, if given, receives which candidates the pattern detection considered and
     why it rejected them. It stays empty when existing patterns are loaded."""
@@ -213,6 +216,7 @@ def __run(
             visualizer,
             ignore_dependency_states=ignore_dependency_states,
             doall_default_none=doall_default_none,
+            all_blocking_dependencies=all_blocking_dependencies,
         )
 
     for plugin_name in plugins:
@@ -286,6 +290,7 @@ def run(arguments: ExplorerArguments) -> None:
                 ignore_dependency_states=arguments.ignore_dependency_states,
                 pattern_decisions=pattern_decisions,
                 doall_default_none=arguments.doall_default_none,
+                all_blocking_dependencies=arguments.all_blocking_dependencies,
             )
 
         end = time.time()

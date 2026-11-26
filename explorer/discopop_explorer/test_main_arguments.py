@@ -35,3 +35,11 @@ def test_default_none_can_be_switched_off(dot_discopop: Path) -> None:
 
 def test_default_none_can_still_be_requested_explicitly(dot_discopop: Path) -> None:
     assert parse_args(["--path", str(dot_discopop), "--doall-default-none"]).doall_default_none is True
+
+
+def test_all_blocking_dependencies_is_off_by_default(dot_discopop: Path) -> None:
+    assert parse_args(["--path", str(dot_discopop)]).all_blocking_dependencies is False
+
+
+def test_all_blocking_dependencies_reaches_the_explorer_arguments(dot_discopop: Path) -> None:
+    assert parse_args(["--path", str(dot_discopop), "--all-blocking-dependencies"]).all_blocking_dependencies is True
