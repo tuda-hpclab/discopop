@@ -250,6 +250,7 @@ def _publish_agent_approval(root: Path, pattern_id: int, assumption: str = "the 
                         "end_line": "2:40",
                         "region": {"file_id": 2, "end_line": 48},
                         "pragma": "#pragma omp parallel for",
+                        "affected_functions": ["2:38:kernel"],
                     }
                 ],
             }
@@ -282,6 +283,16 @@ def test_published_agent_approvals_are_labelled(tmp_path: Path) -> None:
     )
     assert "Agent-approved" not in dict(suggestion_detail_fields(generated))
     assert suggestions.agent_approved_note(generated) == ""
+
+
+def test_agent_approvals_are_classified_by_hotness_like_the_others(tmp_path: Path) -> None:
+    """By the loop of their unsure suggestion, as the auto-tuner classifies them when it searches them."""
+    dot_dp = _project(tmp_path, {"do_all": [_entry(0, "1:20", "1:22")]}, ["0"])
+    _publish_agent_approval(tmp_path, 9)
+    _hotspots(tmp_path, [_region(1, 21, "MAYBE"), _region(2, 40, "YES")])
+    generated, approved = load_suggestions(dot_dp)
+    assert (generated.hotness, approved.hotness) == ("MAYBE", "YES")
+    assert approved.function == "kernel"
 
 
 def test_an_agent_approval_without_its_unsure_suggestion(tmp_path: Path) -> None:

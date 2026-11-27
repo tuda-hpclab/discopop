@@ -296,21 +296,41 @@ def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
     patterns = _read_patterns(dot_dp)
     file_mapping = _read_file_mapping(dot_dp)
     entries = {suggestion_id: patterns[suggestion_id][1] for suggestion_id in ids if suggestion_id in patterns}
-    hotness = _hotness_by_suggestion(dot_dp, entries)
-    outside = find_outside_project_targets(dot_dp, ids)
-
-    raw_functions = {suggestion_id: _function_name(entry) for suggestion_id, entry in entries.items()}
-    demangle.prefetch(name for name in raw_functions.values() if name)
-
-    infos: List[SuggestionInfo] = []
-    unsure: Optional[Dict[str, Dict[str, Any]]] = None
+    # the suggestions the blocker resolution published: their marker, and the loop of their unsure suggestion
+    markers: Dict[str, Dict[str, Any]] = {}
     for suggestion_id in ids:
         if suggestion_id not in patterns:
             marker = _read_json(os.path.join(dot_dp, PATCH_GENERATOR_DIRECTORY, suggestion_id, AGENT_APPROVED_MARKER))
             if isinstance(marker, dict):
-                if unsure is None:
-                    unsure = _read_unsure(dot_dp)
-                infos.append(_agent_approved(suggestion_id, marker, unsure.get(suggestion_id), file_mapping, outside))
+                markers[suggestion_id] = marker
+    unsure = _read_unsure(dot_dp) if markers else {}
+    approved_entries = {sid: unsure[sid] for sid in markers if sid in unsure}
+    # classified together and by the same entries the auto-tuner searches (EmpiricalAutotuning/agent_approved.py), so
+    # that the Hotness column agrees with the order in which the tuner tries them
+    hotness = _hotness_by_suggestion(dot_dp, {**entries, **approved_entries})
+    outside = find_outside_project_targets(dot_dp, ids)
+
+    raw_functions = {
+        suggestion_id: _function_name(entry) for suggestion_id, entry in {**entries, **approved_entries}.items()
+    }
+    demangle.prefetch(name for name in raw_functions.values() if name)
+
+    infos: List[SuggestionInfo] = []
+    for suggestion_id in ids:
+        if suggestion_id not in patterns:
+            if suggestion_id in markers:
+                function = raw_functions.get(suggestion_id, "")
+                infos.append(
+                    _agent_approved(
+                        suggestion_id,
+                        markers[suggestion_id],
+                        unsure.get(suggestion_id),
+                        file_mapping,
+                        outside,
+                        hotness=hotness.get(suggestion_id, ""),
+                        function=demangle.demangle(function) if function else "",
+                    )
+                )
                 continue
             infos.append(SuggestionInfo(id=suggestion_id, outside_files=tuple(outside.get(suggestion_id, ()))))
             continue
@@ -362,6 +382,8 @@ def _agent_approved(
     entry: Optional[Dict[str, Any]],
     file_mapping: Dict[int, str],
     outside: Dict[str, List[str]],
+    hotness: str = "",
+    function: str = "",
 ) -> SuggestionInfo:
     """A suggestion the blocker resolution published: the loop of its unsure suggestion, marked as agent-approved."""
     entry = entry or {}
@@ -380,6 +402,8 @@ def _agent_approved(
         start_line=start_line,
         end_line=end_line,
         pragma=str(entry.get("pragma") or ""),
+        function=function,
+        hotness=hotness,
         outside_files=tuple(outside.get(suggestion_id, ())),
         agent_approved=True,
         agent_assumption=str(marker.get("assumption") or ""),
