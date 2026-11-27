@@ -12,5 +12,7 @@ Your answer could not be used:
 
 {failure}
 
-Answer again, in the same format as before. If you cannot justify every blocker,
-answer "rejected" or "unsure".
+Answer again with only the JSON object in a ```json block, in the same format as
+before. If the problem lies in your reasoning rather than in the format,
+reconsider: the cautious verdict ("rejected" or "unsure" when checking, "disagree"
+when reviewing) is a valid answer, and for a rejection you undo all your changes.
