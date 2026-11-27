@@ -116,3 +116,16 @@ def test_a_suggestion_outside_the_project_says_so_in_its_tooltip(qtbot: QtBot) -
     tip = table.proxy.index(rows.index("7"), 1).data(Qt.ItemDataRole.ToolTipRole)
     assert "outside the project: /shared/a.c" in tip
     assert "outside" not in table.proxy.index(rows.index("2"), 1).data(Qt.ItemDataRole.ToolTipRole)
+
+
+def test_an_agent_approved_suggestion_says_so_in_its_tooltip(qtbot: QtBot) -> None:
+    table = SuggestionTable()
+    qtbot.addWidget(table)
+    approved = SuggestionInfo(
+        "9", "doall (agent-approved)", "a.c", "/p/a.c", 5, 6, agent_approved=True, agent_assumption="order is free"
+    )
+    table.set_suggestions([INFOS[1], approved])
+    rows = column(table, 0)
+    tip = table.proxy.index(rows.index("9"), 1).data(Qt.ItemDataRole.ToolTipRole)
+    assert "Approved by an LLM agent, not by DiscoPoP's analysis; it assumes: order is free" in tip
+    assert "agent" not in table.proxy.index(rows.index("2"), 1).data(Qt.ItemDataRole.ToolTipRole)

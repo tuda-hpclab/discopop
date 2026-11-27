@@ -15,8 +15,14 @@ from discopop_library.ProjectManager.services.commands import (
     explorer_command,
     hotspot_analyzer_command,
     patch_repair_command,
+    suggestion_check_command,
 )
-from discopop_library.ProjectManager.services.requests import AutotunerRequest, ExplorerRequest, PatchRepairRequest
+from discopop_library.ProjectManager.services.requests import (
+    AutotunerRequest,
+    ExplorerRequest,
+    PatchRepairRequest,
+    SuggestionCheckRequest,
+)
 
 
 def _autotuner(**changes: object) -> AutotunerRequest:
@@ -82,6 +88,79 @@ def test_patch_repair_command() -> None:
     assert command[-7:] == ["--backend", "claude", "--model", "m", "--dry-run", "-s", "3"]
     bare = patch_repair_command(PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "", "", False, None), "d", "py")
     assert bare[-2:] == ["--log", "INFO"]
+
+
+def _check(**changes: object) -> SuggestionCheckRequest:
+    defaults = dict(
+        connection="",
+        prompts=2,
+        retries=1,
+        agent_timeout=600,
+        log_level="WARNING",
+        backend="claude",
+        model="sonnet",
+        review=True,
+        accept_rounding=True,
+        discopop_tools=True,
+        max_suggestions=0,
+        suggestion_ids=None,
+    )
+    defaults.update(changes)
+    return SuggestionCheckRequest(**defaults)  # type: ignore[arg-type]
+
+
+def test_suggestion_check_command() -> None:
+    command = suggestion_check_command(_check(), "d", "py")
+    assert command == [
+        "py",
+        "-m",
+        "discopop_library.SuggestionCheck",
+        "--dot-dp-path",
+        "d",
+        "--prompts",
+        "2",
+        "--retries",
+        "1",
+        "--agent-timeout",
+        "600",
+        "--log",
+        "WARNING",
+        "--backend",
+        "claude",
+        "--model",
+        "sonnet",
+    ]
+    # the project root and the prompts are the check's defaults: never passed
+    assert "--project-root" not in command and "--prompt-dir" not in command
+    off = suggestion_check_command(
+        _check(
+            backend="",
+            model="",
+            review=False,
+            accept_rounding=False,
+            discopop_tools=False,
+            max_suggestions=3,
+            suggestion_ids=("4", "12"),
+        ),
+        "d",
+        "py",
+    )
+    assert off[off.index("WARNING") + 1 :] == [
+        "--no-review",
+        "--reject-rounding",
+        "--no-discopop-tools",
+        "--max-suggestions",
+        "3",
+        "-s",
+        "4,12",
+    ]
+    assert "--backend" not in off and "--model" not in off
+
+
+def test_a_stored_connection_decides_the_backend_and_the_model() -> None:
+    command = suggestion_check_command(_check(connection="fast"), "d", "py")
+    assert command[-2:] == ["--connection", "fast"]
+    assert "--backend" not in command and "--model" not in command
 
 
 def test_hotspot_analyzer_command() -> None:

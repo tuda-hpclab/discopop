@@ -38,7 +38,11 @@ from discopop_library.ProjectManager.plots import hotspot_charts
 from discopop_library.ProjectManager.plots.hotspot_data import HOTNESS_ORDER
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.services.patches import suggestion_order
-from discopop_library.ProjectManager.services.suggestions import SuggestionInfo, outside_files_note
+from discopop_library.ProjectManager.services.suggestions import (
+    SuggestionInfo,
+    agent_approved_note,
+    outside_files_note,
+)
 
 COLUMN_ID = "ID"
 COLUMNS = (COLUMN_ID, "Type", "Location", "Function", "Hotness", "Pragma")
@@ -135,6 +139,9 @@ class SuggestionModel(QAbstractTableModel):
             tip = info.pragma if COLUMNS[column] == "Pragma" and info.pragma else self.cell_text(info, column)
             if info.outside_files:
                 tip += "\n\n" + outside_files_note(info).capitalize() + " (applied only on explicit confirmation)"
+            if info.agent_approved:
+                note = agent_approved_note(info)
+                tip += "\n\n" + note[:1].upper() + note[1:]
             return tip
         if role == Qt.ItemDataRole.TextAlignmentRole and column == 0:
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

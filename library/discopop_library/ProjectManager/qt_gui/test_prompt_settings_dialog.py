@@ -33,7 +33,8 @@ def _stored(tmp_path: Path, name: str) -> bool:
 def test_settings_menu_opens_the_dialog_of_the_project(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
-    assert [a.text() for a in window.settings_menu.actions()] == ["Suggestion check prompts…"]
+    assert window.prompt_settings_action.text() == "Suggestion check prompts…"
+    assert window.prompt_settings_action in window.settings_menu.actions()
     window.prompt_settings_action.trigger()
     dialog = window.prompt_settings_dialog
     assert dialog is not None and dialog.isVisible()

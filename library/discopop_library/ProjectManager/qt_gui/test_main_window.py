@@ -32,13 +32,18 @@ from discopop_library.ProjectManager.qt_gui.main_window import (
     TAB_PROFILING,
     TAB_REPORT,
     TAB_SETUP,
+    TAB_SUGGESTION_CHECK,
     MainWindow,
 )
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ResultsChanged
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningFinished,
+    PatternsChanged,
+    ResultsChanged,
+)
 from discopop_library.ProjectManager.services.workflow_status import StageState
 
 
@@ -54,6 +59,7 @@ def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
         TAB_HOTSPOT,
         TAB_PROFILING,
         TAB_PATTERN_DETECTION,
+        TAB_SUGGESTION_CHECK,
         TAB_PATCH_REPAIR,
         TAB_AUTOTUNING,
         TAB_EXECUTE,
@@ -199,6 +205,7 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
         "ReportPanel",
         "HotspotPanel",
         "PatternDetectionPanel",
+        "SuggestionCheckPanel",
         "PatchRepairPanel",
         "AutotuningPanel",
     }
@@ -215,6 +222,20 @@ def test_profiling_data_unlocks_the_pattern_detection_stage(qtbot: QtBot, tmp_pa
     window.project_state.publish(ResultsChanged())
     qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.NOT_RUN, timeout=2000)
     assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
+
+
+def test_unsure_suggestions_unlock_the_suggestion_check_stage(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    assert window.nav.stage_state(TAB_SUGGESTION_CHECK) == StageState.LOCKED
+    assert window.tab_title(TAB_SUGGESTION_CHECK) == "Suggestion Check"
+    (tmp_path / ".discopop" / "explorer").mkdir()
+    (tmp_path / ".discopop" / "explorer" / "unsure_suggestions.json").write_text(
+        '{"format_version": 1, "suggestions": []}'
+    )
+    window.project_state.publish(PatternsChanged())
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_SUGGESTION_CHECK) == StageState.NOT_RUN, timeout=2000)
+    assert window.suggestion_check_panel.run_button.isEnabled()
 
 
 def test_ctrl_s_saves_the_stage_in_front(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,6 +310,7 @@ def test_a_running_job_shows_a_spinner_on_its_stage(qtbot: QtBot, tmp_path: Path
         TAB_HOTSPOT: window.hotspot_panel,
         TAB_PROFILING: window.profiling_panel,
         TAB_PATTERN_DETECTION: window.pattern_detection_panel,
+        TAB_SUGGESTION_CHECK: window.suggestion_check_panel,
         TAB_PATCH_REPAIR: window.patch_repair_panel,
         TAB_AUTOTUNING: window.autotuning_panel,
         TAB_EXECUTE: window.execute_panel,

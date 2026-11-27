@@ -42,6 +42,13 @@ PATTERN_TYPE_NAMES = {
     "optimizer_output": "optimizer",
 }
 
+# the marker of a suggestion an LLM agent approved and the user put into use (SuggestionCheck/publish.py, MARKER_FILE;
+# not imported, as that pulls in the whole check); such a suggestion is not in patterns.json but in
+# explorer/unsure_suggestions.json
+AGENT_APPROVED_MARKER = "agent_approved.json"
+AGENT_APPROVED_SUFFIX = " (agent-approved)"
+AGENT_APPROVED_NOTE = "approved by an LLM agent, not by DiscoPoP's analysis"
+
 _HOTNESS_NAMES = {HotspotType.YES: "YES", HotspotType.MAYBE: "MAYBE", HotspotType.NO: "NO"}
 
 
@@ -59,6 +66,9 @@ class SuggestionInfo:
     variables: Tuple[Tuple[str, str], ...] = ()  # (label, value) of the data sharing clauses that are not empty
     # the files the patches modify that lie outside the project; they are only applied on explicit request
     outside_files: Tuple[str, ...] = ()
+    # published by the suggestion check: it rests on this assumption of an LLM agent, not on DiscoPoP's analysis
+    agent_approved: bool = False
+    agent_assumption: str = ""
 
     @property
     def location(self) -> str:
@@ -237,6 +247,7 @@ def _cache_key(dot_dp: str) -> Tuple[Any, ...]:
         _stat_key(os.path.join(dot_dp, "explorer", "patterns.json")),
         _stat_key(os.path.join(dot_dp, "hotspot_detection", "Hotspots.json")),
         _stat_key(os.path.join(dot_dp, "FileMapping.txt")),
+        _stat_key(os.path.join(dot_dp, "explorer", "unsure_suggestions.json")),
         _patch_directory_key(dot_dp),
     )
 
@@ -285,8 +296,15 @@ def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
     demangle.prefetch(name for name in raw_functions.values() if name)
 
     infos: List[SuggestionInfo] = []
+    unsure: Optional[Dict[str, Dict[str, Any]]] = None
     for suggestion_id in ids:
         if suggestion_id not in patterns:
+            marker = _read_json(os.path.join(dot_dp, PATCH_GENERATOR_DIRECTORY, suggestion_id, AGENT_APPROVED_MARKER))
+            if isinstance(marker, dict):
+                if unsure is None:
+                    unsure = _read_unsure(dot_dp)
+                infos.append(_agent_approved(suggestion_id, marker, unsure.get(suggestion_id), file_mapping, outside))
+                continue
             infos.append(SuggestionInfo(id=suggestion_id, outside_files=tuple(outside.get(suggestion_id, ()))))
             continue
         pattern_type, entry = patterns[suggestion_id]
@@ -323,6 +341,51 @@ def _load_suggestions(dot_dp: str) -> List[SuggestionInfo]:
     return infos
 
 
+def _read_unsure(dot_dp: str) -> Dict[str, Dict[str, Any]]:
+    """The entries of explorer/unsure_suggestions.json by pattern id (as a string)."""
+    data = _read_json(os.path.join(dot_dp, "explorer", "unsure_suggestions.json"))
+    if not isinstance(data, dict) or not isinstance(data.get("suggestions"), list):
+        return {}
+    return {str(e["pattern_id"]): e for e in data["suggestions"] if isinstance(e, dict) and "pattern_id" in e}
+
+
+def _agent_approved(
+    suggestion_id: str,
+    marker: Dict[str, Any],
+    entry: Optional[Dict[str, Any]],
+    file_mapping: Dict[int, str],
+    outside: Dict[str, List[str]],
+) -> SuggestionInfo:
+    """A suggestion the suggestion check published: the loop of its unsure suggestion, marked as agent-approved."""
+    entry = entry or {}
+    file_id, start_line = _split_location(entry.get("start_line"))
+    region = entry.get("region")
+    end_line = _split_location(entry.get("end_line"))[1]
+    if isinstance(region, dict) and isinstance(region.get("end_line"), int):
+        end_line = region["end_line"]
+    file_path = file_mapping.get(file_id, "")
+    pattern_type = str(entry.get("type") or "do_all")
+    return SuggestionInfo(
+        id=suggestion_id,
+        pattern_type=PATTERN_TYPE_NAMES.get(pattern_type, pattern_type) + AGENT_APPROVED_SUFFIX,
+        file_name=os.path.basename(file_path),
+        file_path=file_path,
+        start_line=start_line,
+        end_line=end_line,
+        pragma=str(entry.get("pragma") or ""),
+        outside_files=tuple(outside.get(suggestion_id, ())),
+        agent_approved=True,
+        agent_assumption=str(marker.get("assumption") or ""),
+    )
+
+
+def agent_approved_note(info: SuggestionInfo) -> str:
+    """The note of a suggestion an LLM agent approved (empty for all others)."""
+    if not info.agent_approved:
+        return ""
+    return AGENT_APPROVED_NOTE + "; it assumes: " + (info.agent_assumption or "(nothing stated)")
+
+
 def suggestion_detail_fields(info: SuggestionInfo) -> List[Tuple[str, str]]:
     """The (label, value) rows of the detail pane of a suggestion; unknown values are left out."""
     fields: List[Tuple[str, str]] = [("Suggestion", info.id)]
@@ -338,6 +401,8 @@ def suggestion_detail_fields(info: SuggestionInfo) -> List[Tuple[str, str]]:
     fields.extend(info.variables)
     if info.outside_files:
         fields.append(("Outside the project", outside_files_note(info)))
+    if info.agent_approved:
+        fields.append(("Agent-approved", agent_approved_note(info)))
     return fields
 
 

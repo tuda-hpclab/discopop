@@ -55,3 +55,25 @@ class PatchRepairRequest:
     dry_run: bool
     # None: all suggestions
     suggestion_ids: Optional[Tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class SuggestionCheckRequest:
+    # a stored connection of the LLM configuration shared with patch repair; empty: backend and model below
+    connection: str
+    prompts: int
+    retries: int
+    agent_timeout: int
+    log_level: str
+    backend: str
+    # empty: the backend's default model
+    model: str
+    review: bool
+    # False: --reject-rounding
+    accept_rounding: bool
+    # False: --no-discopop-tools
+    discopop_tools: bool
+    # 0: no limit
+    max_suggestions: int
+    # None: all unsure suggestions
+    suggestion_ids: Optional[Tuple[str, ...]]
