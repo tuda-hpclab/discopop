@@ -15,6 +15,12 @@ import pytest
 
 from discopop_library.PatchRepair.llm_backends import opencode
 
+# placeholder names: the test must not depend on which models a machine has
+RECENT = {"providerID": "provider-a", "modelID": "model-a"}
+OTHER = {"providerID": "provider-b", "modelID": "model-b"}
+RECENT_MODEL = RECENT["providerID"] + "/" + RECENT["modelID"]
+CONFIGURED_MODEL = OTHER["providerID"] + "/" + OTHER["modelID"]
+
 
 def write_state(state_home: Path, recent: List[Dict[str, str]]) -> None:
     (state_home / "opencode").mkdir(parents=True)
@@ -22,10 +28,7 @@ def write_state(state_home: Path, recent: List[Dict[str, str]]) -> None:
 
 
 def test_without_a_model_the_cli_default_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    write_state(
-        tmp_path,
-        [{"providerID": "HPC_Lab", "modelID": "Qwen/Qwen3.8-27B-FP8"}, {"providerID": "openai", "modelID": "gpt-5.5"}],
-    )
+    write_state(tmp_path, [RECENT, OTHER])
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert opencode.build_argv({"model": ""}, "hi", "/tmp") == [
         "opencode",
@@ -33,17 +36,17 @@ def test_without_a_model_the_cli_default_is_used(tmp_path: Path, monkeypatch: py
         "--format",
         "json",
         "-m",
-        "HPC_Lab/Qwen/Qwen3.8-27B-FP8",
+        RECENT_MODEL,
         "--",
         "hi",
     ]
 
 
 def test_a_configured_model_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    write_state(tmp_path, [{"providerID": "HPC_Lab", "modelID": "Qwen/Qwen3.8-27B-FP8"}])
+    write_state(tmp_path, [RECENT])
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    argv = opencode.build_argv({"model": "openai/gpt-5.5"}, "hi", "/tmp")
-    assert argv[argv.index("-m") + 1] == "openai/gpt-5.5"
+    argv = opencode.build_argv({"model": CONFIGURED_MODEL}, "hi", "/tmp")
+    assert argv[argv.index("-m") + 1] == CONFIGURED_MODEL
 
 
 def test_no_state_means_no_model_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
