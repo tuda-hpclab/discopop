@@ -406,6 +406,8 @@ class FirstAccessQueueChunk {
   std::promise<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
   // one record per address the chunk touched: the state its last access left, and its number of entry accesses
   std::promise<std::vector<AddressRecord>*> exit_boundary_summary;
+  // the frames live when the profiled thread handed the chunk over (StackFrames::LiveIds), for the second queue
+  std::vector<std::uint64_t> live_frames;
 
  private:
   std::vector<AccessInfo> buffer_;
@@ -416,13 +418,16 @@ class FirstAccessQueueChunk {
 class SecondAccessQueueElement {
  public:
   SecondAccessQueueElement(std::future<std::vector<AccessInfo>*> fut_first_addr_accesses,
-                           std::future<std::vector<AddressRecord>*> fut_exit_summary) {
+                           std::future<std::vector<AddressRecord>*> fut_exit_summary,
+                           std::vector<std::uint64_t> arg_live_frames = {})
+      : live_frames(std::move(arg_live_frames)) {
     entry_boundary_first_addr_accesses = std::move(fut_first_addr_accesses);
     exit_boundary_summary = std::move(fut_exit_summary);
   }
 
   std::future<std::vector<AccessInfo>*> entry_boundary_first_addr_accesses;
   std::future<std::vector<AddressRecord>*> exit_boundary_summary;
+  std::vector<std::uint64_t> live_frames;
 };
 
 class SecondAccessQueue {
@@ -500,7 +505,8 @@ class FirstAccessQueue {
     queued_elements_.store(internal_queue_.size(), std::memory_order_relaxed);
 
     // register Futures in SecondAccessQueue
-    SecondAccessQueueElement* saqe = new SecondAccessQueueElement(buffer->GetEntryFuture(), buffer->GetExitFuture());
+    SecondAccessQueueElement* saqe =
+        new SecondAccessQueueElement(buffer->GetEntryFuture(), buffer->GetExitFuture(), std::move(buffer->live_frames));
     second_access_queue_ptr->Push(saqe);
 
     return buffer;

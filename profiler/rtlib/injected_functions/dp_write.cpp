@@ -20,6 +20,7 @@
 
 #include "DPTypes.hpp"
 #include "callback_scope.hpp"
+#include "lid_constants.hpp"
 #include "runtimeFunctions.hpp"
 #include "runtimeFunctionsGlobals.hpp"
 
@@ -44,7 +45,21 @@ void __dp_write(LID lid, ADDR addr, const char* var) {
 #endif
 
   // For tracking function call or invoke
-  function_manager->ResetCall(lid);
+  if (lid == kLibraryAccessInstructionId) {
+    // an access of library code, attributed to the call of project code that entered the library (or dropped); it
+    // must not reset the call either, which the entry of a function called back from the library pairs with
+    // the frame of this callback lies below every frame of the library
+    lid = stack_frames.LibraryAccessAttribution(addr, reinterpret_cast<ADDR>(__builtin_frame_address(0)));
+    if (lid == 0) {
+      return;
+    }
+    // a variable of project code under its own name, see StackFrames::VariableAt
+    if (const char* project_variable = stack_frames.VariableAt(addr)) {
+      var = const_cast<char*>(project_variable);  // char* in the SKIP_DUP_INSTR signature, never written
+    }
+  } else {
+    function_manager->ResetCall(lid);
+  }
 
 #ifdef DP_DEBUG  // runs for every event, so only built with the build option DP_DEBUG
   if (dp_debug) {
@@ -62,6 +77,7 @@ void __dp_write(LID lid, ADDR addr, const char* var) {
     while (!first_access_queue.CanAcceptEntries()) {
       usleep(1000);
     }
+    stack_frames.LiveIds(main_thread_access_info_buffer->live_frames);
     first_access_queue.Push(main_thread_access_info_buffer);
     main_thread_access_info_buffer = first_access_queue_chunk_buffer.GetPreparedChunk(kFirstAccessQueueChunkSize);
   }
@@ -73,7 +89,8 @@ void __dp_write(LID lid, ADDR addr, const char* var) {
   current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state_id) << 32);
   current.var = var;
   current.aa_var = reinterpret_cast<std::int64_t>(var);
-  current.addr = addr;
+  // stack memory per frame instance, see memory/StackFrames.hpp
+  current.addr = stack_frames.Key(addr);
 
 #if defined DP_NUM_WORKERS && DP_NUM_WORKERS == 0
   AnalyzeSingleAccessOnMainThread(current);

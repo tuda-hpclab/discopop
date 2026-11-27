@@ -13,6 +13,7 @@
 #include "dp_add_bb_deps.hpp"
 
 #include "hybrid_analysis/bb_deps.hpp"
+#include "runtimeFunctionsGlobals.hpp"
 
 namespace dp {
 
@@ -31,6 +32,7 @@ void __dp_add_bb_deps(char* dep_string_ptr) {
   if (dep_string_ptr == nullptr) {
     return;
   }
+  const RuntimeSection runtime_section;  // the runtime is already running, see lifecycle/runtime_startup.cpp
   RegisteredBbDepStrings().push_back(dep_string_ptr);
 }
 // End HA

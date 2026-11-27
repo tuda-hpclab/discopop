@@ -64,7 +64,7 @@ The `version` field is not maintained at the moment and always contains the text
 }
 ```
 
-For a rejected region, `outcome` says so and `reasons` explains why.
+For a rejected region, `outcome` says so and `reasons` explains why. A do-all loop is rejected at the first dependency between its iterations that is found; with `--all-blocking-dependencies`, `reasons` lists all of them.
 <!-- UNVERIFIED: exact outcome values and reason texts of rejected regions (not produced by the example) -->
 
 ## detection_result_dump.json

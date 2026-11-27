@@ -14,7 +14,21 @@ import re
 import signal  # noqa: F401  used by the commented-out code
 import logging
 import sys
-from typing import Any, Collection, Deque, Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple, Union, cast
+from typing import (
+    Any,
+    Collection,
+    Deque,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 import warnings
 import networkx as nx  # type: ignore
 import matplotlib
@@ -2260,6 +2274,13 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         depends on the iteration order."""
         return sorted(contexts, key=lambda ctx: ctx.creation_index)
 
+    def __is_single_line_loop(self, loop_ctx: LoopParentContext) -> bool:
+        """whether the loop, header and body, is written on one line (also if that is unknown)"""
+        loop_node = self.__loop_node_of_entry(loop_ctx.parent_loop)
+        if loop_node is None:
+            return True
+        return bool(loop_node.start_line == loop_node.end_line)
+
     def __induction_variables(self, loop_ctx: LoopParentContext) -> Tuple[Optional[Set[str]], Optional[LineID]]:
         """(the loop indices of the loop's LoopNode, see PEGraphX.calculateLoopMetadata, or None if
         the loop has no LoopNode; the line of the loop's header)"""
@@ -2269,6 +2290,54 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
         header_line = LineID(str(entry.file_id) + ":" + str(entry.start_line))
         loop_node = self.__loop_node_of_entry(loop_ctx.parent_loop)
         return (None if loop_node is None else set(loop_node.loop_indices)), header_line
+
+    @staticmethod
+    def __header_controlled_variables(
+        loop_ctx: LoopParentContext, loop_iteration_ctxs: Set[Context], header_line: Optional[LineID]
+    ) -> List[Tuple[str, MemoryRegion]]:
+        """the variables of the loop that are advanced on the line of the loop header (a RAW dependency from the
+        header line to the header line, e.g. the increment of a for loop) and whose memory is written nowhere else in
+        the loop, i.e. loop control variables. Memory the body writes as well, as in `for (...; ...; ++it) { it = ...;
+        }`, under any name, is none: its dependencies are carried by the loop. Not for a loop on a single line (pass
+        header_line None), whose body writes on the header line, too."""
+        if header_line is None:
+            return []
+        contexts = set(loop_iteration_ctxs)
+        contexts.add(loop_ctx)
+
+        def dependencies() -> Iterator[Tuple[Context, Context, Dependency]]:
+            """(source, sink, dependency) of the data dependencies of the loop's contexts"""
+            for ctx in contexts:
+                for other_ctx, dep in ctx.outgoing_dependencies:
+                    if dep is not None and dep.etype == EdgeType.DATA:
+                        yield ctx, other_ctx, dep
+                for other_ctx, dep in ctx.incoming_dependencies:
+                    if dep is not None and dep.etype == EdgeType.DATA:
+                        yield other_ctx, ctx, dep
+
+        advanced: Dict[Tuple[str, MemoryRegion], None] = dict()  # ordered, for reproducible results
+        for _, _, dep in dependencies():
+            if (
+                dep.dtype == DepType.RAW
+                and dep.source_line == header_line
+                and dep.sink_line == header_line
+                and dep.var_name is not None
+                and dep.memory_region is not None
+            ):
+                advanced[(dep.var_name, dep.memory_region)] = None
+        if not advanced:
+            return []  # most loops
+        candidate_regions = {region for _, region in advanced}
+        written_elsewhere: Set[MemoryRegion] = set()
+        for source_ctx, sink_ctx, dep in dependencies():
+            if dep.memory_region not in candidate_regions:
+                continue
+            # the writing ends of the dependency within the loop
+            if dep.dtype in (DepType.RAW, DepType.WAW) and source_ctx in contexts and dep.source_line != header_line:
+                written_elsewhere.add(dep.memory_region)
+            if dep.dtype in (DepType.WAR, DepType.WAW) and sink_ctx in contexts and dep.sink_line != header_line:
+                written_elsewhere.add(dep.memory_region)
+        return [v for v in advanced if v[1] not in written_elsewhere]
 
     def __determine_loop_variables(self) -> None:
         """determine loop variables: the variables the loop header and the iterations exchange values
@@ -2338,6 +2407,14 @@ class TaskGraph(Plottable, object):  # type: ignore[misc]
                 for v in loop_vars
                 if (loop_indices is not None and v[0] in loop_indices) or v in advanced_on_header_line
             ]
+            # loop control variables written by the header only, wherever its code ended up: an iterator advanced
+            # by library calls on the header line (++it, ++__begin of a range-for, library code outside the project)
+            # is never read in the body by project code, and its increment may lie in a context of the iterations
+            for v in self.__header_controlled_variables(
+                loop_ctx, loop_iteration_ctxs, None if self.__is_single_line_loop(loop_ctx) else header_line
+            ):
+                if v not in loop_vars:
+                    loop_vars.append(v)
             # save loop variables
             loop_ctx.loop_variables = loop_vars
 

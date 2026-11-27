@@ -211,6 +211,7 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
   // Callbacks to run-time library
   llvm::FunctionCallee dp_finalize_;
   llvm::FunctionCallee dp_read_, dp_write_;
+  llvm::FunctionCallee dp_read_range_, dp_write_range_;  // memory intrinsics of library code
   llvm::FunctionCallee dp_alloca_, dp_new_, dp_delete_;  //, DpDecl;
   llvm::FunctionCallee dp_call_or_invoke_;
   llvm::FunctionCallee dp_func_entry_, dp_func_exit_;
@@ -294,6 +295,11 @@ class DiscoPoP {  // : public ModulePass, public PassInfoMixin<DiscoPoP> {
                                         std::map<std::string, std::vector<CU*>>& bb_id_to_cu_ids_map);
 
   bool IsInstrumentedFunction(llvm::Function& f);
+  // library code (outside the project), instrumented by InstrumentLibraryAccesses only
+  bool IsLibraryFunction(llvm::Function& f);
+  // __dp_read / __dp_write with kLibraryAccessInstructionId for the accesses of a library function that may reach
+  // memory of its callers, nothing else
+  void InstrumentLibraryAccesses(llvm::Function& f);
   // determineFileID, cached per function of the current module (the lookup walks the function and
   // resolves its file path)
   int32_t GetCachedFileId(llvm::Function& f);

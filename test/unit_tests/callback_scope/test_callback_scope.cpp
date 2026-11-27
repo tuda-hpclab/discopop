@@ -36,6 +36,24 @@ void instrumented_callback_without_a_scope() {
   ++callbacks_that_did_their_work;
 }
 
+// A callback that reaches instrumented code: the runtime calling the instrumented copy of a template instantiation
+// it shares with the program (see inside_runtime in runtimeFunctionsGlobals.hpp).
+void instrumented_callback_reaching_instrumented_code() {
+  DP_CALLBACK_SCOPE(LOOP_INCR);
+
+  instrumented_callback();
+  instrumented_callback_without_a_scope();
+  ++callbacks_that_did_their_work;
+}
+
+bool inside_runtime_during_the_callback = false;
+
+void instrumented_callback_recording_inside_runtime() {
+  DP_CALLBACK_SCOPE(READ);
+
+  inside_runtime_during_the_callback = inside_runtime;
+}
+
 // Every callback the pass injects, so that a CallbackId added without a callback -- or a callback
 // switched by an id that belongs to another one -- shows up here rather than as a variant of the
 // runtime that measures the wrong thing.
@@ -70,6 +88,7 @@ protected:
   void SetUp() override {
     previous_state = runtime_state;
     callbacks_that_did_their_work = 0;
+    ASSERT_FALSE(inside_runtime);
   }
 
   void TearDown() override { runtime_state = previous_state; }
@@ -218,4 +237,63 @@ TEST_F(CallbackScopeTest, testATimedSectionDoesNotDependOnTheRuntimeState) {
   DP_TIMED_SECTION(kOutputLoops, "outputLoops");
 
   SUCCEED();
+}
+
+// The runtime reaches instrumented code when the program and the runtime share an instrumented template
+// instantiation (e.g. std::vector<unsigned>::_M_default_append with libstdc++ as project code): callbacks entered
+// from within a callback must return without work, as the runtime's state is in the middle of a change.
+TEST_F(CallbackScopeTest, testACallbackEnteredFromWithinACallbackReturnsWithoutWork) {
+  runtime_state = RuntimeState::kRunning;
+
+  instrumented_callback_reaching_instrumented_code();
+
+  EXPECT_EQ(callbacks_that_did_their_work, 1);
+}
+
+TEST_F(CallbackScopeTest, testTheThreadIsInsideTheRuntimeOnlyWhileACallbackRuns) {
+  runtime_state = RuntimeState::kRunning;
+
+  instrumented_callback_recording_inside_runtime();
+
+  EXPECT_TRUE(inside_runtime_during_the_callback);
+  EXPECT_FALSE(inside_runtime);
+}
+
+// a stopped callback must not clear the mark of the callback (or runtime section) it was entered from
+TEST_F(CallbackScopeTest, testAStoppedCallbackKeepsTheThreadInsideTheRuntime) {
+  runtime_state = RuntimeState::kRunning;
+  const RuntimeSection section;
+
+  instrumented_callback();
+
+  EXPECT_EQ(callbacks_that_did_their_work, 0);
+  EXPECT_TRUE(inside_runtime);
+}
+
+// __dp_init, the output of __dp_finalize and the worker threads are runtime without being a callback
+TEST_F(CallbackScopeTest, testCallbacksReturnWithoutWorkInARuntimeSection) {
+  runtime_state = RuntimeState::kRunning;
+  {
+    const RuntimeSection section;
+
+    instrumented_callback();
+    instrumented_callback_without_a_scope();
+
+    EXPECT_EQ(callbacks_that_did_their_work, 0);
+  }
+
+  instrumented_callback();
+
+  EXPECT_EQ(callbacks_that_did_their_work, 1);
+}
+
+TEST_F(CallbackScopeTest, testANestedRuntimeSectionRestoresTheOuterOne) {
+  {
+    const RuntimeSection outer;
+    { const RuntimeSection inner; }
+
+    EXPECT_TRUE(inside_runtime);
+  }
+
+  EXPECT_FALSE(inside_runtime);
 }

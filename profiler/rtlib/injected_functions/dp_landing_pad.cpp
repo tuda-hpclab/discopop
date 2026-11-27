@@ -41,6 +41,7 @@ void __dp_landing_pad(int32_t function_entry_id) {
   for (std::size_t left = frames_before - frames_after; left > 0; --left) {
     loop_manager->CleanFunctionExit(function_manager->GetCurrentStackLevel(), 0);
     function_manager->DecreaseStackLevel();
+    stack_frames.Pop();
   }
 }
 }

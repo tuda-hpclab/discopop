@@ -60,6 +60,8 @@ void __dp_init() {
   if (runtime_state != RuntimeState::kNotInitialized) {
     return;
   }
+  // The runtime is running before the worker threads are started, which may reach instrumented code.
+  const RuntimeSection runtime_section;
 
   // This part should be executed only once.
   // The globals the runtime manages itself have to exist before anything reads them.
@@ -112,8 +114,8 @@ void __dp_init() {
   call_state_graph = new CallStateGraph();
   InitializeCurrentCallpathState();
   // hybrid analysis: after the callpath states are known, for which the caches of the reports are sized
-  bb_list = new ReportedBBRecorder(static_cast<std::size_t>(bb_report_cache_mb) << 20,
-                                   call_state_graph->StateIdBound());
+  bb_list =
+      new ReportedBBRecorder(static_cast<std::size_t>(bb_report_cache_mb) << 20, call_state_graph->StateIdBound());
 
   if (dp_debug) {
     std::cout << "DP initialized." << std::endl;

@@ -104,6 +104,39 @@ class TestLoopOverArray(InstrumentationTestCase):
         self.assertEqual(10, alloca.arg_int(5))
 
 
+class TestStackVariableSize(InstrumentationTestCase):
+    """A struct on the stack: the runtime assigns [start, start + size) to the frame of the function.
+
+    The size used to be the scalar size of the type, which is 0 for a struct, so the variable had no memory.
+    """
+
+    SOURCE = """
+        struct Pair {
+          double value;
+          int count;
+        };
+
+        void fill(struct Pair* pair) {
+          pair->value = 1.0;
+          pair->count = 2;
+        }
+
+        int main() {
+          struct Pair pair;               // @pair
+          fill(&pair);
+          return pair.count;
+        }
+        """
+
+    def test_the_size_of_a_struct_is_its_allocated_size(self) -> None:
+        allocas = [call for call in self.program.calls("__dp_alloca") if call.function == "main"]
+        pair = [call for call in allocas if self.program.string_value(call.arg_pointer(1)) == "pair"]
+        self.assertEqual(1, len(pair), f"no __dp_alloca reports pair: {allocas}")
+        # a double and an int, padded to the alignment of the double
+        self.assertEqual(16, pair[0].arg_int(4))
+        self.assertEqual(1, pair[0].arg_int(5))
+
+
 class TestFunctionCall(InstrumentationTestCase):
     """A second function, so that entry, exit and call instrumentation become visible."""
 

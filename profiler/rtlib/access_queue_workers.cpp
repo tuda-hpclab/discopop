@@ -12,6 +12,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -68,6 +69,9 @@ constexpr double kDeferredDedupMinHitRate = 0.25;
 }  // namespace
 
 void* ProcessFirstAccessQueue(void* arg) {
+  // the whole thread is runtime: instrumented code it reaches (see inside_runtime) records nothing
+  inside_runtime = true;
+
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::kAnalyzeDeps);
 #endif
@@ -179,6 +183,9 @@ void* ProcessFirstAccessQueue(void* arg) {
 }
 
 void* ProcessSecondAccessQueue(void* arg) {
+  // the whole thread is runtime: instrumented code it reaches (see inside_runtime) records nothing
+  inside_runtime = true;
+
 #ifdef DP_INTERNAL_TIMER
   const auto timer = Timer(timers, TimerRegion::kAnalyzeDeps);
 #endif
@@ -190,6 +197,10 @@ void* ProcessSecondAccessQueue(void* arg) {
   // the last read and the last write of every address in one bucket, see AnalyzeChunkOnSlots
   HashMap<std::int64_t, ShadowSlot> shadow;
   shadow.reserve(1024);
+  // the shadow keeps a state for every variable of every frame instance (memory/StackFrames.hpp): the keys of ended
+  // frames are removed whenever it has doubled since the last time, i.e. at constant cost per inserted key
+  constexpr std::size_t kMinimumSweepSize = std::size_t{1} << 16;
+  std::size_t next_sweep_size = kMinimumSweepSize;
 
   while (true) {
     // get chunk from queue
@@ -202,6 +213,10 @@ void* ProcessSecondAccessQueue(void* arg) {
       auto promised_first_accesses_vector_ptr = current->entry_boundary_first_addr_accesses.get();
       std::vector<AddressRecord>* promised_exit_summary_ptr = current->exit_boundary_summary.get();
       AnalyzeChunkOnSlots(shadow, *promised_first_accesses_vector_ptr, *promised_exit_summary_ptr);
+      if (shadow.size() >= next_sweep_size) {
+        StackFrames::EraseKeysOfEndedFrames(shadow, current->live_frames);
+        next_sweep_size = std::max(kMinimumSweepSize, 2 * static_cast<std::size_t>(shadow.size()));
+      }
 
       // cleanup promises
       delete promised_first_accesses_vector_ptr;

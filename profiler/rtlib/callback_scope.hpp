@@ -164,7 +164,7 @@ template <std::size_t N>
 class CallbackScope {
  public:
   CallbackScope([[maybe_unused]] TimerRegion region, CallbackId callback, [[maybe_unused]] const char (&name)[N])
-      : active_(CallbackBodyEnabled(callback) && ProfilingActive()) {
+      : active_(CallbackBodyEnabled(callback) && ProfilingActive() && !inside_runtime), mark_(active_) {
     if (!active_) {
       // Deliberately before everything else: a callback that is about to return without doing
       // anything must not take the lock, announce itself or produce a timing sample.
@@ -209,8 +209,26 @@ class CallbackScope {
 
  private:
   // Declared lock, trace, timer and therefore destroyed in the opposite order, so the timer still
-  // stops before the lock is released, exactly as the hand written sequence did.
+  // stops before the lock is released, exactly as the hand written sequence did; mark_ goes last.
   bool active_;
+  // Marks the thread as inside the runtime (inside_runtime) from before the lock is taken until after it is released
+  // and the timer and the trace are gone, as each of them may reach instrumented code. An active scope is never
+  // nested in another one, so the thread was outside the runtime before.
+  struct InsideRuntimeMark {
+    explicit InsideRuntimeMark(bool active) noexcept : active(active) {
+      if (active) {
+        inside_runtime = true;
+      }
+    }
+    ~InsideRuntimeMark() {
+      if (active) {
+        inside_runtime = false;
+      }
+    }
+    InsideRuntimeMark(const InsideRuntimeMark&) = delete;
+    InsideRuntimeMark& operator=(const InsideRuntimeMark&) = delete;
+    bool active;
+  } mark_;
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE
   std::unique_lock<std::mutex> lock;
 #endif
@@ -241,10 +259,10 @@ class CallbackScope {
 // and therefore has no CallbackScope to ask -- and, having no TimerRegion either, names only a
 // CallbackId. It answers the same two questions: is the runtime running, and does this build
 // execute this callback's body.
-#define DP_CALLBACK_GUARD(callback)                                                         \
-  if (!::dp::CallbackBodyEnabled(::dp::CallbackId::callback) || !::dp::ProfilingActive()) { \
-    return;                                                                                 \
-  }                                                                                         \
+#define DP_CALLBACK_GUARD(callback)                                                                                 \
+  if (!::dp::CallbackBodyEnabled(::dp::CallbackId::callback) || !::dp::ProfilingActive() || ::dp::inside_runtime) { \
+    return;                                                                                                         \
+  }                                                                                                                 \
   static_cast<void>(0)
 
 // A traced and timed section that is not a callback: no state check, no lock. See TimedSection.

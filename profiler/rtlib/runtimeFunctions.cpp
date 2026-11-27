@@ -189,6 +189,7 @@ void FinalizeParallelization() {
   }
 
   // push last state of the mainThread_AccessInfoBuffer to the global FirstAccessQueue
+  stack_frames.LiveIds(main_thread_access_info_buffer->live_frames);
   first_access_queue.Push(main_thread_access_info_buffer);
   main_thread_access_info_buffer = first_access_queue_chunk_buffer.GetPreparedChunk(kFirstAccessQueueChunkSize);
 

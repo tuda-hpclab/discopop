@@ -88,7 +88,7 @@ All suites run with pytest. Write new tests in pytest style.
 
 ### Adding an end-to-end test case
 
-Every directory below `test/end_to_end/cases` that contains an `expected.toml` is one test. The directory holds the program in `src/` (a Makefile that builds `prog` with `$CC`/`$CXX`) and the expected patterns; the schema is documented in the docstring of `test/end_to_end/test_cases.py`. Known failures get `xfail = "<reason>"`. The pipeline runs in a temporary copy of `src/`.
+Every directory below `test/end_to_end/cases` that contains an `expected.toml` is one test. The directory holds the program in `src/` (a Makefile that builds `prog` with `$CC`/`$CXX`) and the expected patterns; the schema is documented in the docstring of `test/end_to_end/test_cases.py`. Known failures get `xfail = "<reason>"` (strict: a passing case is reported); cases whose result varies between runs get `flaky = "<reason>"` (not strict). The pipeline runs in a temporary copy of `src/`.
 
 Tests that check more than the detected patterns live in `test/end_to_end/<topic>/test_<topic>.py` and derive from `pipeline.PipelineTestCase`. Profiler dependency cases are directories with `test.cpp`, a `Makefile` and `expected.toml` below `test/profiler/{RAW,WAR,WAW,NONE}` (see `test/profiler/README.md`).
 

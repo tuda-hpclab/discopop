@@ -1,0 +1,5 @@
+# operator[] of a pre-sized std::vector is library code. Every iteration writes a
+# different element and only reads the vector's data pointer, so the loop has no loop-carried dependency and stays
+# do-all, although the library accesses are attributed to the loop.
+[do_all]
+includes = ["1:8"]

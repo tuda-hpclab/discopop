@@ -1,4 +1,10 @@
 # constants read only in the branch of an inner loop which ends with break
+# With the analysis of library code, y is sometimes classified first_private: the hybrid analysis of the pass is not
+# deterministic (it iterates sets and maps of llvm::Instruction* in address order), so two compiles of this file
+# profile different accesses, and with the accesses of std::vector's constructor to y's elements the classification
+# of y depends on them.
+flaky = "the hybrid analysis is not deterministic: y is sometimes first_private instead of shared"
+
 [do_all]
 lines = ["1:9"]
 

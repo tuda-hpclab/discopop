@@ -127,6 +127,12 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "information.",
     )
     experimental_parser.add_argument(
+        "--all-blocking-dependencies", action="store_true",
+        help="Record every dependency which prevents a loop from being a do-all loop in the pattern decisions (see "
+        "--pattern-decisions), instead of only the first one found. Slower for loops with many dependencies between "
+        "their iterations; for finding out what has to change before a loop can be parallelized.",
+    )
+    experimental_parser.add_argument(
         "--plot-pet", type=str, nargs="?", default=None, const="explorer/pet_plot.gexf",
         help="Plots PET as a GEXF file. If a path is given (file extension has to be .gexf), the PET Graph is written "
         "to the given file, otherwise to pet_plot.gexf"
@@ -206,6 +212,7 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         enable_visualizer=arguments.visualize,
         visualize_on=None,
         doall_default_none=arguments.doall_default_none,
+        all_blocking_dependencies=arguments.all_blocking_dependencies,
         enable_pattern_decisions_file=arguments.pattern_decisions,
     )
 

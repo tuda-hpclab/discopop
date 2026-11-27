@@ -145,6 +145,12 @@ inline bool FileExists(const std::string& filename) {
 // rule and must agree.
 bool IsInProjectRoot(const std::string& path);
 
+// Whether code outside the project (IsInProjectRoot, after DP_PROJECT_EXCLUDE_DIRS) is analyzed as library code: its
+// functions are instrumented for their memory accesses only, which the runtime attributes to the call in project code
+// that entered the library (no CUs, no function entry/exit, no loops, no file id); see DiscoPoP::IsLibraryFunction.
+// On unless DP_LIBRARY_ACCESSES is "off" (or "0", "false", "no", in any case).
+bool LibraryAccessesEnabled();
+
 // The nearest directory named ".discopop" in start_directory or one of its ancestors (symbolic links resolved), as an
 // absolute path; empty if there is none. Used when DOT_DISCOPOP is not set, so that the compiler calls of any build (in
 // the project directory, a build directory below it or a subdirectory) and the instrumented program write to the same

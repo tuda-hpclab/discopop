@@ -12,7 +12,9 @@ Dependencies are often fetched below the project directory (``build/_deps`` of C
 FetchContent). Without an exclusion the pass instruments their code as the project's, maps their
 headers in ``FileMapping.txt``, and the AST export keeps their declarations, which for template
 libraries is gigabytes per translation unit. ``DP_PROJECT_EXCLUDE_DIRS`` lists directories
-(separated by ``:``, absolute or relative to ``DP_PROJECT_ROOT_DIR``) whose files are none of it.
+(separated by ``:``, absolute or relative to ``DP_PROJECT_ROOT_DIR``) whose files are none of it: like all code
+outside the project they are library code, instrumented for their memory accesses only (``__dp_read`` /
+``__dp_write`` with instruction id 0, see test_library_accesses.py), which the checks here leave aside.
 """
 
 import os
@@ -80,6 +82,19 @@ def _instrumented(program: InstrumentedProgram, part: str) -> bool:
     return program.callback_counts(function=_function(program, part)).get("__dp_func_entry", 0) > 0
 
 
+#: the callbacks of library code, with instruction id 0
+LIBRARY_CALLBACKS = ("__dp_read", "__dp_write", "__dp_read_range", "__dp_write_range")
+
+
+def _project_callbacks(program: InstrumentedProgram, part: str) -> int:
+    """The callbacks of project code in the function: all but the accesses of library code (instruction id 0)."""
+    return sum(
+        1
+        for call in program.calls(function=_function(program, part))
+        if call.callee.startswith("__dp_") and not (call.callee in LIBRARY_CALLBACKS and call.arg_int(0) == 0)
+    )
+
+
 def _mapped(program: InstrumentedProgram) -> list[str]:
     return sorted(os.path.relpath(path, program.directory) for path in program.file_mapping.values())
 
@@ -131,7 +146,7 @@ def test_the_project_root_does_not_match_its_namesake_prefix(
 
     def has_callbacks(part: str) -> bool:
         # main lies outside of the root here, so __dp_func_entry is not there to look for
-        return sum(program.callback_counts(function=_function(program, part)).values()) > 0
+        return _project_callbacks(program, part) > 0
 
     assert has_callbacks("library_sum")
     assert not has_callbacks("other_sum") and not has_callbacks("sum")
@@ -178,7 +193,7 @@ def test_without_inclusion_a_directory_outside_the_project_is_no_project_code(
     project, _ = _outside_project(tmp_path)
     program = _compile_outside(project, tmp_path)
     assert _mapped_names(program) == ["test.cpp"]
-    assert program.callback_counts(function=_function(program, "vendored_sum")) == {}
+    assert _project_callbacks(program, "vendored_sum") == 0
 
 
 @pytest.mark.parametrize("spelling", ["absolute", "relative", "through a link"])
@@ -204,6 +219,34 @@ def test_included_directory_outside_the_project_is_instrumented_and_mapped(
         "test.cpp",
         "vendored.hpp",
     ]
+
+
+def test_included_directory_reached_through_dot_dot_is_instrumented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The debug info spells a header as it was found: through "-I<base>/detour/.." it is
+    # "<base>/detour/../outside/include/vendored.hpp", as clang spells the headers of libstdc++
+    # "/usr/lib/gcc/<triple>/<version>/../../../../include/c++/<version>/...". The included directory
+    # "<base>/outside/include" must still contain it.
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    project, outside = _outside_project(tmp_path)
+    (tmp_path / "detour").mkdir()
+    monkeypatch.setenv("DP_PROJECT_INCLUDE_DIRS", str(outside))
+    program = compile_to_ir(OUTSIDE_SOURCE, directory=str(project), extra_arguments=[f"-I{tmp_path}/detour/.."])
+    assert _instrumented(program, "vendored_sum") and _instrumented(program, "skipped_sum")
+    assert _mapped_names(program) == ["skipped.hpp", "test.cpp", "vendored.hpp"]
+
+
+def test_a_header_reached_through_the_project_root_and_dot_dot_is_no_project_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "<project>/../outside/include/vendored.hpp" contains the spelling of the project root, but lies outside of it
+    monkeypatch.delenv("DP_PROJECT_INCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("DP_PROJECT_EXCLUDE_DIRS", raising=False)
+    project, _ = _outside_project(tmp_path)
+    program = compile_to_ir(OUTSIDE_SOURCE, directory=str(project), extra_arguments=[f"-I{project}/.."])
+    assert _mapped_names(program) == ["test.cpp"]
+    assert _project_callbacks(program, "vendored_sum") == 0
 
 
 def test_included_directory_does_not_match_its_namesake_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,7 +277,7 @@ def test_excluded_directory_below_an_included_one_is_left_out(
     )
     program = _compile_outside(project, tmp_path)
     assert _instrumented(program, "vendored_sum")
-    assert program.callback_counts(function=_function(program, "skipped_sum")) == {}
+    assert _project_callbacks(program, "skipped_sum") == 0
     assert _mapped_names(program) == ["test.cpp", "vendored.hpp"]
 
 

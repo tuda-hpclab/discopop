@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -248,6 +249,12 @@ bool IsInProjectRoot(const std::string& path) {
   const auto contains = [&path](const std::string& part) { return path.find(part) != std::string::npos; };
   return std::any_of(directories.roots.begin(), directories.roots.end(), contains) &&
          std::none_of(directories.excluded.begin(), directories.excluded.end(), contains);
+}
+
+bool LibraryAccessesEnabled() {
+  std::string value(dputil::GetEnvOrDefault("DP_LIBRARY_ACCESSES", "on"));
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+  return value != "off" && value != "0" && value != "false" && value != "no";
 }
 
 std::string FindDotDiscopop(const std::string& start_directory, std::string* shadowed) {

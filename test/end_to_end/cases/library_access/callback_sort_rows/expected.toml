@@ -1,0 +1,5 @@
+# std::sort is library code that calls back into project code, the comparator lambda.
+# Each iteration sorts its own row: the accesses of std::sort to the row are attributed to the call on line 13, the
+# comparator's reads of its parameters stay within the iteration, so the loop on line 12 stays do-all.
+[do_all]
+includes = ["1:12"]

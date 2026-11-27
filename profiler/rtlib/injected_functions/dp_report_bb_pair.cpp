@@ -50,7 +50,8 @@ void __dp_report_bb_pair(std::int32_t semaphore, std::uint32_t bb_index) {
 // as no dependency is reported then either).
 std::uint32_t __dp_bb_state() {
   // the semaphore half of the pair reports, so it belongs to REPORT_BB_PAIR in a benchmark build
-  if (!CallbackBodyEnabled(CallbackId::REPORT_BB_PAIR) || !ProfilingActive() || current_callpath_state == nullptr) {
+  if (!CallbackBodyEnabled(CallbackId::REPORT_BB_PAIR) || !ProfilingActive() || inside_runtime ||
+      current_callpath_state == nullptr) {
     return 0;
   }
 #ifdef DP_PTHREAD_COMPATIBILITY_MODE

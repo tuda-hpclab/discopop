@@ -56,6 +56,8 @@ void __dp_finalize(LID lid) {
     lock.lock();
 #endif
 
+    // Not around UnwindFunctionStack: it leaves the open functions through __dp_func_exit, which would return at once.
+    const RuntimeSection runtime_section;
     WriteResults(lid);
     ReleaseRuntime();
   }

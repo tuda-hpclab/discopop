@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import logging
+
+import pytest
 from typing import Any, Callable, List, Tuple, cast
 
 from discopop_explorer.aliases.LineID import LineID
@@ -609,6 +611,49 @@ def test_the_dependency_that_prevents_a_loop_is_recorded(
         "1:6",
         "dynamic",
     )
+
+
+def _loop_with_two_carried_dependencies(
+    make_node: MakeNode, build_pet_graph: BuildPetGraph, build_task_graph: Any, make_tg_node: Any
+) -> Tuple[TaskGraph, Node]:
+    tg, loop, _loop_ctx, work1, work2 = _build_two_iteration_loop(
+        make_node, build_pet_graph, build_task_graph, make_tg_node
+    )
+    for var_name, source_line in (("x", "1:7"), ("y", "1:8")):
+        dep = Dependency(EdgeType.DATA)
+        dep.dtype = DepType.RAW
+        dep.var_name = var_name
+        dep.source_line = LineID(source_line)
+        dep.sink_line = LineID("1:6")
+        dep.origin = DepOrigin.DYNAMIC_ANALYSIS
+        work1.register_outgoing_dependency(work2, dep)
+    return tg, loop
+
+
+@pytest.mark.parametrize("all_blocking_dependencies, variables", [(False, 1), (True, 2)])
+def test_all_blocking_dependencies_records_every_dependency_preventing_the_loop(
+    make_node: MakeNode,
+    build_pet_graph: BuildPetGraph,
+    build_task_graph: Any,
+    make_tg_node: Any,
+    isolated_pattern_id_cwd: Any,
+    all_blocking_dependencies: bool,
+    variables: int,
+) -> None:
+    tg, loop = _loop_with_two_carried_dependencies(make_node, build_pet_graph, build_task_graph, make_tg_node)
+    decisions = PatternDecisionLog()
+    patterns = identify_simple_doall_and_reduction(
+        tg, ASTPatternDetectionHelper(), DataEdgeIndex(tg.pet), decisions, all_blocking_dependencies
+    )
+    decisions.finalize(DECISION_DETECTOR, patterns)
+    decision = decisions.get(DECISION_DETECTOR, loop.id)
+    assert decision is not None
+    assert patterns == []
+    assert decision.outcome == REJECTED
+    assert {r.kind for r in decision.reasons} == {LOOP_CARRIED_DEPENDENCY}
+    recorded = {r.dependency.variable for r in decision.reasons if r.dependency is not None}
+    assert len(recorded) == variables
+    assert recorded <= {"x", "y"}
 
 
 def test_an_unprivatizable_static_dependency_is_recorded(

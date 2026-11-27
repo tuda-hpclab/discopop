@@ -58,6 +58,7 @@ void __dp_decl(LID lid, ADDR addr, const char* var) {
     while (!first_access_queue.CanAcceptEntries()) {
       usleep(1000);
     }
+    stack_frames.LiveIds(main_thread_access_info_buffer->live_frames);
     first_access_queue.Push(main_thread_access_info_buffer);
     main_thread_access_info_buffer = first_access_queue_chunk_buffer.GetPreparedChunk(kFirstAccessQueueChunkSize);
   }
@@ -68,7 +69,8 @@ void __dp_decl(LID lid, ADDR addr, const char* var) {
   current.lid = lid | (static_cast<std::uint64_t>(current_callpath_state_id) << 32);
   current.var = var;
   current.aa_var = reinterpret_cast<std::int64_t>(var);
-  current.addr = addr;
+  // stack memory per frame instance, see memory/StackFrames.hpp
+  current.addr = stack_frames.Key(addr);
   current.skip = true;
 
 #if defined DP_NUM_WORKERS && DP_NUM_WORKERS == 0

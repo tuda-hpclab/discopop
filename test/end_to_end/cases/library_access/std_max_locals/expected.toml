@@ -1,0 +1,5 @@
+# std::max (library code) takes references to the loop body's locals a and b and
+# reads them. Library accesses to the caller's locals must not create false loop-carried dependencies between the
+# iterations, the loop stays do-all.
+[do_all]
+includes = ["1:9"]
