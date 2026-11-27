@@ -174,6 +174,7 @@ class UnsureEntry:
     start_line: str = ""  # "file_id:line"
     pragma: str = ""
     blockers: Tuple[Dict[str, Any], ...] = ()
+    end_line: str = ""  # "file_id:line"
 
 
 def load_unsure(dot_dp: str) -> Dict[str, UnsureEntry]:
@@ -193,8 +194,37 @@ def load_unsure(dot_dp: str) -> Dict[str, UnsureEntry]:
             str(entry.get("start_line") or ""),
             str(entry.get("pragma") or ""),
             blockers,
+            str(entry.get("end_line") or ""),
         )
     return result
+
+
+def hotspot_classes(dot_dp: str, unsure: Dict[str, UnsureEntry]) -> Dict[str, str]:
+    """The hotspot class (YES, MAYBE, NO) of each unsure suggestion that one hotspot loop of the results starts in,
+    by the rule the check's hotspot filter applies (SuggestionCheck/hotspots.py). Empty without hotspot results;
+    a suggestion no hotspot loop starts in is left out."""
+    # imported here: the hotspot loader reads the project's files
+    from discopop_library.HostpotLoader.utilities import classify_by_loops, hotspot_loops
+    from discopop_library.SuggestionCheck.hotspots import load
+
+    try:
+        information = load(dot_dp)
+    except Exception:  # the results of the hotspot detection are optional here
+        return {}
+    if not information:
+        return {}
+    loops = hotspot_loops(information)
+    classes: Dict[str, str] = {}
+    for suggestion_id, entry in unsure.items():
+        try:
+            file_text, _, line_text = entry.start_line.partition(":")
+            end_text = entry.end_line.partition(":")[2] or line_text
+            found = classify_by_loops(int(file_text), int(line_text), int(end_text), loops)
+        except ValueError:
+            continue
+        if found is not None:
+            classes[suggestion_id] = found.name
+    return classes
 
 
 def unsure_ids(dot_dp: str) -> List[str]:
@@ -316,6 +346,7 @@ class ResultRow:
     cost: str
     published: bool = False
     blockers: str = ""
+    hotspot: str = ""
 
     def cells(self) -> Tuple[str, ...]:
         state = self.state_label + (" (in use)" if self.published else "")
@@ -323,6 +354,7 @@ class ResultRow:
             self.suggestion_id,
             self.location,
             self.blockers,
+            self.hotspot,
             state,
             self.result_differences,
             self.tool_calls,
@@ -332,7 +364,18 @@ class ResultRow:
         )
 
 
-COLUMNS = ("Suggestion", "Location", "Blockers", "State", "Result differences", "Tool calls", "Review", "Model", "Cost")
+COLUMNS = (
+    "Suggestion",
+    "Location",
+    "Blockers",
+    "Hotspot",
+    "State",
+    "Result differences",
+    "Tool calls",
+    "Review",
+    "Model",
+    "Cost",
+)
 
 
 def result_rows(
@@ -341,16 +384,19 @@ def result_rows(
     published: Sequence[str] = (),
     candidates: Optional[Dict[str, UnsureEntry]] = None,
     skipped: Sequence[Tuple[str, str]] = (),
+    hotspots: Optional[Dict[str, str]] = None,
 ) -> List[ResultRow]:
     """One row per checked suggestion and, given the ``candidates`` (the unsure suggestions), one per candidate
     without a result: "Not checked", or "Skipped (cold)" if the hotspot filter skipped it. Without candidates only
     the results are listed."""
     candidates = candidates or {}
+    hotspots = hotspots or {}
     cold = dict(skipped)
     rows = []
     for suggestion_id in sorted(set(records) | set(candidates), key=sort_key):
         entry = candidates.get(suggestion_id)
         blockers = str(len(entry.blockers)) if entry is not None else ""
+        hotspot = hotspots.get(suggestion_id, "")
         record = records.get(suggestion_id)
         if record is None:
             skipped_type = cold.get(suggestion_id)
@@ -358,7 +404,9 @@ def result_rows(
             state = STATE_SKIPPED if skipped_type is not None else STATE_PENDING
             location = location_text(entry.start_line, file_mapping) if entry is not None else ""
             rows.append(
-                ResultRow(suggestion_id, location, state, label, TONE_IDLE, "", "", "", "", "", False, blockers)
+                ResultRow(
+                    suggestion_id, location, state, label, TONE_IDLE, "", "", "", "", "", False, blockers, hotspot
+                )
             )
             continue
         label, tone = state_display(record)
@@ -382,6 +430,7 @@ def result_rows(
                 cost_text(record),
                 suggestion_id in published,
                 blockers,
+                hotspot,
             )
         )
     return rows
@@ -424,7 +473,11 @@ def blocker_text(blocker: Dict[str, Any], file_mapping: Dict[int, str]) -> str:
 
 
 def candidate_text(
-    suggestion_id: str, unsure: Optional[UnsureEntry], file_mapping: Dict[int, str], skipped_type: Optional[str] = None
+    suggestion_id: str,
+    unsure: Optional[UnsureEntry],
+    file_mapping: Dict[int, str],
+    skipped_type: Optional[str] = None,
+    hotspot: str = "",
 ) -> str:
     """What the Details tab shows of an unsure suggestion that has no result: what the check would look at."""
     if skipped_type is not None:
@@ -439,6 +492,8 @@ def candidate_text(
         lines.append("Loop: " + location)
     if unsure.pattern_type:
         lines.append("Pattern type: " + unsure.pattern_type)
+    if hotspot:
+        lines.append("Hotspot: " + hotspot)
     if unsure.pragma:
         lines.append("Directive without the blockers: " + unsure.pragma)
     lines.append("")
@@ -458,15 +513,18 @@ def detail_text(
     file_mapping: Dict[int, str],
     marker: Optional[Dict[str, Any]] = None,
     skipped_type: Optional[str] = None,
+    hotspot: str = "",
 ) -> str:
     """What the Details tab shows of a checked suggestion: the outcome with its reason, or for an approval the
     assumption and the justification of every blocker, then how the check went."""
     if suggestion_id is None:
         return "(select a suggestion in the Results tab)"
     if record is None:
-        return candidate_text(suggestion_id, unsure, file_mapping, skipped_type)
+        return candidate_text(suggestion_id, unsure, file_mapping, skipped_type, hotspot)
     label, _tone = state_display(record)
     lines = ["Suggestion " + suggestion_id + ": " + label]
+    if hotspot:
+        lines.append("Hotspot: " + hotspot)
     location = location_text(record.get("start_line"), file_mapping)
     if location:
         end_line = str(record.get("end_line") or "").partition(":")[2]

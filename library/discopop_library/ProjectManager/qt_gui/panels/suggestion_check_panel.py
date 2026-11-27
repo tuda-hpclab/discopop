@@ -55,6 +55,7 @@ from discopop_library.ProjectManager.services.jobs import (
 )
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
+    HotspotsChanged,
     PatternsChanged,
     ProjectState,
     ResultsChanged,
@@ -127,6 +128,8 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self._stale = False
         # (id, hotspot type) of the suggestions the last run skipped by the hotspot filter
         self._skipped: List[Tuple[str, str]] = []
+        # hotspot class (YES, MAYBE, NO) of the unsure suggestions a hotspot loop starts in
+        self._hotspots: Dict[str, str] = {}
         self._unsure: Dict[str, view.UnsureEntry] = {}
         self._file_mapping: Dict[int, str] = {}
         self._published: List[str] = []
@@ -158,6 +161,8 @@ class SuggestionCheckPanel(LlmAgentPanel):
         layout.addWidget(self.splitter, 1)
 
         project_state.subscribe(PatternsChanged, lambda _event: self._on_patterns_changed())
+        # the hotspot column follows new hotspot results
+        project_state.subscribe(HotspotsChanged, lambda _event: self._reload_unsure())
         self.reload_connections()
         self._update_budget()
         self._reload_unsure()
@@ -284,7 +289,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        for column, width in enumerate((80, 130, 70, 110, 120, 75, 75, 120)):
+        for column, width in enumerate((80, 130, 70, 75, 110, 120, 75, 75, 120)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
             self.table.setColumnWidth(column, width)
         header.setStretchLastSection(True)
@@ -380,6 +385,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self._unsure = view.load_unsure(self.arguments.dot_dp)
         self._file_mapping = view.read_file_mapping(self.arguments.dot_dp)
         self._update_scope_caption()
+        self._hotspots = view.hotspot_classes(self.arguments.dot_dp, self._unsure)
         # the candidates are rows of the table before they have a result
         self._refresh_table()
 
@@ -710,7 +716,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
         previous = self._selected_ids()
         self._published = view.published_suggestions(self.arguments.dot_dp)
         rows = view.result_rows(
-            self._records, self._file_mapping, self._published, self._unsure, self._skipped_for_rows()
+            self._records, self._file_mapping, self._published, self._unsure, self._skipped_for_rows(), self._hotspots
         )
         self.table.blockSignals(True)
         try:
@@ -767,6 +773,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
                     self._file_mapping,
                     marker,
                     dict(self._skipped).get(suggestion_id or ""),
+                    self._hotspots.get(suggestion_id or "", ""),
                 )
             )
 

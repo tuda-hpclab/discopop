@@ -90,8 +90,8 @@ def test_the_results_of_the_check_are_read(dot_dp: Path) -> None:
     assert records is not None and sorted(records) == ["12", "3"]
     rows = view.result_rows(records, view.read_file_mapping(str(dot_dp)))
     assert [row.cells() for row in rows] == [
-        ("3", "main.cpp:13", "", "Approved", "rounding", "7", "agree", "sonnet", ""),
-        ("12", "main.cpp:22", "", "Unsure", "", "0", "", "sonnet", ""),
+        ("3", "main.cpp:13", "", "", "Approved", "rounding", "7", "agree", "sonnet", ""),
+        ("12", "main.cpp:22", "", "", "Unsure", "", "0", "", "sonnet", ""),
     ]
     assert [row.tone for row in rows] == [view.TONE_OK, view.TONE_STOP]
     assert not view.results_are_stale(str(dot_dp))
@@ -151,7 +151,7 @@ def test_the_model_cost_and_location_columns() -> None:
         {},
         published=["1"],
     )
-    assert rows[0].cells() == ("1", "9:4", "", "Error (in use)", "", "0", "", "opencode (default)", "$0.5000")
+    assert rows[0].cells() == ("1", "9:4", "", "", "Error (in use)", "", "0", "", "opencode (default)", "$0.5000")
     assert rows[1].location == "bad" and rows[1].cost == ""
     assert view.has_cost(rows) and not view.has_cost(rows[1:])
     assert view.cost_text({"cost": True}) == ""
