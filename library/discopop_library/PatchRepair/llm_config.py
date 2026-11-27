@@ -120,8 +120,9 @@ def resolve_connection(
     """The connection to drive a run with, fully resolved.
 
     ``name`` selects a stored connection; without one, the single stored connection is
-    used when there is exactly one, and otherwise an implicit connection through the
-    first installed agent. ``backend_override`` and ``model_override`` come from the
+    used when there is exactly one, and otherwise an implicit connection (through
+    ``backend_override``, or the first installed agent). Several stored connections
+    and neither a name nor a backend override is an error. ``backend_override`` and ``model_override`` come from the
     command line and win over whatever is stored, so a one-off run never has to edit
     the file.
 
@@ -145,7 +146,10 @@ def resolve_connection(
         profile = dict(connections[only_name])
         profile.setdefault("name", only_name)
     else:
-        if connections:
+        # With a backend named on the command line, a run that selects no connection is
+        # a one-off: it asks that backend directly instead of refusing because several
+        # connections are stored (the GUI's "choose backend and model" mode does this).
+        if connections and not backend_override:
             raise ValueError(
                 "The LLM configuration defines several connections; select one with "
                 "--connection. Known connections: " + ", ".join(connection_names(config))
@@ -228,3 +232,143 @@ def check_connection(profile: Dict[str, Any]) -> List[str]:
                 + str(getattr(module, "AUTH_HINT", ""))
             )
     return warnings
+
+
+# ---- validation ----------------------------------------------------------------
+#
+# Checked when the GUI saves the file, so a typo is reported where it was made and not
+# by the first run that resolves the connection. Only what can be judged without
+# running anything: whether a backend is installed, or a model reachable, is a probe
+# and reported by check_connection.
+
+
+def _string_list_problem(value: Any) -> Optional[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return "must be a list of strings"
+    return None
+
+
+def _env_problem(value: Any) -> Optional[str]:
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        return "must be an object of strings"
+    return None
+
+
+def _options_problem(backend_name: str, options: Any) -> Optional[str]:
+    """Why ``options`` cannot be the backend-specific settings of ``backend_name``, or None."""
+    if not isinstance(options, dict):
+        return "must be an object"
+    for spec in llm_backends.fields_of(backend_name):
+        if spec.key not in options:
+            continue
+        value = options[spec.key]
+        if spec.kind == "bool":
+            if not isinstance(value, bool):
+                return "sets '" + spec.label + "' to " + repr(value) + ", which is not true or false"
+        elif spec.kind == "choice" and spec.choices:
+            if str(value) not in spec.choices:
+                return (
+                    "sets '"
+                    + spec.label
+                    + "' to "
+                    + repr(value)
+                    + ", which "
+                    + backend_name
+                    + " does not accept. One of: "
+                    + ", ".join(repr(choice) for choice in spec.choices)
+                )
+        elif not isinstance(value, str):
+            return "sets '" + spec.label + "' to " + repr(value) + ", which is not text"
+    return None
+
+
+def validate_connection(config: Dict[str, Any], name: str) -> Optional[str]:
+    """Why the stored connection ``name`` cannot be used, or None if it can.
+
+    An empty backend is allowed (the first installed agent), and so is an empty model
+    (the backend's default): both are what a connection says when it leaves the choice
+    to the machine it runs on.
+    """
+    connections = config.get("connections")
+    if not isinstance(connections, dict) or name not in connections:
+        return "no LLM connection named '" + name + "' is configured"
+    connection = connections[name]
+    who = "connection '" + name + "'"
+    if not isinstance(connection, dict):
+        return who + " is not an object"
+    backend_name = str(connection.get("backend") or "")
+    if backend_name and llm_backends.unknown_backends([backend_name]):
+        return (
+            who
+            + " uses the unknown backend '"
+            + backend_name
+            + "'. Known backends: "
+            + ", ".join(llm_backends.available_backends())
+        )
+    for key in ("description", "model"):
+        if key in connection and not isinstance(connection[key], str):
+            return who + ": '" + key + "' must be text"
+    if "timeout" in connection:
+        timeout = connection["timeout"]
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0:
+            return who + ": 'timeout' must be a number of seconds, at least 0 (got " + repr(timeout) + ")"
+    if "extra_args" in connection:
+        problem = _string_list_problem(connection["extra_args"])
+        if problem:
+            return who + ": 'extra_args' " + problem
+    if "env" in connection:
+        problem = _env_problem(connection["env"])
+        if problem:
+            return who + ": 'env' " + problem
+    if "backend_options" in connection:
+        problem = _options_problem(llm_backends.backend_of(connection), connection["backend_options"])
+        if problem:
+            return who + ": 'backend_options' " + problem
+    return None
+
+
+def validate_backend(config: Dict[str, Any], name: str) -> Optional[str]:
+    """Why the ``backends`` section of ``name`` cannot be used, or None if it can (or there is none)."""
+    backends = config.get("backends") or {}
+    if not isinstance(backends, dict) or name not in backends:
+        return None
+    who = "backend '" + name + "'"
+    if llm_backends.unknown_backends([name]):
+        return who + " is not known. Known backends: " + ", ".join(llm_backends.available_backends())
+    section = backends[name]
+    if not isinstance(section, dict):
+        return who + " is not an object"
+    if "binary" in section and not isinstance(section["binary"], str):
+        return who + ": 'binary' must be text"
+    if "extra_args" in section:
+        problem = _string_list_problem(section["extra_args"])
+        if problem:
+            return who + ": 'extra_args' " + problem
+    if "env" in section:
+        problem = _env_problem(section["env"])
+        if problem:
+            return who + ": 'env' " + problem
+    if "options" in section:
+        problem = _options_problem(name, section["options"])
+        if problem:
+            return who + ": 'options' " + problem
+    return None
+
+
+def validate_config(config: Dict[str, Any]) -> List[str]:
+    """Every problem of the configuration, as messages; empty means it can be saved."""
+    problems: List[str] = []
+    for key in ("connections", "backends"):
+        if not isinstance(config.get(key, {}), dict):
+            problems.append("'" + key + "' must be an object")
+    if problems:
+        return problems
+    for name in sorted(config.get("backends") or {}):
+        error = validate_backend(config, name)
+        if error is not None:
+            problems.append(error)
+    for name in connection_names(config):
+        error = validate_connection(config, name)
+        if error is not None:
+            problems.append(error)
+    return problems

@@ -15,8 +15,14 @@ from discopop_library.ProjectManager.services.commands import (
     explorer_command,
     hotspot_analyzer_command,
     patch_repair_command,
+    blocker_resolution_command,
 )
-from discopop_library.ProjectManager.services.requests import AutotunerRequest, ExplorerRequest, PatchRepairRequest
+from discopop_library.ProjectManager.services.requests import (
+    AutotunerRequest,
+    ExplorerRequest,
+    PatchRepairRequest,
+    BlockerResolutionRequest,
+)
 
 
 def _autotuner(**changes: object) -> AutotunerRequest:
@@ -43,6 +49,8 @@ def test_explorer_command() -> None:
     assert full[-3:] == ["-j", "4", "--ignore-dependency-states"]
     visualized = explorer_command(ExplorerRequest("doall", "auto", False, visualize=True), "py")
     assert visualized == plain + ["--visualize"]
+    unsure = explorer_command(ExplorerRequest("doall", "auto", False, unsure_suggestions=True), "py")
+    assert unsure == plain + ["--unsure-suggestions"]
 
 
 def test_default_autotuner_command_has_no_optional_flags() -> None:
@@ -82,6 +90,91 @@ def test_patch_repair_command() -> None:
     assert command[-7:] == ["--backend", "claude", "--model", "m", "--dry-run", "-s", "3"]
     bare = patch_repair_command(PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "", "", False, None), "d", "py")
     assert bare[-2:] == ["--log", "INFO"]
+    # a stored connection decides the backend and the model
+    stored = PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "claude", "m", False, None, connection="fast")
+    command = patch_repair_command(stored, "d", "py")
+    assert command[-2:] == ["--connection", "fast"]
+    assert "--backend" not in command and "--model" not in command
+
+
+def _check(**changes: object) -> BlockerResolutionRequest:
+    defaults = dict(
+        connection="",
+        prompts=2,
+        retries=1,
+        agent_timeout=600,
+        log_level="WARNING",
+        backend="claude",
+        model="sonnet",
+        review=True,
+        accept_rounding=True,
+        discopop_tools=True,
+        max_suggestions=0,
+        suggestion_ids=None,
+    )
+    defaults.update(changes)
+    return BlockerResolutionRequest(**defaults)  # type: ignore[arg-type]
+
+
+def test_blocker_resolution_command() -> None:
+    command = blocker_resolution_command(_check(), "d", "py")
+    assert command == [
+        "py",
+        "-m",
+        "discopop_library.BlockerResolution",
+        "--dot-dp-path",
+        "d",
+        "--prompts",
+        "2",
+        "--retries",
+        "1",
+        "--agent-timeout",
+        "600",
+        "--log",
+        "WARNING",
+        "--hotspot-types",
+        "yes,maybe",
+        "--backend",
+        "claude",
+        "--model",
+        "sonnet",
+    ]
+    # the project root and the prompts are the check's defaults: never passed
+    assert "--project-root" not in command and "--prompt-dir" not in command
+    off = blocker_resolution_command(
+        _check(
+            backend="",
+            model="",
+            review=False,
+            accept_rounding=False,
+            discopop_tools=False,
+            use_approved=False,
+            max_suggestions=3,
+            suggestion_ids=("4", "12"),
+            hotspot_types="no",
+        ),
+        "d",
+        "py",
+    )
+    assert off[off.index("WARNING") + 1 :] == [
+        "--hotspot-types",
+        "no",
+        "--no-review",
+        "--reject-rounding",
+        "--no-discopop-tools",
+        "--no-use-approved",
+        "--max-suggestions",
+        "3",
+        "-s",
+        "4,12",
+    ]
+    assert "--backend" not in off and "--model" not in off
+
+
+def test_a_stored_connection_decides_the_backend_and_the_model() -> None:
+    command = blocker_resolution_command(_check(connection="fast"), "d", "py")
+    assert command[-2:] == ["--connection", "fast"]
+    assert "--backend" not in command and "--model" not in command
 
 
 def test_hotspot_analyzer_command() -> None:

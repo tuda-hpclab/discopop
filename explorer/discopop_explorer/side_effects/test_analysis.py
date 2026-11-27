@@ -41,8 +41,11 @@ class ExportBuilder:
         self.main, self.main_ctx = self.instance("1:1", None, call=None, edge=False)
         self.executed_calls.append({"caller": None, "call_instruction_id": None, "callee": "1:1"})
 
-    def glob(self, name: str, const: bool = False) -> None:
-        self.globals.append({"name": name, "const": const})
+    def glob(self, name: str, const: bool = False, thread_local: Optional[bool] = False) -> None:
+        entry: Dict[str, Any] = {"name": name, "const": const}
+        if thread_local is not None:  # None: an export written before thread_local was recorded
+            entry["thread_local"] = thread_local
+        self.globals.append(entry)
 
     def function(
         self,
@@ -1071,3 +1074,30 @@ def test_outside_names_of_the_other_end_carry_its_file() -> None:
     )
     effect = find(b.index().compute(wr), "read", "p")
     assert [(o.name, o.file_id) for o in effect.outside_names] == [("state", 2)]
+
+
+# ---------------------------------------------------------------------------------------------- thread_local
+
+
+def _global_write(thread_local: Optional[bool], second: Optional[bool] = None) -> SideEffects:
+    b = ExportBuilder()
+    b.glob("g_gen", thread_local=thread_local)
+    if second is not None:
+        b.glob("g_gen", thread_local=second)  # the same name declared elsewhere
+    f = b.function("1:5", "draw()", 19, 19)
+    _, c = b.instance(f, b.main)
+    b.record("RAW", "g_gen", (10, 19), (20, 19), pairs=[(c, c)], other_names=["g_gen"])
+    return b.index().compute(f)
+
+
+def test_a_thread_local_global_is_marked() -> None:
+    assert all(e.thread_local for e in _global_write(True).effects)
+    assert not any(e.thread_local for e in _global_write(False).effects)
+
+
+def test_thread_local_only_if_every_declaration_is() -> None:
+    assert not any(e.thread_local for e in _global_write(True, second=False).effects)
+
+
+def test_an_export_without_the_flag_marks_nothing() -> None:
+    assert not any(e.thread_local for e in _global_write(None).effects)

@@ -125,6 +125,86 @@ class TestGetSideEffects(unittest.TestCase):
     def __lines(self, effects: list[Effect], **arguments: Any) -> list[str]:
         return self.__query(effects, **arguments).splitlines()
 
+    # --- thread-local storage and copies of one definition
+
+    def test_thread_local_data_is_marked(self) -> None:
+        text = self.__query([_effect("generators", thread_local=True), _effect("counter")])
+        self.assertIn("- generators (thread-local global)", text)
+        self.assertIn("- counter (global)", text)
+        self.assertIn("Note: Thread-local data (thread_local storage) exists once per thread", text)
+        self.assertNotIn("thread", self.__query([_effect("counter")]).lower())
+
+    def test_copies_of_one_definition_are_one_function(self) -> None:
+        # an inline function of a header, compiled into two files; one copy never ran
+        unseen, seen = _function("1:5"), _function("1:6")
+        index = FakeIndex(
+            [unseen, seen],
+            {"1:5": _result([], coverage="not_executed"), "1:6": _result([_effect("state")])},
+        )
+        text = self.__call(index)
+        self.assertIn("- state (global)", text)
+        self.assertIn("Note: the definition was compiled 2 times", text)
+        self.assertIn("described are the effects of all copies together", text)
+        self.assertNotIn("matches", text)
+        # the copy that never ran does not make the observed one incomplete
+        self.assertNotIn("Caveat", text)
+
+    def test_copies_of_one_definition_are_described_by_the_union_of_their_effects(self) -> None:
+        # the best observed copy reads state; a partially observed one writes it and another global: both stay, and
+        # the coverage of the best copy is not claimed for the definition
+        best = _result(
+            [_effect("state", access="read", lines=(12,)), _effect("shared", thread_local=True)],
+            pure_on_observed_inputs=False,
+        )
+        other = _result(
+            [
+                _effect("state", access="write", lines=(13,)),
+                _effect("log_count", lines=(14,)),
+                _effect("shared", lines=(15,)),
+            ],
+            coverage="partial",
+            pure_on_observed_inputs=None,
+            performs_file_io=True,
+            unprofiled_calls=["fprintf"],
+        )
+        index = FakeIndex([_function("1:5"), _function("1:6")], {"1:5": best, "1:6": other})
+        text = self.__call(index)
+        self.assertIn("- state (global): line 13", text)  # written by the other copy
+        self.assertIn("- state (global): line 12", text)  # read by the best one
+        self.assertIn("- log_count (global): line 14", text)
+        # thread-local only where every copy says so; sites of both copies
+        self.assertIn("- shared (global): line 12; line 15", text)
+        self.assertIn("Not pure: it writes log_count, shared, state", text)
+        self.assertIn("performs file I/O", text)
+        self.assertIn(f"Caveat: {get_side_effects.COVERAGE_TEXT['partial']}", text)
+        self.assertIn("library code): fprintf", text)
+
+    def test_the_coverage_of_merged_copies(self) -> None:
+        def coverage(*kinds: str) -> str:
+            return get_side_effects.merge_copies([_result([], coverage=k) for k in kinds]).coverage
+
+        self.assertEqual(coverage("untracked", "untracked"), "untracked")
+        self.assertEqual(coverage("untracked", "not_executed"), "untracked")
+        self.assertEqual(coverage("not_executed", "not_executed"), "not_executed")
+        self.assertEqual(coverage("executed", "not_executed"), "executed")
+        self.assertEqual(coverage("executed", "untracked"), "partial")
+        self.assertEqual(coverage("executed", "partial"), "partial")
+
+    def test_a_pure_copy_does_not_make_the_definition_pure(self) -> None:
+        copies = [_result([], pure_on_observed_inputs=True), _result([], pure_on_observed_inputs=False)]
+        self.assertIs(get_side_effects.merge_copies(copies).pure_on_observed_inputs, False)
+        copies = [_result([], pure_on_observed_inputs=True), _result([], coverage="partial")]
+        self.assertIsNone(get_side_effects.merge_copies(copies).pure_on_observed_inputs)
+        copies = [_result([], pure_on_observed_inputs=True), _result([], pure_on_observed_inputs=True)]
+        self.assertIs(get_side_effects.merge_copies(copies).pure_on_observed_inputs, True)
+
+    def test_different_definitions_still_have_to_be_chosen(self) -> None:
+        index = FakeIndex(
+            [_function("1:5", start=10, end=20), _function("1:6", start=30, end=40)],
+            {"1:5": _result([]), "1:6": _result([])},
+        )
+        self.assertIn("matches 2 functions", self.__call(index))
+
     # --- name resolution
 
     def test_a_unique_name_is_resolved_with_or_without_signature(self) -> None:

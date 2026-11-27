@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple, cast
 from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArguments
 from discopop_library.EmpiricalAutotuning.Classes.CodeConfiguration import CodeConfiguration
 from discopop_library.EmpiricalAutotuning.Classes.ExecutionResult import ExecutionResult
+from discopop_library.EmpiricalAutotuning.agent_approved import add_published_approvals
 from discopop_library.EmpiricalAutotuning.Statistics.StatisticsGraph import NodeShape, StatisticsGraph
 from discopop_library.EmpiricalAutotuning.Types import SUGGESTION_ID
 from discopop_library.EmpiricalAutotuning.optimization.check_single_combination import check_single_combination
@@ -244,6 +245,8 @@ def run(arguments: AutotunerArguments) -> None:
         os.path.join(arguments.dot_dp_path, "explorer", "detection_result_dump.json")
     )
     logger.debug("loaded suggestions")
+    if arguments.include_agent_approved:
+        add_published_approvals(detection_result, arguments.dot_dp_path, logger)
     # suggestions that patch files outside the project cannot be tried in isolated copies: skipped, and logged
     skipped_outside_project = exclude_outside_project_patterns(detection_result, arguments.dot_dp_path, logger)
     # Amdahl bounds for the progress events; never allowed to disturb the search

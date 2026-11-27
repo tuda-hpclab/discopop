@@ -55,7 +55,7 @@ flowchart TD
 1. You compile your program with the [compiler wrappers](Instrumentation.md) and run it. The instrumented program writes the profiling data to `.discopop/profiler`.
 2. Optionally, you build the program with the [hotspot detection](Hotspot_detection.md) wrappers, run it with several inputs and analyze the runs. This creates `.discopop/hotspot_detection/Hotspots.json`.
 3. The [Explorer](Explorer.md) detects parallel patterns and writes them to `.discopop/explorer/patterns.json`. It also creates the [patches](Patch_generator.md) in `.discopop/patch_generator/`.
-4. Optionally, [patch repair](Patch_repair.md) lets an LLM agent fix patches that do not compile.
+4. Optionally, [patch repair](Patch_repair.md) lets an LLM agent fix patches that do not compile, and the [blocker resolution](Blocker_resolution.md) lets one resolve the blockers of loops that are almost parallelizable (`discopop_explorer --unsure-suggestions`). Its approvals are kept apart from DiscoPoP's suggestions.
 5. The [empirical autotuner](Autotuner.md) measures which suggestions pay off and writes the result to `.discopop/auto_tuner/results.json`.
 6. The [patch applicator](Patch_applicator.md) applies the selected patches to your source code.
 
@@ -73,6 +73,7 @@ The [project manager](Project_manager.md) and the [GUI](GUI.md) store how your p
 | `discopop_patch_generator` | Convert patterns into patch files | [Patch generator](Patch_generator.md) |
 | `discopop_patch_applicator` | Apply, roll back and list patches | [Patch applicator](Patch_applicator.md) |
 | `discopop_patch_repair` | Repair patches that do not compile, using an LLM agent | [Patch repair](Patch_repair.md) |
+| `discopop_blocker_resolution` | Let an LLM agent check loops that are almost parallelizable | [Blocker resolution](Blocker_resolution.md) |
 | `discopop_auto_tuner` | Measure and select the best combination of suggestions | [Empirical autotuner](Autotuner.md) |
 | `discopop_mcp_server` | MCP server for LLM agents | [MCP server](MCP_server.md) |
 | `discopop_optimizer` | Select suggestions using a performance model (experimental) | [Optimizer](Optimizer.md) |

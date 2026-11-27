@@ -2,7 +2,7 @@
 layout: default
 title: MCP server
 parent: Tools
-nav_order: 10
+nav_order: 11
 ---
 
 # MCP server
@@ -66,10 +66,12 @@ The server offers 12 tools. In workflow order:
 | `get_hotspots` | List the hotspots, longest running first, with their runtime and share of the program's. |
 | `get_parallelization_suggestions` | List the suggestions, hottest first (10 by default, `limit` shows more, `file_path` restricts them to one file), with the pragma to add. Task parallelism is a task group instead (see [Task groups](#task-groups)): it names no pragmas, the agent places them. |
 | `explain_parallelization` | Explain in a text why code at given lines was or was not suggested for parallelization, e.g. which dependency prevents it. For lines inside the parallel region of a task group it names the group and points to its suggestion; the task detection does not record why other code is not part of a group, and the answer says so. |
-| `get_side_effects` | Describe in a text the data a function reads and writes outside of itself, including its callees. |
+| `get_side_effects` | Describe in a text the data a function reads and writes outside of itself, including its callees. Data with `thread_local` storage is marked "thread-local global" (one copy per thread). Copies of one definition (e.g. an inline function of a header, compiled into several files) count as one function: the effects of all copies are described together. |
 | `run_configuration` | Build the project as it is and run a configuration with a given thread count; reports the time, the result of `validate.sh`, and the errors and warnings of the build and the run. |
 
-`--tools analysis` hides the four project setup tools (`initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration`, `delete_execution_configuration`). Use it against a project that is already configured. The default is `--tools all`.
+`--tools analysis` hides the four project setup tools (`initialize_discopop_directory`, `set_compile_script`, `create_execution_configuration`, `delete_execution_configuration`). Use it against a project that is already configured. `--tools readonly` offers only the tools marked read-only (`get_project_status`, `get_configurations`, `get_hotspots`, `get_parallelization_suggestions`, `explain_parallelization`, `get_side_effects`): nothing that profiles, builds, runs or sets up a project, and the server writes no log into the project (`.discopop/mcp_server/log.txt`, written otherwise). The default is `--tools all`.
+
+`--project <path>` binds the server to one project: every tool works on it, whatever `project_path` the caller passes, and the tools are listed without `project_path`. It implies `--no-daemon`, which runs every call in the server's own process and never forwards to a daemon, even if one is listening, and cannot be combined with `--daemon`; a bound server writes no log into the project. The [blocker resolution](Blocker_resolution.md) starts the server this way for its agents.
 
 The analysis tools answer in short text, one line per hotspot, suggestion or effect. The setup and pipeline tools answer in JSON that holds the facts of the call and, where useful, a `next_step` hint; an error is `{"status": "error", "message": ..., "next_step": ...}`.
 

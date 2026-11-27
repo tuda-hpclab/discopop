@@ -32,13 +32,18 @@ from discopop_library.ProjectManager.qt_gui.main_window import (
     TAB_PROFILING,
     TAB_REPORT,
     TAB_SETUP,
+    TAB_BLOCKER_RESOLUTION,
     MainWindow,
 )
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.ProjectManager.services.project_state import AutotuningFinished, ResultsChanged
+from discopop_library.ProjectManager.services.project_state import (
+    AutotuningFinished,
+    PatternsChanged,
+    ResultsChanged,
+)
 from discopop_library.ProjectManager.services.workflow_status import StageState
 
 
@@ -54,6 +59,7 @@ def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
         TAB_HOTSPOT,
         TAB_PROFILING,
         TAB_PATTERN_DETECTION,
+        TAB_BLOCKER_RESOLUTION,
         TAB_PATCH_REPAIR,
         TAB_AUTOTUNING,
         TAB_EXECUTE,
@@ -199,6 +205,7 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
         "ReportPanel",
         "HotspotPanel",
         "PatternDetectionPanel",
+        "BlockerResolutionPanel",
         "PatchRepairPanel",
         "AutotuningPanel",
     }
@@ -215,6 +222,20 @@ def test_profiling_data_unlocks_the_pattern_detection_stage(qtbot: QtBot, tmp_pa
     window.project_state.publish(ResultsChanged())
     qtbot.waitUntil(lambda: window.nav.stage_state(TAB_PATTERN_DETECTION) == StageState.NOT_RUN, timeout=2000)
     assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
+
+
+def test_unsure_suggestions_unlock_the_blocker_resolution_stage(qtbot: QtBot, tmp_path: Path) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    assert window.nav.stage_state(TAB_BLOCKER_RESOLUTION) == StageState.LOCKED
+    assert window.tab_title(TAB_BLOCKER_RESOLUTION) == "Blocker Resolution"
+    (tmp_path / ".discopop" / "explorer").mkdir()
+    (tmp_path / ".discopop" / "explorer" / "unsure_suggestions.json").write_text(
+        '{"format_version": 1, "suggestions": []}'
+    )
+    window.project_state.publish(PatternsChanged())
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_BLOCKER_RESOLUTION) == StageState.NOT_RUN, timeout=2000)
+    assert window.blocker_resolution_panel.run_button.isEnabled()
 
 
 def test_ctrl_s_saves_the_stage_in_front(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -314,6 +335,7 @@ def test_a_running_job_shows_a_spinner_on_its_stage(qtbot: QtBot, tmp_path: Path
         TAB_HOTSPOT: window.hotspot_panel,
         TAB_PROFILING: window.profiling_panel,
         TAB_PATTERN_DETECTION: window.pattern_detection_panel,
+        TAB_BLOCKER_RESOLUTION: window.blocker_resolution_panel,
         TAB_PATCH_REPAIR: window.patch_repair_panel,
         TAB_AUTOTUNING: window.autotuning_panel,
         TAB_EXECUTE: window.execute_panel,
@@ -354,7 +376,7 @@ def test_view_menu_reset_undoes_manual_resizing(qtbot: QtBot, tmp_path: Path) ->
 
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
-    assert [a.text() for a in window.menuBar().actions()] == ["&View"]
+    assert [a.text() for a in window.menuBar().actions()] == ["&View", "&Settings"]
     assert not window.menuBar().isNativeMenuBar()
     handles = window.findChildren(widgets.ResizeHandle)
     assert handles
@@ -363,3 +385,21 @@ def test_view_menu_reset_undoes_manual_resizing(qtbot: QtBot, tmp_path: Path) ->
     window.reset_view_action.trigger()
     for handle in handles:
         assert handle.target.minimumHeight() == handle.default_height
+
+
+def test_suggestions_changed_outside_the_gui_are_announced_on_activation(qtbot: QtBot, tmp_path: Path) -> None:
+    """E.g. approvals published by discopop_blocker_resolution in a terminal: the suggestion lists refresh only on
+    PatternsChanged, which the window publishes when it is activated and finds the suggestions changed."""
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    events: List[object] = []
+    window.project_state.subscribe(PatternsChanged, events.append)
+    window._check_suggestions_changed()
+    assert events == []
+    approved = Path(window.arguments.dot_dp, "patch_generator", "17")
+    approved.mkdir(parents=True)
+    (approved / "1.patch").write_text("+#pragma omp parallel for\n")
+    window._check_suggestions_changed()
+    assert len(events) == 1
+    window._check_suggestions_changed()  # announced once
+    assert len(events) == 1

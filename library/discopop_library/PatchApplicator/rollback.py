@@ -81,14 +81,17 @@ def __rollback_file_patches(
     file_mapping: Dict[int, Path], suggestion_id: str, patch_generator_dir: str, arguments: PatchApplicatorArguments
 ) -> bool:
     # get a list of patches for the given suggestion
-    patch_files = sorted(os.listdir(os.path.join(patch_generator_dir, suggestion_id)))
+    # only the patches: a suggestion directory may hold other files, e.g. the marker of an agent-approved suggestion
+    patch_files = sorted(
+        f for f in os.listdir(os.path.join(patch_generator_dir, suggestion_id)) if f.endswith(".patch")
+    )
     if arguments.verbose:
         print("\tFound patch files:", patch_files)
 
     encountered_error = False
     already_patched: List[str] = []
     for patch_file_name in patch_files:
-        patch_file_id = int(patch_file_name.rstrip(".patch"))
+        patch_file_id = int(patch_file_name.removesuffix(".patch"))
         patch_target = file_mapping[patch_file_id]
         patch_file_path = os.path.join(patch_generator_dir, suggestion_id, patch_file_name)
         # save original version to calculate diff to calculate line mapping
@@ -143,7 +146,7 @@ def __rollback_file_patches(
     # cleanup in case of an error
     if encountered_error:
         for patch_file_name in already_patched:
-            patch_file_id = int(patch_file_name.rstrip(".patch"))
+            patch_file_id = int(patch_file_name.removesuffix(".patch"))
             patch_target = file_mapping[patch_file_id]
             patch_file_path = os.path.join(patch_generator_dir, suggestion_id, patch_file_name)
             # save original version to calculate diff to calculate line mapping

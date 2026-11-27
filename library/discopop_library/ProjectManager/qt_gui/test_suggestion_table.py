@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt
 
 from discopop_library.ProjectManager.plots import hotspot_charts
 from discopop_library.ProjectManager.qt_gui.suggestion_selector import SuggestionSelector
-from discopop_library.ProjectManager.qt_gui.suggestion_table import SuggestionTable
+from discopop_library.ProjectManager.qt_gui.suggestion_table import AGENT_APPROVED_COLOR, SuggestionTable
 from discopop_library.ProjectManager.services.suggestions import SuggestionInfo
 
 INFOS = [
@@ -131,3 +131,23 @@ def test_a_suggestion_outside_the_project_says_so_in_its_tooltip(qtbot: QtBot) -
     tip = table.proxy.index(rows.index("7"), 1).data(Qt.ItemDataRole.ToolTipRole)
     assert "outside the project: /shared/a.c" in tip
     assert "outside" not in table.proxy.index(rows.index("2"), 1).data(Qt.ItemDataRole.ToolTipRole)
+
+
+def test_an_agent_approved_suggestion_says_so_in_its_tooltip(qtbot: QtBot) -> None:
+    table = SuggestionTable()
+    qtbot.addWidget(table)
+    approved = SuggestionInfo(
+        "9", "doall (agent-approved)", "a.c", "/p/a.c", 5, 6, agent_approved=True, agent_assumption="order is free"
+    )
+    table.set_suggestions([INFOS[1], approved])
+    rows = column(table, 0)
+    tip = table.proxy.index(rows.index("9"), 1).data(Qt.ItemDataRole.ToolTipRole)
+    assert "Approved by an LLM agent, not by DiscoPoP's analysis; it assumes: order is free" in tip
+    assert "agent" not in table.proxy.index(rows.index("2"), 1).data(Qt.ItemDataRole.ToolTipRole)
+    # marked without hovering: its id and type in their own color and in italics, the others not
+    marked = table.proxy.index(rows.index("9"), 0)
+    assert marked.data(Qt.ItemDataRole.ForegroundRole).color().name() == AGENT_APPROVED_COLOR
+    assert marked.data(Qt.ItemDataRole.FontRole).italic()
+    assert table.proxy.index(rows.index("9"), 1).data(Qt.ItemDataRole.FontRole).italic()
+    plain = table.proxy.index(rows.index("2"), 0)
+    assert plain.data(Qt.ItemDataRole.ForegroundRole) is None and plain.data(Qt.ItemDataRole.FontRole) is None

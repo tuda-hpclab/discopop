@@ -239,6 +239,12 @@ def run_agent(
         for key, value in layer.items():
             process_env[str(key)] = str(value)
 
+    # the prompt is an argument of the command: logged by its size, not its text
+    shown = ["<prompt, " + str(len(prompt)) + " characters>" if a == prompt else a for a in argv]
+    logger.info(
+        "Starting " + result.backend + (" (model " + str(profile.get("model")) + ")" if profile.get("model") else "")
+    )
+    logger.debug("Command: " + " ".join(shown) + "; cwd " + str(cwd) + "; timeout " + str(effective_timeout or "none"))
     started = time.time()
     try:
         completed = subprocess.run(
@@ -263,6 +269,21 @@ def run_agent(
         result.seconds = time.time() - started
         return result
     result.seconds = time.time() - started
+    logger.debug(
+        result.backend
+        + " finished after "
+        + format(result.seconds, ".1f")
+        + " s with exit code "
+        + str(result.returncode)
+        + ": "
+        + str(len(result.raw))
+        + " characters of stdout, "
+        + str(len(result.stderr))
+        + " of stderr"
+        + ("; stderr: " + result.stderr[-500:].strip() if result.stderr.strip() else "")
+    )
+    if result.timed_out:
+        logger.warning(result.backend + " did not answer within " + str(effective_timeout) + " s and was stopped")
 
     if (
         result.returncode not in (0, None)

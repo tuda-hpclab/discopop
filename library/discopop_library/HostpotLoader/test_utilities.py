@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from discopop_library.HostpotLoader.HotspotNodeType import HotspotNodeType
 from discopop_library.HostpotLoader.HotspotType import HotspotType
-from discopop_library.HostpotLoader.utilities import get_patterns_by_hotspot_type
+from discopop_library.HostpotLoader.utilities import classify_by_loops, get_patterns_by_hotspot_type, hotspot_loops
 
 
 def _pattern(pattern_id: int, first: int, last: int, **attached: Any) -> Any:
@@ -68,3 +68,17 @@ def test_a_pattern_without_a_patch_of_its_own_is_no_candidate() -> None:
     assert result == {HotspotType.YES: [1], HotspotType.NO: [], HotspotType.MAYBE: []}
     without_hotspots = get_patterns_by_hotspot_type(_result(region, task, merged_doall), {})
     assert without_hotspots[HotspotType.YES] == [1]
+
+
+def test_a_region_is_matched_yes_before_no_before_maybe() -> None:
+    hotspots: Dict[HotspotType, List[Any]] = {
+        HotspotType.MAYBE: [(1, 12, HotspotNodeType.LOOP, "", 1.0)],
+        HotspotType.NO: [(1, 11, HotspotNodeType.LOOP, "", 1.0), (1, 30, HotspotNodeType.FUNCTION, "", 1.0)],
+    }
+    loops = hotspot_loops(hotspots)
+    assert classify_by_loops(1, 10, 12, loops) == HotspotType.NO
+    assert classify_by_loops(1, 12, 20, loops) == HotspotType.MAYBE
+    # functions are not loops, other files do not count
+    assert classify_by_loops(1, 30, 30, loops) is None
+    assert classify_by_loops(2, 10, 12, loops) is None
+    assert _classify(_pattern(1, 10, 12), hotspots=hotspots)[HotspotType.NO] == [1]

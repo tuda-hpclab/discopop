@@ -63,6 +63,12 @@ class AutotuningChanged:
 
 
 @dataclass(frozen=True)
+class LlmConfigChanged:
+    """The LLM configuration shared by patch repair and the blocker resolution (``patch_repair/llm_config.json``) was
+    saved under Settings, or is to be read again from disk: lists of its connections are not current."""
+
+
+@dataclass(frozen=True)
 class AutotuningFinished:
     """An autotuning run ended successfully; its selection of suggestions is the new current one."""
 

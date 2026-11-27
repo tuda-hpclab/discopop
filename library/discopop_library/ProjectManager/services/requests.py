@@ -15,6 +15,8 @@ the snapshot to the worker thread; the worker never touches a widget or a Tk var
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
+
 
 @dataclass(frozen=True)
 class ExplorerRequest:
@@ -23,6 +25,8 @@ class ExplorerRequest:
     ignore_dependency_states: bool
     # open the explorer's own graph visualizer (``--visualize``); the Tk GUI runs a visualized run in-process instead
     visualize: bool = False
+    # also write explorer/unsure_suggestions.json (``--unsure-suggestions``), the input of the blocker resolution
+    unsure_suggestions: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,3 +62,31 @@ class PatchRepairRequest:
     dry_run: bool
     # None: all suggestions
     suggestion_ids: Optional[Tuple[str, ...]]
+    # a stored connection of the LLM configuration shared with the blocker resolution; None: backend and model
+    connection: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BlockerResolutionRequest:
+    # a stored connection of the LLM configuration shared with patch repair; empty: backend and model below
+    connection: str
+    prompts: int
+    retries: int
+    agent_timeout: int
+    log_level: str
+    backend: str
+    # empty: the backend's default model
+    model: str
+    review: bool
+    # False: --reject-rounding
+    accept_rounding: bool
+    # False: --no-discopop-tools
+    discopop_tools: bool
+    # 0: no limit
+    max_suggestions: int
+    # None: all unsure suggestions
+    suggestion_ids: Optional[Tuple[str, ...]]
+    # comma separated (yes, maybe, no): the others are skipped, the explicit ids above are checked regardless
+    hotspot_types: str = DEFAULT_HOTSPOT_TYPES
+    # False: --no-use-approved (the approvals stay unused until "Use approved suggestions"); True: in use when it ends
+    use_approved: bool = True

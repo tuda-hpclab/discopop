@@ -234,3 +234,71 @@ def test_suggestions_with_targets_outside_the_project_are_marked(tmp_path: Path)
     assert inside.outside_files == () and outside.outside_files == (f"{tmp_path}/shared/b.cpp",)
     assert "Outside the project" not in dict(suggestion_detail_fields(inside))
     assert "outside the project" in dict(suggestion_detail_fields(outside))["Outside the project"]
+
+
+def _publish_agent_approval(root: Path, pattern_id: int, assumption: str = "the order does not matter") -> None:
+    """What the blocker resolution's publish_approved leaves: the patch and the marker, and the unsure suggestion."""
+    (root / "explorer" / "unsure_suggestions.json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "suggestions": [
+                    {
+                        "pattern_id": pattern_id,
+                        "type": "do_all",
+                        "start_line": "2:40",
+                        "end_line": "2:40",
+                        "region": {"file_id": 2, "end_line": 48},
+                        "pragma": "#pragma omp parallel for",
+                        "affected_functions": ["2:38:kernel"],
+                    }
+                ],
+            }
+        )
+    )
+    directory = root / "patch_generator" / str(pattern_id)
+    directory.mkdir(parents=True)
+    (directory / "2.patch").write_text("")
+    (directory / suggestions.AGENT_APPROVED_MARKER).write_text(json.dumps({"assumption": assumption}))
+
+
+def test_the_marker_is_the_one_the_blocker_resolution_writes() -> None:
+    from discopop_library.BlockerResolution.publish import MARKER_FILE
+
+    assert suggestions.AGENT_APPROVED_MARKER == MARKER_FILE
+
+
+def test_published_agent_approvals_are_labelled(tmp_path: Path) -> None:
+    dot_dp = _project(tmp_path, {"do_all": [_entry(0, "1:20", "1:22")]}, ["0"])
+    _publish_agent_approval(tmp_path, 9)
+    generated, approved = load_suggestions(dot_dp)
+    assert not generated.agent_approved and generated.pattern_type == "doall"
+    assert approved.id == "9" and approved.agent_approved
+    assert approved.pattern_type == "doall (agent-approved)"
+    assert (approved.location, approved.end_line, approved.pragma) == ("other.cpp:40", 48, "#pragma omp parallel for")
+    assert approved.agent_assumption == "the order does not matter"
+    fields = dict(suggestion_detail_fields(approved))
+    assert fields["Agent-approved"] == (
+        "approved by an LLM agent, not by DiscoPoP's analysis; it assumes: the order does not matter"
+    )
+    assert "Agent-approved" not in dict(suggestion_detail_fields(generated))
+    assert suggestions.agent_approved_note(generated) == ""
+
+
+def test_agent_approvals_are_classified_by_hotness_like_the_others(tmp_path: Path) -> None:
+    """By the loop of their unsure suggestion, as the auto-tuner classifies them when it searches them."""
+    dot_dp = _project(tmp_path, {"do_all": [_entry(0, "1:20", "1:22")]}, ["0"])
+    _publish_agent_approval(tmp_path, 9)
+    _hotspots(tmp_path, [_region(1, 21, "MAYBE"), _region(2, 40, "YES")])
+    generated, approved = load_suggestions(dot_dp)
+    assert (generated.hotness, approved.hotness) == ("MAYBE", "YES")
+    assert approved.function == "kernel"
+
+
+def test_an_agent_approval_without_its_unsure_suggestion(tmp_path: Path) -> None:
+    dot_dp = _project(tmp_path, {}, [])
+    _publish_agent_approval(tmp_path, 9, assumption="")
+    (tmp_path / "explorer" / "unsure_suggestions.json").write_text("{broken")
+    [approved] = load_suggestions(dot_dp)
+    assert approved.agent_approved and approved.pattern_type == "doall (agent-approved)" and approved.location == ""
+    assert suggestions.agent_approved_note(approved).endswith("it assumes: (nothing stated)")

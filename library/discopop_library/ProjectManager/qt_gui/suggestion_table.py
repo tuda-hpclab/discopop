@@ -23,7 +23,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -38,9 +38,17 @@ from discopop_library.ProjectManager.plots import hotspot_charts
 from discopop_library.ProjectManager.plots.hotspot_data import HOTNESS_ORDER
 from discopop_library.ProjectManager.qt_gui import widgets
 from discopop_library.ProjectManager.services.patches import suggestion_order
-from discopop_library.ProjectManager.services.suggestions import SuggestionInfo, outside_files_note
+from discopop_library.ProjectManager.services.suggestions import (
+    SuggestionInfo,
+    agent_approved_note,
+    outside_files_note,
+)
 
 COLUMN_ID = "ID"
+# the marker of a suggestion an LLM agent approved (blocker resolution) rather than DiscoPoP's analysis: its id and type
+# in this color and in italics, next to the " (agent-approved)" of its type and the note in its tool tip
+AGENT_APPROVED_COLOR = widgets.STATUS_STOP
+_MARKED_COLUMNS = (COLUMN_ID, "Type")
 COLUMNS = (COLUMN_ID, "Type", "Location", "Function", "Hotness", "Pragma")
 ALL_TYPES = "All types"
 NO_SUGGESTIONS_TEXT = "No suggestions yet. Run pattern detection to find parallelization opportunities."
@@ -135,11 +143,21 @@ class SuggestionModel(QAbstractTableModel):
             tip = info.pragma if COLUMNS[column] == "Pragma" and info.pragma else self.cell_text(info, column)
             if info.outside_files:
                 tip += "\n\n" + outside_files_note(info).capitalize() + " (applied only on explicit confirmation)"
+            if info.agent_approved:
+                note = agent_approved_note(info)
+                tip += "\n\n" + note[:1].upper() + note[1:]
             return tip
         if role == Qt.ItemDataRole.TextAlignmentRole and column == 0:
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole and COLUMNS[column] == "Hotness" and info.hotness:
             return QBrush(QColor(hotspot_charts.hotness_color(info.hotness)))
+        if info.agent_approved and COLUMNS[column] in _MARKED_COLUMNS:
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QBrush(QColor(AGENT_APPROVED_COLOR))
+            if role == Qt.ItemDataRole.FontRole:
+                font = QFont()
+                font.setItalic(True)
+                return font
         if role == _SORT_ROLE:
             return self.sort_key(info, column)
         return None

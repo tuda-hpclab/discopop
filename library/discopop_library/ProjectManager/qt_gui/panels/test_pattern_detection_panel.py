@@ -131,7 +131,7 @@ def test_the_hotspot_hint_leads_to_the_hotspot_tab(panel: PatternDetectionPanel)
 
 
 def test_the_request_reads_the_widgets(panel: PatternDetectionPanel) -> None:
-    assert panel.snapshot_request() == ExplorerRequest("reduction,doall", "auto", False, False)
+    assert panel.snapshot_request() == ExplorerRequest("reduction,doall", "auto", False, False, True)
     for check in panel.pattern_checks.values():
         check.setChecked(False)
     assert panel.snapshot_request().enable_patterns == "reduction,doall"
@@ -139,7 +139,8 @@ def test_the_request_reads_the_widgets(panel: PatternDetectionPanel) -> None:
     panel.mode_buttons["no_states"].setChecked(True)
     panel.jobs_selector.setCurrentText("4")
     panel.visualize_check.setChecked(True)
-    assert panel.snapshot_request() == ExplorerRequest("task", "4", True, True)
+    panel.unsure_check.setChecked(False)
+    assert panel.snapshot_request() == ExplorerRequest("task", "4", True, True, False)
     panel.mode_buttons["default"].setChecked(True)
     assert not panel.snapshot_request().ignore_dependency_states
 
@@ -356,6 +357,22 @@ def test_new_results_after_a_run_are_shown(qtbot: QtBot, panel: PatternDetection
         write_suggestions(panel, ["1"])
         qtbot.waitUntil(lambda: not panel.explorer_running, timeout=20000)
     assert [info.id for info in panel.table.suggestions()] == ["1"]
+
+
+def test_published_approvals_are_listed_marked_and_counted(panel: PatternDetectionPanel) -> None:
+    """A suggestion the blocker resolution put into use joins the list as soon as PatternsChanged arrives."""
+    profile(panel)
+    dot_dp = write_suggestions(panel, ["2"])
+    assert not panel.agent_approved_hint.isVisibleTo(panel)
+    approved = dot_dp / "patch_generator" / "17"
+    approved.mkdir()
+    (approved / "1.patch").write_text("--- a/main.c\n+++ b/main.c\n@@ -1 +1 @@\n+#pragma omp parallel for\n")
+    (approved / "agent_approved.json").write_text(json.dumps({"assumption": "order is free"}))
+    panel.project_state.publish(PatternsChanged())
+    infos = {info.id: info for info in panel.table.suggestions()}
+    assert set(infos) == {"2", "17"} and infos["17"].agent_approved and not infos["2"].agent_approved
+    assert panel.header.chip.text() == "2 suggestions (1 agent-approved)"
+    assert panel.agent_approved_hint.isVisibleTo(panel)
 
 
 def test_the_chip_reports_profiling_data_newer_than_the_results(panel: PatternDetectionPanel) -> None:

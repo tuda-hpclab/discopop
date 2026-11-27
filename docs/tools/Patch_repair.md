@@ -76,12 +76,14 @@ A candidate must pass all six of these checks, cheapest first.
 ## Choosing a model
 The agent, the model and their settings are configured in `.discopop/patch_repair/llm_config.json`, in two sections:
 
-- **connections** -- part of the experiment: which model, through which backend, with which defaults for prompts, retries and timeout.
+- **connections** -- part of the experiment: which model, through which backend, with which timeout per call (it wins over `--agent-timeout`), extra arguments, environment and backend settings.
 - **backends** -- part of the *installation*: where that agent's executable is on this machine, and what every connection through it should default to.
 
 They are separate because they answer different questions: a connection means the same on any machine, an install path does not. Settings resolve most-specific-first, and **no credentials are stored**.
 
-For a one-off run nothing needs configuring: `--backend` and `--model` override whatever is stored, and with exactly one agent installed even those can be omitted.
+For a one-off run nothing needs configuring: `--backend` and `--model` override whatever is stored, and with exactly one agent installed even those can be omitted. With several stored connections, a run names one with `--connection`; without one, `--backend` (and `--model`) ask that agent directly, with only the backend's section of the file applied.
+
+The GUI edits the file under *Settings > LLM connections…* and *Settings > LLM backends…* (see [GUI](GUI.md)). The *Patch Repair* stage offers the stored connections in its *Connection* selector (the run passes `--connection`), or a backend and a model chosen there (`--backend` / `--model`); it queries a backend's version and models with the executable of its `backends` section. The prompts of patch repair are not part of it: they are the templates shipped in `discopop_library/PatchRepair/prompts/`, replaced with `--prompt-dir`.
 
 ```text
 discopop_patch_repair --backend opencode --model openai/gpt-5.4-mini
@@ -124,7 +126,7 @@ Run the tool from inside `.discopop`, or pass `--dot-dp-path`.
 | `--max-attempts` | `6` | Hard ceiling on agent calls per suggestion. |
 | `--max-repairs` | `0` | Stop after this many repaired suggestions. `0` disables the limit. |
 | `--agent-error-retries` | `2` | Extra calls when a call produces no answer. |
-| `--connection` | the only one defined | Name of a connection of the LLM configuration. |
+| `--connection` | the only one defined | Name of a connection of the LLM configuration. Required when several are defined, unless `--backend` is given. |
 | `--backend` | from the connection | Agent backend: `opencode` or `claude`. |
 | `--model` | from the connection | Backend-specific model id. |
 | `--agent-timeout` | `300` | Timeout in seconds of a single agent call. |

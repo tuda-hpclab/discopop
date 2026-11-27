@@ -35,9 +35,10 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
-from discopop_library.ProjectManager.qt_gui import theme, widgets
+from discopop_library.ProjectManager.qt_gui import llm_dialogs, llm_logic, theme, widgets
 from discopop_library.ProjectManager.qt_gui.output_pane import OutputPane
 from discopop_library.ProjectManager.qt_gui.panel import Panel
+from discopop_library.ProjectManager.qt_gui.prompt_settings_dialog import PromptSettingsDialog
 from discopop_library.ProjectManager.qt_gui.panels.autotuning_panel import AutotuningPanel
 from discopop_library.ProjectManager.qt_gui.panels.config_list_panel import ConfigListPanel
 from discopop_library.ProjectManager.qt_gui.panels.editor_panel import EditorPanel
@@ -49,6 +50,7 @@ from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
 from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
+from discopop_library.ProjectManager.qt_gui.panels.blocker_resolution_panel import BlockerResolutionPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
@@ -66,6 +68,7 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_PROFILING as TAB_PROFILING,
     TAB_REPORT as TAB_REPORT,
     TAB_SETUP as TAB_SETUP,
+    TAB_BLOCKER_RESOLUTION as TAB_BLOCKER_RESOLUTION,
 )
 from discopop_library.ProjectManager.qt_gui.workflow_nav import WorkflowNav
 from discopop_library.ProjectManager.services.project_state import (
@@ -74,12 +77,15 @@ from discopop_library.ProjectManager.services.project_state import (
     ConfigChanged,
     ConfigurationsChanged,
     HotspotsChanged,
+    LlmConfigChanged,
     PatternsChanged,
     CallpathPruningChanged,
     ProjectDirectoriesChanged,
     ProjectState,
     ResultsChanged,
 )
+from discopop_library.BlockerResolution.prompt_store import custom_prompt_dir
+from discopop_library.ProjectManager.services.suggestions import suggestions_fingerprint
 from discopop_library.ProjectManager.services.workflow_status import forget_build_states, stage_statuses
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
@@ -194,6 +200,7 @@ class MainWindow(QMainWindow):
         self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
         self.hotspot_panel = HotspotPanel(args, state, status, self.execute_panel.timeouts)
         self.pattern_detection_panel = PatternDetectionPanel(args, state, status, self)
+        self.blocker_resolution_panel = BlockerResolutionPanel(args, state, status)
         self.patch_repair_panel = PatchRepairPanel(args, state, status)
         self.autotuning_panel = AutotuningPanel(args, state, status, self)
         self.config_list = ConfigListPanel(
@@ -212,6 +219,7 @@ class MainWindow(QMainWindow):
             TAB_PROFILING: self.profiling_panel,
             TAB_HOTSPOT: self.hotspot_panel,
             TAB_PATTERN_DETECTION: self.pattern_detection_panel,
+            TAB_BLOCKER_RESOLUTION: self.blocker_resolution_panel,
             TAB_PATCH_REPAIR: self.patch_repair_panel,
             TAB_AUTOTUNING: self.autotuning_panel,
             TAB_EXECUTE: self.execute_panel,
@@ -243,17 +251,83 @@ class MainWindow(QMainWindow):
             state.subscribe(event_type, lambda _event: self._status_timer.start())
         # a measurement or a run can rebuild what the hotspot stage compares with the sources
         state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
+        # what the suggestion lists showed when they were last told: a change made outside the GUI is noticed when the
+        # window is activated again (_check_suggestions_changed)
+        self._remember_suggestions_fingerprint()
+        state.subscribe(PatternsChanged, lambda _event: self._remember_suggestions_fingerprint())
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
+        # the connections saved under Settings > LLM connections (or edited by hand and reloaded) are offered at once
+        state.subscribe(LlmConfigChanged, lambda _event: self.blocker_resolution_panel.reload_connections())
+        state.subscribe(LlmConfigChanged, lambda _event: self.patch_repair_panel.reload_connections())
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _build_menu_bar(self) -> None:
-        """The menu bar: "View" with "Reset" (the layout as at the start)."""
+        """The menu bar: "View" with "Reset" (the layout as at the start), "Settings" with the LLM configuration
+        (connections, backends, reload) and the prompts of the blocker resolution."""
         # in the window, at its top (not in the global menu bar of the desktop)
         self.menuBar().setNativeMenuBar(False)
         self.view_menu = self.menuBar().addMenu("&View")
         self.reset_view_action = self.view_menu.addAction("&Reset")
         self.reset_view_action.setToolTip("Undo manual changes of the layout: box heights, splitters, the output pane")
         self.reset_view_action.triggered.connect(lambda _checked=False: self.reset_view())
+        self.settings_menu = self.menuBar().addMenu("&Settings")
+        self.llm_connections_action = self.settings_menu.addAction("LLM connections\u2026")
+        self.llm_connections_action.setToolTip(
+            "Edit the LLM connections (agent, model and their settings) of patch repair and the blocker resolution"
+        )
+        self.llm_connections_action.triggered.connect(lambda _checked=False: self.open_llm_dialog("connections"))
+        self.llm_backends_action = self.settings_menu.addAction("LLM backends\u2026")
+        self.llm_backends_action.setToolTip(
+            "Where each coding agent is installed on this machine, and what every connection through it defaults to"
+        )
+        self.llm_backends_action.triggered.connect(lambda _checked=False: self.open_llm_dialog("backends"))
+        self.reload_llm_action = self.settings_menu.addAction("Reload LLM configuration from disk")
+        self.reload_llm_action.setToolTip("Read the LLM configuration again after it was edited outside the GUI")
+        self.reload_llm_action.triggered.connect(lambda _checked=False: self.reload_llm_configuration())
+        self.llm_dialogs: Dict[str, llm_dialogs.LlmDialog] = {}
+        self.settings_menu.addSeparator()
+        self.prompt_settings_action = self.settings_menu.addAction("Blocker resolution prompts\u2026")
+        self.prompt_settings_action.setToolTip("Edit the prompts the blocker resolution sends to the LLM agent")
+        self.prompt_settings_action.triggered.connect(lambda _checked=False: self.open_prompt_settings())
+        self.prompt_settings_dialog: Optional[PromptSettingsDialog] = None
+
+    def open_prompt_settings(self) -> PromptSettingsDialog:
+        """Open (or raise) the dialog editing the prompt templates of the blocker resolution of this project."""
+        dialog = self.prompt_settings_dialog
+        if dialog is None:
+            dialog = PromptSettingsDialog(custom_prompt_dir(self.arguments.dot_dp), self)
+            self.prompt_settings_dialog = dialog
+            dialog.finished.connect(lambda _result=0: setattr(self, "prompt_settings_dialog", None))
+            dialog.finished.connect(dialog.deleteLater)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
+
+    def open_llm_dialog(self, kind: str) -> Optional[llm_dialogs.LlmDialog]:
+        """Open (or raise) the editor ``kind`` ("connections" / "backends") of the project's LLM configuration; None
+        if the file cannot be read (the reason is shown). A save tells the panels (``LlmConfigChanged``)."""
+        dialog = self.llm_dialogs.get(kind)
+        if dialog is None:
+            dialog = llm_dialogs.open_llm_dialog(self, kind, llm_logic.config_path(self.arguments.dot_dp))
+            if dialog is None:
+                return None
+            self.llm_dialogs[kind] = dialog
+            dialog.saved.connect(lambda: self.project_state.publish(LlmConfigChanged()))
+            dialog.finished.connect(lambda _result=0: self.llm_dialogs.pop(kind, None))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
+
+    def reload_llm_configuration(self) -> None:
+        """Read the LLM configuration again (edited outside the GUI) and say what it holds."""
+        self.project_state.publish(LlmConfigChanged())
+        names, error = llm_logic.read_connection_names(self.arguments.dot_dp)
+        if error is not None:
+            self.status.set(error, widgets.STATUS_FAIL)
+        else:
+            self.status.set(f"Reloaded the LLM configuration: {len(names)} connection(s)", reset_ms=5000)
 
     def reset_view(self) -> None:
         """Undo the manual changes of the layout: resized boxes, splitter positions, the height of the output pane."""
@@ -507,7 +581,21 @@ class MainWindow(QMainWindow):
             # the sources may have been edited in another program
             forget_build_states()
             self._status_timer.start()
+        if event.type() == QEvent.Type.WindowActivate:
+            self._check_suggestions_changed()
         return super().event(event)
+
+    def _check_suggestions_changed(self) -> None:
+        """Tell the stages if the suggestions changed outside the GUI (e.g. approvals published or withdrawn by
+        ``discopop_blocker_resolution`` in a terminal): their lists refresh on ``PatternsChanged`` only."""
+        if self._closing:
+            return
+        fingerprint = suggestions_fingerprint(self.arguments.dot_dp)
+        if fingerprint != self._suggestions_fingerprint:
+            self.project_state.publish(PatternsChanged())  # also updates the fingerprint
+
+    def _remember_suggestions_fingerprint(self) -> None:
+        self._suggestions_fingerprint = suggestions_fingerprint(self.arguments.dot_dp)
 
     # --- the output pane ---
 
@@ -544,6 +632,14 @@ class MainWindow(QMainWindow):
             panel.cancel_jobs()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt's name)
+        # an open prompt editor asks about its unsaved edits first; Cancel there keeps the window open
+        if self.prompt_settings_dialog is not None and not self.prompt_settings_dialog.close():
+            event.ignore()
+            return
+        for dialog in list(self.llm_dialogs.values()):
+            if not dialog.close():
+                event.ignore()
+                return
         self._closing = True
         self._status_timer.stop()
         self.cancel_running_jobs()

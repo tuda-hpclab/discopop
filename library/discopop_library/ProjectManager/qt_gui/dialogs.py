@@ -64,6 +64,24 @@ def ask_yes_no(parent: Optional[QWidget], title: str, message: str) -> bool:
     return answer == QMessageBox.StandardButton.Yes
 
 
+SAVE = "save"
+DISCARD = "discard"
+
+
+def ask_save_discard(parent: Optional[QWidget], title: str, message: str) -> Optional[str]:
+    """``SAVE`` or ``DISCARD``, or None for Cancel (Save is the default button)."""
+    box = QMessageBox(QMessageBox.Icon.Question, title, message, parent=parent)
+    save = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+    discard = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton(QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(save)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is save:
+        return SAVE
+    return DISCARD if clicked is discard else None
+
+
 def ask_string(parent: Optional[QWidget], title: str, prompt: str, initial: str = "") -> Optional[str]:
     """The text the user entered, or None if the dialog was cancelled."""
     text, ok = QInputDialog.getText(parent, title, prompt, QLineEdit.EchoMode.Normal, initial)
@@ -156,6 +174,7 @@ __all__: List[str] = [
     "show_warning",
     "show_error",
     "ask_yes_no",
+    "ask_save_discard",
     "ask_string",
     "ask_choice",
     "ask_open_file",

@@ -95,6 +95,8 @@ These options may change or be removed.
 | `--generate-data-cu-inst <dir>` | none | Generate `Data_CUInst.txt` in the given directory and stop. Requires `--cu-xml`, `--dep-file`, `--loop-counter` and `--reduction`. |
 | `--enable-statistics` | off | Calculate and store statistics for the code and the generated suggestions. |
 | `--ignore-dependency-states` | off | Ignore the callpath state markers (`@<state_id>`) in the dependency data. The affected dependencies are then reclassified from dynamic to static. The explorer writes no `side_effects.json.gz` in this mode. |
+| `--unsure-suggestions [path]` | off | Also write the loops that are not parallelizable only because of a few dependencies between their iterations (blockers) to `explorer/unsure_suggestions.json` (or `path`). They are not suggestions: see [blocker resolution](Blocker_resolution.md). The suggestions and their ids are the same with and without this option. |
+| `--unsure-max-blockers <n>` | 4 | The largest number of blockers of an unsure suggestion. A blocker groups the dependencies with the same type, source line, sink line and origin. |
 | `--all-blocking-dependencies` | off | Record every dependency between iterations that prevents a do-all loop in `pattern_decisions.json`, not only the first one found. Shows what has to change before a loop can be parallelized; slower for loops with many such dependencies. The suggestions are the same. |
 | `--plot-pet [path]` | off | Write the program execution graph as GEXF file (`explorer/pet_plot.gexf` if no path is given). |
 | `--plot-task-graph` | off | Plot the task graph interactively. |

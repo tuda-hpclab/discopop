@@ -51,6 +51,7 @@ from discopop_explorer.pattern_detectors.new_task_detector import (
 from discopop_explorer.pattern_detectors.new_do_all_detector import run_detection as detect_do_all_and_reduction_new
 from discopop_explorer.pattern_detectors.task_cursor_loops import LoopTaskSource, find_cursor_loops
 from discopop_explorer.pattern_detectors.new_do_all_detector import DECISION_DETECTOR as DO_ALL_AND_REDUCTION_DETECTOR
+from discopop_explorer.classes.patterns.UnsureSuggestions import UnsureSuggestions
 from discopop_explorer.classes.patterns.PatternDecisions import PatternDecisionLog
 
 try:
@@ -72,7 +73,12 @@ class PatternDetectorX(object):
     pet: PEGraphX
     ast_helper: ASTPatternDetectionHelper
 
-    def __init__(self, pet_graph: PEGraphX, pattern_decisions: Optional[PatternDecisionLog] = None) -> None:
+    def __init__(
+        self,
+        pet_graph: PEGraphX,
+        pattern_decisions: Optional[PatternDecisionLog] = None,
+        unsure_suggestions: Optional[UnsureSuggestions] = None,
+    ) -> None:
         """This class runs detection algorithms on CU graph
 
         :param pet_graph: CU graph
@@ -81,6 +87,9 @@ class PatternDetectorX(object):
         # which candidates detect_patterns considered and why they were rejected. Kept apart from
         # the DetectionResult, whose serialization covers all of its attributes.
         self.pattern_decisions = pattern_decisions if pattern_decisions is not None else PatternDecisionLog()
+        # the loops which are parallelizable only if a few dependencies between their iterations are harmless. Kept
+        # apart from the DetectionResult as well: they are not parallelization suggestions.
+        self.unsure_suggestions = unsure_suggestions
         self.ast_helper = ASTPatternDetectionHelper()
 
     def __merge(self, loop_type: bool, remove_dummies: bool) -> None:
@@ -183,6 +192,7 @@ class PatternDetectorX(object):
                     self.ast_helper,
                     decisions=self.pattern_decisions,
                     all_blocking_dependencies=all_blocking_dependencies,
+                    unsure=self.unsure_suggestions,
                 )
             if "*" in enable_patterns or "doall" in enable_patterns:
                 res.patterns.do_all = [p for p in tmp_result if isinstance(p, DoAllInfo)]
@@ -252,6 +262,10 @@ class PatternDetectorX(object):
         #        if enable_detection_of_scheduling_clauses:
         # identify scheduling clauses
         #            return self.__identify_scheduling_clauses(res, project_path, file_mapping)
+
+        # last: building them allocates their pattern ids, which therefore follow those of all suggestions
+        if self.unsure_suggestions is not None:
+            self.unsure_suggestions.build()
 
         return res
 

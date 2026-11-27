@@ -9,12 +9,12 @@
 """The Patch Repair tab: fixing suggestions whose patch does not compile.
 
 Ported from ``gui/mixins/patch_repair_panel.py``; what the tab shows is computed by
-``services/patch_repair_view.py``. The backend and model selectors are built from the ``llm_backends`` registry, so a
-new agent reaches the GUI without touching this file.
+``services/patch_repair_view.py``. The "LLM Agent" box (stored connection, or backend and model) is shared with the
+Blocker Resolution tab (``qt_gui/llm_agent_panel.py``).
 """
 
 import queue
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -34,14 +34,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from discopop_library.PatchRepair import llm_backends
 from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.PatchRepair.results import PROGRESS_PREFIX
 from discopop_library.ProjectManager.plots.data import split_progress_events
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter, start_work
-from discopop_library.ProjectManager.qt_gui.panel import Panel
+from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
+from discopop_library.ProjectManager.qt_gui.llm_agent_panel import LlmAgentPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.suggestion_selector import SuggestionSelector
 from discopop_library.ProjectManager.services import patch_repair_view
@@ -54,10 +53,6 @@ from discopop_library.ProjectManager.services.jobs import (
     JobOutput,
     JobRunner,
     JobSpec,
-    WorkContext,
-    WorkEvent,
-    WorkFinished,
-    WorkRunner,
 )
 from discopop_library.ProjectManager.services.patches import has_patches
 from discopop_library.ProjectManager.services.project_state import (
@@ -93,15 +88,17 @@ _CHIP_LEVELS = {
 _COLUMNS = ("Suggestion", "Hotspot", "Status", "Files", "Attempts", "First error")
 
 
-class PatchRepairPanel(Panel):
+class PatchRepairPanel(LlmAgentPanel):
     """The Patch Repair tab.
 
     Subscribes to ``ConfigChanged`` and ``PatternsChanged`` (the run button needs patches and a configuration)
     and publishes ``AutotuningChanged`` and ``ResultsChanged`` after a run that ended without an error: a repaired
-    patch changes what the tuner and the report show.
+    patch changes what the tuner and the report show. The main window calls :meth:`reload_connections` on
+    ``LlmConfigChanged``.
     """
 
     output_title = "Patch Repair"
+    llm_shared_with = "the blocker resolution"
 
     def __init__(
         self,
@@ -113,7 +110,6 @@ class PatchRepairPanel(Panel):
         super().__init__(arguments, project_state, status, parent)
         self.running = False
         self._job: Optional[JobRunner] = None
-        self._backend_query: Optional[WorkRunner] = None
         # results.json as it currently stands, keyed by suggestion id (as a string)
         self._records: Dict[str, Dict[str, Any]] = {}
 
@@ -144,7 +140,7 @@ class PatchRepairPanel(Panel):
 
         project_state.subscribe(ConfigChanged, lambda _event: self._update_ui())
         project_state.subscribe(PatternsChanged, lambda _event: self._update_ui())
-        self._on_backend_changed()
+        self.reload_connections()
         self._update_budget()
         self._update_ui()
         self._load_results_from_file()
@@ -180,18 +176,7 @@ class PatchRepairPanel(Panel):
         self._settings_box = section
 
     def _build_agent_settings(self) -> None:
-        # built from the registry, so a newly added agent reaches the GUI without a change here
-        backends = llm_backends.available_backends()
-        installed = llm_backends.first_installed_backend()
-        self.backend_combo = QComboBox()
-        self.backend_combo.addItems(backends)
-        self.backend_combo.setCurrentText(installed or (backends[0] if backends else ""))
-        self.backend_combo.currentTextChanged.connect(lambda _text: self._on_backend_changed())
-        # Editable, not read-only: a backend's model list depends on which providers are authenticated and is not
-        # always exhaustive, so a model missing from it must still be typeable.
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self.model_combo.setCurrentText("")
+        self._agent_box = self.build_llm_agent_section("Empty: the backend's default model.")
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(10, 3600)
         self.timeout_spin.setSingleStep(10)
@@ -204,13 +189,6 @@ class PatchRepairPanel(Panel):
         self.retries_spin.setValue(2)
         self.prompts_spin.valueChanged.connect(lambda _value: self._update_budget())
         self.retries_spin.valueChanged.connect(lambda _value: self._update_budget())
-
-        section = widgets.FormSection("LLM Agent")
-        backend_hint = section.add_row("Backend:", self.backend_combo, " ")
-        assert backend_hint is not None
-        self.backend_hint = backend_hint
-        section.add_row("Model:", self.model_combo, "Empty: the backend's default model.", stretch_field=True)
-        self._agent_box = section
 
     def _build_scope(self) -> None:
         section = widgets.FormSection("Suggestion Scope")
@@ -304,51 +282,6 @@ class PatchRepairPanel(Panel):
 
     # ── state ───────────────────────────────────────────────────────────────
 
-    def _on_backend_changed(self) -> None:
-        """Refresh the model list and say so when the selected agent is not installed."""
-        name = self.backend_combo.currentText()
-        try:
-            module = llm_backends.get(name)
-        except KeyError:
-            self.backend_hint.setText("Unknown backend: " + name)
-            widgets.set_label_color(self.backend_hint, widgets.STATUS_FAIL)
-            return
-
-        if not module.available():
-            self.backend_hint.setText(str(getattr(module, "INSTALL_HINT", "")) or (name + " could not be run."))
-            widgets.set_label_color(self.backend_hint, widgets.STATUS_FAIL)
-            self._set_models([])
-            return
-
-        def query_backend(_ctx: WorkContext) -> Tuple[str, List[str]]:
-            # version() and list_models() run the agent's own command, which can take a moment; they must not block
-            # the UI thread. A failure leaves the list empty and the field still typeable.
-            return module.version() or "", module.list_models()
-
-        def apply(event: WorkEvent) -> None:
-            if not isinstance(event, WorkFinished):
-                return
-            self._backend_query = None
-            if self.backend_combo.currentText() != name:
-                return  # another backend was selected in the meantime
-            version, models = event.result if event.error is None else ("", [])
-            self.backend_hint.setText(
-                patch_repair_view.backend_description(version, str(getattr(module, "DESCRIPTION", "")))
-            )
-            widgets.set_label_color(self.backend_hint, widgets.STATUS_IDLE)
-            self._set_models(models)
-
-        self.backend_hint.setText("Querying " + name + "...")
-        widgets.set_label_color(self.backend_hint, widgets.STATUS_IDLE)
-        self._backend_query = start_work(self, query_backend, apply)
-
-    def _set_models(self, models: List[str]) -> None:
-        """Fill the model list; what is typed in the field stays."""
-        typed = self.model_combo.currentText()
-        self.model_combo.clear()
-        self.model_combo.addItems(models)
-        self.model_combo.setCurrentText(typed)
-
     def _update_budget(self) -> None:
         self.budget_label.setText(patch_repair_view.budget_text(self.prompts_spin.value(), self.retries_spin.value()))
         widgets.set_label_color(self.budget_label, widgets.STATUS_IDLE)
@@ -380,6 +313,10 @@ class PatchRepairPanel(Panel):
             return
         if not self.project_state.current_config:
             dialogs.show_error(self, "No Configuration Selected", "Please select a configuration first.")
+            return
+        if self._connection_problem:
+            # patch repair would fail on it before repairing anything
+            dialogs.show_error(self, "LLM Connection", self._connection_problem)
             return
 
         self.running = True
@@ -425,6 +362,7 @@ class PatchRepairPanel(Panel):
         if not self.selector.is_all_selected():
             suggestion_ids = tuple(self.selector.get_selected_ids())
         return PatchRepairRequest(
+            connection=self._selected_connection() or None,
             configuration=self.project_state.current_config or "tiny",
             hotspot_types=hotspot_types,
             prompts=self.prompts_spin.value(),
@@ -445,8 +383,11 @@ class PatchRepairPanel(Panel):
         self.console.append_text("Configuration:\n")
         self.console.append_text("  Configuration: " + request.configuration + "\n")
         self.console.append_text("  Hotspot Types: " + request.hotspot_types + "\n")
-        self.console.append_text("  Backend: " + request.backend + "\n")
-        self.console.append_text("  Model: " + (request.model or "(default)") + "\n\n")
+        if request.connection:
+            self.console.append_text("  Connection: " + request.connection + "\n\n")
+        else:
+            self.console.append_text("  Backend: " + request.backend + "\n")
+            self.console.append_text("  Model: " + (request.model or "(default)") + "\n\n")
 
     def _on_job_event(self, event: JobEvent) -> None:
         """Handle one event of the patch repair job; runs on the main thread."""
@@ -525,8 +466,7 @@ class PatchRepairPanel(Panel):
     def cancel_jobs(self) -> None:
         if self._job is not None:
             self._job.cancel()
-        if self._backend_query is not None:
-            self._backend_query.cancel()
+        self._cancel_backend_query()
 
     # ── results display ─────────────────────────────────────────────────────
 

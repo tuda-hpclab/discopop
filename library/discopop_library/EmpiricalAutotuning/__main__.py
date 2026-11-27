@@ -41,6 +41,10 @@ def parse_args() -> AutotunerArguments:
     "tiny")
     parser.add_argument("-s", "--suggestions", help="If specified, the comma separated list of suggestions will be "
     "applied and compared to the baseline.")
+    parser.add_argument("--no-agent-approved", dest="include_agent_approved", action="store_false", help="Do not "
+    "search the suggestions an LLM agent approved and published (discopop_blocker_resolution). By default they are "
+    "searched like DiscoPoP's own: they rest on the agent's assumption, not on DiscoPoP's analysis, and the search "
+    "keeps them only if they pay off. discopop_blocker_resolution --withdraw-published takes them back for good.")
     parser.add_argument("--search-space", dest="search_space", default=None, help="If specified, restrict the "
     "optimization algorithm's search space to this comma separated list of suggestion ids (and ranges are NOT expanded "
     "here; pass explicit ids). With -A 0, a listed id the hotspot loader could not classify is measured as well. "
@@ -133,6 +137,7 @@ def parse_args() -> AutotunerArguments:
         sanitize=arguments.sanitize,
         suggestions=arguments.suggestions,
         search_space=arguments.search_space,
+        include_agent_approved=arguments.include_agent_approved,
         allow_plots=arguments.plot,
         thread_count=arguments.threads,
         hotspot_types=arguments.hotspot_types,

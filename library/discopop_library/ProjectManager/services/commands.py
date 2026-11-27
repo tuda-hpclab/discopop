@@ -12,7 +12,12 @@ import os
 import sys
 from typing import Dict, List, Mapping, Optional
 
-from discopop_library.ProjectManager.services.requests import AutotunerRequest, ExplorerRequest, PatchRepairRequest
+from discopop_library.ProjectManager.services.requests import (
+    AutotunerRequest,
+    ExplorerRequest,
+    PatchRepairRequest,
+    BlockerResolutionRequest,
+)
 
 
 def explorer_command(request: ExplorerRequest, python: Optional[str] = None) -> List[str]:
@@ -32,6 +37,8 @@ def explorer_command(request: ExplorerRequest, python: Optional[str] = None) -> 
         command.append("--ignore-dependency-states")
     if request.visualize:
         command.append("--visualize")
+    if request.unsure_suggestions:
+        command.append("--unsure-suggestions")
     return command
 
 
@@ -87,12 +94,61 @@ def patch_repair_command(request: PatchRepairRequest, dot_dp_path: str, python: 
         "--log",
         request.log_level,
     ]
-    if request.backend:
-        command += ["--backend", request.backend]
-    if request.model:
-        command += ["--model", request.model]
+    if request.connection:
+        # the connection decides the backend and the model
+        command += ["--connection", request.connection]
+    else:
+        if request.backend:
+            command += ["--backend", request.backend]
+        if request.model:
+            command += ["--model", request.model]
     if request.dry_run:
         command.append("--dry-run")
+    if request.suggestion_ids is not None:
+        command += ["-s", ",".join(request.suggestion_ids)]
+    return command
+
+
+def blocker_resolution_command(
+    request: BlockerResolutionRequest, dot_dp_path: str, python: Optional[str] = None
+) -> List[str]:
+    """``discopop_blocker_resolution`` for the request; the project root is the default, the directory holding
+    ``.discopop``, and the prompts are the project's own (as edited under Settings > Blocker resolution prompts)."""
+    command = [
+        python or sys.executable,
+        "-m",
+        "discopop_library.BlockerResolution",
+        "--dot-dp-path",
+        dot_dp_path,
+        "--prompts",
+        str(request.prompts),
+        "--retries",
+        str(request.retries),
+        "--agent-timeout",
+        str(request.agent_timeout),
+        "--log",
+        request.log_level,
+        "--hotspot-types",
+        request.hotspot_types,
+    ]
+    if request.connection:
+        # the connection decides the backend and the model
+        command += ["--connection", request.connection]
+    else:
+        if request.backend:
+            command += ["--backend", request.backend]
+        if request.model:
+            command += ["--model", request.model]
+    if not request.review:
+        command.append("--no-review")
+    if not request.accept_rounding:
+        command.append("--reject-rounding")
+    if not request.discopop_tools:
+        command.append("--no-discopop-tools")
+    if not request.use_approved:
+        command.append("--no-use-approved")
+    if request.max_suggestions > 0:
+        command += ["--max-suggestions", str(request.max_suggestions)]
     if request.suggestion_ids is not None:
         command += ["-s", ",".join(request.suggestion_ids)]
     return command

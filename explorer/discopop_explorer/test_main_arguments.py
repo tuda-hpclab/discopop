@@ -43,3 +43,20 @@ def test_all_blocking_dependencies_is_off_by_default(dot_discopop: Path) -> None
 
 def test_all_blocking_dependencies_reaches_the_explorer_arguments(dot_discopop: Path) -> None:
     assert parse_args(["--path", str(dot_discopop), "--all-blocking-dependencies"]).all_blocking_dependencies is True
+
+
+def test_unsure_suggestions_are_off_by_default(dot_discopop: Path) -> None:
+    arguments = parse_args(["--path", str(dot_discopop)])
+    assert arguments.enable_unsure_suggestions_file is None
+    assert arguments.unsure_max_blockers == 4
+
+
+def test_unsure_suggestions_are_written_to_the_default_file(dot_discopop: Path) -> None:
+    arguments = parse_args(["--path", str(dot_discopop), "--unsure-suggestions", "--unsure-max-blockers", "2"])
+    assert arguments.enable_unsure_suggestions_file == "explorer/unsure_suggestions.json"
+    assert arguments.unsure_max_blockers == 2
+
+
+def test_unsure_max_blockers_must_be_positive(dot_discopop: Path) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--path", str(dot_discopop), "--unsure-max-blockers", "0"])

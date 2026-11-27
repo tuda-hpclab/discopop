@@ -345,8 +345,10 @@ def _same_dependency_file(recorded: Any, current: Any) -> bool:
 
 
 class ToolContext:
-    def __init__(self, debug: bool = False) -> None:
+    def __init__(self, debug: bool = False, log_to_project: bool = True) -> None:
         self.debug = debug
+        # whether log_to_file writes <project>/.discopop/mcp_server/log.txt
+        self.log_to_project = log_to_project
         # project_path → (file_id_to_path, FileMapping.txt mtime)
         self._file_mapping_cache: dict[str, tuple[dict[int, Path], float]] = {}
         # project_path → ((export mtime_ns, size), ignore_dependency_states, dependency_file info, index).
@@ -529,7 +531,11 @@ class ToolContext:
         Never raises — logging failures must not affect tool execution.
 
         Only into a .discopop that exists: creating it would create a mistyped project_path,
-        and mark a directory as a DiscoPoP project that was never initialized as one."""
+        and mark a directory as a DiscoPoP project that was never initialized as one. Nothing at all
+        if the context does not log to the project (log_to_project: a server bound to a project, or
+        offering only read-only tools)."""
+        if not self.log_to_project:
+            return
         try:
             if not (Path(project_path) / ".discopop").is_dir():
                 return

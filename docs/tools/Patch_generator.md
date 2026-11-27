@@ -26,6 +26,7 @@ The patches are stored in `patch_generator/` (inside `.discopop`).
 For each parallel pattern, a folder named after the pattern `id` is created. It contains one patch file `<file id>.patch` for every modified file.
 See [File mapping](../data/Filemapping.md) for how to interpret the file ids.
 
+
 ## Example
 ```bash
 cd .discopop && discopop_patch_generator

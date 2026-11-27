@@ -7,6 +7,7 @@
 # directory for details.
 import itertools
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from discopop_explorer.aliases.LineID import LineID
@@ -23,6 +24,7 @@ from discopop_explorer.classes.TaskGraph.Contexts.LoopParentContext import LoopP
 from discopop_explorer.classes.TaskGraph.TGNode import TGNode
 from discopop_explorer.classes.TaskGraph.TaskGraph import TaskGraph
 from discopop_explorer.classes.PEGraph.LoopNode import LoopNode
+from discopop_explorer.classes.patterns.UnsureSuggestions import Blocker, UnsureLoop, UnsureSuggestions, group_blockers
 from discopop_explorer.classes.patterns.PatternDecisions import (
     CUT_EARLY_EXIT,
     CUT_EXCEPTION_HANDLER,
@@ -72,10 +74,11 @@ def run_detection(
     ast_helper: ASTPatternDetectionHelper,
     decisions: Optional[PatternDecisionLog] = None,
     all_blocking_dependencies: bool = False,
+    unsure: Optional[UnsureSuggestions] = None,
 ) -> List[DoAllInfo | ReductionInfo]:
     """decisions, if given, receives every loop considered and why it was rejected. It is not
     finalized here, since the caller decides which of the returned patterns are reported.
-    all_blocking_dependencies: see identify_simple_doall_and_reduction."""
+    all_blocking_dependencies, unsure: see identify_simple_doall_and_reduction."""
     logger.info("Starting new do_all and reduction detection...")
     result: List[DoAllInfo | ReductionInfo] = []
     # built once, since the PET graph is not modified during pattern detection
@@ -83,7 +86,7 @@ def run_detection(
 
     with stage("Identifying doall and reduction loops", 1, total=2):
         result += identify_simple_doall_and_reduction(
-            task_graph, ast_helper, data_edges, decisions, all_blocking_dependencies
+            task_graph, ast_helper, data_edges, decisions, all_blocking_dependencies, unsure
         )
     # collapsible nests are derived from the identified patterns, so this must run afterwards
     with stage("Identifying collapsible loop nests", 2, total=2):
@@ -345,6 +348,7 @@ def identify_simple_doall_and_reduction(
     data_edges: DataEdgeIndex,
     decisions: Optional[PatternDecisionLog] = None,
     all_blocking_dependencies: bool = False,
+    unsure: Optional[UnsureSuggestions] = None,
 ) -> List[DoAllInfo | ReductionInfo]:
     """Analyzes the results of the graph simplification and create simple doall patterns.
     Implementation is fundamentally similar to the original doall detector, but implemented in a more maintainable
@@ -352,7 +356,9 @@ def identify_simple_doall_and_reduction(
     Checks for clean doall opportunities.
     A loop is rejected at its first dependency observed between its iterations. With all_blocking_dependencies (and
     decisions), the scan goes on and every such dependency is recorded, which tells what has to change before the loop
-    can be parallelized; the detected patterns are the same."""
+    can be parallelized; the detected patterns are the same.
+    unsure, if given, receives the loops rejected only because of a few dependencies between their iterations (see
+    design/blocker_resolution.md); the detected patterns are the same."""
     patterns: List[DoAllInfo | ReductionInfo] = []
     # everything a pattern's tag is derived from, for the patterns collected in `patterns` - see
     # the duplicate check below. Kept alongside the tags themselves, which are only known once a
@@ -367,8 +373,10 @@ def identify_simple_doall_and_reduction(
     show_plot(tg)
 
     prevented_loops: Set[NodeID] = set()
-    # only the decisions show the dependencies after the first one
-    collect_all = all_blocking_dependencies and decisions is not None
+    # only the decisions and the unsure suggestions show the dependencies after the first one
+    collect_all = (all_blocking_dependencies and decisions is not None) or unsure is not None
+    # the loops rejected for dynamic dependencies, classified once the scan is done (see add_unsure_loops)
+    unsure_candidates: List[_UnsureCandidate] = []
     # the region of each loop, for recording decisions. The task graph holds several copies of a
     # loop, so this is looked up once per loop rather than once per copy.
     decision_regions: Dict[NodeID, CodeRegion] = dict()
@@ -504,6 +512,8 @@ def identify_simple_doall_and_reduction(
         dependency_found = False
         reduction_info: List[Tuple[Context, Context, Dependency, Dict[str, str]]] = []
         potential_breaking_dependencies: List[Tuple[Context, Context, Dependency]] = []
+        # the dynamic dependencies which prevent the loop
+        blocking_dependencies: List[Dependency] = []
         # only needed for reduction candidates, and then at most once per context
         code_scopes: Dict[Context, Set[LineID]] = dict()
 
@@ -574,8 +584,9 @@ def identify_simple_doall_and_reduction(
                     + str(dep.carried_by_pet_loops)
                 )
             if dep.origin == DepOrigin.DYNAMIC_ANALYSIS:
-                # dependency is trustworthy and definitely breaks doall
-                if decisions is not None:
+                # dependency is trustworthy and definitely breaks doall. Unless all of them were asked for, the
+                # decisions name the first one only, also when the scan goes on for the unsure suggestions.
+                if decisions is not None and (all_blocking_dependencies or len(blocking_dependencies) == 0):
                     record = DependencyRecord.from_dependency(dep)
                     record_rejection(
                         node.pet_node_id,
@@ -587,6 +598,7 @@ def identify_simple_doall_and_reduction(
                             dependency=record,
                         ),
                     )
+                blocking_dependencies.append(dep)
                 return True
             # dependency is static and may be too pessimistic.
             # dependency is not problematic, if the variable is first written in the loop
@@ -637,6 +649,17 @@ def identify_simple_doall_and_reduction(
             # node is not a valid doall loop
             prevented_loops.add(node.pet_node_id)
             counts["skipped_dependency_found"] += 1
+            if unsure is not None and unsure.accepts(len(_blockers(blocking_dependencies))):
+                unsure_candidates.append(
+                    _UnsureCandidate(
+                        node,
+                        iteration_contexts,
+                        list(loop_variables),
+                        list(blocking_dependencies),
+                        list(reduction_info),
+                        list(potential_breaking_dependencies),
+                    )
+                )
             continue
 
         # Determine which pattern this candidate would register. Both the reduction variables
@@ -679,8 +702,10 @@ def identify_simple_doall_and_reduction(
             clause_cache,
         )
         # check potential_breaking_dependencies for cases which actually prevent doall
+        unprivatizable: List[Dependency] = []
         for src_ctx, dst_ctx, dep in potential_breaking_dependencies:
             if dep.var_name not in firstwritten.union(init).union(reduction):
+                unprivatizable.append(dep)
                 # node is not a valid doall loop
                 prevented_loops.add(node.pet_node_id)
                 if decisions is not None:
@@ -702,6 +727,12 @@ def identify_simple_doall_and_reduction(
             else:
                 # static dependency does not actually prevent doall parallelization, as privatization is possible
                 pass
+        if unsure is not None and len(unprivatizable) > 0 and pattern_key is not None:
+            unsure.add(
+                _unsure_loop(
+                    tg, node, unprivatizable, reduction_vars, firstprivate, private, lastprivate, shared, sharing_notes
+                )
+            )
         # if len(potential_breaking_dependencies) > 0:
         #    print(
         #        "HERE DUE TO SECOND CHANCEs!: ", [(d[2].dtype, d[2].var_name) for d in potential_breaking_dependencies]
@@ -713,51 +744,9 @@ def identify_simple_doall_and_reduction(
             counts["discarded_after_classification"] += 1
             continue
         known_pattern_keys.add(pattern_key)
-        pattern: DoAllInfo | ReductionInfo
-        if len(reduction) == 0:
-            # register DoAll pattern
-            pattern = DoAllInfo(tg.pet, tg.pet.node_at(node.pet_node_id))
-            # the loop body: the node of the pattern is the header CU of the loop, the body lies in the context
-            pattern.instruction_ids = node.created_context.get_instruction_scope(tg.pet, inclusive=True)
-            pattern.affected_line_ids = tg.pet.get_line_ids_of_instructions(pattern.instruction_ids)
-            pattern.first_private = [
-                Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(firstprivate)
-            ]
-            pattern.private = [Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(private)]
-            pattern.last_private = [
-                Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(lastprivate)
-            ]
-            pattern.shared = [Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(shared)]
-            pattern.sharing_notes = [text for _, text in sharing_notes]
-        else:
-            # register reduction pattern. get_pattern_key rejected a missing parent loop already.
-            assert node.created_context.parent_loop is not None
-            pattern = ReductionInfo(tg.pet, tg.pet.node_at(node.created_context.parent_loop), reduction=reduction_vars)
-            # the loop body: the node of the pattern is the header CU of the loop, the body lies in the context
-            pattern.instruction_ids = node.created_context.get_instruction_scope(tg.pet, inclusive=True)
-            pattern.affected_line_ids = tg.pet.get_line_ids_of_instructions(pattern.instruction_ids)
-            pattern.first_private = [
-                Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
-                for v in sorted(firstprivate)
-                if v not in reduction
-            ]
-            pattern.private = [
-                Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
-                for v in sorted(private)
-                if v not in reduction
-            ]
-            pattern.last_private = [
-                Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
-                for v in sorted(lastprivate)
-                if v not in reduction
-            ]
-            pattern.shared = [
-                Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
-                for v in sorted(shared)
-                if v not in reduction
-            ]
-            # a reduction variable is not listed in a data sharing clause, so notes about its sharing do not apply
-            pattern.sharing_notes = [text for name, text in sharing_notes if name not in reduction]
+        pattern = build_loop_pattern(
+            tg, node, reduction_vars, firstprivate, private, lastprivate, shared, sharing_notes
+        )
 
         # two different nodes can still collide on a tag, so the exact check remains - it is just
         # no longer the one which every duplicate has to be built for.
@@ -775,7 +764,140 @@ def identify_simple_doall_and_reduction(
     # clean patterns agains prevented loops
     patterns = [p for p in patterns if p.node_id not in prevented_loops]
 
+    if unsure is not None:
+        add_unsure_loops(tg, ast_helper, data_edges, unsure, unsure_candidates, clause_cache)
+
     return patterns
+
+
+def build_loop_pattern(
+    tg: TaskGraph,
+    node: TGNode,
+    reduction_vars: List[Variable],
+    firstprivate: Set[str],
+    private: Set[str],
+    lastprivate: Set[str],
+    shared: Set[str],
+    sharing_notes: Tuple[Tuple[str, str], ...],
+) -> DoAllInfo | ReductionInfo:
+    """the do-all or, with reduction variables, the reduction pattern of a classified loop candidate. Allocates the
+    pattern's id."""
+    assert node.pet_node_id is not None and isinstance(node.created_context, LoopParentContext)
+    reduction: Set[str] = set([str(v.name) for v in reduction_vars])
+    pattern: DoAllInfo | ReductionInfo
+    if len(reduction) == 0:
+        # register DoAll pattern
+        pattern = DoAllInfo(tg.pet, tg.pet.node_at(node.pet_node_id))
+        # the loop body: the node of the pattern is the header CU of the loop, the body lies in the context
+        pattern.instruction_ids = node.created_context.get_instruction_scope(tg.pet, inclusive=True)
+        pattern.affected_line_ids = tg.pet.get_line_ids_of_instructions(pattern.instruction_ids)
+        pattern.first_private = [
+            Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(firstprivate)
+        ]
+        pattern.private = [Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(private)]
+        pattern.last_private = [
+            Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(lastprivate)
+        ]
+        pattern.shared = [Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(shared)]
+        pattern.sharing_notes = [text for _, text in sharing_notes]
+    else:
+        # register reduction pattern. get_pattern_key rejected a missing parent loop already.
+        assert node.created_context.parent_loop is not None
+        pattern = ReductionInfo(tg.pet, tg.pet.node_at(node.created_context.parent_loop), reduction=reduction_vars)
+        # the loop body: the node of the pattern is the header CU of the loop, the body lies in the context
+        pattern.instruction_ids = node.created_context.get_instruction_scope(tg.pet, inclusive=True)
+        pattern.affected_line_ids = tg.pet.get_line_ids_of_instructions(pattern.instruction_ids)
+        pattern.first_private = [
+            Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
+            for v in sorted(firstprivate)
+            if v not in reduction
+        ]
+        pattern.private = [
+            Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(private) if v not in reduction
+        ]
+        pattern.last_private = [
+            Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN")
+            for v in sorted(lastprivate)
+            if v not in reduction
+        ]
+        pattern.shared = [
+            Variable(type="UNKNOWN", name=VarName(v), defLine="UNKNOWN") for v in sorted(shared) if v not in reduction
+        ]
+        # a reduction variable is not listed in a data sharing clause, so notes about its sharing do not apply
+        pattern.sharing_notes = [text for name, text in sharing_notes if name not in reduction]
+
+    return pattern
+
+
+@dataclass
+class _UnsureCandidate:
+    """a loop rejected for dynamic dependencies between its iterations, before its classification"""
+
+    node: TGNode
+    iteration_contexts: List[IterationContext]
+    loop_variables: List[Any]
+    blocking_dependencies: List[Dependency]
+    reduction_info: List[Tuple[Context, Context, Dependency, Dict[str, str]]]
+    potential_breaking_dependencies: List[Tuple[Context, Context, Dependency]]
+
+
+def _blockers(dependencies: List[Dependency]) -> List[Blocker]:
+    return group_blockers(DependencyRecord.from_dependency(dep) for dep in dependencies)
+
+
+def _unsure_loop(
+    tg: TaskGraph,
+    node: TGNode,
+    blockers: List[Dependency],
+    reduction_vars: List[Variable],
+    firstprivate: Set[str],
+    private: Set[str],
+    lastprivate: Set[str],
+    shared: Set[str],
+    sharing_notes: Tuple[Tuple[str, str], ...],
+) -> UnsureLoop:
+    assert node.pet_node_id is not None
+
+    def build() -> DoAllInfo | ReductionInfo:
+        return build_loop_pattern(tg, node, reduction_vars, firstprivate, private, lastprivate, shared, sharing_notes)
+
+    return UnsureLoop(node.pet_node_id, _blockers(blockers), build, region_of_pet_node(tg.pet, node.pet_node_id))
+
+
+def add_unsure_loops(
+    tg: TaskGraph,
+    ast_helper: ASTPatternDetectionHelper,
+    data_edges: DataEdgeIndex,
+    unsure: UnsureSuggestions,
+    candidates: List[_UnsureCandidate],
+    clause_cache: Dict["ClauseCacheKey", "SharingClauses"],
+) -> None:
+    """classifies the loops rejected for dynamic dependencies like a do-all candidate, and adds those with few
+    enough blockers to unsure. A static dependency which cannot be privatized is a blocker as well."""
+    for candidate in candidates:
+        node = candidate.node
+        loop_ctx = node.created_context
+        assert node.pet_node_id is not None and isinstance(loop_ctx, LoopParentContext)
+        reduction_vars = collect_reduction_variables(candidate.reduction_info)
+        if get_pattern_key(node.pet_node_id, loop_ctx, reduction_vars) is None:
+            continue
+        firstprivate, private, lastprivate, shared, firstwritten, init, sharing_notes = detect_doall_sharing_clauses(
+            tg.pet,
+            ast_helper,
+            data_edges,
+            node.pet_node_id,
+            candidate.iteration_contexts,
+            loop_ctx.get_contained_contexts(inclusive=True),
+            set([v[0] for v in candidate.loop_variables]),
+            clause_cache,
+        )
+        privatizable = firstwritten.union(init).union(set([str(v.name) for v in reduction_vars]))
+        blockers = list(candidate.blocking_dependencies) + [
+            dep for _, _, dep in candidate.potential_breaking_dependencies if dep.var_name not in privatizable
+        ]
+        unsure.add(
+            _unsure_loop(tg, node, blockers, reduction_vars, firstprivate, private, lastprivate, shared, sharing_notes)
+        )
 
 
 # firstprivate, private, lastprivate, shared, firstwritten, init and the notes about classifications the analysis is not

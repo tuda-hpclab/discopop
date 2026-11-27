@@ -92,6 +92,16 @@ _NONE_FOUND_TEXT = "No patterns found."
 # the width of the settings column
 _SETTINGS_WIDTH = 340
 _SELECT_HINT = "Select a suggestion to see its details and patch."
+# the suggestions the blocker resolution added: marked in the table (suggestion_table.AGENT_APPROVED_COLOR)
+AGENT_APPROVED_HINT = (
+    "Marked (agent-approved): added by the Blocker Resolution. They rest on an LLM agent's assumption, not on "
+    "DiscoPoP's analysis; Autotuning and Execute use them like the others until you withdraw them there."
+)
+AGENT_APPROVED_DETAIL = (
+    "Suggestions marked agent-approved were added by the Blocker Resolution: an LLM agent resolved the blockers that "
+    "kept DiscoPoP from suggesting the loop. They rest on the agent's assumption (see the details of each) and are "
+    "used by Autotuning and Execute until you withdraw them in the Blocker Resolution tab."
+)
 _VISUALIZER_MISSING = (
     "Graph visualization needs the package discopop_gui, which is not installed.\n"
     "Install it (pip install discopop-gui) or run the detection without 'Show graph visualization'."
@@ -220,10 +230,22 @@ class PatternDetectionPanel(Panel):
             check.setChecked(pattern in _DEFAULT_PATTERN_TYPES)
             self.pattern_checks[pattern] = check
             pattern_row.append(check)
+        self.unsure_check = QCheckBox("Also record unsure suggestions")
+        self.unsure_check.setChecked(True)
+        self.unsure_check.setToolTip(
+            "Writes explorer/unsure_suggestions.json: the loops that only a dependency between iterations keeps "
+            "from being suggested. The Blocker Resolution tab hands them to an LLM agent; they never become "
+            "suggestions by themselves."
+        )
         self.jobs_selector = widgets.ThreadSelector()
 
         detection = widgets.FormSection("Detection")
         detection.add_row("Pattern types:", widgets.hbox(*pattern_row, None))
+        detection.add_row(
+            "Blocker resolution:",
+            self.unsure_check,
+            "Needed by the Blocker Resolution tab; adds the unsure suggestions to the result of this run.",
+        )
         detection.add_row("Threads:", self.jobs_selector, "auto = unlimited; custom counts can be typed.")
 
         self.mode_buttons: Dict[str, QRadioButton] = {}
@@ -298,8 +320,17 @@ class PatternDetectionPanel(Panel):
         detail_layout.addLayout(widgets.hbox(self.detail_title, None, self.open_vscode_button))
         detail_layout.addWidget(self.detail_stack, 1)
 
+        # the suggestions the blocker resolution added are marked in the table; the line says what the marker means
+        self.agent_approved_hint = widgets.caption_label(AGENT_APPROVED_HINT)
+        self.agent_approved_hint.setVisible(False)
+        listing = QWidget()
+        listing_layout = QVBoxLayout(listing)
+        listing_layout.setContentsMargins(0, 0, 0, 0)
+        listing_layout.addWidget(self.table, 1)
+        listing_layout.addWidget(self.agent_approved_hint)
+
         results = QSplitter(Qt.Orientation.Vertical)
-        results.addWidget(self.table)
+        results.addWidget(listing)
         results.addWidget(detail)
         results.setStretchFactor(0, 3)
         results.setStretchFactor(1, 2)
@@ -342,7 +373,9 @@ class PatternDetectionPanel(Panel):
         self.vscode_button.setEnabled(bool(infos))
         self.browse_button.setEnabled(bool(infos))
         self.detail_area.setVisible(bool(infos))
-        self._update_chip(ready, len(infos), none_found)
+        agent_approved = sum(1 for info in infos if info.agent_approved)
+        self.agent_approved_hint.setVisible(agent_approved > 0)
+        self._update_chip(ready, len(infos), none_found, agent_approved)
 
         if ready:
             self.results_stack.setCurrentIndex(0)
@@ -358,7 +391,7 @@ class PatternDetectionPanel(Panel):
         # the tab stays reachable: without profiling data it explains what to do instead of being grayed out
         self.tabs.set_tab_enabled(TAB_PATTERN_DETECTION, True, "")
 
-    def _update_chip(self, ready: bool, count: int, none_found: bool) -> None:
+    def _update_chip(self, ready: bool, count: int, none_found: bool, agent_approved: int = 0) -> None:
         chip = self.header.chip
         dot_dp = self.arguments.dot_dp
         if self.explorer_running:
@@ -378,7 +411,11 @@ class PatternDetectionPanel(Panel):
         elif none_found:
             chip.set_status(widgets.CHIP_WARN, "No suggestions found")
         elif count:
-            chip.set_status(widgets.CHIP_OK, f"{count} suggestion{'' if count == 1 else 's'}")
+            text = f"{count} suggestion{'' if count == 1 else 's'}"
+            if agent_approved:
+                chip.set_status(widgets.CHIP_OK, text + f" ({agent_approved} agent-approved)", AGENT_APPROVED_DETAIL)
+            else:
+                chip.set_status(widgets.CHIP_OK, text)
         else:
             chip.set_status(widgets.CHIP_IDLE, "Not run yet")
 
@@ -390,6 +427,7 @@ class PatternDetectionPanel(Panel):
             jobs=self.jobs_selector.value(),
             ignore_dependency_states=self.mode_buttons[NO_STATES_DETECTION_MODE].isChecked(),
             visualize=self.visualize_check.isChecked(),
+            unsure_suggestions=self.unsure_check.isChecked(),
         )
 
     # ── running ─────────────────────────────────────────────────────────────

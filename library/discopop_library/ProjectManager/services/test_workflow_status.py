@@ -23,6 +23,7 @@ from discopop_library.ProjectManager.services.hotspot_build import BUILD_CURRENT
 from discopop_library.ProjectManager.services.hotspot_session import HotspotSession
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.services import workflow_status
+from discopop_library.BlockerResolution.unsure import Fingerprint
 from discopop_library.ProjectManager.services.workflow_status import (
     OTHER_DIRECTORIES,
     forget_build_states,
@@ -34,6 +35,7 @@ from discopop_library.ProjectManager.services.workflow_status import (
     STAGE_SETUP,
     STAGE_HOTSPOT,
     STAGE_PATCH_REPAIR,
+    STAGE_BLOCKER_RESOLUTION,
     STAGE_PATTERN_DETECTION,
     STAGE_REPORT,
     StageState,
@@ -109,6 +111,7 @@ def test_empty_project(tmp_path: Path) -> None:
     assert result[STAGE_HOTSPOT].state == StageState.NOT_RUN
     assert result[STAGE_PATTERN_DETECTION] == StageStatus(StageState.LOCKED, "needs profiling data")
     assert result[STAGE_PATCH_REPAIR] == StageStatus(StageState.LOCKED, "needs suggestions")
+    assert result[STAGE_BLOCKER_RESOLUTION] == StageStatus(StageState.LOCKED, "needs unsure suggestions")
     assert result[STAGE_AUTOTUNING] == StageStatus(StageState.LOCKED, "needs profiling data")
     assert result[STAGE_REPORT] == StageStatus(StageState.NOT_RUN, "0 execution results")
 
@@ -290,3 +293,23 @@ def test_profiling_is_stale_when_it_was_pruned_differently(tmp_path: Path) -> No
     # pruning is switched on after the data was profiled without it
     callpath_pruning.save_callpath_pruning(arguments.project_dir, callpath_pruning.CallpathPruning(enabled=True))
     assert statuses(arguments)[STAGE_PROFILING] == StageStatus(StageState.STALE, "call path pruning changed")
+
+
+def test_blocker_resolution(tmp_path: Path) -> None:
+    arguments = make_arguments(tmp_path)
+    dot_dp = arguments.dot_dp
+    unsure = os.path.join(dot_dp, "explorer", "unsure_suggestions.json")
+    results = os.path.join(dot_dp, "blocker_resolution", "results.json")
+    assert statuses(arguments)[STAGE_BLOCKER_RESOLUTION] == StageStatus(StageState.LOCKED, "needs unsure suggestions")
+    touch(unsure, json.dumps({"format_version": 1, "suggestions": []}), mtime=1000.0)
+    assert statuses(arguments)[STAGE_BLOCKER_RESOLUTION] == StageStatus(StageState.NOT_RUN, "optional")
+    fingerprint = Fingerprint.of(unsure).to_dict()
+    entries = [{"pattern_id": 1, "state": "approved"}, {"pattern_id": 2, "state": "rejected"}]
+    touch(results, json.dumps({"explorer_output": fingerprint, "suggestions": entries}))
+    assert statuses(arguments)[STAGE_BLOCKER_RESOLUTION] == StageStatus(StageState.DONE, "2 checks, 1 approved")
+    # the explorer ran again: the ids may name other loops now
+    touch(unsure, json.dumps({"format_version": 1, "suggestions": [1]}), mtime=2000.0)
+    assert statuses(arguments)[STAGE_BLOCKER_RESOLUTION] == StageStatus(StageState.STALE, "the explorer ran again")
+    # an unreadable results file counts as not run
+    touch(results, "{broken")
+    assert statuses(arguments)[STAGE_BLOCKER_RESOLUTION] == StageStatus(StageState.NOT_RUN, "optional")

@@ -49,6 +49,11 @@ _SOURCE_RANK = {"observed": 0, "static": 1}
 _KIND_TEXT = {"global": "global", "parameter": "parameter", "other": "other memory"}
 
 PROFILED_INPUTS_NOTE = "Valid for the profiled inputs only."
+THREAD_LOCAL_NOTE = (
+    "Thread-local data (thread_local storage) exists once per thread: each thread accesses its own copy."
+)
+# the coverage of a copy of a definition, best first, to pick the copy whose place describes the merged copies
+_COVERAGE_RANK = {"executed": 3, "partial": 2, "untracked": 1, "not_executed": 0}
 # Only added if the analysis' own note on missing source-level facts is absent.
 NO_AST_NOTE = (
     "No source-level facts are available for this function or a callee, so its names could not be classified "
@@ -189,7 +194,8 @@ def _outside_text(
 
 
 def _effect_text(effect: Effect, function: FunctionInfo, files: dict[int, Optional[str]], project_path: str) -> str:
-    qualifiers = [_KIND_TEXT.get(effect.kind, effect.kind)]
+    kind = _KIND_TEXT.get(effect.kind, effect.kind)
+    qualifiers = ["thread-local " + kind if getattr(effect, "thread_local", False) else kind]
     if effect.through_pointer:
         qualifiers.append("through pointer")
     if effect.source == "static":
@@ -259,6 +265,8 @@ def build_text(
     notes = [note for note in effects.notes if note != PROFILED_INPUTS_NOTE]
     if not effects.ast_facts and not any(note.startswith(_NO_AST_NOTE_MARKER) for note in effects.notes):
         notes.append(NO_AST_NOTE)
+    if any(getattr(effect, "thread_local", False) for effect in shown):
+        notes.append(THREAD_LOCAL_NOTE)
     lines += [f"Note: {note}" for note in dict.fromkeys(notes)]
     lines.append(PROFILED_INPUTS_NOTE)
     return "\n".join(lines)
@@ -315,6 +323,17 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
                 TOOL_NAME,
                 next_step="Pass the file_path and line of one of the definitions.",
             )
+        copies_note = ""
+        merged: Optional[SideEffects] = None
+        if len(narrowed) > 1 and _copies_of_one_definition(narrowed):
+            # e.g. an inline or template function of a header, compiled into several files: one definition in the
+            # source, so the agent cannot pick one. Each copy saw other calls: described is what any copy did.
+            merged = merge_copies([index.compute(info.id) for info in narrowed])
+            copies_note = (
+                f"Note: the definition was compiled {len(narrowed)} times (e.g. a header included by several files); "
+                "described are the effects of all copies together."
+            )
+            narrowed = [merged.function]
         if len(narrowed) > 1:
             listed = [f"- {_place(project_path, info)}" for info in narrowed[:MAX_CANDIDATES]]
             text = "\n".join(
@@ -327,8 +346,10 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
             )
             return [TextContent(type="text", text=text)]
 
-        effects = index.compute(narrowed[0].id)
+        effects = merged if merged is not None else index.compute(narrowed[0].id)
         text = build_text(project_path, effects, _file_table(index), limit)
+        if copies_note:
+            text = text + "\n" + copies_note
         ctx.log_action(project_path, TOOL_NAME, f"Described the side effects of {narrowed[0].display_name}")
         return [TextContent(type="text", text=text)]
 
@@ -336,6 +357,73 @@ def handle(arguments: dict[str, Any], ctx: ToolContext) -> list[TextContent]:
         error_msg = f"Error computing side effects: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return ctx.error(error_msg, arguments.get("project_path", ""), TOOL_NAME)
+
+
+def merge_copies(copies: list[SideEffects]) -> SideEffects:
+    """The copies of one definition as one function: the union of their effects (a read in one copy and a write in
+    another both stay), and caveats that hold for the union. A copy never executed adds what its code references, but
+    does not make the others' observation incomplete: then the definition was observed through the other copies."""
+    from discopop_explorer.side_effects.result import Effect, SideEffects
+
+    executed = [c for c in copies if c.coverage != "not_executed"]
+    kinds = {c.coverage for c in executed}
+    if not executed:
+        coverage = "not_executed"
+    elif len(kinds) == 1:
+        # e.g. every copy untracked: its caveat holds for the union
+        coverage = executed[0].coverage
+    else:
+        # some copies fully observed, others not: effects of the union may be missing
+        coverage = "partial"
+    judged = executed or copies
+    purity: Optional[bool]
+    if any(c.pure_on_observed_inputs is False for c in judged):
+        purity = False
+    elif all(c.pure_on_observed_inputs is True for c in judged) and coverage == "executed":
+        purity = True
+    else:
+        purity = None
+
+    merged_effects: dict[tuple[Any, ...], Effect] = {}
+    for copy in copies:
+        for effect in copy.effects:
+            key = (effect.name, effect.kind, effect.access, effect.source, effect.through_pointer, effect.member_of)
+            known = merged_effects.get(key)
+            if known is None:
+                merged_effects[key] = Effect(
+                    name=effect.name,
+                    kind=effect.kind,
+                    access=effect.access,
+                    source=effect.source,
+                    through_pointer=effect.through_pointer,
+                    member_of=effect.member_of,
+                    sites=list(effect.sites),
+                    outside_names=list(effect.outside_names),
+                    thread_local=effect.thread_local,
+                )
+                continue
+            known.sites = sorted(set(known.sites) | set(effect.sites), key=lambda s: (s.file_id, s.line, s.via))
+            known.outside_names = list(dict.fromkeys(known.outside_names + effect.outside_names))
+            # one copy per thread only if it is so in every copy
+            known.thread_local = known.thread_local and effect.thread_local
+    best = max(copies, key=lambda c: (_COVERAGE_RANK.get(c.coverage, 0), len(c.effects)))
+    return SideEffects(
+        function=best.function,
+        coverage=coverage,  # type: ignore[arg-type]
+        pure_on_observed_inputs=purity,
+        performs_file_io=any(c.performs_file_io for c in copies),
+        unprofiled_calls=list(dict.fromkeys(name for c in copies for name in c.unprofiled_calls)),
+        effects=list(merged_effects.values()),
+        unmapped_records=sum(c.unmapped_records for c in copies),
+        contributing_callees=list(dict.fromkeys(name for c in copies for name in c.contributing_callees)),
+        ast_facts=all(c.ast_facts for c in copies),
+        notes=list(dict.fromkeys(note for c in copies for note in c.notes)),
+    )
+
+
+def _copies_of_one_definition(functions: list[FunctionInfo]) -> bool:
+    """whether the functions are copies of one definition: the same name, file and lines"""
+    return len({(f.display_name, f.file, f.start_line, f.end_line) for f in functions}) == 1
 
 
 def _file_table(index: Any) -> dict[int, Optional[str]]:
