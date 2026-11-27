@@ -208,6 +208,29 @@ def directive_at_loop(code: str, header: str) -> bool:
     return False
 
 
+def directive_of_loop(code: str, header: str) -> str:
+    """the parallel for directive directly before the loop's header line (with continuation lines joined), "" if
+    there is none"""
+    lines = code.splitlines()
+    stripped = [line.strip() for line in lines]
+    for index, line in enumerate(stripped):
+        if not header or line != header:
+            continue
+        end = index - 1
+        while end >= 0 and not stripped[end]:
+            end -= 1
+        start = end
+        while start > 0 and stripped[start - 1].endswith("\\"):
+            start -= 1
+        if end >= 0 and _LOOP_DIRECTIVE.match(stripped[start]):
+            return " ".join(part.rstrip("\\").strip() for part in stripped[start : end + 1])
+    return ""
+
+
+# a data-sharing or reduction clause over part of an array: DiscoPoP's analysis never proposes one
+_ARRAY_SECTION = re.compile(r"\b(?:private|firstprivate|lastprivate|shared|reduction)\s*\([^)]*\[[^\]]*:[^\]]*\]")
+
+
 def change_gates(changes: Changes, suggestion: UnsureSuggestion, files: SourceFiles) -> Tuple[Optional[PatchSet], str]:
     """(the patch, "") if the agent's changes are usable, otherwise (None, why) for the agent"""
     if changes.unmapped:
@@ -228,6 +251,11 @@ def change_gates(changes: Changes, suggestion: UnsureSuggestion, files: SourceFi
             + files.line_text(suggestion.start)
             + "`) is not directly preceded by its OpenMP directive (`#pragma omp parallel for ...`), or its header "
             "line was changed. Add the directive directly before the loop and keep the header line as it is."
+        )
+    if _ARRAY_SECTION.search(directive_of_loop(code, files.line_text(suggestion.start))):
+        return None, (
+            "The directive uses an array section (`name[a:b]`) in a data-sharing or reduction clause. DiscoPoP does "
+            'not verify these; use whole variables only, or answer "rejected" if the loop needs more.'
         )
     patch = patch_of(changes.mapped, files, suggestion.pattern_id)
     if not patch.entries:
