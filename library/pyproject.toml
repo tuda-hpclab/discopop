@@ -90,6 +90,7 @@ discopop_library = [
     "py.typed",
     "global_data/version/VERSION",
     "PatchRepair/prompts/*.md",
+    "SuggestionCheck/prompts/*.md",
     "ProjectManager/assets/*.png",
 ]
 
