@@ -397,3 +397,12 @@ def test_a_blocker_in_no_file_of_the_copy_rejects_without_asking(project: Projec
     outcome = check_suggestion(suggestion, files, str(project.root), agent, None, Budget())
     assert outcome.state == STATE_REJECTED and agent.prompts == []
     assert "no file the agent can open" in outcome.reason
+
+
+def test_the_debug_level_shows_the_prompt_and_the_response(project: Project, caplog: pytest.LogCaptureFixture) -> None:
+    agent = ScriptedAgent([json_answer(verdict="unsure", reason="cannot tell here")])
+    with caplog.at_level("DEBUG", logger="SuggestionCheck"):
+        run(project, agent)
+    messages = [r.getMessage() for r in caplog.records if r.name == "SuggestionCheck"]
+    assert any(m.startswith("Prompt ") and "checking whether a loop" in m for m in messages)
+    assert any(m.startswith("Response ") and "cannot tell here" in m for m in messages)

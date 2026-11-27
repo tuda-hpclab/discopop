@@ -11,6 +11,7 @@ callable, so the logic is tested without a model."""
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -33,6 +34,8 @@ from discopop_library.SuggestionCheck.discopop_tools import SERVER_NAME as DISCO
 from discopop_library.SuggestionCheck.tool_calls import mcp_server_failed, opened_files, tool_calls
 from discopop_library.SuggestionCheck.unsure import UnsureSuggestion
 from discopop_library.SuggestionCheck.workspace import Changes, Workspace, patch_of
+
+logger = logging.getLogger("SuggestionCheck")
 
 # the states of a checked suggestion
 STATE_APPROVED = "approved"
@@ -154,11 +157,14 @@ class _Conversation:
         while True:
             self.outcome.calls += 1
             self._write(name + "_prompt.txt", prompt)
+            logger.debug("Prompt " + name + ":\n" + prompt)
             reply = self.agent(prompt, session, workdir)
             if self.guard is not None:
                 # raises ProjectChanged, which ends the whole run
                 self.guard()
-            self._write(name + "_answer.txt", reply.text if reply.answered else "(no answer) " + reply.failure)
+            answer = reply.text if reply.answered else "(no answer) " + reply.failure
+            logger.debug("Response " + name + ":\n" + answer)
+            self._write(name + "_answer.txt", answer)
             if reply.events:
                 calls = tool_calls(reply.events)
                 self.outcome.tool_calls += len(calls)

@@ -30,6 +30,8 @@ Notes on the flags, because each one is load-bearing:
 Credentials are never handled here -- ``opencode`` owns provider authentication.
 """
 
+import json
+import os
 from typing import Any, Dict, List, Optional
 
 from discopop_library.PatchRepair.llm_backends.base import (
@@ -127,6 +129,21 @@ def new_session_id() -> Optional[str]:
     return None
 
 
+def cli_default_model() -> str:
+    """ "provider/model" the opencode CLI uses when none is given: the first entry of its recent models in its state
+    file (``$XDG_STATE_HOME/opencode/model.json``, default ``~/.local/state``); "" if there is none."""
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    try:
+        with open(os.path.join(state, "opencode", "model.json"), "r") as f:
+            recent = json.load(f).get("recent") or []
+    except (OSError, ValueError, AttributeError):
+        return ""
+    for entry in recent:
+        if isinstance(entry, dict) and entry.get("providerID") and entry.get("modelID"):
+            return str(entry["providerID"]) + "/" + str(entry["modelID"])
+    return ""
+
+
 def build_argv(
     profile: Dict[str, Any],
     prompt: str,
@@ -147,6 +164,9 @@ def build_argv(
     model_variant = str(option(profile, "model_variant") or "").strip()
     if model and model_variant and "#" not in model:
         model = model + "#" + model_variant
+    if not model:
+        # no model configured: the one the opencode CLI starts with (its most recently used one)
+        model = cli_default_model()
     if model:
         argv += ["-m", model]
     agent = str(option(profile, "agent") or "").strip()
