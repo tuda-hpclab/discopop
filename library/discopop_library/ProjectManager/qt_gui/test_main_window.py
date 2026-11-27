@@ -385,3 +385,21 @@ def test_view_menu_reset_undoes_manual_resizing(qtbot: QtBot, tmp_path: Path) ->
     window.reset_view_action.trigger()
     for handle in handles:
         assert handle.target.minimumHeight() == handle.default_height
+
+
+def test_suggestions_changed_outside_the_gui_are_announced_on_activation(qtbot: QtBot, tmp_path: Path) -> None:
+    """E.g. approvals published by discopop_blocker_resolution in a terminal: the suggestion lists refresh only on
+    PatternsChanged, which the window publishes when it is activated and finds the suggestions changed."""
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    events: List[object] = []
+    window.project_state.subscribe(PatternsChanged, events.append)
+    window._check_suggestions_changed()
+    assert events == []
+    approved = Path(window.arguments.dot_dp, "patch_generator", "17")
+    approved.mkdir(parents=True)
+    (approved / "1.patch").write_text("+#pragma omp parallel for\n")
+    window._check_suggestions_changed()
+    assert len(events) == 1
+    window._check_suggestions_changed()  # announced once
+    assert len(events) == 1

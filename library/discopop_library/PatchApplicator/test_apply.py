@@ -214,3 +214,18 @@ def test_applying_an_already_applied_patch_fails_instead_of_reversing_it(tmp_pat
     assert apply_once() != 0
     # and, crucially, the parallelization-equivalent change is still in the file
     assert "int x = 42;" in source.read_text()
+
+
+def test_files_beside_the_patches_are_not_applied_or_rolled_back(in_tmp_cwd: Path) -> None:
+    """An agent-approved suggestion keeps its marker (agent_approved.json) next to its patches."""
+    from discopop_library.PatchApplicator.rollback import rollback_patches
+
+    tmp_path = in_tmp_cwd
+    file_mapping, applied_file, generator_dir = _make_project(tmp_path)
+    with open(os.path.join(generator_dir, "1", "agent_approved.json"), "w") as f:
+        json.dump({"assumption": "x"}, f)
+    result = apply_patches(["1"], file_mapping, _arguments(), applied_file, generator_dir)
+    assert result.applied == ["1"] and result.retval == 0
+    assert "int i = 1;" in open(file_mapping[1]).read()
+    assert rollback_patches(["1"], file_mapping, _arguments(), applied_file, generator_dir) == 0
+    assert open(file_mapping[1]).read() == ORIGINAL

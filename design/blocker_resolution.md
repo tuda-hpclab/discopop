@@ -30,8 +30,9 @@ This design adds a second category of suggestions next to the safe ones:
   throwaway copy of the project. The agent either rejects it, or changes the code
   so that the loop runs in parallel correctly and states the assumption this rests
   on. DiscoPoP computes the patch from the changed copy;
-* a suggestion the agent approved stays a **separate, labelled category**. Tools
-  use it only on request and always show its assumption.
+* a suggestion the agent approved stays a **separate, labelled category**. Once
+  published it is used like DiscoPoP's own until the user withdraws it; tools
+  always label it and show its assumption.
 
 Motivating case: relearn's `BarnesHutLocationAware.cpp:57`, which the original
 code parallelizes with a `critical` section around an append and a `thread_local`
@@ -51,7 +52,7 @@ meaning.
 | The assumption comes from the agent. | The explorer does not guess why a dependency could be harmless. The agent names the assumption its change rests on, citing code. |
 | The agent is conservative. | Rejection is the default. An approval must justify every blocker; anything left unclear is a rejection (§5.3). |
 | Execution can disprove, not prove. | Building and running the approved change is a check, and can be switched off (§5.5). An approval records how far it was verified. |
-| Approved stays distinguishable. | An approved suggestion never joins the safe ones. Consumers opt in (§6). |
+| Approved stays distinguishable. | An approved suggestion never joins the safe ones: it is marked wherever it is listed. Publishing is the consent, withdrawing takes it back (§6). |
 
 ---
 
@@ -417,21 +418,23 @@ are stale; tools then ignore `approved.json`, and the GUI says so.
 
 ---
 
-## 6. Consumers: opt in only
+## 6. Consumers: used while published
 
-* **Autotuner:** `--include-agent-approved` reads `blocker_resolution/approved.json`
-  and `explorer/unsure_suggestions.json`, adds the approved ones to the pattern
-  storage under the key `agent_approved` and copies their patches from
-  `blocker_resolution/approved/<id>/` into each configuration's `patch_generator/`.
-  Without the flag, nothing changes. The check tool's verification (§5.5) uses the
-  same mechanism, pointed at one candidate.
-* **Patch applicator:** `--agent-approved` makes it look up ids it does not find in
-  `patch_generator/` in `blocker_resolution/approved/`.
-* **MCP server:** `get_parallelization_suggestions` lists approved suggestions only
-  with `include_agent_approved`, as a separate list with the assumption and the
+Publishing (`--publish-approved`, by default at the end of a reviewed run) copies an
+approval to `patch_generator/<id>/` with the marker `agent_approved.json`. As long as
+it is there, the user has not withdrawn it, and the consumers use it:
+
+* **Autotuner:** adds the published approvals to the do-all candidates
+  (`EmpiricalAutotuning/agent_approved.py`, built from `explorer/unsure_suggestions.json`);
+  `--no-agent-approved` leaves them out.
+* **Patch applicator:** applies them like any suggestion; it reads only the `*.patch`
+  files of a suggestion directory, so the marker is ignored.
+* **GUI:** Pattern Detection, Autotuning and Execute list them with a distinct marker
+  (id and type in orange italics, the suffix *(agent-approved)*, the assumption in
+  the tool tip and the details); Pattern Detection counts them in its chip.
+* **MCP server (planned, not implemented):** `get_parallelization_suggestions` would
+  list approved suggestions as a separate list with the assumption and the
   verification level.
-* **GUI:** the suggestion table shows them only when a filter is switched on, with
-  a distinct marker, the assumption and the verification level.
 * **Optimizer, parallel region merger:** unchanged; they never see them.
 
 ---
@@ -460,8 +463,8 @@ A Qt panel after *Patch Repair* in the workflow sidebar, built like it
 ## 8. Open points
 
 * **The autotuner's search over approved suggestions.** An approved suggestion
-  should probably never be combined with others before it was measured alone. To be
-  decided when the opt-in is implemented.
+  should probably never be combined with others before it was measured alone. Not decided yet:
+  the search treats it like any other candidate.
 * **Reductions with a blocker.** A loop with a recognized reduction and further
   blockers becomes an unsure `ReductionInfo`. Whether the agent handles those well
   is unknown.
@@ -486,7 +489,7 @@ Each step is reviewable on its own and leaves the tree working.
 2. ~~Patch generator: `patch_generator_unsure/`~~ (dropped, §4.4).
 3. Check tool core: arguments, candidate selection, workspace, prompt and answer
    format, gates, review, `results.json`, tests with a scripted agent (no model).
-4. Autotuner opt-in `--include-agent-approved` and the verification step (§5.5, §6).
+4. Approvals in the autotuner's search by default (`--no-agent-approved`) and the verification step (§5.5, §6).
 5. Remaining consumers: patch applicator, MCP server, GUI suggestion table.
 6. GUI stage (§7).
 7. Documentation: `docs/tools/Blocker_resolution.md`, explorer and patch generator pages.

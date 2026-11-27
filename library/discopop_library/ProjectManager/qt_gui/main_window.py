@@ -85,6 +85,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ResultsChanged,
 )
 from discopop_library.BlockerResolution.prompt_store import custom_prompt_dir
+from discopop_library.ProjectManager.services.suggestions import suggestions_fingerprint
 from discopop_library.ProjectManager.services.workflow_status import forget_build_states, stage_statuses
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
@@ -250,6 +251,10 @@ class MainWindow(QMainWindow):
             state.subscribe(event_type, lambda _event: self._status_timer.start())
         # a measurement or a run can rebuild what the hotspot stage compares with the sources
         state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
+        # what the suggestion lists showed when they were last told: a change made outside the GUI is noticed when the
+        # window is activated again (_check_suggestions_changed)
+        self._remember_suggestions_fingerprint()
+        state.subscribe(PatternsChanged, lambda _event: self._remember_suggestions_fingerprint())
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
         # the connections saved under Settings > LLM connections (or edited by hand and reloaded) are offered at once
         state.subscribe(LlmConfigChanged, lambda _event: self.blocker_resolution_panel.reload_connections())
@@ -576,7 +581,21 @@ class MainWindow(QMainWindow):
             # the sources may have been edited in another program
             forget_build_states()
             self._status_timer.start()
+        if event.type() == QEvent.Type.WindowActivate:
+            self._check_suggestions_changed()
         return super().event(event)
+
+    def _check_suggestions_changed(self) -> None:
+        """Tell the stages if the suggestions changed outside the GUI (e.g. approvals published or withdrawn by
+        ``discopop_blocker_resolution`` in a terminal): their lists refresh on ``PatternsChanged`` only."""
+        if self._closing:
+            return
+        fingerprint = suggestions_fingerprint(self.arguments.dot_dp)
+        if fingerprint != self._suggestions_fingerprint:
+            self.project_state.publish(PatternsChanged())  # also updates the fingerprint
+
+    def _remember_suggestions_fingerprint(self) -> None:
+        self._suggestions_fingerprint = suggestions_fingerprint(self.arguments.dot_dp)
 
     # --- the output pane ---
 

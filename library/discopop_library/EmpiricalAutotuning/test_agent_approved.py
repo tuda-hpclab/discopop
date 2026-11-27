@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List
+
+import pytest
 
 from discopop_library.EmpiricalAutotuning.agent_approved import add_published_approvals
 from discopop_library.BlockerResolution.publish import MARKER_FILE
@@ -70,3 +73,15 @@ def test_an_id_the_explorer_already_uses_is_not_added(tmp_path: Path) -> None:
     dot = _dot(tmp_path, [7], [7])
     result = _result([7])
     assert add_published_approvals(result, str(dot), logging.getLogger("t")) == []
+
+
+def test_the_search_includes_published_approvals_unless_told_not_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Published means the user has not withdrawn them: they are searched unless --no-agent-approved is given."""
+    from discopop_library.EmpiricalAutotuning import __main__ as autotuner_main
+
+    # the arguments as parsed; constructing AutotunerArguments would check the .discopop directory
+    monkeypatch.setattr(autotuner_main, "AutotunerArguments", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(sys, "argv", ["discopop_auto_tuner"])
+    assert autotuner_main.parse_args().include_agent_approved
+    monkeypatch.setattr(sys, "argv", ["discopop_auto_tuner", "--no-agent-approved"])
+    assert not autotuner_main.parse_args().include_agent_approved

@@ -23,7 +23,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -45,6 +45,10 @@ from discopop_library.ProjectManager.services.suggestions import (
 )
 
 COLUMN_ID = "ID"
+# the marker of a suggestion an LLM agent approved (blocker resolution) rather than DiscoPoP's analysis: its id and type
+# in this color and in italics, next to the " (agent-approved)" of its type and the note in its tool tip
+AGENT_APPROVED_COLOR = widgets.STATUS_STOP
+_MARKED_COLUMNS = (COLUMN_ID, "Type")
 COLUMNS = (COLUMN_ID, "Type", "Location", "Function", "Hotness", "Pragma")
 ALL_TYPES = "All types"
 NO_SUGGESTIONS_TEXT = "No suggestions yet. Run pattern detection to find parallelization opportunities."
@@ -147,6 +151,13 @@ class SuggestionModel(QAbstractTableModel):
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole and COLUMNS[column] == "Hotness" and info.hotness:
             return QBrush(QColor(hotspot_charts.hotness_color(info.hotness)))
+        if info.agent_approved and COLUMNS[column] in _MARKED_COLUMNS:
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QBrush(QColor(AGENT_APPROVED_COLOR))
+            if role == Qt.ItemDataRole.FontRole:
+                font = QFont()
+                font.setItalic(True)
+                return font
         if role == _SORT_ROLE:
             return self.sort_key(info, column)
         return None

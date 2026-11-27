@@ -88,7 +88,7 @@ To use the result, apply the selected suggestions with the [patch applicator](Pa
 | `-A`, `--algorithm N` | `0` | Search algorithm: `0`, `1`, `3`, `4`, `5`, `6` (see above) |
 | `-s`, `--suggestions IDS` | | Skip the search; measure these comma separated suggestions as one configuration |
 | `--search-space IDS` | all suggestions | Restrict the search to these suggestion ids (explicit ids, ranges are not expanded). Ignored with `-s`. With `-A 0`, a listed id the hotspot loader could not classify is measured as well. |
-| `--include-agent-approved` | off | Also search the suggestions an LLM agent approved and published (`discopop_blocker_resolution --publish-approved`). They rest on the agent's assumption, not on DiscoPoP's analysis; the search measures them like the others and keeps them only if they pay off and validation passes. |
+| `--no-agent-approved` | off | Do not search the suggestions an LLM agent approved and published (`discopop_blocker_resolution`). By default they are searched like DiscoPoP's own: they rest on the agent's assumption, not on DiscoPoP's analysis, and the search keeps them only if they pay off and validation passes. `discopop_blocker_resolution --withdraw-published` takes them back for good. |
 | `-t`, `--threads N` | CPU count / 2 | `OMP_NUM_THREADS` of the measurements |
 | `-ht`, `--hotspot-types TYPES` | `yes,no,maybe` | Hotspot classes to consider (`yes`, `no`, `maybe`) |
 | `-xr`, `--execution-repetitions N` | `1` | Runs per candidate; the median ranks it |

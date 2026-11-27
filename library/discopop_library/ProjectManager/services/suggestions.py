@@ -252,6 +252,13 @@ def _cache_key(dot_dp: str) -> Tuple[Any, ...]:
     )
 
 
+def suggestions_fingerprint(dot_dp: str) -> Tuple[Any, ...]:
+    """Changes whenever the suggestions :func:`load_suggestions` returns may change, also by a program other than the
+    GUI (e.g. ``discopop_blocker_resolution`` publishing or withdrawing approvals from a terminal). Cheap: stat calls
+    and one listing of ``patch_generator``."""
+    return _cache_key(dot_dp)
+
+
 _CACHE_LIMIT = 8
 _cache: Dict[str, Tuple[Tuple[Any, ...], Tuple[SuggestionInfo, ...]]] = {}
 _cache_lock = threading.Lock()

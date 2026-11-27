@@ -5,12 +5,12 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""Suggestions approved by an LLM agent (discopop_blocker_resolution) as candidates of the search, on request only.
+"""Suggestions approved by an LLM agent (discopop_blocker_resolution) as candidates of the search.
 
-An approval rests on an agent's judgement, so the search does not see it unless ``--include-agent-approved`` is given.
-Then the suggestions published to ``patch_generator/`` (``discopop_blocker_resolution --publish-approved``, recognised
-by their marker file) join the Explorer's do-all suggestions as candidates: the search measures them like the others and
-only keeps those that pay off and keep the validation passing.
+An approval rests on an agent's judgement; the user withdraws what they do not accept, and ``--no-agent-approved``
+leaves all of them out. Otherwise the suggestions published to ``patch_generator/`` (recognised by their marker file)
+join the Explorer's do-all suggestions as candidates: the search measures them like the others and only keeps those
+that pay off and keep the validation passing.
 """
 
 from __future__ import annotations
