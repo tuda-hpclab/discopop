@@ -14,6 +14,7 @@ from argparse import ArgumentParser
 from discopop_library.GlobalLogger.setup import setup_logger
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import VERIFY_CHOICES, VERIFY_NONE
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import SuggestionCheckArguments
+from discopop_library.SuggestionCheck.publish import manage_published
 from discopop_library.SuggestionCheck.run import run
 
 
@@ -56,6 +57,12 @@ def parse_args() -> SuggestionCheckArguments:
                         "templates (check.md, review.md, retry.md). Default: "
                         ".discopop/project/prompts/suggestion_check, as edited in the GUI (Settings > Suggestion "
                         "check prompts). A template not found there is the shipped one.")
+    parser.add_argument("--publish-approved", action="store_true", help="Do not check anything: make the approved "
+                        "suggestions (all, or those of -s) usable by the patch applicator, the autotuner and the GUI, "
+                        "by copying their patches to patch_generator/. They are marked as approved by an agent and "
+                        "never replace a generated patch.")
+    parser.add_argument("--withdraw-published", action="store_true", help="Do not check anything: remove the "
+                        "published approvals again (all, or those of -s).")
     parser.add_argument("--log", dest="log_level", default="WARNING", help="Log level. Default: WARNING")
     parser.add_argument("--write-log", action="store_true", help="Create a log file.")
     # fmt: on
@@ -81,6 +88,8 @@ def parse_args() -> SuggestionCheckArguments:
             accept_rounding=arguments.accept_rounding,
             prompt_dir=arguments.prompt_dir,
             discopop_tools=arguments.discopop_tools,
+            publish_approved=arguments.publish_approved,
+            withdraw_published=arguments.withdraw_published,
         )
     except ValueError as error:
         parser.error(str(error))
@@ -89,6 +98,8 @@ def parse_args() -> SuggestionCheckArguments:
 def main() -> None:
     arguments = parse_args()
     setup_logger(arguments)
+    if arguments.publish_approved or arguments.withdraw_published:
+        sys.exit(manage_published(arguments))
     sys.exit(run(arguments))
 
 

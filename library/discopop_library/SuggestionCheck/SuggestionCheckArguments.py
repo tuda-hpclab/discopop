@@ -48,6 +48,9 @@ class SuggestionCheckArguments(GeneralArguments):
     discopop_tools: bool = True
     # the project's own prompt templates; default: .discopop/project/prompts/suggestion_check (see prompt_store)
     prompt_dir: Optional[str] = None
+    # not a check: make approvals usable by the other tools (publish.py), or take them back
+    publish_approved: bool = False
+    withdraw_published: bool = False
 
     def __post_init__(self) -> None:
         problems: List[str] = []
@@ -61,6 +64,8 @@ class SuggestionCheckArguments(GeneralArguments):
             problems.append("--verify must be one of " + ", ".join(VERIFY_CHOICES))
         elif self.verify != VERIFY_NONE:
             problems.append("--verify " + self.verify + " is not implemented yet; use --verify none")
+        if self.publish_approved and self.withdraw_published:
+            problems.append("--publish-approved and --withdraw-published exclude each other")
         if problems:
             raise ValueError("; ".join(problems))
 
