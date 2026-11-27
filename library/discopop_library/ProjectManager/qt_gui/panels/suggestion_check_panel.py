@@ -454,7 +454,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self.set_busy(True)
         self._update_publish_buttons()
         self.output_requested.emit()
-        self.status.set("⏳ Suggestion check in progress...", widgets.STATUS_BUSY)
+        self.status.set("Suggestion check in progress...", widgets.STATUS_BUSY)
 
         self.console.clear()
         self._records = {}
