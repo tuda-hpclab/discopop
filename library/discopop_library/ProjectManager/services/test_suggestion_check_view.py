@@ -90,8 +90,8 @@ def test_the_results_of_the_check_are_read(dot_dp: Path) -> None:
     assert records is not None and sorted(records) == ["12", "3"]
     rows = view.result_rows(records, view.read_file_mapping(str(dot_dp)))
     assert [row.cells() for row in rows] == [
-        ("3", "main.cpp:13", "Approved", "rounding", "7", "agree", "sonnet", ""),
-        ("12", "main.cpp:22", "Unsure", "", "0", "", "sonnet", ""),
+        ("3", "main.cpp:13", "", "Approved", "rounding", "7", "agree", "sonnet", ""),
+        ("12", "main.cpp:22", "", "Unsure", "", "0", "", "sonnet", ""),
     ]
     assert [row.tone for row in rows] == [view.TONE_OK, view.TONE_STOP]
     assert not view.results_are_stale(str(dot_dp))
@@ -151,7 +151,7 @@ def test_the_model_cost_and_location_columns() -> None:
         {},
         published=["1"],
     )
-    assert rows[0].cells() == ("1", "9:4", "Error (in use)", "", "0", "", "opencode (default)", "$0.5000")
+    assert rows[0].cells() == ("1", "9:4", "", "Error (in use)", "", "0", "", "opencode (default)", "$0.5000")
     assert rows[1].location == "bad" and rows[1].cost == ""
     assert view.has_cost(rows) and not view.has_cost(rows[1:])
     assert view.cost_text({"cost": True}) == ""
@@ -406,3 +406,23 @@ def test_the_suggestions_skipped_by_the_hotspot_filter() -> None:
     assert view.skipped_by_hotspot(document) == [("4", "no")]
     assert view.skipped_text([]) == ""
     assert view.skipped_text([("4", "no")]).startswith("Skipped (cold): 4 (NO).")
+
+
+def test_the_candidates_are_listed_before_they_are_checked(dot_dp: Path) -> None:
+    record_real_results(dot_dp)
+    records = view.load_results(str(dot_dp)) or {}
+    unsure = view.load_unsure(str(dot_dp))
+    mapping = view.read_file_mapping(str(dot_dp))
+    only_unchecked = view.result_rows({}, mapping, candidates=unsure)
+    assert [(r.suggestion_id, r.state_label, r.blockers) for r in only_unchecked] == [
+        ("3", "Not checked", "1"),
+        ("12", "Not checked", str(len(unsure["12"].blockers))),
+    ]
+    assert only_unchecked[0].location == "main.cpp:13" and only_unchecked[0].tone == view.TONE_IDLE
+    mixed = view.result_rows({"3": records["3"]}, mapping, candidates=unsure, skipped=[("12", "no")])
+    assert [r.state_label for r in mixed] == ["Approved", "Skipped (cold)"]
+    # a result that has no candidate any more (stale) is still listed
+    assert [r.suggestion_id for r in view.result_rows(records, mapping, candidates={})] == ["3", "12"]
+    text = view.detail_text("12", None, unsure["12"], mapping, None, "no")
+    assert "skipped by the hotspot filter (hotspot type NO)" in text and "Blockers" in text
+    assert "not checked yet" in view.detail_text("3", None, unsure["3"], mapping)

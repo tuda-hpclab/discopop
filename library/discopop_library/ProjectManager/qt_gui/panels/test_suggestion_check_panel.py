@@ -504,7 +504,10 @@ def test_a_successful_run(qtbot: QtBot, panel: SuggestionCheckPanel) -> None:
     assert "Suggestion check completed." in console and "@@SC_PROGRESS" not in console
     assert panel.header.chip.text() == "1 approved, 0 rejected, 0 without an answer"
     assert panel.header.chip.level == widgets.CHIP_OK
-    assert row_texts(panel) == [["3", "main.cpp:13", "Approved", "none", "4", "agree", "m1"]]
+    assert [row[:4] for row in row_texts(panel)] == [
+        ["3", "main.cpp:13", "1", "Approved"],
+        ["4", "main.cpp:14", "1", "Not checked"],
+    ]
     assert status_text(panel) == "Suggestion check completed - 1 approved (not in use yet)"
     assert panel.run_button.text() == "Run Suggestion Check" and panel.run_button.isEnabled()
     # the sidebar state; nothing was put into use
@@ -527,7 +530,7 @@ def test_a_done_event_reloads_the_results(panel: SuggestionCheckPanel) -> None:
     write_results(dot, {3: APPROVAL})
     panel._reload_unsure()
     panel._on_progress({"event": "done", "pattern_id": 3, "state": "approved"})
-    assert row_texts(panel)[0][:3] == ["3", "main.cpp:13", "Approved"]
+    assert row_texts(panel)[0][:4] == ["3", "main.cpp:13", "1", "Approved"]
 
 
 def test_a_failing_run(qtbot: QtBot, panel: SuggestionCheckPanel) -> None:
@@ -603,7 +606,8 @@ def test_a_new_run_clears_the_old_console_and_table(qtbot: QtBot, checked: Sugge
     assert checked.table.rowCount() == 4
     with mock.patch.object(suggestion_check_panel, "suggestion_check_command", lambda *_a, **_k: _program("1")):
         checked.run_button.click()
-        assert checked.table.rowCount() == 0
+        # the candidates stay, without their results
+        assert {row[3] for row in row_texts(checked)} == {"Not checked"}
     assert "old output" not in checked.console.text()
     qtbot.waitUntil(lambda: not checked.running, timeout=20000)
     # the results on disk come back
@@ -661,10 +665,10 @@ def test_a_run_opens_the_output_pane(qtbot: QtBot, panel: SuggestionCheckPanel) 
 
 def test_the_results_of_an_earlier_session_are_shown(checked: SuggestionCheckPanel) -> None:
     assert row_texts(checked) == [
-        ["3", "main.cpp:13", "Approved", "none", "4", "agree", "m1"],
-        ["4", "main.cpp:14", "Unsure", "", "0", "", ""],
-        ["5", "main.cpp:15", "Error", "", "0", "", ""],
-        ["12", "main.cpp:13", "Approved", "rounding", "4", "agree", "m1"],
+        ["3", "main.cpp:13", "1", "Approved", "none", "4", "agree"],
+        ["4", "main.cpp:14", "1", "Unsure", "", "0", ""],
+        ["5", "main.cpp:15", "1", "Error", "", "0", ""],
+        ["12", "main.cpp:13", "1", "Approved", "rounding", "4", "agree"],
     ]
     assert checked.header.chip.text() == "4 checked, 2 approved"
     assert checked.header.chip.level == widgets.CHIP_OK
@@ -775,7 +779,7 @@ def test_using_the_selected_approval(checked: SuggestionCheckPanel, dialog_answe
     assert (dot / "patch_generator" / "3" / "1.patch").read_text() == "+#pragma omp parallel for 3\n"
     assert not (dot / "patch_generator" / "12").exists()
     assert [type(event) for event in published] == [PatternsChanged, AutotuningChanged, ResultsChanged]
-    assert row_texts(checked)[0][2] == "Approved (in use)"
+    assert row_texts(checked)[0][3] == "Approved (in use)"
     assert "In use: published to patch_generator/3" in checked.details_view.toPlainText()
     assert checked.withdraw_button.text() == "Withdraw 3" and checked.withdraw_button.isEnabled()
     assert status_text(checked) == "1 agent-approved suggestion(s) in use"
@@ -923,8 +927,8 @@ def test_a_run_which_skipped_everything_is_no_run_without_results(qtbot: QtBot, 
     _with_skipped(dot, [{"pattern_id": 4, "hotspot_type": "no"}])
     panel = make_panel(qtbot, tmp_path)
     assert panel.header.chip.text() == "0 checked, 0 approved, 1 skipped (cold)"
-    # shown although the table is empty
-    assert panel.results_stack.currentWidget() is panel.empty_label
+    # the skipped candidate is a row of the table
+    assert row_texts(panel) == [["4", "main.cpp:14", "1", "Skipped (cold)", "", "", ""]]
     assert not panel.skipped_label.isHidden()
 
 
@@ -950,3 +954,17 @@ def test_a_skipped_suggestion_with_an_earlier_result_keeps_its_row_only(qtbot: Q
     _with_skipped(dot, [{"pattern_id": 3, "hotspot_type": "no"}, {"pattern_id": 4, "hotspot_type": "no"}])
     panel = make_panel(qtbot, tmp_path)
     assert panel.skipped_label.text().startswith("Skipped (cold): 4 (NO).")
+
+
+def test_the_candidates_are_listed_before_the_first_run(qtbot: QtBot, tmp_path: Path) -> None:
+    dot = dot_dp_of(tmp_path)
+    write_unsure(dot, [3, 4])
+    panel = make_panel(qtbot, tmp_path)
+    assert row_texts(panel) == [
+        ["3", "main.cpp:13", "1", "Not checked", "", "", ""],
+        ["4", "main.cpp:14", "1", "Not checked", "", "", ""],
+    ]
+    panel.table.selectRow(0)
+    details = panel.details_view.toPlainText()
+    assert "not checked yet" in details and "RAW dependency" in details
+    assert not panel.publish_button.isEnabled()

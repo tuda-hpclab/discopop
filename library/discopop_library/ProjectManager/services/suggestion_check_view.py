@@ -55,6 +55,11 @@ STATE_LABEL_APPROVED = "Approved"
 STATE_LABEL_REJECTED = "Rejected"
 STATE_LABEL_UNSURE = "Unsure"
 STATE_LABEL_ERROR = "Error"
+# candidates without a result: a suggestion the check has not looked at, or the hotspot filter skipped
+STATE_PENDING = "pending"
+STATE_SKIPPED = "skipped"
+STATE_LABEL_PENDING = "Not checked"
+STATE_LABEL_SKIPPED = "Skipped (cold)"
 
 DIRECTORY = "suggestion_check"
 RESULTS_FILE = "results.json"
@@ -310,12 +315,14 @@ class ResultRow:
     model: str
     cost: str
     published: bool = False
+    blockers: str = ""
 
     def cells(self) -> Tuple[str, ...]:
         state = self.state_label + (" (in use)" if self.published else "")
         return (
             self.suggestion_id,
             self.location,
+            self.blockers,
             state,
             self.result_differences,
             self.tool_calls,
@@ -325,23 +332,46 @@ class ResultRow:
         )
 
 
-COLUMNS = ("Suggestion", "Location", "State", "Result differences", "Tool calls", "Review", "Model", "Cost")
+COLUMNS = ("Suggestion", "Location", "Blockers", "State", "Result differences", "Tool calls", "Review", "Model", "Cost")
 
 
 def result_rows(
-    records: Dict[str, Dict[str, Any]], file_mapping: Dict[int, str], published: Sequence[str] = ()
+    records: Dict[str, Dict[str, Any]],
+    file_mapping: Dict[int, str],
+    published: Sequence[str] = (),
+    candidates: Optional[Dict[str, UnsureEntry]] = None,
+    skipped: Sequence[Tuple[str, str]] = (),
 ) -> List[ResultRow]:
+    """One row per checked suggestion and, given the ``candidates`` (the unsure suggestions), one per candidate
+    without a result: "Not checked", or "Skipped (cold)" if the hotspot filter skipped it. Without candidates only
+    the results are listed."""
+    candidates = candidates or {}
+    cold = dict(skipped)
     rows = []
-    for suggestion_id in sorted(records, key=sort_key):
-        record = records[suggestion_id]
+    for suggestion_id in sorted(set(records) | set(candidates), key=sort_key):
+        entry = candidates.get(suggestion_id)
+        blockers = str(len(entry.blockers)) if entry is not None else ""
+        record = records.get(suggestion_id)
+        if record is None:
+            skipped_type = cold.get(suggestion_id)
+            label = STATE_LABEL_SKIPPED if skipped_type is not None else STATE_LABEL_PENDING
+            state = STATE_SKIPPED if skipped_type is not None else STATE_PENDING
+            location = location_text(entry.start_line, file_mapping) if entry is not None else ""
+            rows.append(
+                ResultRow(suggestion_id, location, state, label, TONE_IDLE, "", "", "", "", "", False, blockers)
+            )
+            continue
         label, tone = state_display(record)
         differences = record.get("result_differences")
         model = str(record.get("model") or "")
         backend = str(record.get("backend") or "")
+        location = location_text(record.get("start_line"), file_mapping)
+        if not location and entry is not None:
+            location = location_text(entry.start_line, file_mapping)
         rows.append(
             ResultRow(
                 suggestion_id,
-                location_text(record.get("start_line"), file_mapping),
+                location,
                 str(record.get("state") or ""),
                 label,
                 tone,
@@ -351,6 +381,7 @@ def result_rows(
                 model or (backend + " (default)" if backend else ""),
                 cost_text(record),
                 suggestion_id in published,
+                blockers,
             )
         )
     return rows
@@ -392,17 +423,48 @@ def blocker_text(blocker: Dict[str, Any], file_mapping: Dict[int, str]) -> str:
     return text
 
 
+def candidate_text(
+    suggestion_id: str, unsure: Optional[UnsureEntry], file_mapping: Dict[int, str], skipped_type: Optional[str] = None
+) -> str:
+    """What the Details tab shows of an unsure suggestion that has no result: what the check would look at."""
+    if skipped_type is not None:
+        status = "skipped by the hotspot filter (hotspot type " + skipped_type.upper() + ")"
+    else:
+        status = "not checked yet"
+    lines = ["Suggestion " + suggestion_id + ": " + status]
+    if unsure is None:
+        return "\n".join(lines)
+    location = location_text(unsure.start_line, file_mapping)
+    if location:
+        lines.append("Loop: " + location)
+    if unsure.pattern_type:
+        lines.append("Pattern type: " + unsure.pattern_type)
+    if unsure.pragma:
+        lines.append("Directive without the blockers: " + unsure.pragma)
+    lines.append("")
+    if unsure.blockers:
+        lines.append("Blockers (dependencies between iterations that keep DiscoPoP from suggesting it):")
+        for index, blocker in enumerate(unsure.blockers, start=1):
+            lines.append("  " + str(index) + ". " + blocker_text(blocker, file_mapping))
+    else:
+        lines.append("No blockers recorded.")
+    return "\n".join(lines)
+
+
 def detail_text(
     suggestion_id: Optional[str],
     record: Optional[Dict[str, Any]],
     unsure: Optional[UnsureEntry],
     file_mapping: Dict[int, str],
     marker: Optional[Dict[str, Any]] = None,
+    skipped_type: Optional[str] = None,
 ) -> str:
     """What the Details tab shows of a checked suggestion: the outcome with its reason, or for an approval the
     assumption and the justification of every blocker, then how the check went."""
-    if suggestion_id is None or record is None:
+    if suggestion_id is None:
         return "(select a suggestion in the Results tab)"
+    if record is None:
+        return candidate_text(suggestion_id, unsure, file_mapping, skipped_type)
     label, _tone = state_display(record)
     lines = ["Suggestion " + suggestion_id + ": " + label]
     location = location_text(record.get("start_line"), file_mapping)

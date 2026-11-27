@@ -284,7 +284,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        for column, width in enumerate((80, 130, 110, 120, 75, 75, 120)):
+        for column, width in enumerate((80, 130, 70, 110, 120, 75, 75, 120)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
             self.table.setColumnWidth(column, width)
         header.setStretchLastSection(True)
@@ -380,6 +380,8 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self._unsure = view.load_unsure(self.arguments.dot_dp)
         self._file_mapping = view.read_file_mapping(self.arguments.dot_dp)
         self._update_scope_caption()
+        # the candidates are rows of the table before they have a result
+        self._refresh_table()
 
     def _available_ids(self) -> List[str]:
         return sorted(self._unsure, key=view.sort_key)
@@ -707,7 +709,9 @@ class SuggestionCheckPanel(LlmAgentPanel):
     def _refresh_table(self) -> None:
         previous = self._selected_ids()
         self._published = view.published_suggestions(self.arguments.dot_dp)
-        rows = view.result_rows(self._records, self._file_mapping, self._published)
+        rows = view.result_rows(
+            self._records, self._file_mapping, self._published, self._unsure, self._skipped_for_rows()
+        )
         self.table.blockSignals(True)
         try:
             self.table.clearSelection()
@@ -744,6 +748,9 @@ class SuggestionCheckPanel(LlmAgentPanel):
             self.table.blockSignals(False)
         self._on_row_selected()
 
+    def _skipped_for_rows(self) -> List[Tuple[str, str]]:
+        return [] if self._stale else self._skipped
+
     def _on_row_selected(self) -> None:
         suggestion_id = self._selected_id()
         record = self._records.get(suggestion_id) if suggestion_id is not None else None
@@ -752,7 +759,16 @@ class SuggestionCheckPanel(LlmAgentPanel):
         if suggestion_id is None and not self._records:
             self.details_view.set_code(NO_RESULTS_TEXT)
         else:
-            self.details_view.set_code(view.detail_text(suggestion_id, record, unsure, self._file_mapping, marker))
+            self.details_view.set_code(
+                view.detail_text(
+                    suggestion_id,
+                    record,
+                    unsure,
+                    self._file_mapping,
+                    marker,
+                    dict(self._skipped).get(suggestion_id or ""),
+                )
+            )
 
         self.patch_combo.clear()
         self.transcript_combo.clear()
