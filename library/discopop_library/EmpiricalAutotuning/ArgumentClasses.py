@@ -34,6 +34,8 @@ class AutotunerArguments(GeneralArguments):
     hotspot_types: str = ""
     algorithm: int = 0
     search_space: Optional[str] = None
+    # also search the suggestions an LLM agent approved and published (discopop_suggestion_check --publish-approved)
+    include_agent_approved: bool = False
     # Build every candidate but run none of them: the search then answers "does this
     # configuration compile?" instead of "how fast is it?". Nothing is measured, so no
     # candidate can be ranked -- the mode exists for callers that only care about

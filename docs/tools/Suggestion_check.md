@@ -53,7 +53,7 @@ discopop_suggestion_check --publish-approved -s 12,15 # only these
 discopop_suggestion_check --withdraw-published        # take them back (all, or those of -s)
 ```
 
-`--publish-approved` copies the patches of the approved suggestions to `patch_generator/<id>/` and writes a marker, `agent_approved.json`, with the assumption the approval rests on and its declared result differences. The patch applicator, the autotuner, patch repair and the GUI then treat them as suggestions; the GUI labels them *agent-approved*. A directory the patch generator wrote is never replaced, and approvals of an earlier explorer run are not published (check them again). `--withdraw-published` removes only directories with the marker. Neither option checks anything.
+`--publish-approved` copies the patches of the approved suggestions to `patch_generator/<id>/` and writes a marker, `agent_approved.json`, with the assumption the approval rests on and its declared result differences. The patch applicator, patch repair and the GUI then treat them as suggestions; the autotuner searches them only with `--include-agent-approved`; the GUI labels them *agent-approved*. A directory the patch generator wrote is never replaced, and approvals of an earlier explorer run are not published (check them again). `--withdraw-published` removes only directories with the marker. Neither option checks anything.
 
 In the GUI, the *Suggestion Check* stage runs the check and shows its results; **Use approved suggestions** and **Withdraw** do the same as these options (see [GUI](GUI.md#suggestion-check)).
 
