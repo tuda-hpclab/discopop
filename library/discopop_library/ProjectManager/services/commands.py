@@ -37,6 +37,8 @@ def explorer_command(request: ExplorerRequest, python: Optional[str] = None) -> 
         command.append("--ignore-dependency-states")
     if request.visualize:
         command.append("--visualize")
+    if request.unsure_suggestions:
+        command.append("--unsure-suggestions")
     return command
 
 

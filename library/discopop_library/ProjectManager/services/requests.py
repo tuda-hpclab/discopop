@@ -25,6 +25,8 @@ class ExplorerRequest:
     ignore_dependency_states: bool
     # open the explorer's own graph visualizer (``--visualize``); the Tk GUI runs a visualized run in-process instead
     visualize: bool = False
+    # also write explorer/unsure_suggestions.json (``--unsure-suggestions``), the input of the suggestion check
+    unsure_suggestions: bool = False
 
 
 @dataclass(frozen=True)

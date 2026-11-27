@@ -220,10 +220,22 @@ class PatternDetectionPanel(Panel):
             check.setChecked(pattern in _DEFAULT_PATTERN_TYPES)
             self.pattern_checks[pattern] = check
             pattern_row.append(check)
+        self.unsure_check = QCheckBox("Also record unsure suggestions")
+        self.unsure_check.setChecked(True)
+        self.unsure_check.setToolTip(
+            "Writes explorer/unsure_suggestions.json: the loops that only a dependency between iterations keeps "
+            "from being suggested. The Suggestion Check tab hands them to an LLM agent; they never become "
+            "suggestions by themselves."
+        )
         self.jobs_selector = widgets.ThreadSelector()
 
         detection = widgets.FormSection("Detection")
         detection.add_row("Pattern types:", widgets.hbox(*pattern_row, None))
+        detection.add_row(
+            "Suggestion check:",
+            self.unsure_check,
+            "Needed by the Suggestion Check tab; adds the unsure suggestions to the result of this run.",
+        )
         detection.add_row("Threads:", self.jobs_selector, "auto = unlimited; custom counts can be typed.")
 
         self.mode_buttons: Dict[str, QRadioButton] = {}
@@ -390,6 +402,7 @@ class PatternDetectionPanel(Panel):
             jobs=self.jobs_selector.value(),
             ignore_dependency_states=self.mode_buttons[NO_STATES_DETECTION_MODE].isChecked(),
             visualize=self.visualize_check.isChecked(),
+            unsure_suggestions=self.unsure_check.isChecked(),
         )
 
     # ── running ─────────────────────────────────────────────────────────────

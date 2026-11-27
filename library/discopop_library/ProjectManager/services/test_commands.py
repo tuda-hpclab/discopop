@@ -49,6 +49,8 @@ def test_explorer_command() -> None:
     assert full[-3:] == ["-j", "4", "--ignore-dependency-states"]
     visualized = explorer_command(ExplorerRequest("doall", "auto", False, visualize=True), "py")
     assert visualized == plain + ["--visualize"]
+    unsure = explorer_command(ExplorerRequest("doall", "auto", False, unsure_suggestions=True), "py")
+    assert unsure == plain + ["--unsure-suggestions"]
 
 
 def test_default_autotuner_command_has_no_optional_flags() -> None:

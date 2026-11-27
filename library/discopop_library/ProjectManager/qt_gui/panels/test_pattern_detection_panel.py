@@ -131,7 +131,7 @@ def test_the_hotspot_hint_leads_to_the_hotspot_tab(panel: PatternDetectionPanel)
 
 
 def test_the_request_reads_the_widgets(panel: PatternDetectionPanel) -> None:
-    assert panel.snapshot_request() == ExplorerRequest("reduction,doall", "auto", False, False)
+    assert panel.snapshot_request() == ExplorerRequest("reduction,doall", "auto", False, False, True)
     for check in panel.pattern_checks.values():
         check.setChecked(False)
     assert panel.snapshot_request().enable_patterns == "reduction,doall"
@@ -139,7 +139,8 @@ def test_the_request_reads_the_widgets(panel: PatternDetectionPanel) -> None:
     panel.mode_buttons["no_states"].setChecked(True)
     panel.jobs_selector.setCurrentText("4")
     panel.visualize_check.setChecked(True)
-    assert panel.snapshot_request() == ExplorerRequest("task", "4", True, True)
+    panel.unsure_check.setChecked(False)
+    assert panel.snapshot_request() == ExplorerRequest("task", "4", True, True, False)
     panel.mode_buttons["default"].setChecked(True)
     assert not panel.snapshot_request().ignore_dependency_states
 
