@@ -48,7 +48,7 @@ In `.discopop/blocker_resolution/`:
 The results belong to one run of the explorer. After the explorer has run again, the next check discards them, since the ids may now name other loops.
 
 ## Using approved suggestions
-Only published approvals are used by the other tools. A reviewed run publishes its approvals when it ends (see below); they can also be published, or taken back, by hand. Publishing copies them to where the other tools look for patches:
+Only published approvals are used by the other tools. Every run publishes its approvals when it ends, with or without a review (see below); only the user takes them back; they can also be published, or taken back, by hand. Publishing copies them to where the other tools look for patches:
 
 ```bash
 discopop_blocker_resolution --publish-approved          # all approvals of the last run

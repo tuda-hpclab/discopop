@@ -420,7 +420,7 @@ are stale; tools then ignore `approved.json`, and the GUI says so.
 
 ## 6. Consumers: used while published
 
-Publishing (`--publish-approved`, by default at the end of a reviewed run) copies an
+Publishing (`--publish-approved`, by default at the end of every run) copies an
 approval to `patch_generator/<id>/` with the marker `agent_approved.json`. As long as
 it is there, the user has not withdrawn it, and the consumers use it:
 

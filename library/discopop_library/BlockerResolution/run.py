@@ -278,14 +278,9 @@ def run(arguments: BlockerResolutionArguments, agent_factory: Optional[AgentFact
         + ". Approvals rest on the agent's assumptions; see "
         + os.path.join(arguments.blocker_resolution_path, "results.json")
     )
-    if arguments.use_approved and approved_ids and not arguments.review:
-        print(
-            "Not in use: "
-            + ", ".join(map(str, approved_ids))
-            + " (approved without a review; --publish-approved uses them)"
-        )
-    elif arguments.use_approved and approved_ids:
-        # approvals are used unless the user withdraws them: the assumption each rests on is in the marker file
+    if arguments.use_approved and approved_ids:
+        # approvals are used unless the user withdraws them (also those of a run without a review): the assumption
+        # each rests on is in the marker file
         published = publish_approved(dot, approved_ids)
         print(
             "In use: "

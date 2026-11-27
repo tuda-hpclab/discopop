@@ -7,8 +7,8 @@
 # directory for details.
 """Making approved suggestions usable by the other tools, and withdrawing them again.
 
-An approval rests on an LLM agent's judgement, not on DiscoPoP's analysis, so only a published one is used: a reviewed
-run publishes its approvals when it ends (unless --no-use-approved), and the user withdraws what they do not accept.
+An approval rests on an LLM agent's judgement, not on DiscoPoP's analysis, so only a published one is used: a run
+publishes its approvals when it ends (unless --no-use-approved), and only the user withdraws them.
 Publishing copies the patches of the approved suggestions into ``patch_generator/<id>/``, where the patch applicator,
 the autotuner, patch repair and the GUI look for patches. Each published directory holds a marker file with the
 assumption the approval rests on and the declared result differences, so that it can be told from a generated patch,
