@@ -50,7 +50,7 @@ from discopop_library.ProjectManager.qt_gui.panels.build_panel import BuildPanel
 from discopop_library.ProjectManager.qt_gui.panels.profiling_panel import ProfilingPanel
 from discopop_library.ProjectManager.qt_gui.panels.report_panel import ReportPanel
 from discopop_library.ProjectManager.qt_gui.panels.setup_panel import SetupPanel
-from discopop_library.ProjectManager.qt_gui.panels.suggestion_check_panel import SuggestionCheckPanel
+from discopop_library.ProjectManager.qt_gui.panels.blocker_resolution_panel import BlockerResolutionPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 
 # re-exported: the names were defined here first
@@ -68,7 +68,7 @@ from discopop_library.ProjectManager.qt_gui.tabs import (
     TAB_PROFILING as TAB_PROFILING,
     TAB_REPORT as TAB_REPORT,
     TAB_SETUP as TAB_SETUP,
-    TAB_SUGGESTION_CHECK as TAB_SUGGESTION_CHECK,
+    TAB_BLOCKER_RESOLUTION as TAB_BLOCKER_RESOLUTION,
 )
 from discopop_library.ProjectManager.qt_gui.workflow_nav import WorkflowNav
 from discopop_library.ProjectManager.services.project_state import (
@@ -84,7 +84,7 @@ from discopop_library.ProjectManager.services.project_state import (
     ProjectState,
     ResultsChanged,
 )
-from discopop_library.SuggestionCheck.prompt_store import custom_prompt_dir
+from discopop_library.BlockerResolution.prompt_store import custom_prompt_dir
 from discopop_library.ProjectManager.services.workflow_status import forget_build_states, stage_statuses
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.png")
@@ -199,7 +199,7 @@ class MainWindow(QMainWindow):
         self.report_panel = ReportPanel(args, state, status, self.execute_panel.console.append_text)
         self.hotspot_panel = HotspotPanel(args, state, status, self.execute_panel.timeouts)
         self.pattern_detection_panel = PatternDetectionPanel(args, state, status, self)
-        self.suggestion_check_panel = SuggestionCheckPanel(args, state, status)
+        self.blocker_resolution_panel = BlockerResolutionPanel(args, state, status)
         self.patch_repair_panel = PatchRepairPanel(args, state, status)
         self.autotuning_panel = AutotuningPanel(args, state, status, self)
         self.config_list = ConfigListPanel(
@@ -218,7 +218,7 @@ class MainWindow(QMainWindow):
             TAB_PROFILING: self.profiling_panel,
             TAB_HOTSPOT: self.hotspot_panel,
             TAB_PATTERN_DETECTION: self.pattern_detection_panel,
-            TAB_SUGGESTION_CHECK: self.suggestion_check_panel,
+            TAB_BLOCKER_RESOLUTION: self.blocker_resolution_panel,
             TAB_PATCH_REPAIR: self.patch_repair_panel,
             TAB_AUTOTUNING: self.autotuning_panel,
             TAB_EXECUTE: self.execute_panel,
@@ -252,13 +252,13 @@ class MainWindow(QMainWindow):
         state.subscribe(HotspotsChanged, lambda _event: forget_build_states())
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
         # the connections saved under Settings > LLM connections (or edited by hand and reloaded) are offered at once
-        state.subscribe(LlmConfigChanged, lambda _event: self.suggestion_check_panel.reload_connections())
+        state.subscribe(LlmConfigChanged, lambda _event: self.blocker_resolution_panel.reload_connections())
         state.subscribe(LlmConfigChanged, lambda _event: self.patch_repair_panel.reload_connections())
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _build_menu_bar(self) -> None:
         """The menu bar: "View" with "Reset" (the layout as at the start), "Settings" with the LLM configuration
-        (connections, backends, reload) and the prompts of the suggestion check."""
+        (connections, backends, reload) and the prompts of the blocker resolution."""
         # in the window, at its top (not in the global menu bar of the desktop)
         self.menuBar().setNativeMenuBar(False)
         self.view_menu = self.menuBar().addMenu("&View")
@@ -268,7 +268,7 @@ class MainWindow(QMainWindow):
         self.settings_menu = self.menuBar().addMenu("&Settings")
         self.llm_connections_action = self.settings_menu.addAction("LLM connections\u2026")
         self.llm_connections_action.setToolTip(
-            "Edit the LLM connections (agent, model and their settings) of patch repair and the suggestion check"
+            "Edit the LLM connections (agent, model and their settings) of patch repair and the blocker resolution"
         )
         self.llm_connections_action.triggered.connect(lambda _checked=False: self.open_llm_dialog("connections"))
         self.llm_backends_action = self.settings_menu.addAction("LLM backends\u2026")
@@ -281,13 +281,13 @@ class MainWindow(QMainWindow):
         self.reload_llm_action.triggered.connect(lambda _checked=False: self.reload_llm_configuration())
         self.llm_dialogs: Dict[str, llm_dialogs.LlmDialog] = {}
         self.settings_menu.addSeparator()
-        self.prompt_settings_action = self.settings_menu.addAction("Suggestion check prompts\u2026")
-        self.prompt_settings_action.setToolTip("Edit the prompts the suggestion check sends to the LLM agent")
+        self.prompt_settings_action = self.settings_menu.addAction("Blocker resolution prompts\u2026")
+        self.prompt_settings_action.setToolTip("Edit the prompts the blocker resolution sends to the LLM agent")
         self.prompt_settings_action.triggered.connect(lambda _checked=False: self.open_prompt_settings())
         self.prompt_settings_dialog: Optional[PromptSettingsDialog] = None
 
     def open_prompt_settings(self) -> PromptSettingsDialog:
-        """Open (or raise) the dialog editing the prompt templates of the suggestion check of this project."""
+        """Open (or raise) the dialog editing the prompt templates of the blocker resolution of this project."""
         dialog = self.prompt_settings_dialog
         if dialog is None:
             dialog = PromptSettingsDialog(custom_prompt_dir(self.arguments.dot_dp), self)

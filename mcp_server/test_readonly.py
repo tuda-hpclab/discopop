@@ -5,7 +5,7 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""The read-only tool set and a server bound to one project, as the agents of discopop_suggestion_check use them."""
+"""The read-only tool set and a server bound to one project, as the agents of discopop_blocker_resolution use them."""
 
 import contextlib
 import io

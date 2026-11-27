@@ -7,7 +7,7 @@
 # directory for details.
 """End-to-end test of the unsure suggestions (discopop_explorer --unsure-suggestions): loops which are not
 parallelizable only because of a few dependencies between their iterations are written to
-explorer/unsure_suggestions.json, and nowhere else. See design/agent_checked_suggestions.md."""
+explorer/unsure_suggestions.json, and nowhere else. See design/blocker_resolution.md."""
 
 import json
 import tempfile

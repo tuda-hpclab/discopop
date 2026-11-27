@@ -137,7 +137,7 @@ def parse_args(argv: Optional[List[str]] = None) -> ExplorerArguments:
         "--unsure-suggestions", type=str, nargs="?", default=None, const="explorer/unsure_suggestions.json",
         help="Also write the loops which are not parallelizable only because of a few dependencies between their "
         "iterations, with these dependencies, to this JSON file (default: explorer/unsure_suggestions.json). They are "
-        "not suggestions: their patches are incorrect as they are. See design/agent_checked_suggestions.md.",
+        "not suggestions: their patches are incorrect as they are. See design/blocker_resolution.md.",
     )
     experimental_parser.add_argument(
         "--unsure-max-blockers", type=int, default=DEFAULT_MAX_BLOCKERS,

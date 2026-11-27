@@ -358,7 +358,7 @@ def identify_simple_doall_and_reduction(
     decisions), the scan goes on and every such dependency is recorded, which tells what has to change before the loop
     can be parallelized; the detected patterns are the same.
     unsure, if given, receives the loops rejected only because of a few dependencies between their iterations (see
-    design/agent_checked_suggestions.md); the detected patterns are the same."""
+    design/blocker_resolution.md); the detected patterns are the same."""
     patterns: List[DoAllInfo | ReductionInfo] = []
     # everything a pattern's tag is derived from, for the patterns collected in `patterns` - see
     # the duplicate check below. Kept alongside the tags themselves, which are only known once a

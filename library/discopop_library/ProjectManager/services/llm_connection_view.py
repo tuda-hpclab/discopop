@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""What the "LLM Agent" box of the Patch Repair and the Suggestion Check tabs shows, as data.
+"""What the "LLM Agent" box of the Patch Repair and the Blocker Resolution tabs shows, as data.
 
 Both tools read the same LLM configuration (``<.discopop>/patch_repair/llm_config.json``,
 ``PatchRepair/llm_config.py``): the stored connections offered by the connection selector, what a selected one resolves
@@ -23,7 +23,7 @@ NO_CONNECTION = "(choose backend and model below)"
 
 
 def llm_config_path(dot_dp: str) -> str:
-    """The LLM configuration patch repair and the suggestion check share (``patch_repair/llm_config.json``)."""
+    """The LLM configuration patch repair and the blocker resolution share (``patch_repair/llm_config.json``)."""
     from discopop_library.PatchRepair import llm_config
 
     return llm_config.default_config_path(os.path.join(dot_dp, "patch_repair"))

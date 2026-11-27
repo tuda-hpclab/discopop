@@ -36,7 +36,7 @@ from discopop_library.ProjectManager.services.hotspot_session import HotspotSess
 from discopop_library.ProjectManager.services.hotspot_session import forget_build_states as forget_hotspot_build_states
 from discopop_library.ProjectManager.services.patch_repair_view import load_results as load_patch_repair_results
 from discopop_library.ProjectManager.services.patches import count_patches, has_patches
-from discopop_library.ProjectManager.services import suggestion_check_view
+from discopop_library.ProjectManager.services import blocker_resolution_view
 
 # The keys of the stages; they equal the names of the tabs of the main window (qt_gui/tabs.py re-exports them).
 STAGE_SETUP = "Setup"
@@ -47,7 +47,7 @@ STAGE_EXECUTE = "Execute"
 STAGE_REPORT = "Report"
 STAGE_HOTSPOT = "Hotspot Detection"
 STAGE_PATTERN_DETECTION = "Pattern Detection"
-STAGE_SUGGESTION_CHECK = "Suggestion Check"
+STAGE_BLOCKER_RESOLUTION = "Blocker Resolution"
 STAGE_PATCH_REPAIR = "Patch Repair"
 STAGE_AUTOTUNING = "Autotuning"
 
@@ -254,22 +254,22 @@ def _pattern_detection_status(arguments: ProjectManagerArguments) -> StageStatus
     return StageStatus(StageState.DONE, suggestions)
 
 
-# the detail of the locked Suggestion Check stage
+# the detail of the locked Blocker Resolution stage
 NEEDS_UNSURE_SUGGESTIONS = "needs unsure suggestions"
 
 
-def _suggestion_check_status(arguments: ProjectManagerArguments) -> StageStatus:
+def _blocker_resolution_status(arguments: ProjectManagerArguments) -> StageStatus:
     """Locked without ``explorer/unsure_suggestions.json``; stale if the check belongs to another explorer run."""
     dot_dp = arguments.dot_dp
-    if not suggestion_check_view.has_unsure_suggestions(dot_dp):
+    if not blocker_resolution_view.has_unsure_suggestions(dot_dp):
         return StageStatus(StageState.LOCKED, NEEDS_UNSURE_SUGGESTIONS)
-    document = suggestion_check_view.load_document(dot_dp)
-    records = suggestion_check_view.records_of(document)
+    document = blocker_resolution_view.load_document(dot_dp)
+    records = blocker_resolution_view.records_of(document)
     if records is None:
         return StageStatus(StageState.NOT_RUN, "optional")
-    if suggestion_check_view.results_are_stale(dot_dp, document):
+    if blocker_resolution_view.results_are_stale(dot_dp, document):
         return StageStatus(StageState.STALE, "the explorer ran again")
-    approved = len(suggestion_check_view.approved_ids(records))
+    approved = len(blocker_resolution_view.approved_ids(records))
     return StageStatus(StageState.DONE, _plural(len(records), "check") + ", " + str(approved) + " approved")
 
 
@@ -305,7 +305,7 @@ def stage_statuses(arguments: ProjectManagerArguments, config: Optional[str]) ->
         STAGE_EXECUTE: _execute_status(runs),
         STAGE_HOTSPOT: _hotspot_status(arguments, config),
         STAGE_PATTERN_DETECTION: _pattern_detection_status(arguments),
-        STAGE_SUGGESTION_CHECK: _suggestion_check_status(arguments),
+        STAGE_BLOCKER_RESOLUTION: _blocker_resolution_status(arguments),
         STAGE_PATCH_REPAIR: _patch_repair_status(arguments),
         STAGE_AUTOTUNING: _autotuning_status(arguments),
         STAGE_REPORT: StageStatus(StageState.DONE if runs else StageState.NOT_RUN, _plural(runs, "execution result")),

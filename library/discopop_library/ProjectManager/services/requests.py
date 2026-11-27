@@ -25,7 +25,7 @@ class ExplorerRequest:
     ignore_dependency_states: bool
     # open the explorer's own graph visualizer (``--visualize``); the Tk GUI runs a visualized run in-process instead
     visualize: bool = False
-    # also write explorer/unsure_suggestions.json (``--unsure-suggestions``), the input of the suggestion check
+    # also write explorer/unsure_suggestions.json (``--unsure-suggestions``), the input of the blocker resolution
     unsure_suggestions: bool = False
 
 
@@ -62,12 +62,12 @@ class PatchRepairRequest:
     dry_run: bool
     # None: all suggestions
     suggestion_ids: Optional[Tuple[str, ...]]
-    # a stored connection of the LLM configuration shared with the suggestion check; None: backend and model
+    # a stored connection of the LLM configuration shared with the blocker resolution; None: backend and model
     connection: Optional[str] = None
 
 
 @dataclass(frozen=True)
-class SuggestionCheckRequest:
+class BlockerResolutionRequest:
     # a stored connection of the LLM configuration shared with patch repair; empty: backend and model below
     connection: str
     prompts: int

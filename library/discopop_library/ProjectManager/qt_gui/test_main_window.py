@@ -32,7 +32,7 @@ from discopop_library.ProjectManager.qt_gui.main_window import (
     TAB_PROFILING,
     TAB_REPORT,
     TAB_SETUP,
-    TAB_SUGGESTION_CHECK,
+    TAB_BLOCKER_RESOLUTION,
     MainWindow,
 )
 from discopop_library.ProjectManager.qt_gui.panel import Panel
@@ -59,7 +59,7 @@ def test_all_tabs_exist_in_order(qtbot: QtBot, tmp_path: Path) -> None:
         TAB_HOTSPOT,
         TAB_PROFILING,
         TAB_PATTERN_DETECTION,
-        TAB_SUGGESTION_CHECK,
+        TAB_BLOCKER_RESOLUTION,
         TAB_PATCH_REPAIR,
         TAB_AUTOTUNING,
         TAB_EXECUTE,
@@ -205,7 +205,7 @@ def test_the_panels_are_wired(qtbot: QtBot, tmp_path: Path) -> None:
         "ReportPanel",
         "HotspotPanel",
         "PatternDetectionPanel",
-        "SuggestionCheckPanel",
+        "BlockerResolutionPanel",
         "PatchRepairPanel",
         "AutotuningPanel",
     }
@@ -224,18 +224,18 @@ def test_profiling_data_unlocks_the_pattern_detection_stage(qtbot: QtBot, tmp_pa
     assert window.is_tab_enabled(TAB_PATTERN_DETECTION)
 
 
-def test_unsure_suggestions_unlock_the_suggestion_check_stage(qtbot: QtBot, tmp_path: Path) -> None:
+def test_unsure_suggestions_unlock_the_blocker_resolution_stage(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
-    assert window.nav.stage_state(TAB_SUGGESTION_CHECK) == StageState.LOCKED
-    assert window.tab_title(TAB_SUGGESTION_CHECK) == "Suggestion Check"
+    assert window.nav.stage_state(TAB_BLOCKER_RESOLUTION) == StageState.LOCKED
+    assert window.tab_title(TAB_BLOCKER_RESOLUTION) == "Blocker Resolution"
     (tmp_path / ".discopop" / "explorer").mkdir()
     (tmp_path / ".discopop" / "explorer" / "unsure_suggestions.json").write_text(
         '{"format_version": 1, "suggestions": []}'
     )
     window.project_state.publish(PatternsChanged())
-    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_SUGGESTION_CHECK) == StageState.NOT_RUN, timeout=2000)
-    assert window.suggestion_check_panel.run_button.isEnabled()
+    qtbot.waitUntil(lambda: window.nav.stage_state(TAB_BLOCKER_RESOLUTION) == StageState.NOT_RUN, timeout=2000)
+    assert window.blocker_resolution_panel.run_button.isEnabled()
 
 
 def test_ctrl_s_saves_the_stage_in_front(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,7 +335,7 @@ def test_a_running_job_shows_a_spinner_on_its_stage(qtbot: QtBot, tmp_path: Path
         TAB_HOTSPOT: window.hotspot_panel,
         TAB_PROFILING: window.profiling_panel,
         TAB_PATTERN_DETECTION: window.pattern_detection_panel,
-        TAB_SUGGESTION_CHECK: window.suggestion_check_panel,
+        TAB_BLOCKER_RESOLUTION: window.blocker_resolution_panel,
         TAB_PATCH_REPAIR: window.patch_repair_panel,
         TAB_AUTOTUNING: window.autotuning_panel,
         TAB_EXECUTE: window.execute_panel,

@@ -627,7 +627,7 @@ def check_suggestions(arguments: ProjectManagerArguments, key: BuildKey) -> Opti
     temporary directory (as :func:`ensure_build` does before it touches the tree). None without suggestions."""
     if not key.suggestions:
         return None
-    scratch = tempfile.mkdtemp(prefix="dp_suggestion_check_")
+    scratch = tempfile.mkdtemp(prefix="dp_blocker_resolution_")
     try:
         return _apply_in_scratch(arguments, key, os.path.join(scratch, "tree"))[1]
     finally:

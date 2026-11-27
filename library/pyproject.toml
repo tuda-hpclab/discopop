@@ -68,7 +68,7 @@ discopop_patch_applicator = "discopop_library.PatchApplicator.__main__:main"
 discopop_config_provider = "discopop_library.ConfigProvider.__main__:main"
 discopop_auto_tuner = "discopop_library.EmpiricalAutotuning.__main__:main"
 discopop_patch_repair = "discopop_library.PatchRepair.__main__:main"
-discopop_suggestion_check = "discopop_library.SuggestionCheck.__main__:main"
+discopop_blocker_resolution = "discopop_library.BlockerResolution.__main__:main"
 discopop_sanity_checker = "discopop_library.SanityChecker.__main__:main"
 discopop_preprocessor = "discopop_library.PreProcessor.__main__:main"
 discopop_project_manager = "discopop_library.ProjectManager.__main__:main"
@@ -90,7 +90,7 @@ discopop_library = [
     "py.typed",
     "global_data/version/VERSION",
     "PatchRepair/prompts/*.md",
-    "SuggestionCheck/prompts/*.md",
+    "BlockerResolution/prompts/*.md",
     "ProjectManager/assets/*.png",
 ]
 

@@ -42,7 +42,7 @@ PATTERN_TYPE_NAMES = {
     "optimizer_output": "optimizer",
 }
 
-# the marker of a suggestion an LLM agent approved and the user put into use (SuggestionCheck/publish.py, MARKER_FILE;
+# the marker of a suggestion an LLM agent approved and the user put into use (BlockerResolution/publish.py, MARKER_FILE;
 # not imported, as that pulls in the whole check); such a suggestion is not in patterns.json but in
 # explorer/unsure_suggestions.json
 AGENT_APPROVED_MARKER = "agent_approved.json"
@@ -66,7 +66,7 @@ class SuggestionInfo:
     variables: Tuple[Tuple[str, str], ...] = ()  # (label, value) of the data sharing clauses that are not empty
     # the files the patches modify that lie outside the project; they are only applied on explicit request
     outside_files: Tuple[str, ...] = ()
-    # published by the suggestion check: it rests on this assumption of an LLM agent, not on DiscoPoP's analysis
+    # published by the blocker resolution: it rests on this assumption of an LLM agent, not on DiscoPoP's analysis
     agent_approved: bool = False
     agent_assumption: str = ""
 
@@ -356,7 +356,7 @@ def _agent_approved(
     file_mapping: Dict[int, str],
     outside: Dict[str, List[str]],
 ) -> SuggestionInfo:
-    """A suggestion the suggestion check published: the loop of its unsure suggestion, marked as agent-approved."""
+    """A suggestion the blocker resolution published: the loop of its unsure suggestion, marked as agent-approved."""
     entry = entry or {}
     file_id, start_line = _split_location(entry.get("start_line"))
     region = entry.get("region")

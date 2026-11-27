@@ -15,13 +15,13 @@ from discopop_library.ProjectManager.services.commands import (
     explorer_command,
     hotspot_analyzer_command,
     patch_repair_command,
-    suggestion_check_command,
+    blocker_resolution_command,
 )
 from discopop_library.ProjectManager.services.requests import (
     AutotunerRequest,
     ExplorerRequest,
     PatchRepairRequest,
-    SuggestionCheckRequest,
+    BlockerResolutionRequest,
 )
 
 
@@ -97,7 +97,7 @@ def test_patch_repair_command() -> None:
     assert "--backend" not in command and "--model" not in command
 
 
-def _check(**changes: object) -> SuggestionCheckRequest:
+def _check(**changes: object) -> BlockerResolutionRequest:
     defaults = dict(
         connection="",
         prompts=2,
@@ -113,15 +113,15 @@ def _check(**changes: object) -> SuggestionCheckRequest:
         suggestion_ids=None,
     )
     defaults.update(changes)
-    return SuggestionCheckRequest(**defaults)  # type: ignore[arg-type]
+    return BlockerResolutionRequest(**defaults)  # type: ignore[arg-type]
 
 
-def test_suggestion_check_command() -> None:
-    command = suggestion_check_command(_check(), "d", "py")
+def test_blocker_resolution_command() -> None:
+    command = blocker_resolution_command(_check(), "d", "py")
     assert command == [
         "py",
         "-m",
-        "discopop_library.SuggestionCheck",
+        "discopop_library.BlockerResolution",
         "--dot-dp-path",
         "d",
         "--prompts",
@@ -141,7 +141,7 @@ def test_suggestion_check_command() -> None:
     ]
     # the project root and the prompts are the check's defaults: never passed
     assert "--project-root" not in command and "--prompt-dir" not in command
-    off = suggestion_check_command(
+    off = blocker_resolution_command(
         _check(
             backend="",
             model="",
@@ -172,7 +172,7 @@ def test_suggestion_check_command() -> None:
 
 
 def test_a_stored_connection_decides_the_backend_and_the_model() -> None:
-    command = suggestion_check_command(_check(connection="fast"), "d", "py")
+    command = blocker_resolution_command(_check(connection="fast"), "d", "py")
     assert command[-2:] == ["--connection", "fast"]
     assert "--backend" not in command and "--model" not in command
 

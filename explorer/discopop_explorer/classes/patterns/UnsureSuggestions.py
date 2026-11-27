@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 """Unsure suggestions: loops which are not parallelizable as they are, because of a few dependencies between their
-iterations, see design/agent_checked_suggestions.md.
+iterations, see design/blocker_resolution.md.
 
 They are kept apart from the detection result on purpose. Many tools walk every list of the PatternStorage, and an
 unsure suggestion must never be taken for a parallelization suggestion: adding its directive alone would be incorrect.

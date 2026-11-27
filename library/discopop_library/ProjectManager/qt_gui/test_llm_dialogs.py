@@ -567,7 +567,7 @@ def _window(qtbot: QtBot, tmp_path: Path) -> MainWindow:
 
 
 def _connection_choices(window: MainWindow) -> List[str]:
-    combo = window.suggestion_check_panel.connection_combo
+    combo = window.blocker_resolution_panel.connection_combo
     choices = [combo.itemText(i) for i in range(combo.count())]
     # both panels that drive an agent offer the same connections
     repair = window.patch_repair_panel.connection_combo
@@ -581,7 +581,7 @@ def test_settings_menu_entries(qtbot: QtBot, tmp_path: Path) -> None:
         "LLM connections…",
         "LLM backends…",
         "Reload LLM configuration from disk",
-        "Suggestion check prompts…",
+        "Blocker resolution prompts…",
     ]
 
 
@@ -600,7 +600,7 @@ def test_menu_opens_one_dialog_over_the_projects_file(qtbot: QtBot, tmp_path: Pa
     assert kind not in window.llm_dialogs
 
 
-def test_saved_connections_reach_the_suggestion_check_panel(
+def test_saved_connections_reach_the_blocker_resolution_panel(
     qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder
 ) -> None:
     window = _window(qtbot, tmp_path)

@@ -14,8 +14,8 @@ from types import SimpleNamespace
 from typing import List
 
 from discopop_library.EmpiricalAutotuning.agent_approved import add_published_approvals
-from discopop_library.SuggestionCheck.publish import MARKER_FILE
-from discopop_library.SuggestionCheck.unsure import UNSURE_SUGGESTIONS_FILE
+from discopop_library.BlockerResolution.publish import MARKER_FILE
+from discopop_library.BlockerResolution.unsure import UNSURE_SUGGESTIONS_FILE
 
 
 def _result(ids: List[int]) -> SimpleNamespace:

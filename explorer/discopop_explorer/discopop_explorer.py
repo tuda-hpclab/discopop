@@ -93,7 +93,7 @@ class ExplorerArguments(GeneralArguments):
     # record every dependency preventing a do-all loop in the pattern decisions, not only the first one
     all_blocking_dependencies: bool = False
     # None means no file, otherwise the path. Loops which are parallelizable only if a few dependencies between their
-    # iterations are harmless, see design/agent_checked_suggestions.md
+    # iterations are harmless, see design/blocker_resolution.md
     enable_unsure_suggestions_file: Optional[str] = None
     unsure_max_blockers: int = DEFAULT_MAX_BLOCKERS
 

@@ -6,9 +6,9 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""Settings > Suggestion check prompts: edit the prompt templates the suggestion check sends to the LLM agent.
+"""Settings > Blocker resolution prompts: edit the prompt templates the blocker resolution sends to the LLM agent.
 
-The storage is ``discopop_library.SuggestionCheck.prompt_store``: a template saved here is kept in the project and
+The storage is ``discopop_library.BlockerResolution.prompt_store``: a template saved here is kept in the project and
 used by the next run of the check; a template equal to the shipped one is not stored.
 """
 
@@ -18,21 +18,21 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QListWidget, QPlainTextEdit, QWidget
 
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.SuggestionCheck import prompt_store
+from discopop_library.BlockerResolution import prompt_store
 
 _NOTE = (
-    "Changes apply to the next run of the suggestion check. Where no version is saved, the template shipped with "
+    "Changes apply to the next run of the blocker resolution. Where no version is saved, the template shipped with "
     "DiscoPoP is used."
 )
 
 
 class PromptSettingsDialog(QDialog):
-    """One entry per template of the suggestion check, an editor for the selected one."""
+    """One entry per template of the blocker resolution, an editor for the selected one."""
 
     def __init__(self, prompt_dir: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.prompt_dir = prompt_dir
-        self.setWindowTitle("Suggestion check prompts")
+        self.setWindowTitle("Blocker resolution prompts")
         self.setWindowFlag(Qt.WindowType.Window)
         self.resize(1000, 700)
         self.setMinimumSize(800, 500)

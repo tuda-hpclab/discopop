@@ -224,7 +224,7 @@ class PatternDetectionPanel(Panel):
         self.unsure_check.setChecked(True)
         self.unsure_check.setToolTip(
             "Writes explorer/unsure_suggestions.json: the loops that only a dependency between iterations keeps "
-            "from being suggested. The Suggestion Check tab hands them to an LLM agent; they never become "
+            "from being suggested. The Blocker Resolution tab hands them to an LLM agent; they never become "
             "suggestions by themselves."
         )
         self.jobs_selector = widgets.ThreadSelector()
@@ -232,9 +232,9 @@ class PatternDetectionPanel(Panel):
         detection = widgets.FormSection("Detection")
         detection.add_row("Pattern types:", widgets.hbox(*pattern_row, None))
         detection.add_row(
-            "Suggestion check:",
+            "Blocker resolution:",
             self.unsure_check,
-            "Needed by the Suggestion Check tab; adds the unsure suggestions to the result of this run.",
+            "Needed by the Blocker Resolution tab; adds the unsure suggestions to the result of this run.",
         )
         detection.add_row("Threads:", self.jobs_selector, "auto = unlimited; custom counts can be typed.")
 

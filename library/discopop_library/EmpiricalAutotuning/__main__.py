@@ -42,7 +42,7 @@ def parse_args() -> AutotunerArguments:
     parser.add_argument("-s", "--suggestions", help="If specified, the comma separated list of suggestions will be "
     "applied and compared to the baseline.")
     parser.add_argument("--include-agent-approved", dest="include_agent_approved", action="store_true", help="Also "
-    "search the suggestions an LLM agent approved and published (discopop_suggestion_check --publish-approved). They "
+    "search the suggestions an LLM agent approved and published (discopop_blocker_resolution --publish-approved). They "
     "rest on the agent's assumption, not on DiscoPoP's analysis; the search keeps them only if they pay off.")
     parser.add_argument("--search-space", dest="search_space", default=None, help="If specified, restrict the "
     "optimization algorithm's search space to this comma separated list of suggestion ids (and ranges are NOT expanded "

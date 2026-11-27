@@ -9,13 +9,13 @@
 """Settings > LLM connections / LLM backends: the editors of the LLM configuration.
 
 Both edit ``<.discopop>/patch_repair/llm_config.json`` (``PatchRepair/llm_config.py``), which patch repair and the
-suggestion check share: the connections (which model, through which agent, with which settings) and the backends
+blocker resolution share: the connections (which model, through which agent, with which settings) and the backends
 (where each agent is installed on this machine, and what every connection through it defaults to). Each dialog saves
 only its own section over what is on disk, validated first. The logic that is not widget code lives in
 ``qt_gui/llm_logic.py``; probes of an agent (version, model list) run off the UI thread.
 
 Ported from the benchmark harness's ``gui/qt/llm_dialogs.py``; its prompts dialog is not, as the prompts of the
-suggestion check have a dialog of their own (``prompt_settings_dialog.py``).
+blocker resolution have a dialog of their own (``prompt_settings_dialog.py``).
 """
 
 import copy
@@ -455,7 +455,7 @@ class ConnectionsDialog(LlmDialog):
             form,
             "Timeout per call (s):",
             self.timeout_edit,
-            "Blank: the agent timeout of the run (patch repair / suggestion check, Advanced). A value here wins "
+            "Blank: the agent timeout of the run (patch repair / blocker resolution, Advanced). A value here wins "
             "over it for every run through this connection.",
         )
         self.extra_args_edit = QLineEdit()

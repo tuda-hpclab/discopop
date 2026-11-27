@@ -215,7 +215,7 @@ TOOL_SETS = {
     "all": _ALL_TOOLS,
     "analysis": [tool for tool in _ALL_TOOLS if tool not in _SETUP_TOOLS],
     # only the tools marked read-only: no profiling, no building or running, no changes to the project. For callers
-    # that must not change anything, e.g. the agents of discopop_suggestion_check
+    # that must not change anything, e.g. the agents of discopop_blocker_resolution
     "readonly": [tool for tool in _ALL_TOOLS if _read_only(tool)],
 }
 DEFAULT_TOOL_SET = "all"
@@ -362,7 +362,7 @@ class DiscoPopMCPServer:
         # listed without project_path
         self.project = os.path.abspath(project) if project else None
         _setup_logging(debug=debug)
-        # a server bound to a project (e.g. for the agents of the suggestion check) or offering only read-only
+        # a server bound to a project (e.g. for the agents of the blocker resolution) or offering only read-only
         # tools writes nothing into the project, not even its log
         self._ctx = ToolContext(debug=debug, log_to_project=self.project is None and tool_set != "readonly")
         self._limiter: Optional[anyio.CapacityLimiter] = None

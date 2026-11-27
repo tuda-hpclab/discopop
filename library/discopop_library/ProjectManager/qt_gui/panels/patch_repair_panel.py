@@ -10,7 +10,7 @@
 
 Ported from ``gui/mixins/patch_repair_panel.py``; what the tab shows is computed by
 ``services/patch_repair_view.py``. The "LLM Agent" box (stored connection, or backend and model) is shared with the
-Suggestion Check tab (``qt_gui/llm_agent_panel.py``).
+Blocker Resolution tab (``qt_gui/llm_agent_panel.py``).
 """
 
 import queue
@@ -98,7 +98,7 @@ class PatchRepairPanel(LlmAgentPanel):
     """
 
     output_title = "Patch Repair"
-    llm_shared_with = "the suggestion check"
+    llm_shared_with = "the blocker resolution"
 
     def __init__(
         self,

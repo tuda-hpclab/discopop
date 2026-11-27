@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-"""The base class of the panels that drive an LLM agent (Patch Repair, Suggestion Check): their "LLM Agent" box.
+"""The base class of the panels that drive an LLM agent (Patch Repair, Blocker Resolution): their "LLM Agent" box.
 
 The box offers the stored connections of the LLM configuration both tools share (``patch_repair/llm_config.json``),
 the first entry being the backend and the model chosen in the box itself. A selected connection shows what it resolves

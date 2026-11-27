@@ -253,7 +253,7 @@ def test_a_stored_connection_shows_its_backend_and_model_read_only(qtbot: QtBot,
     ]
     # several connections do not stop patch repair from asking the backend chosen here
     assert panel.connection_hint.text() == (
-        "Stored connections are shared with the suggestion check (patch_repair/llm_config.json)."
+        "Stored connections are shared with the blocker resolution (patch_repair/llm_config.json)."
     )
     assert panel._connection_problem == ""
     panel.model_combo.setCurrentText("typed")

@@ -46,7 +46,7 @@ UNSET_BACKEND_NOTE = "Not set in this connection: a run uses the first installed
 
 
 def config_path(dot_dp: str) -> str:
-    """The LLM configuration of the project (shared by patch repair and the suggestion check)."""
+    """The LLM configuration of the project (shared by patch repair and the blocker resolution)."""
     return llm_config.default_config_path(os.path.join(dot_dp, "patch_repair"))
 
 

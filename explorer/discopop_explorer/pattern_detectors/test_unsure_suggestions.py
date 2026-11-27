@@ -6,7 +6,7 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 """Loops rejected only because of a few dependencies between their iterations become unsure suggestions, see
-design/agent_checked_suggestions.md."""
+design/blocker_resolution.md."""
 
 from __future__ import annotations
 

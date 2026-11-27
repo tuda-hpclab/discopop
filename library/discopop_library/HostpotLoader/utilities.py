@@ -47,7 +47,7 @@ def classify_by_loops(
 ) -> Optional[HotspotType]:
     """The class of the code region file_id:start_line-end_line by the hotspot loops starting in it (see
     LOOP_MATCH_ORDER); None if no hotspot loop starts in it. The rule get_patterns_by_hotspot_type applies to
-    patterns, shared with the suggestion check, which classifies the unsure suggestions by it."""
+    patterns, shared with the blocker resolution, which classifies the unsure suggestions by it."""
     for hotspot_type in LOOP_MATCH_ORDER:
         for loop_file_id, loop_line in loops.get(hotspot_type, []):
             if file_id == loop_file_id and start_line <= loop_line <= end_line:

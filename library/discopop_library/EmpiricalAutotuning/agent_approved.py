@@ -5,11 +5,11 @@
 # This software may be modified and distributed under the terms of
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
-"""Suggestions approved by an LLM agent (discopop_suggestion_check) as candidates of the search, on request only.
+"""Suggestions approved by an LLM agent (discopop_blocker_resolution) as candidates of the search, on request only.
 
 An approval rests on an agent's judgement, so the search does not see it unless ``--include-agent-approved`` is given.
-Then the suggestions published to ``patch_generator/`` (``discopop_suggestion_check --publish-approved``, recognised by
-their marker file) join the Explorer's do-all suggestions as candidates: the search measures them like the others and
+Then the suggestions published to ``patch_generator/`` (``discopop_blocker_resolution --publish-approved``, recognised
+by their marker file) join the Explorer's do-all suggestions as candidates: the search measures them like the others and
 only keeps those that pay off and keep the validation passing.
 """
 
@@ -20,8 +20,8 @@ import logging
 import os
 from typing import Any, Dict, List
 
-from discopop_library.SuggestionCheck.publish import published_ids
-from discopop_library.SuggestionCheck.unsure import UNSURE_SUGGESTIONS_FILE
+from discopop_library.BlockerResolution.publish import published_ids
+from discopop_library.BlockerResolution.unsure import UNSURE_SUGGESTIONS_FILE
 
 
 def add_published_approvals(detection_result: Any, dot_dp_path: str, logger: logging.Logger) -> List[int]:

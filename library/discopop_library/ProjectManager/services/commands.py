@@ -16,7 +16,7 @@ from discopop_library.ProjectManager.services.requests import (
     AutotunerRequest,
     ExplorerRequest,
     PatchRepairRequest,
-    SuggestionCheckRequest,
+    BlockerResolutionRequest,
 )
 
 
@@ -109,15 +109,15 @@ def patch_repair_command(request: PatchRepairRequest, dot_dp_path: str, python: 
     return command
 
 
-def suggestion_check_command(
-    request: SuggestionCheckRequest, dot_dp_path: str, python: Optional[str] = None
+def blocker_resolution_command(
+    request: BlockerResolutionRequest, dot_dp_path: str, python: Optional[str] = None
 ) -> List[str]:
-    """``discopop_suggestion_check`` for the request; the project root is the default, the directory holding
-    ``.discopop``, and the prompts are the project's own (as edited under Settings > Suggestion check prompts)."""
+    """``discopop_blocker_resolution`` for the request; the project root is the default, the directory holding
+    ``.discopop``, and the prompts are the project's own (as edited under Settings > Blocker resolution prompts)."""
     command = [
         python or sys.executable,
         "-m",
-        "discopop_library.SuggestionCheck",
+        "discopop_library.BlockerResolution",
         "--dot-dp-path",
         dot_dp_path,
         "--prompts",

@@ -17,7 +17,7 @@ from discopop_library.ProjectManager.qt_gui.conftest import DialogRecorder
 from discopop_library.ProjectManager.qt_gui.main_window import MainWindow
 from discopop_library.ProjectManager.qt_gui.prompt_settings_dialog import PromptSettingsDialog
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
-from discopop_library.SuggestionCheck import prompt_store
+from discopop_library.BlockerResolution import prompt_store
 
 
 def _dialog(qtbot: QtBot, tmp_path: Path) -> PromptSettingsDialog:
@@ -33,7 +33,7 @@ def _stored(tmp_path: Path, name: str) -> bool:
 def test_settings_menu_opens_the_dialog_of_the_project(qtbot: QtBot, tmp_path: Path) -> None:
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
-    assert window.prompt_settings_action.text() == "Suggestion check prompts…"
+    assert window.prompt_settings_action.text() == "Blocker resolution prompts…"
     assert window.prompt_settings_action in window.settings_menu.actions()
     window.prompt_settings_action.trigger()
     dialog = window.prompt_settings_dialog

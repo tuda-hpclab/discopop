@@ -237,7 +237,7 @@ def test_suggestions_with_targets_outside_the_project_are_marked(tmp_path: Path)
 
 
 def _publish_agent_approval(root: Path, pattern_id: int, assumption: str = "the order does not matter") -> None:
-    """What the suggestion check's publish_approved leaves: the patch and the marker, and the unsure suggestion."""
+    """What the blocker resolution's publish_approved leaves: the patch and the marker, and the unsure suggestion."""
     (root / "explorer" / "unsure_suggestions.json").write_text(
         json.dumps(
             {
@@ -261,8 +261,8 @@ def _publish_agent_approval(root: Path, pattern_id: int, assumption: str = "the 
     (directory / suggestions.AGENT_APPROVED_MARKER).write_text(json.dumps({"assumption": assumption}))
 
 
-def test_the_marker_is_the_one_the_suggestion_check_writes() -> None:
-    from discopop_library.SuggestionCheck.publish import MARKER_FILE
+def test_the_marker_is_the_one_the_blocker_resolution_writes() -> None:
+    from discopop_library.BlockerResolution.publish import MARKER_FILE
 
     assert suggestions.AGENT_APPROVED_MARKER == MARKER_FILE
 
