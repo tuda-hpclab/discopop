@@ -37,8 +37,8 @@ dependencies = [
     # @server.call_tool()) with constructor-based handlers; server.py still uses the 1.x API.
     "mcp>=1.0,<2",
     # the tools call the project manager and read the explorer's results in-process
-    "discopop-library>=0.0.1a11",
-    "discopop-explorer>=0.0.1a3",
+    "discopop-library>=0.0.1a12",
+    "discopop-explorer>=0.0.1a4",
     "termcolor>=2.0",
     "uvicorn>=0.20",
     "starlette>=0.20",

@@ -29,12 +29,12 @@ classifiers = [
     "Topic :: Software Development",
 ]
 dependencies = [
-    "discopop-profiler>=0.0.1a6",
-    "discopop-library>=0.0.1a11",
-    "discopop-gui>=0.0.1a3",
-    "discopop-explorer>=0.0.1a3",
-    "discopop-mcp-server>=0.0.1a9",
-    "discopop-hotspot-detection>=0.0.1a3",
+    "discopop-profiler>=0.0.1a7",
+    "discopop-library>=0.0.1a12",
+    "discopop-gui>=0.0.1a4",
+    "discopop-explorer>=0.0.1a4",
+    "discopop-mcp-server>=0.0.1a10",
+    "discopop-hotspot-detection>=0.0.1a4",
 ]
 
 [project.urls]

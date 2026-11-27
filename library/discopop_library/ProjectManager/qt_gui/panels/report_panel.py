@@ -15,8 +15,9 @@ import copy
 import functools
 import json
 import os
+import sys
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices
@@ -37,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from discopop_library.Amdahl.model import SuggestionRegion
-from discopop_library.Amdahl.regions import load_regions
+from discopop_library.Amdahl.regions import dump_path_of, load_regions, needs_extraction, regions_stamp
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.plots import mode_style, report_charts
 from discopop_library.ProjectManager.plots.data import ExecutionRecord, parse_execution_results
@@ -47,7 +48,15 @@ from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.reports.full import generate_full_report
-from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
+from discopop_library.ProjectManager.services.build_overview import format_size
+from discopop_library.ProjectManager.services.jobs import (
+    JobSpec,
+    WorkContext,
+    WorkEvent,
+    WorkFinished,
+    WorkOutput,
+    WorkRunner,
+)
 from discopop_library.ProjectManager.services.project_state import ProjectState, ResultsChanged
 from discopop_library.ProjectManager.services.reports import (
     ReportProblem,
@@ -57,7 +66,6 @@ from discopop_library.ProjectManager.services.reports import (
     format_ratio,
     format_seconds,
     format_suggestion_ids,
-    has_execution_results,
 )
 
 # chart types offered by the "+" button: a menu label and the stem of the tab title
@@ -109,7 +117,33 @@ class PlotTab:
     checks: Dict[str, QCheckBox] = field(default_factory=dict)
 
 
-def load_execution_records(project_dir: str) -> List[ExecutionRecord]:
+_AMDAHL_MISSING_TEXT = (
+    "Amdahl ceilings unavailable: the detection result was written by an older explorer and lacks the extents of "
+    "the suggestions. Recommended: run the pattern detection again."
+)
+# peak memory of decoding a detection result dump relative to its size (relearn: 41 GB for a 1.2 GB dump)
+DECODE_MEMORY_FACTOR = 35
+
+
+def extraction_cost_text(dump_size: int) -> str:
+    """What computing the extents from a dump of ``dump_size`` bytes costs (an estimate)."""
+    return (
+        "Computing them from the existing result decodes the whole detection result ("
+        + format_size(dump_size)
+        + ") in a separate process: expect minutes and about "
+        + format_size(dump_size * DECODE_MEMORY_FACTOR)
+        + " of memory."
+    )
+
+
+def dot_discopop_of(project_dir: str) -> str:
+    """The ``.discopop`` directory of the project directory ``<.discopop>/project``."""
+    return os.path.dirname(os.path.normpath(project_dir))
+
+
+def load_execution_records(
+    project_dir: str, on_regions_error: Optional[Callable[[Exception], None]] = None
+) -> List[ExecutionRecord]:
     path = os.path.join(project_dir, "execution_results.json")
     if not os.path.exists(path):
         return []
@@ -118,16 +152,28 @@ def load_execution_records(project_dir: str) -> List[ExecutionRecord]:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
-    return parse_execution_results(data, _load_regions(project_dir))
+    return parse_execution_results(data, _load_regions(project_dir, on_regions_error))
 
 
-def _load_regions(project_dir: str) -> Optional[Dict[int, SuggestionRegion]]:
-    """Suggestion runtime shares for the Amdahl ceilings; None if they cannot be derived."""
+def _load_regions(
+    project_dir: str, on_error: Optional[Callable[[Exception], None]] = None
+) -> Optional[Dict[int, SuggestionRegion]]:
+    """Suggestion runtime shares for the Amdahl ceilings; None if they cannot be derived. Never decodes the
+    detection result (see :func:`discopop_library.Amdahl.regions.load_regions`)."""
     try:
-        # execution_results.json lives in <.discopop>/project
-        return load_regions(os.path.dirname(os.path.normpath(project_dir))) or None
-    except Exception:  # noqa: BLE001 -- the report must work without the ceilings
+        return load_regions(dot_discopop_of(project_dir)) or None
+    except Exception as e:  # noqa: BLE001 -- the report must work without the ceilings
+        if on_error is not None:
+            on_error(e)
         return None
+
+
+def _file_identity(path: str) -> Optional[Tuple[int, int]]:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
 
 
 def record_fields(record: ExecutionRecord) -> List[tuple[str, str]]:
@@ -185,6 +231,15 @@ class ReportPanel(Panel):
         self._execution_running = False
         self.plot_tabs: List[PlotTab] = []
         self._plot_counter = 0
+        # the parsed records and what they were read from (execution_results.json, detection result, hotspots):
+        # the file is parsed again only when one of them changed
+        self._records_key: Optional[Tuple[Any, ...]] = None
+        self._records: List[ExecutionRecord] = []
+        # the key of the records the table and the charts show
+        self._shown_key: Optional[Tuple[Any, ...]] = None
+        # an error of the Amdahl regions is reported once per state of their inputs, not on every refresh
+        self._reported_regions_error: Optional[Tuple[Any, ...]] = None
+        self._extraction: Optional[WorkRunner] = None
 
         self.generate_report_button = widgets.primary_button("Generate PDF Report", self.generate_report)
         self.view_report_button = widgets.create_button("View Report PDF", self.view_report)
@@ -212,7 +267,7 @@ class ReportPanel(Panel):
             table_close.resize(0, 0)
             table_close.hide()
         self.add_plot_button = QToolButton()
-        self.add_plot_button.setText("＋")
+        self.add_plot_button.setText("+")
         self.add_plot_button.setToolTip("Add a chart")
         self.add_plot_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.add_plot_button)
@@ -223,8 +278,21 @@ class ReportPanel(Panel):
         self.add_plot_button.setMenu(menu)
         self.notebook.setCornerWidget(self.add_plot_button, Qt.Corner.TopRightCorner)
 
+        # results of an older explorer have no suggestion extents: say so and offer to compute them
+        self.amdahl_label = widgets.caption_label(_AMDAHL_MISSING_TEXT)
+        self.amdahl_label.setWordWrap(True)
+        self.compute_amdahl_button = widgets.create_button(
+            "Compute Amdahl ceilings",
+            self.compute_amdahl_ceilings,
+            tooltip="Extract the extents of the suggestions from the detection result, in a separate process",
+        )
+        self.amdahl_notice = QWidget()
+        self.amdahl_notice.setLayout(widgets.hbox(self.amdahl_label, self.compute_amdahl_button))
+        self.amdahl_notice.setVisible(False)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.header)
+        layout.addWidget(self.amdahl_notice)
         layout.addWidget(self.notebook, 1)
 
         project_state.subscribe(ResultsChanged, lambda _event: self._on_results_changed())
@@ -250,18 +318,58 @@ class ReportPanel(Panel):
         header.setSectionResizeMode(_LABEL_COLUMN, QHeaderView.ResizeMode.Stretch)
         return table
 
-    def records(self) -> List[ExecutionRecord]:
-        return load_execution_records(self.arguments.project_dir)
-
-    def update_display(self) -> None:
-        """Refresh the table, the open charts and the report buttons from ``execution_results.json``."""
-        records = self.records()
-        self._fill_table(records)
-        for tab in self.plot_tabs:
-            self._render(tab)
-        self.generate_report_button.setEnabled(
-            not self._execution_running and has_execution_results(self.arguments.project_dir)
+    def _current_records_key(self) -> Tuple[Any, ...]:
+        project_dir = self.arguments.project_dir
+        return (
+            _file_identity(os.path.join(project_dir, "execution_results.json")),
+            regions_stamp(dot_discopop_of(project_dir)),
         )
+
+    def records(self) -> List[ExecutionRecord]:
+        """The records of ``execution_results.json``; parsed again only after it or the Amdahl inputs changed."""
+        key = self._current_records_key()
+        if key != self._records_key:
+            self._records = load_execution_records(
+                self.arguments.project_dir, functools.partial(self._report_regions_error, key)
+            )
+            self._records_key = key
+        return self._records
+
+    def _report_regions_error(self, key: Tuple[Any, ...], error: Exception) -> None:
+        if self._reported_regions_error == key:
+            return
+        self._reported_regions_error = key
+        self._report_progress("Amdahl ceilings unavailable: " + str(error))
+
+    def update_display(self, force: bool = True) -> None:
+        """Refresh the table, the open charts and the report buttons from ``execution_results.json``.
+
+        Without ``force`` (an event that may have changed the results), the table and the charts are only redrawn
+        when the results or the Amdahl inputs changed.
+        """
+        records = self.records()
+        if force or self._records_key != self._shown_key:
+            self._fill_table(records)
+            for tab in self.plot_tabs:
+                self._render(tab, records=records)
+            self._shown_key = self._records_key
+        self.generate_report_button.setEnabled(not self._execution_running and bool(records))
+        self._update_amdahl_notice()
+
+    def _dump_size(self) -> int:
+        try:
+            return os.path.getsize(dump_path_of(dot_discopop_of(self.arguments.project_dir)))
+        except OSError:
+            return 0
+
+    def _update_amdahl_notice(self) -> None:
+        running = self._extraction is not None
+        visible = running or needs_extraction(dot_discopop_of(self.arguments.project_dir))
+        self.amdahl_notice.setVisible(visible)
+        if visible:
+            self.amdahl_label.setText(_AMDAHL_MISSING_TEXT + " " + extraction_cost_text(self._dump_size()))
+        self.compute_amdahl_button.setEnabled(not running)
+        self.compute_amdahl_button.setText("Computing Amdahl ceilings..." if running else "Compute Amdahl ceilings")
 
     def _fill_table(self, records: List[ExecutionRecord]) -> None:
         # the best (highest speedup) valid record per configuration is highlighted
@@ -391,8 +499,12 @@ class ReportPanel(Panel):
         # the bar charts have a fixed metric (spbars: speedup, rtbars: runtime) and no controls
         return widgets.hbox(*items, None)
 
-    def _render(self, tab: PlotTab, reset_camera: bool = False) -> None:
-        records = [record for record in self.records() if record.script == "execute.sh"]
+    def _render(
+        self, tab: PlotTab, reset_camera: bool = False, records: Optional[List[ExecutionRecord]] = None
+    ) -> None:
+        records = [
+            record for record in (self.records() if records is None else records) if record.script == "execute.sh"
+        ]
         on_select = functools.partial(self._on_record_selected, tab)
         combos, checks = tab.combos, tab.checks
         if tab.plot_type == "pareto":
@@ -466,7 +578,7 @@ class ReportPanel(Panel):
             self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
 
     def _on_results_changed(self) -> None:
-        self.update_display()
+        self.update_display(force=False)
         # a reset (Project Setup) deletes the reports
         if not self._execution_running:
             self.view_report_button.setEnabled(find_latest_report_pdf(self.arguments.project_dir)[0] is not None)
@@ -495,6 +607,52 @@ class ReportPanel(Panel):
                 self.status.set("Error generating report", widgets.STATUS_FAIL)
 
         start_work(self, lambda _context: generate_full_report(arguments), handle)
+
+    # ── the Amdahl ceilings of an older detection result ───────────────────────
+
+    def compute_amdahl_ceilings(self) -> None:
+        """Extract the suggestion extents of a detection result of an older explorer, in a process of its own (the
+        whole result is decoded: minutes and gigabytes for a large program, which the GUI must not hold)."""
+        if self._extraction is not None:
+            return
+        if not dialogs.ask_yes_no(
+            self,
+            "Compute Amdahl ceilings",
+            extraction_cost_text(self._dump_size())
+            + " Running the pattern detection again is usually faster. Compute them anyway?",
+        ):
+            return
+        dot_dp = dot_discopop_of(self.arguments.project_dir)
+        spec = JobSpec(
+            [sys.executable, "-m", "discopop_library.Amdahl.regions", "--extract-extents", dot_dp], cwd=dot_dp
+        )
+        self.status.set("Computing the Amdahl ceilings...", widgets.STATUS_BUSY)
+        self._report_progress("Computing the Amdahl ceilings from the detection result...")
+
+        def work(context: WorkContext) -> int:
+            return context.run_command(spec, context.output)
+
+        def handle(event: WorkEvent) -> None:
+            if isinstance(event, WorkOutput):
+                self._report_progress(event.text.rstrip("\n"))
+                return
+            if not isinstance(event, WorkFinished):
+                return
+            self._extraction = None
+            if event.error is None and event.result == 0:
+                self.status.set("Amdahl ceilings computed.", widgets.STATUS_OK, reset_ms=5000)
+            else:
+                reason = event.error if event.error is not None else "exit code " + str(event.result)
+                self._report_progress("Computing the Amdahl ceilings failed: " + reason)
+                self.status.set("Computing the Amdahl ceilings failed", widgets.STATUS_FAIL)
+            self.update_display(force=False)
+
+        self._extraction = start_work(self, work, handle)
+        self._update_amdahl_notice()
+
+    def cancel_jobs(self) -> None:
+        if self._extraction is not None:
+            self._extraction.cancel()
 
     def view_report(self) -> None:
         report_path, problem = find_latest_report_pdf(self.arguments.project_dir)

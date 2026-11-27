@@ -236,7 +236,15 @@ class AutotuningPanel(Panel):
         self.log_level = widgets.log_level_selector("WARNING")
         section = widgets.FormSection()
         section.add_row("Log level:", self.log_level)
-        return widgets.CollapsibleSection("Advanced", section, summary="log level")
+        self.kept_build_trees_check = QCheckBox("Compile candidates in the kept build tree")
+        self.kept_build_trees_check.setChecked(True)
+        section.add_row(
+            "Build trees:",
+            self.kept_build_trees_check,
+            "One candidate after the other in the build tree of its mode (seq, par), incrementally with a "
+            "compile_incremental.sh. Off: a copy of the project per candidate, deleted after its run.",
+        )
+        return widgets.CollapsibleSection("Advanced", section, summary="log level, build trees")
 
     def _build_selection(self) -> QWidget:
         # pick between searching for the best combination (algorithm + restricted search space) and evaluating one
@@ -508,7 +516,7 @@ class AutotuningPanel(Panel):
         self.run_button.set_running(True)
         self.set_busy(True)
         self.output_requested.emit()
-        self.status.set("⏳ Autotuning in progress...", widgets.STATUS_BUSY)
+        self.status.set("Autotuning in progress...", widgets.STATUS_BUSY)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Tuning…")
         self.console.set_text("")
 
@@ -602,6 +610,7 @@ class AutotuningPanel(Panel):
             mode=mode,
             evaluate_ids=evaluate_ids,
             search_space_ids=search_space_ids,
+            kept_build_trees=self.kept_build_trees_check.isChecked(),
         )
 
     def _announce_request(self, request: AutotunerRequest) -> None:

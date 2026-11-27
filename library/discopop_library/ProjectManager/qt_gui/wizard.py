@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFormLayout,
     QLabel,
     QLineEdit,
@@ -31,15 +32,21 @@ from PySide6.QtWidgets import (
 
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
+from discopop_library.ProjectManager.qt_gui.help_dialogs import help_button
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.excluded_directories import ExcludedDirectoriesTree
 from discopop_library.ProjectManager.qt_gui.included_directories import IncludedDirectoriesList
 from discopop_library.ProjectManager.services.configurations import (
+    ConfigurationError,
     WizardData,
+    existing_shared_incremental_script,
+    remove_shared_incremental_script,
     write_seq_settings,
     write_shared_compile_script,
+    write_shared_incremental_script,
     write_wizard_configuration,
 )
+from discopop_library.ProjectManager.services.incremental_script import incremental_draft
 from discopop_library.ProjectManager.services.jobs import WorkEvent, WorkFinished
 from discopop_library.ProjectManager.services.wizard import (
     COMPILE_PLACEHOLDER,
@@ -58,6 +65,7 @@ STEP_TITLES = [
     "Write Permissions Check",
     "Project Directories",
     "Compilation Script",
+    "Incremental Build Script",
     "Compilation Settings",
     "Test Compilation",
     "Derived Settings",
@@ -73,11 +81,13 @@ The wizard will help you with:
 
 1. Choosing what is project code (directories to exclude, directories outside the project to include)
 2. Specifying the compilation script (compile.sh)
-3. Configuring compilation settings (compilers and flags)
-4. Testing the compilation configuration
-5. Reviewing and accepting derived settings files
-6. Specifying the execution script and naming your configuration
-7. Optionally specifying an output validation script (validate.sh), plus a separate
+3. Optionally specifying an incremental build script (compile_incremental.sh), which rebuilds only what
+   changed (worthwhile for projects whose build takes long)
+4. Configuring compilation settings (compilers and flags)
+5. Testing the compilation configuration
+6. Reviewing and accepting derived settings files
+7. Specifying the execution script and naming your configuration
+8. Optionally specifying an output validation script (validate.sh), plus a separate
    compilation script for it if validation needs a different build
 
 After completing this wizard, your project will be ready to use with DiscoPoP.
@@ -113,6 +123,20 @@ COMPILE_HINT = (
     "You can use relative paths as if you are already in the project root.\n"
     "See the wiki for examples: https://tuda-hpclab.github.io/discopop/"
 )
+
+INCREMENTAL_TEXT = (
+    "An incremental build script (compile_incremental.sh) is for larger projects: it continues the build tree of an "
+    "earlier build and rebuilds only what changed, instead of running compile.sh in full. This pays off e.g. when "
+    "the autotuner tries one set of suggestions after the other.\n\n"
+    "This step is optional: skip it if the build is quick. You can add the script later in the Project Setup stage, "
+    "or for a single configuration in the Editor stage.\n\n"
+    "The script must only rebuild: no clean, no rm -rf of the build directory, no configure step. It applies to the "
+    "configurations that use this shared compile.sh."
+)
+INCREMENTAL_CHECKBOX = "Use an incremental build script (recommended for projects whose build takes long)"
+INCREMENTAL_PROPOSED = "Proposed from compile.sh — check it"
+INCREMENTAL_NO_BUILD_LINE = "No build line found in compile.sh — write the rebuild command"
+INCREMENTAL_FROM_FILE = "The shared compile_incremental.sh of this project"
 
 EXECUTE_HINT = (
     "Specify a minimal execution script to validate the instrumentation.\n"
@@ -228,6 +252,7 @@ class ConfigurationWizard(QWizard):
             self._write_access_step(),
             self._project_directories_step(),
             self._compile_sh_step(),
+            self._incremental_step(),
             self._seq_settings_step(),
             self._test_compilation_step(),
             self._derived_settings_step(),
@@ -237,6 +262,7 @@ class ConfigurationWizard(QWizard):
         for step in self.steps:
             self.addPage(step)
         self.currentIdChanged.connect(self._update_title)
+        self.currentIdChanged.connect(self._refresh_incremental_proposal)
         self._update_title(0)
 
     def _update_title(self, step_index: int) -> None:
@@ -305,6 +331,71 @@ class ConfigurationWizard(QWizard):
         write_shared_compile_script(self.arguments.project_config_dir, self.step_data)
         return True
 
+    def _incremental_step(self) -> _Step:
+        existing = existing_shared_incremental_script(self.arguments.project_config_dir)
+        # the text last proposed from compile.sh; None while the editor holds something else (the file of a
+        # earlier run)
+        self._incremental_proposal: Optional[str] = None
+        self.incremental_check = QCheckBox(INCREMENTAL_CHECKBOX)
+        self.incremental_status = QLabel("")
+        self.incremental_sh_text = widgets.ScriptEditor()
+        self.incremental_sh_text.setEnabled(False)
+        if existing is not None:
+            self.incremental_sh_text.set_text(existing)
+            self.incremental_status.setText(INCREMENTAL_FROM_FILE)
+            self.incremental_check.setChecked(True)
+            self.incremental_sh_text.setEnabled(True)
+        self.incremental_check.toggled.connect(self._incremental_toggled)
+        # the check box and the Help button in one row (a button alone in the step would span its width)
+        check_row = QWidget()
+        check_row.setLayout(widgets.hbox(self.incremental_check, None, help_button(self, "compile_incremental.sh")))
+        return self._step(
+            4,
+            _label(INCREMENTAL_TEXT, wrap=True),
+            check_row,
+            self.incremental_status,
+            self.incremental_sh_text,
+            on_next=self._leave_incremental,
+        )
+
+    def _incremental_toggled(self, checked: bool) -> None:
+        self.incremental_sh_text.setEnabled(checked)
+        if checked:
+            current = self.incremental_sh_text.text()
+            if not current.strip() or current == self._incremental_proposal:
+                self._propose_incremental()
+
+    def _propose_incremental(self) -> None:
+        draft, found = incremental_draft(self.step_data.compile_sh)
+        self._incremental_proposal = draft
+        self.incremental_sh_text.set_text(draft)
+        self.incremental_status.setText(INCREMENTAL_PROPOSED if found else INCREMENTAL_NO_BUILD_LINE)
+
+    def _refresh_incremental_proposal(self, step_index: int) -> None:
+        """Entering the step again: a proposal the user did not edit follows the compile.sh entered meanwhile."""
+        if step_index != 4 or not self.incremental_check.isChecked() or self._incremental_proposal is None:
+            return
+        if self.incremental_sh_text.text() == self._incremental_proposal:
+            self._propose_incremental()
+
+    def _leave_incremental(self) -> bool:
+        config_dir = self.arguments.project_config_dir
+        if self.incremental_check.isChecked():
+            try:
+                write_shared_incremental_script(config_dir, self.incremental_sh_text.text())
+            except ConfigurationError as e:
+                dialogs.show_error(self, e.title, e.message)
+                return False
+        elif existing_shared_incremental_script(config_dir) is not None:
+            if dialogs.ask_yes_no(
+                self,
+                "Remove compile_incremental.sh",
+                "A shared compile_incremental.sh exists, but the incremental build script is not used.\n\n"
+                "Remove it? Every build then runs compile.sh in full.",
+            ):
+                remove_shared_incremental_script(config_dir)
+        return True
+
     def _seq_settings_step(self) -> _Step:
         settings = initial_seq_settings(self.arguments.project_config_dir)
         self.cc_entry = QLineEdit(settings["CC"])
@@ -318,7 +409,7 @@ class ConfigurationWizard(QWizard):
         form_layout.addRow("C Flags (CFLAGS):", self.cflags_entry)
         form_layout.addRow("C++ Flags (CXXFLAGS):", self.cxxflags_entry)
         step = self._step(
-            4,
+            5,
             _label("Configure your compilation settings. These will be used to compile your project."),
             form,
             on_next=self._leave_seq_settings,
@@ -339,7 +430,7 @@ class ConfigurationWizard(QWizard):
         self.test_status_label = QLabel("")
         self.test_output = widgets.OutputConsole()
         step = self._step(
-            5,
+            6,
             _label("Click 'Run Test Compilation' to verify your compilation script works."),
             self.run_test_button,
             self.test_status_label,
@@ -358,7 +449,7 @@ class ConfigurationWizard(QWizard):
         self.test_status_label.setText("Running...")
         widgets.set_label_color(self.test_status_label, widgets.STATUS_BUSY)
         self.run_test_button.setEnabled(False)
-        self.steps[5].set_complete(False)
+        self.steps[6].set_complete(False)
 
         def handle(event: WorkEvent) -> None:
             if not isinstance(event, WorkFinished):
@@ -371,7 +462,7 @@ class ConfigurationWizard(QWizard):
             for line in outcome.output:
                 self.test_output.append_text(line)
             self.run_test_button.setEnabled(True)
-            self.steps[5].set_complete(True)
+            self.steps[6].set_complete(True)
 
         start_work(self, compilation_work(self.arguments), handle)
 
@@ -394,7 +485,7 @@ class ConfigurationWizard(QWizard):
         self.notebook.addTab(self.hd_settings_text, "hd_settings.json")
         self.notebook.addTab(self.par_settings_text, "par_settings.json")
         return self._step(
-            6,
+            7,
             _label("Review and accept the derived settings. You can edit them before continuing."),
             self.notebook,
             on_next=self._leave_derived_settings,
@@ -421,7 +512,7 @@ class ConfigurationWizard(QWizard):
         name_layout.setContentsMargins(0, 0, 0, 0)
         name_layout.addWidget(_label("Configuration Name:"))
         name_layout.addWidget(self.config_name_entry)
-        return self._step(7, name_row, _label(EXECUTE_HINT), self.execute_sh_text, on_next=self._leave_execute_sh)
+        return self._step(8, name_row, _label(EXECUTE_HINT), self.execute_sh_text, on_next=self._leave_execute_sh)
 
     def _leave_execute_sh(self) -> bool:
         config_name = self.config_name_entry.text().strip()
@@ -440,7 +531,7 @@ class ConfigurationWizard(QWizard):
             "compile_validate.sh — only if validation needs a different build",
             widgets.vbox(_label(VALIDATE_COMPILE_HINT), self.validate_compile_sh_text, margins=5),
         )
-        return self._step(8, _label(VALIDATE_HINT), validate_box, validate_compile_box)
+        return self._step(9, _label(VALIDATE_HINT), validate_box, validate_compile_box)
 
     # --- finishing ---
 

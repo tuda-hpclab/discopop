@@ -30,6 +30,7 @@ All paths are relative to the `.discopop` directory. The files are described in 
 | `explorer/patterns.json` | The identified parallel patterns (suggestions). Other tools of the framework import it. |
 | `explorer/pattern_decisions.json` | Which code regions the detection considered, which patterns it found for them and why it rejected the others (e.g. the data dependency that prevents a parallelization). |
 | `explorer/detection_result_dump.json` | Dump of the complete detection result, including the program execution graph. |
+| `explorer/suggestion_extents.json` | The source ranges of the suggestions, next to the dump; read instead of the dump for the Amdahl ceilings. |
 | `explorer/side_effects.json.gz` | Data that functions read and write outside of themselves, as observed during profiling. |
 | `patch_generator/<pattern id>/<file id>.patch` | The patches created by the [patch generator](Patch_generator.md). |
 

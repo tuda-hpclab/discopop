@@ -314,7 +314,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
 
         # --- Live Plot tab (default) ---
         plot_tab = ttk.Frame(right_notebook)
-        right_notebook.add(plot_tab, text="📈 Live Plot")
+        right_notebook.add(plot_tab, text="Live Plot")
 
         tiles_frame = ttk.Frame(plot_tab)
         tiles_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(6, 2))
@@ -348,7 +348,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
 
         # --- Console tab ---
         console_tab = ttk.Frame(right_notebook)
-        right_notebook.add(console_tab, text="🖥 Console")
+        right_notebook.add(console_tab, text="Console")
         self.autotuning_output_text = create_styled_output_console(console_tab)
         self.autotuning_output_text.pack(fill=tk.BOTH, expand=True)
 
@@ -608,7 +608,7 @@ class AutotuningPanelMixin(ConfigManagerMixinBase):
         if self.autotuning_stop_button is not None:
             self.autotuning_stop_button.config(state="normal")
 
-        self.status_label.config(text="⏳ Autotuning in progress...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text="Autotuning in progress...", foreground=widgets.STATUS_BUSY)
 
         if self.autotuning_output_text is not None:
             self.autotuning_output_text.config(state=tk.NORMAL)

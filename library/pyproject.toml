@@ -31,7 +31,7 @@ classifiers = [
 dependencies = [
     # the Project Manager GUI's hotspot tab identifies code regions with the
     # region-key helpers that live next to the instrumentation pass writing them
-    "discopop-hotspot-detection>=0.0.1a3",
+    "discopop-hotspot-detection>=0.0.1a4",
     "extrap",
     "filelock",
     "jsonpickle",
@@ -74,7 +74,6 @@ discopop_preprocessor = "discopop_library.PreProcessor.__main__:main"
 discopop_project_manager = "discopop_library.ProjectManager.__main__:main"
 discopop = "discopop_library.ProjectManager.__main__:main"
 discopop_gui = "discopop_library.ProjectManager.__main__:gui_main"
-discopop_configuration_manager = "discopop_library.ConfigurationManager.__main__:main"
 discopop_dependency_comparator = "discopop_library.DependencyComparator.__main__:main"
 discopop_parallel_region_merger = "discopop_library.ParallelRegionMerger.__main__:main"
 

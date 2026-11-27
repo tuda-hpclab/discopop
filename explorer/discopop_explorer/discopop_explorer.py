@@ -39,7 +39,8 @@ from discopop_library.Viewer.suggestions_view import print_suggestions_overview
 #    ExtrapInterpolatedMicrobench,
 # )
 from discopop_library.result_classes.DetectionResult import DetectionResult
-from discopop_library.StatusReporting.console import banner, stage, success
+from discopop_library.Amdahl.regions import suggestion_extents, write_suggestion_extents
+from discopop_library.StatusReporting.console import banner, stage, success, warn
 from discopop_explorer.classes.PEGraph.PEGraphX import PEGraphX
 from discopop_explorer.json_serializer import PatternBaseSerializer
 from discopop_explorer.utilities.PEGraphConstruction.parser import parse_inputs
@@ -329,6 +330,12 @@ def run(arguments: ExplorerArguments) -> None:
                     f.write(res.dump_to_pickled_json())
                     f.flush()
                     f.close()
+            # the source ranges of the suggestions (Amdahl ceilings), so that readers need not decode the dump
+            with stage("Writing the suggestion extents"):
+                try:
+                    write_suggestion_extents(arguments.enable_detection_result_dump_file, suggestion_extents(res))
+                except Exception as e:  # noqa: BLE001 -- optional data, must not fail the detection
+                    warn("Could not write the suggestion extents: " + str(e))
 
         if arguments.enable_json_file is None:
             print(str(res))

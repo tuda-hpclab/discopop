@@ -13,12 +13,14 @@ name: "DiscoPoP CI"
 # A commit is tested once: branches are tested through their pull request (which also covers the pull requests of a
 # stack, whose target is another feature branch), so a push only runs for the branches that code is merged into.
 # A branch without a pull request is tested by a manual run (workflow_dispatch).
+# A job only runs if the changes can affect it (create_matrix, step "Find out which jobs the changes affect"): e.g. a
+# pull request that only changes the explorer skips the profiler's C++ unit tests, runtime checks and benchmarks.
 on:
   push:
     branches:
       - master
   pull_request:
-  # manual runs, e.g. to get the callback benchmark (callback_benchmark) for a branch
+  # manual runs, e.g. to get the benchmarks (job benchmarks) for a branch
   workflow_dispatch:
     inputs:
       callback_breakdown:
@@ -59,25 +61,38 @@ jobs:
 # is derived from its base image and install command, so changing either one builds a new image, and a push that
 # changes neither one reuses the existing image. Bump IMAGE_REVISION to rebuild all images, e.g. to update the packages.
   create_matrix:
-    runs-on: self-hosted
+    # a GitHub-hosted runner: it only decides what runs, and starts at once instead of waiting for a self-hosted slot
+    runs-on: ubuntu-latest
     name: Create matrix
     # the jobs run on a self-hosted runner: never execute code from pull requests of forks there.
     # a maintainer pushes such a branch to this repository to have it checked.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # looks up which prerequisite images exist already
+      packages: read
+      # look up whether a pull request run tested the tree of a push already
+      actions: read
+      pull-requests: read
     outputs:
+      tested_by: ${{ steps.tested.outputs.tested_by }}
       scope: ${{ steps.create_matrix.outputs.scope }}
       benchmarks: ${{ steps.create_matrix.outputs.benchmarks }}
       matrix: ${{ steps.create_matrix.outputs.matrix }}
-      images: ${{ steps.create_matrix.outputs.images }}
-      build_environments: ${{ steps.create_matrix.outputs.build_environments }}
+      missing_images: ${{ steps.missing_images.outputs.missing_images }}
       tools_image: ${{ steps.create_matrix.outputs.tools_image }}
       primary_image: ${{ steps.create_matrix.outputs.primary_image }}
-      leak_check_image: ${{ steps.create_matrix.outputs.leak_check_image }}
       head_label: ${{ steps.versions.outputs.head_label }}
       base_sha: ${{ steps.versions.outputs.base_sha }}
       base_label: ${{ steps.versions.outputs.base_label }}
       base_note: ${{ steps.versions.outputs.base_note }}
+      # whether the changes affect a job (step "changes"): 'false' skips it, an empty value (the step failed) runs it
+      run_python_tests: ${{ steps.changes.outputs.run_python_tests }}
+      run_profiler_tests: ${{ steps.changes.outputs.run_profiler_tests }}
+      run_profiler_unit_tests: ${{ steps.changes.outputs.run_profiler_unit_tests }}
+      run_runtime_checks: ${{ steps.changes.outputs.run_runtime_checks }}
+      run_benchmarks: ${{ steps.changes.outputs.run_benchmarks }}
     steps:
       - name: Create build matrix
         id: create_matrix
@@ -115,25 +130,21 @@ jobs:
           e_llvm20="$(entry ubuntu-24-04-llvm-20 ubuntu:24.04 python3 "$apt_common && $apt_install llvm-20-dev clang-20 clang-tools-20 libclang-20-dev libomp-20-dev")"
           e_llvm21="$(entry debian-trixie-llvm-21 debian:trixie python3 "$apt_common && $apt_llvm_org && $apt_install llvm-21-dev clang-21 clang-tools-21 libclang-21-dev libomp-21-dev")"
           e_llvm22="$(entry debian-trixie-llvm-22 debian:trixie python3 "$apt_common && $apt_install llvm-22-dev clang-22 clang-tools-22 libclang-22-dev libomp-22-dev")"
-          # the sanitized unit tests and the coverage (no venv needed); llvm-19 provides llvm-cov and llvm-profdata,
-          # libclang-rt-19-dev the sanitizer and profile runtimes (only recommended by clang-19)
+          # the runtime checks (sanitized unit tests, leak check, coverage; no venv needed); llvm-19 provides llvm-cov,
+          # llvm-profdata and llvm-symbolizer, libclang-rt-19-dev the sanitizer and profile runtimes (only recommended by
+          # clang-19)
           e_tools="$(entry ubuntu-24-04-llvm-19-tools ubuntu:24.04 python3 "$apt_common && $apt_install llvm-19 llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev")"
-          # the leak check links against the sanitizer runtime of clang
-          e_leak="$(entry debian-trixie-llvm-19-leak-check debian:trixie python3 "export DEBIAN_FRONTEND=noninteractive && apt update && $apt_install ca-certificates python3 build-essential make cmake git llvm-19-dev clang-19 libclang-rt-19-dev libomp-19-dev libboost-dev")"
 
           # the full matrix only where code is merged into master (pushes and pull requests targeting it);
           # every other push is checked on one platform to keep development runs short
           if [[ ( "$GITHUB_EVENT_NAME" = "push" && "$GITHUB_REF" = "refs/heads/master" ) \
              || ( "$GITHUB_EVENT_NAME" = "pull_request" && "$PR_BASE_REF" = "master" ) ]]; then
             matrix="{\"include\":[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]}"
-            images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools,$e_leak]"
-            # the environments that need the venv with DiscoPoP (see prepare_build)
-            build_environments="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22]"
+            images="[$e_llvm19,$e_llvm20,$e_llvm21,$e_llvm22,$e_tools]"
             scope="full"
           else
             matrix="{\"include\":[$e_llvm21]}"
-            images="[$e_llvm21,$e_tools,$e_leak]"
-            build_environments="[$e_llvm21]"
+            images="[$e_llvm21,$e_tools]"
             scope="reduced"
           fi
           # the benchmarks (about half of the time of a run) compare against the version before and are of interest where
@@ -154,17 +165,199 @@ jobs:
             echo "images<<END"
             echo "$images"
             echo "END"
-            echo "build_environments<<END"
-            echo "$build_environments"
-            echo "END"
             echo "tools_image=$(image_of "$e_tools")"
             # the environment of the jobs outside the matrix that need the venv (static checks, benchmarks): the matrix entry
             # both configurations contain, so its venv is prepared anyway
             echo "primary_image=$(image_of "$e_llvm21")"
-            echo "leak_check_image=$(image_of "$e_leak")"
           } >> "$GITHUB_OUTPUT"
 
-      # the versions the benchmarks compare (benchmark_report): a pull request against the tip of its target branch,
+          # A push to master whose tree a pull request run has tested completely already (the merge of a pull request that
+      # was up to date with master, which the branch protection of master requires) is not tested again: its checks
+      # are skipped and checks_successful names the run that tested it. A pull request run tests the merge of its head
+      # into the target branch as it was then; that tree equals the tree of the head if the head contains the target
+      # branch of then, which is an ancestor of the master before the push (the first parent). So the tree was tested if
+      # it equals the tree of the head of a merged pull request into master that contains that first parent, and if that
+      # head has a successful run with the full matrix (a pull request retargeted to master without a new push only had
+      # a reduced run).
+      - name: Find out whether a pull request run tested this tree already
+        id: tested
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && !github.event.act }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX: ${{ steps.create_matrix.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          api() { gh api -H "Accept: application/vnd.github+json" "repos/$GITHUB_REPOSITORY/$1" "${@:2}"; }
+          tree="$(api "commits/$GITHUB_SHA" -q .commit.tree.sha)"
+          first_parent="$(api "commits/$GITHUB_SHA" -q '.parents[0].sha')"
+          environments="$(jq '.include | length' <<< "$MATRIX")"
+          tested_by=""
+          while read -r number head; do
+            [ -n "$number" ] || continue
+            if [ "$(api "commits/$head" -q .commit.tree.sha)" != "$tree" ]; then
+              echo "#$number: the tree of its head ${head:0:8} differs"; continue
+            fi
+            if [[ ! "$(api "compare/$first_parent...$head" -q .status)" =~ ^(ahead|identical)$ ]]; then
+              echo "#$number: its head ${head:0:8} does not contain ${first_parent:0:8}"; continue
+            fi
+            while read -r run_id run_url; do
+              [ -n "$run_id" ] || continue
+              # every matrix entry of the full configuration had to run its tests, and the run had to succeed
+              python_tests="$(api "actions/runs/$run_id/jobs?per_page=100" --paginate \
+                -q '[.jobs[] | select((.name | startswith("Python tests:")) and .conclusion == "success")] | length' \
+                | awk '{ sum += $1 } END { print sum + 0 }')"
+              if [ "$python_tests" -ge "$environments" ]; then
+                tested_by="$run_url"; break
+              fi
+              echo "#$number: run $run_url tested $python_tests of $environments environments"
+            done < <(api "actions/workflows/ci.yml/runs?event=pull_request&head_sha=$head&status=success&per_page=20" \
+                       -q '.workflow_runs[] | "\(.id) \(.html_url)"')
+            [ -z "$tested_by" ] || break
+          done < <(api "commits/$GITHUB_SHA/pulls" \
+                     -q '.[] | select(.base.ref == "master" and .merged_at != null) | "\(.number) \(.head.sha)"')
+          if [ -n "$tested_by" ]; then
+            echo "The tree of $GITHUB_SHA was tested by $tested_by: its checks are skipped"
+          else
+            echo "No pull request run tested the tree of $GITHUB_SHA: it is tested"
+          fi
+          echo "tested_by=$tested_by" >> "$GITHUB_OUTPUT"
+
+      # only the images that do not exist yet are built (prepare_images): usually none, and then that job is skipped
+      # instead of taking a runner per image to find out
+      - name: Find the prerequisite images that do not exist yet
+        id: missing_images
+        shell: bash
+        env:
+          IMAGES: ${{ steps.create_matrix.outputs.images }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # local runs with act (scripts/dev/run_ci_locally.sh): no registry, the images are in the local docker store
+          if [ -z "${ACT:-}" ]; then
+            echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null
+          fi
+          missing="$(jq -c '.[]' <<< "$IMAGES" | while read -r environment; do
+            image="$(jq -r .image <<< "$environment")"
+            if [ -z "${ACT:-}" ]; then
+              exists() { docker manifest inspect "$1" > /dev/null 2>&1; }
+            else
+              exists() { docker image inspect "$1" > /dev/null 2>&1; }
+            fi
+            if exists "$image"; then
+              echo "$image exists" >&2
+            else
+              echo "$image has to be built" >&2
+              echo "$environment"
+            fi
+          done | jq -sc .)"
+          echo "missing_images=$missing" >> "$GITHUB_OUTPUT"
+
+      # CHANGED PATHS: a job runs only if the changes can affect its result. irrelevant() below lists, per job, the
+      # paths that cannot: any other path runs the job, also one not named there (a new directory, the workflow, the
+      # build configuration), so a forgotten path costs time, not a check. The changes of a pull request are the ones
+      # GitHub shows (against the merge base with its target), those of a push to master the ones against the state
+      # before it. A manual run, a local run (act), a diff that cannot be determined and a failure of this step run
+      # every job: the jobs test the outputs for != 'false'.
+      - name: Find out which jobs the changes affect
+        id: changes
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # python_tests: the job (mypy, unit and end-to-end tests); profiler_tests: its steps for test/instrumentation
+          # and test/profiler; the others are the jobs of these names
+          jobs=(python_tests profiler_tests profiler_unit_tests runtime_checks benchmarks)
+
+          # irrelevant <job> <path>: whether a change of <path> cannot change the result of <job>
+          irrelevant() {
+            case "$2" in
+              # documentation and the configuration of editors and commit tools: only the license check (static_checks,
+              # which always runs) reads them. Not every .md file: the code loads some (e.g. the prompts of PatchRepair)
+              docs/*|design/*|*README.md|CLAUDE.md|.github/ISSUE_TEMPLATE/*|LICENSE) return 0 ;;
+              .clangd|.clang-format|.pre-commit-config.yaml|commitlint.config.js) return 0 ;;
+            esac
+            [ "$1" != python_tests ] || return 1
+            case "$2" in
+              # the Python packages besides the profiler and their tests: no profiler job builds, runs or tests them
+              # (test/instrumentation and test/profiler only call discopop_cc / discopop_cxx)
+              explorer/*|library/*|GUI/*|mcp_server/*|hotspot_detection/*|example/*|tools/*|mypy.ini) return 0 ;;
+              test/end_to_end/*|test/wip_end_to_end/*|test/project_manager/*|test/scripts/*|test/utils/*|test/old/*) return 0 ;;
+            esac
+            case "$1" in
+              profiler_tests)
+                # the C++ tests, the leak check, the benchmarks and the scripts of the other profiler jobs
+                case "$2" in test/unit_tests/*|test/pass_unit_tests/*|test/leak_check/*|benchmark/*|scripts/dev/*) return 0 ;; esac ;;
+              profiler_unit_tests|runtime_checks)
+                # the pytest suites; the benchmark sources (these jobs configure benchmark/CMakeLists.txt, but build
+                # only the unit tests and the runtime library); the leak check is a runtime check
+                case "$1:$2" in
+                  *:benchmark/CMakeLists.txt) return 1 ;;
+                  *:test/instrumentation/*|*:test/profiler/*|*:test/conftest.py|*:benchmark/*) return 0 ;;
+                  profiler_unit_tests:test/leak_check/*) return 0 ;;
+                esac ;;
+              benchmarks)
+                # the tests and the scripts of the other jobs: the benchmarks only measure the profiler
+                case "$2" in test/*|scripts/dev/*) return 0 ;; esac ;;
+            esac
+            return 1
+          }
+
+          everything=""
+          if [ -n "${ACT:-}" ]; then
+            everything="a local run (act)"
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # renamed files count with their old path, too: a file moved out of profiler/ changes the profiler
+            files="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+                       -q '.[] | .filename, (.previous_filename // empty)')"
+            listed="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" -q '.[].filename' | wc -l)"
+            # the API lists at most 3000 files
+            if [ "$listed" -lt "${PR_CHANGED_FILES:-0}" ]; then
+              everything="the API listed only $listed of the $PR_CHANGED_FILES changed files"
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
+            compare="$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA")"
+            files="$(jq -r '.files[] | .filename, (.previous_filename // empty)' <<< "$compare")"
+            # the API lists at most 300 files; the state before a force push need not be an ancestor
+            if [ "$(jq '.files | length' <<< "$compare")" -ge 300 ]; then
+              everything="the push changes 300 files or more"
+            elif [ "$(jq -r .status <<< "$compare")" != "ahead" ]; then
+              everything="the push does not extend ${BEFORE:0:8}"
+            fi
+          else
+            everything="a $GITHUB_EVENT_NAME run"
+          fi
+          if [ -z "$everything" ] && [ -z "${files:-}" ]; then
+            everything="no changed files were listed"
+          fi
+
+          if [ -n "$everything" ]; then
+            echo "Every job runs: $everything"
+            for job in "${jobs[@]}"; do echo "run_$job=true" >> "$GITHUB_OUTPUT"; done
+            exit 0
+          fi
+          echo "Changed files: $(wc -l <<< "$files")"
+          for job in "${jobs[@]}"; do
+            reason=""
+            while read -r file; do
+              if ! irrelevant "$job" "$file"; then reason="$file"; break; fi
+            done <<< "$files"
+            if [ -n "$reason" ]; then
+              echo "$job: runs ($reason and maybe more affect it)"
+              echo "run_$job=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$job: skipped (no changed file affects it)"
+              echo "run_$job=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      # the versions the benchmarks compare (job benchmarks): a pull request against the tip of its target branch,
       # a push against the state before it; a manual run and the first push of a branch have nothing to compare with
       - name: Determine the versions to compare
         id: versions
@@ -200,11 +393,13 @@ jobs:
             echo "base_note=$base_note"
           } >> "$GITHUB_OUTPUT"
 
-  # builds the prerequisite images that do not exist in the registry yet (see create_matrix)
+  # builds the prerequisite images that do not exist in the registry yet (see create_matrix), on a GitHub-hosted runner:
+  # it needs no self-hosted resources. Skipped when all images exist, so the jobs that need it accept a skipped one.
   prepare_images:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     name: "Prepare image: ${{ matrix.id }}"
     needs: [create_matrix]
+    if: ${{ needs.create_matrix.outputs.missing_images != '[]' }}
     timeout-minutes: 60
     # the only job that writes to the registry; the others only read
     permissions:
@@ -213,7 +408,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.create_matrix.outputs.images) }}
+        include: ${{ fromJson(needs.create_matrix.outputs.missing_images) }}
     steps:
       - name: Build and push the image, unless it exists
         shell: bash
@@ -269,55 +464,21 @@ jobs:
           fi
 
 
-  # BUILT CODE: builds the venv with all DiscoPoP packages (installed without -e) once per environment and saves it to
-  # the actions cache (see .github/actions/prepared-venv); the jobs below restore it instead of installing themselves.
-  # The built profiler is cached separately and keyed by profiler/ only: a change of the Python sources reinstalls the
-  # packages, but does not rebuild the profiler.
-  prepare_build:
-    runs-on: self-hosted
-    name: "Prepare build: ${{ matrix.id }}"
-    needs: [create_matrix, prepare_images]
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ${{ matrix.image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.create_matrix.outputs.build_environments) }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Build the venv with DiscoPoP, unless it is cached
-        uses: ./.github/actions/prepared-venv
-        with:
-          environment: ${{ matrix.image }}
-          python: ${{ matrix.python }}
-          save: "true"
-
   # The tests of the matrix entries are split into the jobs below (the Python based checks in one, the profiler build in
-  # another), which run in parallel. Each matrix job restores the prepared venv and installs the DiscoPoP packages itself.
+  # another), which run in parallel.
   #
   # STATIC CHECKS: independent of the platform (black targets the supported Python versions, see pyproject.toml), so
-  # they run once instead of per matrix entry.
+  # they run once instead of per matrix entry. They need neither the prepared image nor DiscoPoP, only black and ruff:
+  # a GitHub-hosted runner, which starts at once, so that they are the first result of a run. Executing the code of a
+  # pull request of a fork is harmless there, but its other jobs do not run anyway (create_matrix).
   static_checks:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
-    container:
-      image: ${{ needs.create_matrix.outputs.primary_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Static checks: license tags, formatting (black), lint (ruff)"
-    needs: [create_matrix, prepare_images, prepare_build]
+    name: "Static checks: license tags, formatting (black), lint (ruff), package versions"
+    # only for skipping a tested push (create_matrix takes seconds on a hosted runner)
+    needs: [create_matrix]
+    if: ${{ needs.create_matrix.outputs.tested_by == '' }}
     timeout-minutes: 20
     steps:
       - name: Checkout Repository
@@ -327,11 +488,11 @@ jobs:
         run: |
           ./scripts/dev/check-license.sh $(find . -type f)
 
-      # only black and ruff (requirements-dev.txt) are needed from this venv
-      - name: Setup venv
-        uses: ./.github/actions/prepared-venv
-        with:
-          environment: ${{ needs.create_matrix.outputs.primary_image }}
+      # the versions CI pins in requirements-dev.txt; the other requirements are not needed
+      - name: Setup venv with black and ruff
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install $(grep -E '^(black|ruff)==' requirements-dev.txt)
 
       - name: Check formatting of DiscoPoP Explorer
         run: |
@@ -366,6 +527,12 @@ jobs:
         run: |
           venv/bin/python3 -m ruff check
 
+      # a VERSION change is a release (release.yml): the requirements between the packages must fit the versions
+      - name: Check the versions and the requirements between the packages (scripts/dev/release.py check)
+        run: |
+          venv/bin/pip install --quiet packaging
+          venv/bin/python3 scripts/dev/release.py check
+
   # PROFILER UNIT TESTS: the GoogleTest binaries of the runtime library (DiscoPoP_UT) and the LLVM pass (DiscoPoP_Pass_UT);
   # built from the root CMakeLists.txt, they need no venv
   profiler_unit_tests:
@@ -380,6 +547,8 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Profiler unit tests: runtime library and LLVM pass (${{ matrix.id }})"
     needs: [create_matrix, prepare_images]
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' && needs.create_matrix.outputs.run_profiler_unit_tests != 'false' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -408,8 +577,10 @@ jobs:
           python3 scripts/dev/check_headers.py build_tests
 
       # most of the runtime is configured by -DDP_... options, and the default build compiles only one variant:
-      # this builds the runtime library once per set of options, so that an option does not stop compiling unnoticed
+      # this builds the runtime library once per set of options, so that an option does not stop compiling unnoticed.
+      # The runtime library does not depend on LLVM: one environment (the primary one, part of every run) suffices.
       - name: Build the runtime library with the compile time options (scripts/dev/check_rtlib_options.sh)
+        if: ${{ matrix.image == needs.create_matrix.outputs.primary_image }}
         run: |
           scripts/dev/check_rtlib_options.sh
 
@@ -421,6 +592,11 @@ jobs:
   # One job instead of one per kind: each kind takes about a minute, so a job of its own spent more time on starting the
   # container, restoring the venv and waiting for a free runner than on the checks. The steps all run, so a run
   # reports every failing kind; the profiler build (profiler_unit_tests) stays a job of its own, it takes minutes.
+  # BUILT CODE: the job also provides the venv with all DiscoPoP packages (installed without -e) of its environment: it
+  # restores it from the actions cache, or builds and saves it there (see .github/actions/prepared-venv), so that the
+  # benchmarks restore it. The built profiler is cached separately and keyed by profiler/ only: a change of the Python
+  # sources reinstalls the packages, but does not rebuild the profiler. (A job of its own preparing the venv cost another
+  # wait for a runner between the image and the tests, up to an hour in busy times.)
   python_tests:
     runs-on: self-hosted
     permissions:
@@ -432,7 +608,9 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
     name: "Python tests: mypy, unit, profiler, end-to-end (${{ matrix.id }})"
-    needs: [create_matrix, prepare_images, prepare_build]
+    needs: [create_matrix, prepare_images]
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' && needs.create_matrix.outputs.run_python_tests != 'false' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -441,12 +619,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # the venv with all DiscoPoP packages comes from the prepare_build job
-      - name: Setup venv with DiscoPoP
+      - name: Setup venv with DiscoPoP (built and saved to the cache, unless it is cached)
         uses: ./.github/actions/prepared-venv
         with:
           environment: ${{ matrix.image }}
           python: ${{ matrix.python }}
+          save: "true"
 
       - name: Type check (mypy)
         run: |
@@ -457,16 +635,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -m "not e2e and not profiler"
+          python3 -m pytest -n "$DP_TEST_WORKERS" -m "not e2e and not profiler"
 
       - name: Instrumentation tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.create_matrix.outputs.run_profiler_tests != 'false' }}
         run: |
           . venv/bin/activate
           python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/instrumentation
 
       - name: Profiler gold standard tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.create_matrix.outputs.run_profiler_tests != 'false' }}
         run: |
           . venv/bin/activate
           python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/profiler
@@ -475,17 +653,63 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           . venv/bin/activate
-          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup test/end_to_end
+          python3 -m pytest -v -n "$DP_TEST_WORKERS" --dist loadgroup --durations=20 test/end_to_end
 
-  # SANITIZED UNIT TESTS of the profiler runtime library: the C++ unit tests (DiscoPoP_UT) run against a runtime
-  # built with sanitizers (DP_SANITIZERS). Finds memory errors, undefined behavior and data races in the runtime's
-  # code, but only in what the unit tests exercise: no LLVM pass and no instrumented program are involved.
-  # The other memory check, "Leak check of instrumented programs", runs real instrumented programs instead.
-  # Locally: scripts/dev/run_profiler_sanitizers.sh <address,undefined|thread>
-  runtime_unit_tests_sanitized:
+  # CACHES OF A TESTED PUSH: a push to master whose checks are skipped (see create_matrix, tested_by) still saves the
+  # venv and the profiler wheel of every environment to the actions cache: the caches of master are the ones every
+  # pull request into it can restore (a pull request cannot read the caches of another one), so without them the first
+  # run of every pull request would build the profiler again. Restoring an existing cache takes seconds.
+  warm_caches:
     runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
+    name: "Caches of a tested push (${{ matrix.id }})"
+    needs: [create_matrix, prepare_images]
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by != '' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build the venv with DiscoPoP and save it to the cache, unless it is cached
+        uses: ./.github/actions/prepared-venv
+        with:
+          environment: ${{ matrix.image }}
+          python: ${{ matrix.python }}
+          save: "true"
+
+  # RUNTIME CHECKS of the profiler runtime library, independent of the platform (one environment, the tools image), in one
+  # job: each check takes only one or two minutes, so jobs of their own spent about as much time on starting containers
+  # and waiting for runners. They run next to the tests instead of after them: off the critical path of a run.
+  # Every step runs, so a run reports every failing check.
+  # - SANITIZED UNIT TESTS: the C++ unit tests (DiscoPoP_UT) against a runtime built with sanitizers (DP_SANITIZERS).
+  #   Finds memory errors, undefined behavior and data races in the runtime's code, but only in what the unit tests
+  #   exercise: no LLVM pass and no instrumented program are involved.
+  #   Locally: scripts/dev/run_profiler_sanitizers.sh <address,undefined|thread>
+  # - LEAK CHECK OF INSTRUMENTED PROGRAMS: small programs (test/leak_check/programs) are compiled with the DiscoPoP
+  #   pass, linked against a runtime built with AddressSanitizer/LeakSanitizer and run. The runtime library must
+  #   not leak, and must not keep growing memory over the run time (see scripts/dev/check_profiler_leaks.sh and
+  #   test/leak_check/evaluate_leaks.py). It only looks for leaks, but in the whole pipeline and in more detail than
+  #   LSan's check at exit: before and after the runtime's shutdown, against a list of known bounded leaks, and
+  #   short against long runs. Locally: scripts/dev/check_profiler_leaks.sh
+  # - COVERAGE: line coverage of the runtime library by DiscoPoP_UT (clang source based coverage, see
+  #   scripts/dev/run_rtlib_coverage.sh). Not enforced yet (continue-on-error): the floor of 90% lines is reported
+  #   until it has proven stable on the runner.
+  # Locally: scripts/dev/run_ci_locally.sh -j runtime_checks
+  runtime_checks:
+    runs-on: self-hosted
+    # never run code from pull requests of forks on the self-hosted runner: create_matrix is skipped for them;
+    # prepare_images is skipped when all images exist
+    if: ${{ !cancelled() && needs.create_matrix.result == 'success' && (needs.prepare_images.result == 'success' || needs.prepare_images.result == 'skipped') && needs.create_matrix.outputs.tested_by == '' && needs.create_matrix.outputs.run_runtime_checks != 'false' }}
     permissions:
       contents: read
       packages: read
@@ -496,89 +720,37 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
       # TSan needs ASLR disabled on kernels with high mmap entropy (setarch -R), which Docker's default seccomp profile forbids
       options: --security-opt seccomp=unconfined
-    name: "Runtime unit tests with sanitizers (${{ matrix.label }})"
-    # the more detailed checks only run once the basic checks and tests have passed
-    needs: [create_matrix, prepare_images, static_checks, python_tests, profiler_unit_tests]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - sanitizers: "address,undefined"
-            label: "ASan+UBSan: memory errors, undefined behavior"
-          - sanitizers: "thread"
-            label: "TSan: data races"
-
+    name: "Runtime checks: sanitizers, leak check, coverage"
+    needs: [create_matrix, prepare_images]
+    timeout-minutes: 60
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # builds DiscoPoP_UT with -DDP_SANITIZERS and runs it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
-      - name: Build the runtime unit tests with ${{ matrix.sanitizers }} and run them
+      # build DiscoPoP_UT with -DDP_SANITIZERS and run it with the *SAN_OPTIONS and suppressions (test/unit_tests/sanitizers)
+      - name: "Runtime unit tests with ASan+UBSan: memory errors, undefined behavior"
+        if: ${{ !cancelled() }}
         run: |
-          scripts/dev/run_profiler_sanitizers.sh "${{ matrix.sanitizers }}"
+          scripts/dev/run_profiler_sanitizers.sh address,undefined
 
-  # LEAK CHECK OF INSTRUMENTED PROGRAMS: small programs (test/leak_check/programs) are compiled with the DiscoPoP
-  # pass, linked against a runtime built with AddressSanitizer/LeakSanitizer and run. The runtime library must
-  # not leak, and must not keep growing memory over the run time (see scripts/dev/check_profiler_leaks.sh and
-  # test/leak_check/evaluate_leaks.py). It only looks for leaks, but in the whole pipeline and in more detail than
-  # LSan's check at exit: before and after the runtime's shutdown, against a list of known bounded leaks, and
-  # short against long runs. The sanitized unit tests are a separate job ("Runtime unit tests with sanitizers").
-  # One platform is enough: the check is about the runtime library's code, not about the platform.
-  # Locally: scripts/dev/check_profiler_leaks.sh, or scripts/dev/run_ci_locally.sh -j instrumented_programs_leak_check
-  instrumented_programs_leak_check:
-    runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ${{ needs.create_matrix.outputs.leak_check_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Leak check of instrumented programs (ASan/LSan)"
-    # the more detailed checks only run once the basic checks and tests have passed
-    needs: [create_matrix, prepare_images, static_checks, python_tests, profiler_unit_tests]
-    timeout-minutes: 45
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Build, run and evaluate the leak check programs
+      - name: "Runtime unit tests with TSan: data races"
+        if: ${{ !cancelled() }}
         run: |
-          # the unit tests run under ASan/LSan in the "Runtime unit tests with sanitizers" job already
+          scripts/dev/run_profiler_sanitizers.sh thread
+
+      - name: "Leak check of instrumented programs (ASan/LSan)"
+        if: ${{ !cancelled() }}
+        run: |
+          # the unit tests run under ASan/LSan in the step above already
           DP_LEAK_CHECK_JOBS="$(nproc)" scripts/dev/check_profiler_leaks.sh --skip-unit-tests
 
-  # Line coverage of the runtime library by DiscoPoP_UT (clang source based coverage, see
-  # scripts/dev/run_rtlib_coverage.sh). Not part of checks_successful yet: the floor of 90% lines is
-  # reported, not enforced, until it has proven stable on the runner.
-  rtlib_coverage:
-    runs-on: self-hosted
-    # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ${{ needs.create_matrix.outputs.tools_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Coverage: runtime library unit tests"
-    # the more detailed checks only run once the basic checks and tests have passed
-    needs: [create_matrix, prepare_images, static_checks, python_tests, profiler_unit_tests]
-    timeout-minutes: 45
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Measure the coverage of the runtime library
+      - name: Coverage of the runtime library by its unit tests (not enforced)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
         run: |
           scripts/dev/run_rtlib_coverage.sh --markdown-out rtlib_coverage_summary.md --min-line-coverage 90
 
-      - name: Add the report to the job summary
+      - name: Add the coverage report to the job summary
         if: ${{ always() }}
         run: |
           if [ -f rtlib_coverage_summary.md ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -586,103 +758,45 @@ jobs:
           fi
 
   # BENCHMARKS: both compare the version under test with the one before it (see create_matrix, "versions") on the
-  # same runner, interleaved round by round, so that a change of the runner's speed affects both alike. They run last
-  # and one after the other, so that no other job of the run competes for the machine while they measure.
-  # benchmark_report turns their results into the pull request comment, the job summary and the artifact
+  # same runner, interleaved round by round, so that a change of the runner's speed affects both alike. They run last,
+  # after all checks and tests, and one after the other in one job, so that no other job of the run competes for the
+  # machine while they measure (and the run waits for a runner once instead of once per benchmark).
+  # The last steps turn their results into the pull request comment, the job summary and the artifact
   # "benchmark-report" (HTML with charts). Regressions are flagged there, but never fail the CI.
   # Locally: benchmark/compare/run_ab_benchmarks.py and benchmark/compare/compare_benchmarks.py
-
-  # Builds a set of small programs with and without the DiscoPoP pass and runs both
-  # (benchmark/pass_overhead). Fails if a program of the version under test does not build or run, or if its
-  # instrumented binary does not reproduce the output of the uninstrumented one; the timings are reported, not
-  # enforced.
-  pass_overhead_benchmark:
+  #
+  # - pass overhead: builds a set of small programs with and without the DiscoPoP pass and runs both
+  #   (benchmark/pass_overhead). Fails the job if a program of the version under test does not build or run, or if its
+  #   instrumented binary does not reproduce the output of the uninstrumented one; the timings are reported, not
+  #   enforced.
+  # - injected callbacks: what the injected callbacks cost (benchmark/injected_functions): per call, with and without
+  #   their bodies. On request (pull request label "benchmark-breakdown", or the input of a manual run) also per
+  #   program, attributed to the single callbacks (--callback-breakdown, builds the runtime library variants), which
+  #   takes long. The times depend on the runner too much to gate on: it never fails the job (continue-on-error).
+  benchmarks:
     runs-on: self-hosted
-    # after the detailed checks (whose success implies the basic ones'); the coverage only has to be finished.
     # never run code from pull requests of forks on the self-hosted runner (see create_matrix)
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.create_matrix.outputs.benchmarks == 'true' && needs.runtime_unit_tests_sanitized.result == 'success' && needs.instrumented_programs_leak_check.result == 'success' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.create_matrix.outputs.benchmarks == 'true' && needs.create_matrix.outputs.run_benchmarks != 'false' && needs.static_checks.result == 'success' && (needs.profiler_unit_tests.result == 'success' || (needs.profiler_unit_tests.result == 'skipped' && needs.create_matrix.outputs.run_profiler_unit_tests == 'false')) && (needs.python_tests.result == 'success' || (needs.python_tests.result == 'skipped' && needs.create_matrix.outputs.run_python_tests == 'false')) && (needs.runtime_checks.result == 'success' || (needs.runtime_checks.result == 'skipped' && needs.create_matrix.outputs.run_runtime_checks == 'false')) }}
     permissions:
       contents: read
       packages: read
+      # reads the labels of the pull request and writes the comment with the report
+      pull-requests: write
     container:
       image: ${{ needs.create_matrix.outputs.primary_image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Benchmark: overhead of the DiscoPoP LLVM pass"
-    needs: [create_matrix, prepare_images, prepare_build, runtime_unit_tests_sanitized, instrumented_programs_leak_check, rtlib_coverage]
-    timeout-minutes: 90
+    # benchmark_breakdown.yml re-runs this job by its name
+    name: "Benchmarks: pass overhead, injected callbacks, comparison report"
+    needs: [create_matrix, static_checks, profiler_unit_tests, python_tests, runtime_checks]
+    timeout-minutes: 240
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # the profiler has to be installed without -e: otherwise LLVMDiscoPoP.so is not in the venv
-      - name: Setup venv with DiscoPoP
-        uses: ./.github/actions/prepared-venv
-        with:
-          environment: ${{ needs.create_matrix.outputs.primary_image }}
-
-      # failing to prepare it only removes it from the comparison; the report says so
-      - name: Prepare the version to compare with
-        if: ${{ needs.create_matrix.outputs.base_sha != '' }}
-        continue-on-error: true
-        uses: ./.github/actions/base-version
-        with:
-          sha: ${{ needs.create_matrix.outputs.base_sha }}
-          environment: ${{ needs.create_matrix.outputs.primary_image }}
-
-      - name: Compare builds with and without the DiscoPoP pass, both versions interleaved
-        shell: bash
-        env:
-          HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
-          BASE_LABEL: ${{ needs.create_matrix.outputs.base_label }}
-          BASE_NOTE: ${{ needs.create_matrix.outputs.base_note }}
-          BASE_SHA: ${{ needs.create_matrix.outputs.base_sha }}
-        run: |
-          base_options=()
-          if [ -n "$BASE_SHA" ]; then
-            base_options=(--base-python venv_base/bin/python)
-          fi
-          venv/bin/python3 benchmark/compare/run_ab_benchmarks.py --results-dir benchmark_results \
-            --head-label "$HEAD_LABEL" --base-label "$BASE_LABEL" --base-note "$BASE_NOTE" "${base_options[@]}" \
-            pass-overhead --rounds 2 --repetitions 3
-
-      - name: Upload the results
-        if: ${{ !cancelled() && !env.ACT }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results-pass-overhead
-          path: benchmark_results/
-          if-no-files-found: ignore
-          overwrite: true
-
-  # What the injected callbacks cost (benchmark/injected_functions): per call, with and without their bodies.
-  # On request (pull request label "benchmark-breakdown", or the input of a manual run) also per program,
-  # attributed to the single callbacks (--callback-breakdown, builds the runtime library variants), which takes long.
-  # The times depend on the runner too much to gate on: not part of checks_successful.
-  callback_benchmark:
-    runs-on: self-hosted
-    # not on every push to a feature branch (it takes long), but where code is merged: pull requests into master or
-    # new_explorer (never from forks, see create_matrix), pushes to them, and manual runs
-    if: ${{ !cancelled() && needs.pass_overhead_benchmark.result == 'success' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/new_explorer')) || github.event_name == 'workflow_dispatch') }}
-    permissions:
-      contents: read
-      packages: read
-      # reads the labels of the pull request
-      pull-requests: read
-    container:
-      image: ${{ needs.create_matrix.outputs.primary_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Benchmark: cost of the injected callbacks"
-    needs: [create_matrix, prepare_images, prepare_build, pass_overhead_benchmark]
-    timeout-minutes: 180
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      # installed without -e: the breakdown drives clang with the pass plugin from the venv
+      # the venv python_tests saved; the profiler has to be installed without -e: otherwise LLVMDiscoPoP.so is not in
+      # the venv, and the breakdown drives clang with the pass plugin from the venv
       - name: Setup venv with DiscoPoP
         uses: ./.github/actions/prepared-venv
         with:
@@ -706,6 +820,7 @@ jobs:
             core.info(`callback breakdown requested: ${requested}`);
             core.setOutput('requested', String(requested));
 
+      # failing to prepare it only removes it from the comparison; the report says so
       - name: Prepare the version to compare with
         if: ${{ needs.create_matrix.outputs.base_sha != '' }}
         continue-on-error: true
@@ -714,8 +829,28 @@ jobs:
           sha: ${{ needs.create_matrix.outputs.base_sha }}
           environment: ${{ needs.create_matrix.outputs.primary_image }}
 
-      # configures and builds both versions of the benchmark itself (build_tests, build_base)
-      - name: Measure the injected callbacks with and without their bodies, both versions interleaved
+      - name: "Pass overhead: compare builds with and without the DiscoPoP pass, both versions interleaved"
+        id: pass_overhead
+        shell: bash
+        env:
+          HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
+          BASE_LABEL: ${{ needs.create_matrix.outputs.base_label }}
+          BASE_NOTE: ${{ needs.create_matrix.outputs.base_note }}
+          BASE_SHA: ${{ needs.create_matrix.outputs.base_sha }}
+        run: |
+          base_options=()
+          if [ -n "$BASE_SHA" ]; then
+            base_options=(--base-python venv_base/bin/python)
+          fi
+          venv/bin/python3 benchmark/compare/run_ab_benchmarks.py --results-dir benchmark_results \
+            --head-label "$HEAD_LABEL" --base-label "$BASE_LABEL" --base-note "$BASE_NOTE" "${base_options[@]}" \
+            pass-overhead --rounds 2 --repetitions 3
+
+      # configures and builds both versions of the benchmark itself (build_tests, build_base); only after a successful
+      # pass overhead benchmark, as before
+      - name: "Injected callbacks: measure them with and without their bodies, both versions interleaved"
+        if: ${{ !cancelled() && steps.pass_overhead.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         env:
           HEAD_LABEL: ${{ needs.create_matrix.outputs.head_label }}
@@ -743,43 +878,19 @@ jobs:
         if: ${{ !cancelled() && !env.ACT }}
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-callbacks
+          name: benchmark-results
           path: benchmark_results/
           if-no-files-found: ignore
           overwrite: true
 
-  # The comparison of the benchmark results: a comment on the pull request (updated by every run instead of adding
-  # another one), the job summary, and the artifact "benchmark-report" with the HTML report and the raw data.
-  benchmark_report:
-    runs-on: self-hosted
-    # not in local runs with act (scripts/dev/run_ci_locally.sh sets github.event.act): no artifact service there
-    if: ${{ !cancelled() && !github.event.act && (needs.pass_overhead_benchmark.result == 'success' || needs.pass_overhead_benchmark.result == 'failure') }}
-    permissions:
-      contents: read
-      packages: read
-      # the comment with the report
-      pull-requests: write
-    container:
-      image: ${{ needs.create_matrix.outputs.primary_image }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN || 'unset' }}
-    name: "Benchmark: comparison report"
-    needs: [create_matrix, pass_overhead_benchmark, callback_benchmark]
-    timeout-minutes: 15
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download the benchmark results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: benchmark-results-*
-          path: benchmark_results
-          merge-multiple: true
-
-      # the comparison only needs the standard library, no venv
+      # the report (not in local runs with act: scripts/dev/run_ci_locally.sh sets github.event.act, and there is no
+      # artifact service there); the comparison only needs the standard library.
+      # The report is informative: its steps never fail the job, which checks_successful requires (e.g. a transient
+      # error of the GitHub API when commenting; it was a job of its own outside checks_successful before)
       - name: Compare the versions
+        id: compare
+        if: ${{ !cancelled() && !github.event.act && steps.pass_overhead.outcome != 'skipped' }}
+        continue-on-error: true
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -789,6 +900,8 @@ jobs:
 
       - name: Upload the report
         id: upload
+        if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-report
@@ -797,6 +910,9 @@ jobs:
 
       # once more, now that the link to the uploaded report is known
       - name: Link the report and add it to the job summary
+        id: link
+        if: ${{ !cancelled() && steps.upload.outcome == 'success' }}
+        continue-on-error: true
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
@@ -806,9 +922,12 @@ jobs:
           cat benchmark_comment.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the pull request
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.link.outcome == 'success' }}
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
+          # the API answers with a server error now and then (HTTP 500)
+          retries: 3
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('benchmark_comment.md', 'utf8');
@@ -822,26 +941,76 @@ jobs:
               await github.rest.issues.createComment({ ...context.repo, issue_number, body });
             }
 
+  # a pull request whose changes no longer affect the benchmarks (e.g. its profiler changes were reverted): the comment
+  # an earlier run wrote would show the results of another version; it is replaced by a note. No comment is created.
+  benchmark_note:
+    runs-on: ubuntu-latest
+    name: Note on skipped benchmarks
+    needs: [create_matrix]
+    if: ${{ github.event_name == 'pull_request' && needs.create_matrix.outputs.benchmarks == 'true' && needs.create_matrix.outputs.run_benchmarks == 'false' }}
+    permissions:
+      pull-requests: write
+    timeout-minutes: 5
+    steps:
+      - name: Replace an earlier benchmark comment by a note
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          retries: 3
+          script: |
+            const marker = '<!-- discopop-benchmark-report -->';
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number });
+            const previous = comments.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
+            if (previous) {
+              const sha = context.payload.pull_request.head.sha.substring(0, 8);
+              const body = `${marker}\n### Benchmarks\n\nSkipped for ${sha}: none of the changes of this pull request ` +
+                'affects the profiler or the benchmarks. Run the workflow manually to measure anyway.';
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            }
+
   checks_successful:
-    runs-on: self-hosted
+    # only evaluates the results of the other jobs: a GitHub-hosted runner, no self-hosted slot
+    runs-on: ubuntu-latest
     name: Checks successful
     # a matrix job stands for all of its entries, i.e. the configurations create_matrix selected for
     # this run: debian trixie with LLVM 21 in the reduced, every entry in the full configuration
-    needs: [create_matrix, static_checks, python_tests, profiler_unit_tests, runtime_unit_tests_sanitized, instrumented_programs_leak_check, pass_overhead_benchmark]
+    needs: [create_matrix, static_checks, python_tests, profiler_unit_tests, runtime_checks, benchmarks]
     # require success explicitly: a skipped job (e.g. a pull request from a fork) must not report success
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
       - name: Report
+        env:
+          TESTED_BY: ${{ needs.create_matrix.outputs.tested_by }}
         run: |
-          # the benchmark is skipped where create_matrix did not ask for it (a pull request of a stack); every other
-          # skipped job (e.g. all of them for a pull request from a fork) must not report success
-          benchmark_skipped_as_planned="${{ needs.create_matrix.outputs.benchmarks == 'false' && needs.pass_overhead_benchmark.result == 'skipped' }}"
-          others_skipped="${{ needs.create_matrix.result == 'skipped' || needs.static_checks.result == 'skipped' || needs.python_tests.result == 'skipped' || needs.profiler_unit_tests.result == 'skipped' || needs.runtime_unit_tests_sanitized.result == 'skipped' || needs.instrumented_programs_leak_check.result == 'skipped' || (needs.pass_overhead_benchmark.result == 'skipped' && needs.create_matrix.outputs.benchmarks != 'false') }}"
+          # a push to master whose tree a pull request run tested completely already (see create_matrix): its checks
+          # are skipped on purpose
+          if [ "${{ needs.create_matrix.result }}" = "success" ] && [ -n "$TESTED_BY" ]; then
+            echo "This tree was tested by $TESTED_BY; its checks were skipped"
+            exit 0
+          fi
+          # a job is skipped as planned where the changes do not affect it (create_matrix, step "changes"), the
+          # benchmark also where create_matrix did not ask for it (a pull request of a stack); every other skipped job
+          # (e.g. all of them for a pull request from a fork) must not report success
+          benchmark_skipped_as_planned="${{ needs.create_matrix.outputs.benchmarks == 'false' && needs.benchmarks.result == 'skipped' }}"
+          others_skipped="${{ needs.create_matrix.result == 'skipped' || needs.static_checks.result == 'skipped' || (needs.python_tests.result == 'skipped' && needs.create_matrix.outputs.run_python_tests != 'false') || (needs.profiler_unit_tests.result == 'skipped' && needs.create_matrix.outputs.run_profiler_unit_tests != 'false') || (needs.runtime_checks.result == 'skipped' && needs.create_matrix.outputs.run_runtime_checks != 'false') || (needs.benchmarks.result == 'skipped' && needs.create_matrix.outputs.benchmarks != 'false' && needs.create_matrix.outputs.run_benchmarks != 'false') }}"
           if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" != "false" || "$others_skipped" != "false" ]]; then
             echo "Checks did not succeed, job results: ${{ join(needs.*.result, ', ') }}"
             exit 1
           fi
+          for job in python_tests profiler_tests profiler_unit_tests runtime_checks benchmarks; do
+            case "$job" in
+              python_tests) flag="${{ needs.create_matrix.outputs.run_python_tests }}" ;;
+              profiler_tests) flag="${{ needs.create_matrix.outputs.run_profiler_tests }}" ;;
+              profiler_unit_tests) flag="${{ needs.create_matrix.outputs.run_profiler_unit_tests }}" ;;
+              runtime_checks) flag="${{ needs.create_matrix.outputs.run_runtime_checks }}" ;;
+              benchmarks) flag="${{ needs.create_matrix.outputs.run_benchmarks }}" ;;
+            esac
+            if [ "$flag" = "false" ]; then
+              echo "Skipped, no change affects it: $job (the log of create_matrix, step \"Find out which jobs the changes affect\", lists why)"
+            fi
+          done
           if [ "$benchmark_skipped_as_planned" = "true" ]; then
             echo "The benchmarks are not part of this run (pull request into a feature branch); run the workflow manually for them"
           fi

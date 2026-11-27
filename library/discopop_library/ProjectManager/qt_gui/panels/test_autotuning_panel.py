@@ -121,6 +121,7 @@ def test_defaults(fixture: Fixture) -> None:
     assert [t for t, check in panel.hotspot_type_checks.items() if check.isChecked()] == ["yes"]
     assert panel.algorithm_combo.currentText() == "Hotspot-guided region descent"
     assert panel.log_level.currentText() == "WARNING"
+    assert panel.kept_build_trees_check.isChecked()
     assert panel.mode() == "search"
     assert panel.header.chip.text() == "Autotuner not yet executed"
     assert panel.suggestions_count_label.text() == "No suggestions available"
@@ -432,3 +433,10 @@ def test_a_long_combination_is_summarized_in_the_chip(fixture: Fixture) -> None:
     panel.project_state.publish(AutotuningFinished())
     assert panel.header.chip.text() == "Best combination: 8 suggestions"
     assert panel.header.chip.detail() == "0, 1, 2, 3, 4, 5, 6, 7"
+
+
+def test_the_kept_build_trees_can_be_switched_off(fixture: Fixture) -> None:
+    panel = fixture.panel
+    assert panel._snapshot_request().kept_build_trees
+    panel.kept_build_trees_check.setChecked(False)
+    assert not panel._snapshot_request().kept_build_trees

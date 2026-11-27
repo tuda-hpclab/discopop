@@ -12,13 +12,20 @@
 
 #include "DPUtils.hpp"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <map>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -158,6 +165,69 @@ void Prepare(ProjectDirectories& directories) {
   }
 }
 
+// Holds an exclusive lock on FileMapping.txt while a file is looked up again and, if still unknown, appended: all
+// compiler processes of a build share the file, and without the lock two of them handed out the same id. The lock
+// file is <directory of FileMapping.txt>/locking_files/FileMapping.lock; the hotspot detection pass
+// (hotspot_detection/HotspotDetection) takes the same lock, so both passes can share one FileMapping.txt. A lock that
+// cannot be taken (a file system without flock, e.g. NFS without lockd: ENOLCK; a .discopop of another user: EACCES)
+// does not stop the compilation: it continues unlocked, as before the lock, with a warning (once per process) that the
+// file ids of a parallel build may collide.
+class FileMappingLock {
+ public:
+  explicit FileMappingLock(const std::string& file_mapping_path) {
+    const std::string::size_type separator = file_mapping_path.rfind('/');
+    const std::string directory = separator == std::string::npos ? "." : file_mapping_path.substr(0, separator);
+    std::string lock_path;
+    try {
+      lock_path = ProfilerLockPath(directory, "FileMapping.lock");
+    } catch (const std::runtime_error& error) {
+      WarnUnlocked(error.what());
+      return;
+    }
+    fd_ = open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+    if (fd_ == -1) {
+      if (errno == ENOENT) {
+        return;  // no directory for FileMapping.txt either: appending fails as well, as it did without the lock
+      }
+      WarnUnlocked("could not open the lock file " + lock_path + ": " + std::strerror(errno));
+      return;
+    }
+    int result = 0;
+    do {
+      result = flock(fd_, LOCK_EX);
+    } while (result == -1 && errno == EINTR);
+    if (result == -1) {
+      const int error = errno;
+      close(fd_);
+      fd_ = -1;
+      WarnUnlocked("could not lock " + lock_path + ": " + std::strerror(error));
+    }
+  }
+
+  FileMappingLock(const FileMappingLock&) = delete;
+  FileMappingLock& operator=(const FileMappingLock&) = delete;
+
+  ~FileMappingLock() {
+    if (fd_ != -1) {
+      flock(fd_, LOCK_UN);
+      close(fd_);
+    }
+  }
+
+ private:
+  static void WarnUnlocked(const std::string& reason) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      errs() << "DiscoPoP: warning: " << reason
+             << ". FileMapping.txt is written without the lock: the file ids of a parallel build (make -j) may "
+                "collide, build serially if they do.\n";
+    }
+  }
+
+  int fd_ = -1;
+};
+
 }  // namespace
 
 bool IsInProjectRoot(const std::string& path) {
@@ -257,9 +327,12 @@ std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& f
 
   // Keep FileMapping.txt in an in-memory cache. getFileID is called per-instruction, so
   // re-reading the file on every call dominates the pass runtime.
+  // The cache belongs to the file it was loaded from: a process naming another FileMapping.txt (the unit tests do)
+  // starts it anew.
   static std::map<std::string, std::int32_t> file_id_cache;
   static std::int32_t next_file_id = 1;
   static bool file_mapping_loaded = false;
+  static std::string loaded_file_mapping_path;
 
   auto load_file_mapping = [&]() {
     std::fstream file_mapping_file;
@@ -283,7 +356,10 @@ std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& f
     file_mapping_loaded = true;
   };
 
-  if (!file_mapping_loaded) {
+  if (!file_mapping_loaded || loaded_file_mapping_path != FileMappingPath()) {
+    file_id_cache.clear();
+    next_file_id = 1;
+    loaded_file_mapping_path = FileMappingPath();
     load_file_mapping();
   }
 
@@ -297,9 +373,10 @@ std::int32_t GetFileId(const std::string& /*file_mapping*/, const std::string& f
   // necessarily pre-generated (see the dp-fmap script), so a file unknown to this process may
   // well have been registered by a concurrently running one in the meantime. Re-read the file
   // before handing out a new id, otherwise two processes assign the same id to different
-  // files. Only the miss path pays for this, the cached lookups above stay free.
-  // NOTE: the append below remains racy - two processes missing at the same time still end up
-  // with the same id. Removing that window requires locking the file.
+  // files. Only the miss path pays for this, the cached lookups above stay free. The lock makes
+  // rereading and appending one step: otherwise two processes missing at the same time hand out
+  // the same id.
+  const FileMappingLock lock(FileMappingPath());
   load_file_mapping();
   cached = file_id_cache.find(full_path_name);
   if (cached != file_id_cache.end()) {

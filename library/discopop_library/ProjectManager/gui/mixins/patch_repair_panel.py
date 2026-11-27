@@ -344,7 +344,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         results_tab = ttk.Frame(notebook)
-        notebook.add(results_tab, text="📋 Results")
+        notebook.add(results_tab, text="Results")
         columns = ("suggestion", "hotspot", "status", "files", "attempts", "error")
         tree = ttk.Treeview(results_tab, columns=columns, show="headings", selectmode="browse")
         for column, heading, width, stretch in (
@@ -371,7 +371,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         self.patch_repair_tree = tree
 
         diff_tab = ttk.Frame(notebook)
-        notebook.add(diff_tab, text="🔀 Patch")
+        notebook.add(diff_tab, text="Patch")
         file_row = ttk.Frame(diff_tab)
         file_row.pack(fill=tk.X, padx=5, pady=5)
         ttk.Label(file_row, text="File:", font=widgets.FONT_BODY).pack(side=tk.LEFT, padx=5)
@@ -410,7 +410,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
         self.patch_repair_diff_repaired = create_code_view(repaired_frame)
 
         console_tab = ttk.Frame(notebook)
-        notebook.add(console_tab, text="🖥 Console")
+        notebook.add(console_tab, text="Console")
         self.patch_repair_output_text = create_styled_output_console(console_tab)
         self.patch_repair_output_text.pack(fill=tk.BOTH, expand=True)
 
@@ -514,7 +514,7 @@ class PatchRepairPanelMixin(ConfigManagerMixinBase):
             self.patch_repair_run_button.config(state="disabled", text="⟳ Running...")
         if self.patch_repair_stop_button is not None:
             self.patch_repair_stop_button.config(state="normal")
-        self.status_label.config(text="⏳ Patch repair in progress...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text="Patch repair in progress...", foreground=widgets.STATUS_BUSY)
 
         if self.patch_repair_output_text is not None:
             self.patch_repair_output_text.config(state=tk.NORMAL)

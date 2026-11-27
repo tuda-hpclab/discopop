@@ -11,7 +11,7 @@ import os
 import sys
 from discopop_library.EmpiricalAutotuning.ArgumentClasses import AutotunerArguments
 from discopop_library.GlobalLogger.setup import setup_logger
-from discopop_library.EmpiricalAutotuning.Autotuner import run
+from discopop_library.EmpiricalAutotuning.Autotuner import ReferenceConfigurationFailed, run
 from discopop_library.ProjectManager.configurations.execution_time import (
     DEFAULT_EXECUTION_TIME_REGEX,
     DEFAULT_EXECUTION_TIME_TAG,
@@ -83,6 +83,10 @@ def parse_args() -> AutotunerArguments:
     "execute none of them. Nothing is measured, so no candidate is ranked and no speedup is reported; the run only "
     "answers whether each configuration compiles. Intended for checking the applicability of suggestions, e.g. by "
     "discopop_patch_repair.")
+    parser.add_argument("--no-kept-build-trees", dest="kept_build_trees", action="store_false", help="Compile every "
+    "candidate in a copy of the project of its own (deleted after its run) instead of one after the other in the "
+    "kept build tree of its mode, which the project manager's builds use as well and which compile_incremental.sh "
+    "compiles incrementally. Needs a copy of the project per candidate at a time.")
     parser.add_argument("--skip-cleanup", action="store_true", help="Disable the deletion of created code variants. "
     "May require a lot of disk space.")
     parser.add_argument("--sanitize", action="store_true", help="Enable the invocation of ThreadSanitizer if "
@@ -138,6 +142,7 @@ def parse_args() -> AutotunerArguments:
         hotspot_types=arguments.hotspot_types,
         algorithm=arguments.algorithm,
         compile_only=arguments.compile_only,
+        kept_build_trees=arguments.kept_build_trees,
         noise_threshold=arguments.noise_threshold,
         hs_min_share=arguments.hs_min_share,
         max_measurements=arguments.max_measurements,
@@ -157,6 +162,11 @@ def main() -> None:
     arguments.log()
     try:
         run(arguments)
+    except ReferenceConfigurationFailed as e:
+        # the compiler output it refers to is on stdout: make it precede the error in a combined log
+        sys.stdout.flush()
+        print("ERROR: " + str(e), file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         # The search loops end on Ctrl+C (or the GUI's Stop) and keep what they measured; an interrupt outside them,
         # e.g. during the baseline measurement, has nothing to keep and is no error worth a traceback.

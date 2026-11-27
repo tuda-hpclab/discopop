@@ -293,13 +293,38 @@ def test_the_report_follows_the_autotuner_and_waits_for_executions(qtbot: QtBot,
     window = MainWindow(make_arguments(tmp_path))
     qtbot.addWidget(window)
     refreshed: List[bool] = []
-    window.report_panel.update_display = lambda: refreshed.append(True)  # type: ignore[method-assign]
+    window.report_panel.update_display = lambda force=True: refreshed.append(True)  # type: ignore[method-assign]
     window.project_state.publish(AutotuningFinished())
     assert refreshed == [True]
 
     window.report_panel.generate_report_button.setEnabled(True)
     window.execute_panel._begin_run("running", "running")
     assert not window.report_panel.generate_report_button.isEnabled()
+
+
+def test_switching_the_configuration_leaves_the_report_alone(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arguments = make_arguments(tmp_path)
+    for name in ("small", "large"):
+        config = Path(arguments.project_config_dir, name)
+        config.mkdir(parents=True)
+        (config / "execute.sh").write_text("#!/bin/bash\n./prog " + name + "\n")
+    window = MainWindow(arguments)
+    qtbot.addWidget(window)
+    window.config_list.refresh()
+    loaded: List[bool] = []
+
+    def records() -> List[object]:
+        loaded.append(True)
+        return []
+
+    monkeypatch.setattr(window.report_panel, "records", records)
+    for name in ("large", "small", "large"):
+        assert window.config_list.select(name)
+        assert window.editor_panel.editors["execute.sh"].text().endswith(name + "\n")
+    # the report shows all configurations: another selection is no reason to read the results again
+    assert loaded == []
 
 
 def test_a_running_job_shows_a_spinner_on_its_stage(qtbot: QtBot, tmp_path: Path) -> None:

@@ -151,7 +151,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
         self.generate_report_button.config(state="disabled")
         self.view_report_button.config(state="disabled")
 
-        self.status_label.config(text="⏳ Execution in progress...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text="Execution in progress...", foreground=widgets.STATUS_BUSY)
 
         self.output_text.config(state=tk.NORMAL)
         self.output_text.delete("1.0", tk.END)
@@ -289,7 +289,7 @@ class ExecutionMixin(ConfigManagerMixinBase):
         self.generate_report_button.config(state="disabled")
         self.view_report_button.config(state="disabled")
 
-        self.status_label.config(text=f"⏳ Preparing {status_noun}...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text=f"Preparing {status_noun}...", foreground=widgets.STATUS_BUSY)
 
         self.output_text.config(state=tk.NORMAL)
         self.output_text.delete("1.0", tk.END)

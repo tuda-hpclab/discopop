@@ -27,7 +27,7 @@ The query tools (`get_hotspots`, `get_parallelization_suggestions`, `explain_par
 Results are current while no source file is newer than them (modification time), and the [excluded and included directories](Project_manager.md#project-directories) have not changed since; otherwise `get_project_status` reports them as stale. They hold for the inputs that were profiled.
 
 ## Installation
-The server is part of `pip install discopop`. Activate the environment and check the command:
+The server is installed with the package `discopop` (see [Installation](../setup/discopop.md)). Activate the environment and check the command:
 ```bash
 discopop_mcp_server --help
 ```

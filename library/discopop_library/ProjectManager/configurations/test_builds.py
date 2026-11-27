@@ -11,9 +11,10 @@
 import json
 import os
 import queue
+import shutil
 import threading
 from pathlib import Path
-from typing import Dict, Iterator
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
@@ -43,6 +44,7 @@ from discopop_library.ProjectManager.configurations.builds import (
 )
 from discopop_library.ProjectManager.services import execution_run
 from discopop_library.ProjectManager.services.callpath_pruning import CallpathPruning, save_callpath_pruning
+from discopop_library.ProjectManager.services.copy_exclude import save_copy_exclude
 from discopop_library.ProjectManager.services.fingerprint_ignore import add_patterns
 from discopop_library.ProjectManager.services.jobs import WorkContext
 
@@ -196,6 +198,9 @@ def test_a_failed_compilation_leaves_no_build(project: Dict[str, Path]) -> None:
     outcome = _build(project)
     assert outcome.result == BuildResult.COMPILE_FAILED and outcome.tree is None
     assert not os.path.exists(manifest_path_of(str(project["root"] / ".discopop" / "project"), KEY))
+    # the kept tree stays for the next compilation; deleting all builds removes it
+    assert os.path.exists(build_tree_path_of(str(project["root"]), KEY))
+    delete_builds(_arguments(project["root"]))
     assert not os.path.exists(build_tree_path_of(str(project["root"]), KEY))
 
 
@@ -593,7 +598,7 @@ def test_a_stale_build_names_the_changed_files(project: Dict[str, Path]) -> None
     _build(project)
     (project["root"] / "main.c").write_text("int main() { return 1; }\n")
     (project["root"] / "dp_build").mkdir()
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("cache\n")
     (project["root"] / "gone.h").unlink()
 
     status = _status(project)
@@ -602,16 +607,78 @@ def test_a_stale_build_names_the_changed_files(project: Dict[str, Path]) -> None
     files = status.changes.files
     assert files is not None and not files.approximate
     assert files.modified == ("main.c",)
-    assert files.added == ("dp_build/CMakeCache.txt",)
+    assert files.added == ("dp_build/build.ninja",)
     assert files.removed == ("gone.h",)
     assert status.reason.startswith("Changed since the build: sources.")
     assert "3 files changed (1 modified, 1 added, 1 removed)" in status.reason
 
 
+def test_a_configured_build_directory_is_neither_copied_nor_counted(project: Dict[str, Path]) -> None:
+    _build(project)
+    # an in-place compilation of the project after the build: an out-of-source CMake build directory
+    build_dir = project["root"] / "build"
+    (build_dir / "CMakeFiles").mkdir(parents=True)
+    (build_dir / "CMakeCache.txt").write_text("CMAKE_HOME_DIRECTORY:INTERNAL=" + str(project["root"]) + "\n")
+    (build_dir / "prog").write_text("binary\n")
+    assert _status(project).state == BuildState.CURRENT
+
+    messages: List[str] = []
+    arguments = _arguments(project["root"])
+    with build_lock(arguments, KEY):
+        outcome = ensure_build(
+            arguments,
+            KEY,
+            str(project["configs"] / "cfg"),
+            str(project["configs"] / "seq_settings.json"),
+            str(project["compile"]),
+            1,
+            BuildPolicy.REBUILD,
+            message=messages.append,
+        )
+    assert outcome.result == BuildResult.BUILT and outcome.tree is not None
+    assert not (Path(outcome.tree) / "build").exists()
+    assert any("Not copied: configured build directories" in text and "build" in text for text in messages)
+
+
+def test_a_build_directory_deleted_after_the_build_does_not_make_it_stale(project: Dict[str, Path]) -> None:
+    build_dir = project["root"] / "build"
+    (build_dir / "CMakeFiles").mkdir(parents=True)
+    (build_dir / "CMakeCache.txt").write_text("CMAKE_HOME_DIRECTORY:INTERNAL=" + str(project["root"]) + "\n")
+    (build_dir / "prog").write_text("binary\n")
+    _build(project)
+    shutil.rmtree(build_dir)
+    assert _status(project).state == BuildState.CURRENT
+    # sources in a directory of that name count again
+    (project["root"] / "build").mkdir()
+    (project["root"] / "build" / "extra.c").write_text("\n")
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
+    assert status.changes.files.added == ("build/extra.c",)
+
+
+def test_the_copy_exclude_list_is_part_of_the_fingerprint(project: Dict[str, Path]) -> None:
+    (project["root"] / "data").mkdir()
+    (project["root"] / "data" / "input.bin").write_text("large\n")
+    _build(project)
+    assert _status(project).state == BuildState.CURRENT
+
+    save_copy_exclude(_project_dir(project), ["data"])
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert "copy_exclude" in status.changes.parts
+
+    outcome = _build(project)
+    assert outcome.result == BuildResult.BUILT and outcome.tree is not None
+    assert not (Path(outcome.tree) / "data").exists()
+    # a change of what is left out no longer matters
+    (project["root"] / "data" / "input.bin").write_text("other\n")
+    assert _status(project).state == BuildState.CURRENT
+
+
 def test_an_ignore_pattern_added_after_the_build_makes_it_current(project: Dict[str, Path]) -> None:
     _build(project)
     (project["root"] / "dp_build").mkdir()
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("cache\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("cache\n")
     assert _status(project).state == BuildState.STALE
 
     add_patterns(_project_dir(project), ["dp_build/"])
@@ -627,30 +694,30 @@ def test_an_ignore_pattern_added_after_the_build_makes_it_current(project: Dict[
 def test_a_build_without_a_file_list_reports_the_files_newer_than_the_build(project: Dict[str, Path]) -> None:
     # the build directory existed when the build was compiled (an in-place compilation before), as in practice
     (project["root"] / "dp_build").mkdir()
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("old\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("old\n")
     _build(project)
     os.remove(build_files_path_of(_project_dir(project), KEY))
     record = read_build(_project_dir(project), KEY)
     assert record is not None
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("\n")
-    os.utime(project["root"] / "dp_build" / "CMakeCache.txt", (record.built_at + 10, record.built_at + 10))
+    (project["root"] / "dp_build" / "build.ninja").write_text("\n")
+    os.utime(project["root"] / "dp_build" / "build.ninja", (record.built_at + 10, record.built_at + 10))
 
     status = _status(project)
     assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
-    assert status.changes.files.approximate and status.changes.files.modified == ("dp_build/CMakeCache.txt",)
+    assert status.changes.files.approximate and status.changes.files.modified == ("dp_build/build.ninja",)
     assert "1 file is newer than the build: dp_build/ (1)." in status.reason
 
     # its recorded hash covers every file: a pattern does not help, which is said
     add_patterns(_project_dir(project), ["dp_build/"])
     status = _status(project)
     assert status.state == BuildState.STALE and status.changes is not None and status.changes.files is not None
-    assert status.changes.files.modified == ("dp_build/CMakeCache.txt",)
+    assert status.changes.files.modified == ("dp_build/build.ninja",)
     assert NO_FILE_LIST_NOTE in status.reason
     # accepted once, the pattern applies
     accept_build(
         _arguments(project["root"]), KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json")
     )
-    (project["root"] / "dp_build" / "CMakeCache.txt").write_text("changed\n")
+    (project["root"] / "dp_build" / "build.ninja").write_text("changed\n")
     assert _status(project).state == BuildState.CURRENT
 
 
@@ -784,3 +851,525 @@ def test_a_dp_build_is_stale_when_the_openmp_flags_are_removed_and_the_change_ca
             _arguments(project["root"]), dp, str(project["compile"]), str(project["configs"] / "dp_settings.json")
         )
     assert _build(project, key=dp).result == BuildResult.BUILT
+
+
+def test_every_part_of_the_fingerprint_is_classified(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import (
+        CONTENT_PARTS,
+        ENVIRONMENT_PARTS,
+        TREE_PART,
+        compute_fingerprint_parts,
+    )
+    from discopop_library.ProjectManager.services import openmp_handling
+    from discopop_library.ProjectManager.services.included_directories import save_included_directories
+
+    assert not CONTENT_PARTS & ENVIRONMENT_PARTS
+    # switch on every optional part
+    openmp_handling.save_openmp_handling(_project_dir(project), openmp_handling.OpenMPHandling(strip=True))
+    save_callpath_pruning(_project_dir(project), CallpathPruning(enabled=True))
+    shared = project["tmp"] / "shared"
+    shared.mkdir()
+    (shared / "lib.c").write_text("\n")
+    save_included_directories(_project_dir(project), str(project["root"]), [str(shared)])
+    save_copy_exclude(_project_dir(project), ["data"])
+    (project["configs"] / "compile_incremental.sh").write_text("#!/bin/bash\n")
+    seen = set()
+    for mode in ("seq", "par", "dp", "hd"):
+        for suggestions in ((), ("1",)):
+            arguments = _arguments(project["root"])
+            seen |= set(
+                compute_fingerprint_parts(
+                    arguments,
+                    BuildKey("cfg", mode, suggestions),
+                    str(project["compile"]),
+                    str(project["configs"] / (mode + "_settings.json")),
+                )
+            )
+    assert seen | {TREE_PART} == CONTENT_PARTS | ENVIRONMENT_PARTS  # TREE_PART is found, not computed
+
+
+def test_the_role_is_part_of_the_id_and_survives_the_manifest(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import ROLE_VALIDATE, key_of
+
+    assert BuildKey("cfg", "par").build_id == "cfg_par"
+    assert BuildKey("cfg", "par", (), ROLE_VALIDATE).build_id == "cfg_par_validate"
+    outcome = _build(project, key=BuildKey("cfg", "seq", (), ROLE_VALIDATE))
+    assert outcome.result == BuildResult.BUILT and outcome.record is not None
+    (record,) = list_builds(_project_dir(project))
+    assert key_of(record) == BuildKey("cfg", "seq", (), ROLE_VALIDATE)
+    # a manifest of before the role (no field) is a build of the runs of its mode
+    data = json.loads(Path(manifest_path_of(_project_dir(project), key_of(record))).read_text())
+    del data["role"]
+    (Path(_project_dir(project)) / "builds" / "cfg_seq.json").write_text(json.dumps(dict(data, build_id="cfg_seq")))
+    old = read_build(_project_dir(project), BuildKey("cfg", "seq"))
+    assert old is not None and old.role == "" and key_of(old) == BuildKey("cfg", "seq")
+
+
+def test_only_content_changes_leave_the_environment_alone(project: Dict[str, Path]) -> None:
+    _build(project)
+    (project["root"] / "main.c").write_text("int main() { return 3; }\n")
+    status = _status(project)
+    assert status.changes is not None and status.changes.content_only
+    project["compile"].write_text(project["compile"].read_text() + "\n# changed\n")
+    status = _status(project)
+    assert status.changes is not None and not status.changes.content_only
+
+
+def _build_with_messages(project: Dict[str, Path], policy: BuildPolicy = BuildPolicy.AUTO) -> Tuple[BuildOutcome, str]:
+    messages: List[str] = []
+    arguments = _arguments(project["root"])
+    with build_lock(arguments, KEY):
+        outcome = ensure_build(
+            arguments,
+            KEY,
+            str(project["configs"] / "cfg"),
+            str(project["configs"] / "seq_settings.json"),
+            str(project["compile"]),
+            1,
+            policy,
+            message=messages.append,
+        )
+    return outcome, "".join(messages)
+
+
+def test_a_kept_tree_is_updated_in_place_like_a_fresh_copy(project: Dict[str, Path]) -> None:
+    (project["root"] / "other.c").write_text("int other;\n")
+    first, text = _build_with_messages(project)
+    assert first.result == BuildResult.BUILT and first.tree is not None and "Copying project" in text
+    tree = Path(first.tree)
+    (tree / "leftover.o").write_text("output of the last compilation\n")
+    (tree / ".discopop" / "stale.txt").write_text("\n")
+    other_written = os.stat(tree / "other.c").st_mtime_ns
+
+    (project["root"] / "main.c").write_text("int main() { return 4; }\n")
+    second, text = _build_with_messages(project)
+
+    assert second.result == BuildResult.BUILT and second.tree == first.tree
+    assert "Updating the build tree" in text and "Changed files written: 1" in text
+    assert (tree / "main.c").read_text() == "int main() { return 4; }\n"
+    assert (tree / "prog.out").exists()  # compiled again
+    assert not (tree / "leftover.o").exists() and not (tree / ".discopop" / "stale.txt").exists()
+    assert os.stat(tree / "other.c").st_mtime_ns == other_written
+    assert _count(project, "compiles.txt") == 2
+    assert _status(project).state == BuildState.CURRENT
+
+
+def test_a_tree_in_an_unknown_state_is_copied_anew(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import invalidate_build
+    from discopop_library.ProjectManager.configurations.tree_sync import SYNCING, read_tree_state, set_tree_state
+
+    _build_with_messages(project)
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == "clean" and "main.c" in state.synced
+
+    set_tree_state(_project_dir(project), KEY.build_id, SYNCING)  # interrupted
+    assert "Copying project" in _build_with_messages(project, BuildPolicy.REBUILD)[1]
+
+    invalidate_build(_project_dir(project), KEY)  # a validation build changed the outputs: synced, compiled in full
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and "Updating the build tree" in text
+
+
+def test_a_compilation_that_ended_on_an_error_marks_the_tree_failed_and_the_next_build_is_incremental(
+    project: Dict[str, Path],
+) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import FAILED, read_tree_state
+
+    # compile.sh and the incremental script (content is part of the environment) stay unchanged: the source decides
+    _incremental_project(project, "grep -q BROKEN main.c && exit 1\ncp main.c prog.out\n")
+    project["compile"].write_text(
+        project["compile"].read_text().replace("cp main.c", "! grep -q BROKEN main.c && cp main.c")
+    )
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("BROKEN\n")
+    outcome, _ = _build_with_messages(project)  # not proven: compile.sh runs as the fallback and fails as well
+    assert outcome.result == BuildResult.COMPILE_FAILED
+    assert _kinds(project) == ["full full", "incremental incremental", "full full"]
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == FAILED and state.environment
+
+    # the next build continues incrementally
+    (project["root"] / "main.c").write_text("int main() { return 3; }\n")
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and "Compiling incrementally" in text
+    assert _kinds(project)[-1] == "incremental incremental"
+
+
+def _failing_script(project: Dict[str, Path], code: str) -> None:
+    project["compile"].write_text(f"#!/bin/bash\nexit {code}\n")
+
+
+@pytest.mark.parametrize("code", ["124", "137", "143", "127"])
+def test_a_compilation_that_was_killed_or_timed_out_marks_the_tree_dirty(project: Dict[str, Path], code: str) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, read_tree_state
+
+    _incremental_project(project, "cp main.c prog.out\n")
+    _build_with_messages(project)
+    _failing_script(project, code)  # 124: what the timeout wrapper of execute_configuration returns
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    assert _build_with_messages(project)[0].result == BuildResult.COMPILE_FAILED
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == DIRTY
+    # the next build is a full one
+    _incremental_project(project, "cp main.c prog.out\n")
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "full full"
+
+
+@pytest.mark.parametrize("result", [None, (-9, 0.0, "", "")])
+def test_a_compilation_without_a_return_code_or_killed_by_a_signal_marks_the_tree_dirty(
+    project: Dict[str, Path], result: Optional[Tuple[int, float, str, str]]
+) -> None:
+    from unittest import mock
+
+    from discopop_library.ProjectManager.configurations import building
+    from discopop_library.ProjectManager.configurations.tree_sync import DIRTY, read_tree_state
+
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    with mock.patch.object(building, "execute_configuration", return_value=result):
+        assert _build_with_messages(project)[0].result == BuildResult.COMPILE_FAILED
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == DIRTY
+
+
+def test_a_failed_tree_is_compiled_in_full_after_a_change_of_the_environment(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import FAILED, read_tree_state
+
+    _incremental_project(project, "cp main.c prog.out\n")
+    _build_with_messages(project)
+    _failing_script(project, "1")
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    _build_with_messages(project)
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == FAILED
+    _incremental_project(project, "cp main.c prog.out\n")
+    (project["configs"] / "seq_settings.json").write_text(
+        json.dumps({"CC": "cc", "CXX": "c++", "CFLAGS": "-O1", "CXXFLAGS": ""})
+    )
+    assert _build_with_messages(project)[0].result == BuildResult.BUILT
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_a_proven_incremental_script_that_fails_is_not_followed_by_compile_sh(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import CLEAN, FAILED, read_tree_state
+
+    _incremental_project(project, "if grep -q BROKEN main.c; then exit 1; fi\ncp main.c prog.out\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    outcome, _ = _build_with_messages(project)  # incremental, proves the script
+    assert outcome.record is not None and outcome.record.build_kind == "incremental"
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == CLEAN and state.incremental_environment == state.environment
+
+    (project["root"] / "main.c").write_text("BROKEN\n")
+    tree = Path(outcome.tree or "")
+    (tree / "kept_output.o").write_text("output\n")
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.COMPILE_FAILED
+    assert "compile.sh is not run again" in text
+    assert _kinds(project) == ["full full", "incremental incremental", "incremental incremental"]
+    assert (tree / "kept_output.o").exists() and (tree / "prog.out").exists()  # outputs not cleaned
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.state == FAILED
+
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    outcome, _ = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and _kinds(project)[-1] == "incremental incremental"
+
+
+def test_after_a_failed_build_a_failing_incremental_script_falls_back_to_compile_sh_again(
+    project: Dict[str, Path],
+) -> None:
+    """A tree broken by a failed build (e.g. a configure step) must not make every later build fail without
+    compile.sh ever running again: the script counts as proven only after a successful compilation."""
+    _incremental_project(project, "if grep -q BROKEN main.c; then exit 1; fi\ncp main.c prog.out\n")
+    project["compile"].write_text(
+        project["compile"].read_text().replace("cp main.c", "! grep -q BROKEN main.c && cp main.c")
+    )
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    _build_with_messages(project)  # proves the script
+    (project["root"] / "main.c").write_text("BROKEN\n")
+    assert _build_with_messages(project)[0].result == BuildResult.COMPILE_FAILED  # no fallback: proven, tree clean
+    (project["root"] / "main.c").write_text("BROKEN again\n")
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.COMPILE_FAILED and "compile.sh is not run again" not in text
+    assert _kinds(project)[-3:] == ["incremental incremental", "incremental incremental", "full full"]
+
+
+def test_an_incremental_build_that_rebuilt_nothing_falls_back_even_when_the_script_is_proven(
+    project: Dict[str, Path],
+) -> None:
+    _incremental_project(project, "[ -f stale ] || cp main.c prog.out\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 1; }\n")
+    _build_with_messages(project)  # proven
+    (project["root"] / "main.c").write_text("int main() { return 2; }\n")
+    tree = Path(_status(project).record.tree)  # type: ignore[union-attr]
+    (tree / "stale").write_text("\n")  # the script now writes nothing
+    # "stale" is an output of the tree and kept, so the script writes nothing
+    outcome, text = _build_with_messages(project)
+    assert outcome.result == BuildResult.BUILT and "wrote no file" in text
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_a_tree_state_file_without_incremental_environment_still_loads(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state, tree_state_path_of
+
+    _build_with_messages(project)
+    path = tree_state_path_of(_project_dir(project), KEY.build_id)
+    data = json.loads(Path(path).read_text())
+    del data["incremental_environment"]
+    Path(path).write_text(json.dumps(data))
+    state = read_tree_state(_project_dir(project), KEY.build_id)
+    assert state is not None and state.incremental_environment == "" and state.environment
+
+
+def test_the_data_runs_link_to_stays_when_the_tree_is_built_again(project: Dict[str, Path]) -> None:
+    first, _ = _build_with_messages(project)
+    assert first.tree is not None
+    data = Path(first.tree) / ".discopop" / "static.txt"
+    data.write_text("data of build 1\n")
+    run_copy = project["tmp"] / "run_static.txt"
+    os.link(data, run_copy)  # as configurations/runs.py links the static data of a build into a run
+
+    (project["root"] / "main.c").write_text("int main() { return 5; }\n")
+    _build_with_messages(project)
+
+    assert run_copy.read_text() == "data of build 1\n"
+
+
+def _add_suggestions(project: Dict[str, Path]) -> None:
+    """Suggestion 1 patches main.c, 2 patches other.c, 9 does not apply."""
+    import subprocess
+
+    root, dot = project["root"], project["root"] / ".discopop"
+    (root / "other.c").write_text("int other = 0;\n")
+    (dot / "FileMapping.txt").write_text("1\t" + str(root / "main.c") + "\n2\t" + str(root / "other.c") + "\n")
+    (dot / "line_mapping.json").write_text(json.dumps({"1": {"1": 1}, "2": {"1": 1}}))
+    patched = {"1": ("main.c", 1, "int main() { return 7; }\n"), "2": ("other.c", 2, "int other = 2;\n")}
+    patched["9"] = ("main.c", 1, "something else\n")
+    for suggestion, (name, file_id, text) in patched.items():
+        original = root / name
+        modified = project["tmp"] / (name + "." + suggestion)
+        modified.write_text(text)
+        if suggestion == "9":
+            original = project["tmp"] / "not_main.c"
+            original.write_text("unrelated\n")
+        diff = subprocess.run(["diff", "-Naru", str(original), str(modified)], stdout=subprocess.PIPE).stdout
+        (dot / "patch_generator" / suggestion).mkdir(parents=True)
+        (dot / "patch_generator" / suggestion / (str(file_id) + ".patch")).write_bytes(diff)
+
+
+def _build_suggestions(project: Dict[str, Path], suggestions: Tuple[str, ...]) -> Tuple[BuildOutcome, str]:
+    messages: List[str] = []
+    arguments = _arguments(project["root"], apply_suggestions=",".join(suggestions) if suggestions else None)
+    key = BuildKey("cfg", "seq", suggestions)
+    with build_lock(arguments, key):
+        outcome = ensure_build(
+            arguments,
+            key,
+            str(project["configs"] / "cfg"),
+            str(project["configs"] / "seq_settings.json"),
+            str(project["compile"]),
+            1,
+            BuildPolicy.AUTO,
+            message=messages.append,
+        )
+    return outcome, "".join(messages)
+
+
+def test_the_builds_of_all_suggestion_sets_share_one_kept_tree(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state
+
+    _add_suggestions(project)
+    project_dir = _project_dir(project)
+
+    first, text = _build_suggestions(project, ("1",))
+    assert first.result == BuildResult.BUILT and first.tree is not None
+    tree = Path(first.tree)
+    assert tree.name == "cfg_seq" and "Copying project" in text
+    assert (tree / "main.c").read_text() == "int main() { return 7; }\n"
+    assert (tree / "prog.out").read_text() == "int main() { return 7; }\n"
+    assert first.application_result is not None and first.application_result.applied == ["1"]
+    assert (project["root"] / "main.c").read_text() == "int main() { return 0; }\n"  # the project is untouched
+    assert _status(project, BuildKey("cfg", "seq", ("1",))).state == BuildState.CURRENT
+    other_written = os.stat(tree / "other.c").st_mtime_ns
+
+    second, text = _build_suggestions(project, ("2",))
+    assert second.result == BuildResult.BUILT and second.tree == first.tree
+    assert "Updating the build tree" in text and "Changed files written: 2" in text
+    assert (tree / "main.c").read_text() == "int main() { return 0; }\n"  # the original is back
+    assert (tree / "other.c").read_text() == "int other = 2;\n"
+    assert os.stat(tree / "other.c").st_mtime_ns != other_written
+    state = read_tree_state(project_dir, "cfg_seq")
+    assert state is not None and state.applied == ["2"]
+    # one build per tree: the build of suggestion 1 is gone, its id is free
+    assert [r.build_id for r in list_builds(project_dir)] == [BuildKey("cfg", "seq", ("2",)).build_id]
+    assert _status(project, BuildKey("cfg", "seq", ("1",))).state == BuildState.NONE
+    (record,) = list_builds(project_dir)
+    assert record.suggestions == ["2"]  # runs of it record the suggestions (activate_run refuses them)
+
+    third, _ = _build_suggestions(project, ())
+    assert third.result == BuildResult.BUILT and third.tree == first.tree
+    assert (tree / "other.c").read_text() == "int other = 0;\n"
+    assert _status(project, BuildKey("cfg", "seq", ("2",))).state == BuildState.NONE
+    assert _status(project).state == BuildState.CURRENT
+
+
+def test_a_failed_application_leaves_the_kept_tree_alone(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import read_tree_state
+
+    _add_suggestions(project)
+    first, _ = _build_suggestions(project, ("1",))
+    assert first.tree is not None
+    before = read_tree_state(_project_dir(project), "cfg_seq")
+
+    failed, _ = _build_suggestions(project, ("9",))
+
+    assert failed.result == BuildResult.APPLICATION_FAILED
+    assert (Path(first.tree) / "main.c").read_text() == "int main() { return 7; }\n"
+    assert read_tree_state(_project_dir(project), "cfg_seq") == before
+    assert not Path(first.tree + ".scratch").exists()
+    assert _status(project, BuildKey("cfg", "seq", ("1",))).state == BuildState.CURRENT
+
+
+def test_a_build_whose_tree_holds_another_build_is_stale_and_cannot_be_accepted(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.tree_sync import TreeState, write_tree_state
+
+    _build(project)
+    write_tree_state(_project_dir(project), "cfg_seq", TreeState({}, ["5"], "clean"))
+    status = _status(project)
+    assert status.state == BuildState.STALE and status.changes is not None
+    assert status.changes.parts == ("tree",) and "suggestions 5" in status.reason
+    arguments = _arguments(project["root"])
+    with pytest.raises(BuildAcceptError):
+        accept_build(arguments, KEY, str(project["compile"]), str(project["configs"] / "seq_settings.json"))
+
+
+def test_the_builds_of_one_tree_share_its_lock(project: Dict[str, Path]) -> None:
+    from discopop_library.ProjectManager.configurations.builds import ROLE_VALIDATE, build_lock_path_of
+
+    project_dir = _project_dir(project)
+    one, other = BuildKey("cfg", "par", ("1",)), BuildKey("cfg", "par", ("2", "3"))
+    assert build_lock_path_of(project_dir, one) == build_lock_path_of(project_dir, other)
+    assert build_lock_path_of(project_dir, one) == build_lock_path_of(project_dir, BuildKey("cfg", "par"))
+    assert build_lock_path_of(project_dir, one) != build_lock_path_of(project_dir, BuildKey("cfg", "seq"))
+    assert build_lock_path_of(project_dir, one) != build_lock_path_of(
+        project_dir, BuildKey("cfg", "par", (), ROLE_VALIDATE)
+    )
+
+
+def _incremental_project(project: Dict[str, Path], incremental: str) -> None:
+    """compile.sh and compile_incremental.sh note in kinds.txt which ran, with DP_BUILD_KIND."""
+    kinds = project["tmp"] / "kinds.txt"
+    project["compile"].write_text(f'#!/bin/bash\necho "full $DP_BUILD_KIND" >> "{kinds}"\ncp main.c prog.out\n')
+    (project["configs"] / "compile_incremental.sh").write_text(
+        f'#!/bin/bash\necho "incremental $DP_BUILD_KIND" >> "{kinds}"\n' + incremental
+    )
+
+
+def _kinds(project: Dict[str, Path]) -> List[str]:
+    return (project["tmp"] / "kinds.txt").read_text().splitlines()
+
+
+def test_a_kept_tree_is_compiled_again_incrementally(project: Dict[str, Path]) -> None:
+    _incremental_project(project, "cp main.c prog.out\n")
+    first, _ = _build_with_messages(project)
+    assert first.record is not None and first.record.build_kind == "full"
+
+    (project["root"] / "main.c").write_text("int main() { return 6; }\n")
+    second, text = _build_with_messages(project)
+
+    assert second.result == BuildResult.BUILT and second.record is not None
+    assert "Compiling incrementally (compile_incremental.sh)" in text
+    assert _kinds(project) == ["full full", "incremental incremental"]
+    assert second.record.build_kind == "incremental"
+    assert (Path(second.tree or "") / "prog.out").read_text() == "int main() { return 6; }\n"
+    # --rebuild compiles in full
+    _build_with_messages(project, BuildPolicy.REBUILD)
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_an_incremental_build_that_rebuilt_nothing_falls_back_to_a_full_build(project: Dict[str, Path]) -> None:
+    # like the outer build of a superbuild: succeeds, writes nothing
+    _incremental_project(project, "true\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 8; }\n")
+
+    outcome, text = _build_with_messages(project)
+
+    assert outcome.result == BuildResult.BUILT and outcome.record is not None
+    assert "wrote no file although 1 file(s) of the project changed" in text
+    assert _kinds(project) == ["full full", "incremental incremental", "full full"]
+    assert outcome.record.build_kind == "full"
+    assert (Path(outcome.tree or "") / "prog.out").read_text() == "int main() { return 8; }\n"
+
+
+def test_a_failing_incremental_build_falls_back_to_a_full_build(project: Dict[str, Path]) -> None:
+    _incremental_project(project, "exit 2\n")
+    _build_with_messages(project)
+    (project["root"] / "main.c").write_text("int main() { return 9; }\n")
+
+    outcome, text = _build_with_messages(project)
+
+    assert outcome.result == BuildResult.BUILT and "compile_incremental.sh failed" in text
+    assert _kinds(project)[-1] == "full full"
+
+
+def test_only_a_tree_compiled_in_the_same_environment_and_mode_is_compiled_incrementally(
+    project: Dict[str, Path],
+) -> None:
+    from discopop_library.ProjectManager.configurations.builds import invalidate_build
+
+    _incremental_project(project, "cp main.c prog.out\n")
+    _build_with_messages(project)
+    # another settings file: in full
+    (project["configs"] / "seq_settings.json").write_text(
+        json.dumps({"CC": "cc", "CXX": "c++", "CFLAGS": "-O1", "CXXFLAGS": ""})
+    )
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "full full"
+    # a validation build changed the outputs: in full
+    invalidate_build(_project_dir(project), KEY)
+    (project["root"] / "main.c").write_text("int main() { return 10; }\n")
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "full full"
+    # now incrementally
+    (project["root"] / "main.c").write_text("int main() { return 11; }\n")
+    _build_with_messages(project)
+    assert _kinds(project)[-1] == "incremental incremental"
+    # instrumented modes are always compiled in full
+    dp_key = BuildKey("cfg", "dp")
+    for _ in range(2):
+        (project["root"] / "main.c").write_text("int main() { return %d; }\n" % (20 + _))
+        _build(project, key=dp_key)
+    assert _kinds(project)[-2:] == ["full full", "full full"]
+
+
+def test_a_full_build_in_the_kept_tree_does_not_take_restored_outputs_for_current(project: Dict[str, Path]) -> None:
+    """Like make without a clean step: main.o is compiled only if it is older than main.c. The project holds an
+    up-to-date main.o of a build in place, which a copy holds as well. Suggestions 1 and 3 both patch main.c."""
+    import subprocess
+
+    _add_suggestions(project)
+    root, dot = project["root"], project["root"] / ".discopop"
+    modified = project["tmp"] / "main.c.3"
+    modified.write_text("int main() { return 8; }\n")
+    diff = subprocess.run(["diff", "-Naru", str(root / "main.c"), str(modified)], stdout=subprocess.PIPE).stdout
+    (dot / "patch_generator" / "3").mkdir()
+    (dot / "patch_generator" / "3" / "1.patch").write_bytes(diff)
+    project["compile"].write_text("#!/bin/bash\n[ main.o -nt main.c ] || cp main.c main.o\ncp main.o prog.out\n")
+    (root / "main.o").write_text("object of the unpatched main.c\n")
+    os.utime(root / "main.c", (OLD_TIME, OLD_TIME))
+    os.utime(root / "main.o", (OLD_TIME + 10, OLD_TIME + 10))
+
+    for suggestions, expected in ((("1",), "return 7"), (("3",), "return 8"), ((), "object of the unpatched")):
+        outcome, _ = _build_suggestions(project, suggestions)
+        assert outcome.result == BuildResult.BUILT and outcome.tree is not None
+        assert expected in (Path(outcome.tree) / "prog.out").read_text(), suggestions
+
+
+OLD_TIME = 1_000_000_000

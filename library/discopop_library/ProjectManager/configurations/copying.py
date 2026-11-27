@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.PatchApplicator.PatchApplicationResult import (
     PatchApplicationResult,
@@ -25,6 +25,8 @@ from discopop_library.PatchApplicator.outside_project import (
     split_by_outside_project,
 )
 from discopop_library.PatchApplicator.patch_applicator import run_with_result as apply_suggestions
+from discopop_library.ProjectManager.configurations.copy_exclusions import CopyExclusions
+from discopop_library.ProjectManager.services.copy_exclude import load_copy_exclude
 
 PATH = str
 logger = logging.getLogger("ConfigurationManager")
@@ -88,6 +90,47 @@ def resolve_requested_suggestions(
     return suggestions
 
 
+def rewrite_file_mapping(path: PATH, old_root: PATH, new_root: PATH) -> None:
+    """Move the paths below ``old_root`` in the ``FileMapping.txt`` at ``path`` to ``new_root`` (nothing if there is
+    no such file)."""
+    if not os.path.exists(path):
+        return
+    with open(path, "r") as f:
+        fmap_lines = f.readlines()
+    for idx, line in enumerate(fmap_lines):
+        # only paths below the project root move into the copy; a plain substring replacement would also
+        # rewrite a directory outside the project that merely starts with the root ("/p/proj2" for "/p/proj")
+        file_id, separator, file_path = line.partition("\t")
+        stripped_path = file_path.rstrip("\n")
+        line_ending = file_path[len(stripped_path) :]
+        if separator and (stripped_path == old_root or stripped_path.startswith(old_root + os.sep)):
+            moved_path = new_root + stripped_path[len(old_root) :]
+            fmap_lines[idx] = file_id + separator + moved_path + line_ending
+    with open(path, "w") as f:
+        for line in fmap_lines:
+            f.write(line)
+
+
+def copy_dot_discopop(arguments: ProjectManagerArguments, tree: PATH, leave_out: Sequence[str] = ()) -> None:
+    """Replace the ``.discopop`` of ``tree`` by a copy of the project's, without the directories ``leave_out``,
+    with the paths of ``FileMapping.txt`` moved into the tree. The files of the old one are unlinked, not
+    overwritten: runs may hold hard links to them (``configurations/runs.py``)."""
+    destination = os.path.join(tree, ".discopop")
+    if os.path.lexists(destination):
+        shutil.rmtree(destination)
+    source = os.path.abspath(os.path.join(arguments.project_root, ".discopop"))
+    if os.path.isdir(source):
+        shutil.copytree(
+            source,
+            destination,
+            ignore=lambda directory, names: (
+                [name for name in names if name in leave_out] if os.path.abspath(directory) == source else []
+            ),
+            ignore_dangling_symlinks=True,
+        )
+    rewrite_file_mapping(os.path.join(destination, "FileMapping.txt"), arguments.project_root, os.path.abspath(tree))
+
+
 def copy_configuration(
     arguments: ProjectManagerArguments,
     config_path: PATH,
@@ -95,6 +138,7 @@ def copy_configuration(
     configuration_id: Optional[int] = None,
     destination: Optional[PATH] = None,
     leave_out_of_dot_discopop: Sequence[str] = (),
+    on_left_out: Optional[Callable[[str], None]] = None,
 ) -> PATH:
     """Copy the project for one run (or one build) of a configuration and apply the requested suggestions.
 
@@ -102,6 +146,9 @@ def copy_configuration(
     file and lies next to the project root. An existing directory of that name is replaced.
     ``leave_out_of_dot_discopop`` names directories of the project's ``.discopop`` that are not copied (the data of
     earlier profiling runs, which a build must not start with).
+
+    Configured build directories and the paths of the project's ``copy_exclude.json`` are not copied
+    (``configurations/copy_exclusions.py``); ``on_left_out`` (by default the log) is told what was left out.
     """
 
     config_name = os.path.basename(config_path)
@@ -117,35 +164,20 @@ def copy_configuration(
         os.makedirs(os.path.dirname(project_copy_path), exist_ok=True)
     if os.path.exists(project_copy_path):
         shutil.rmtree(project_copy_path)
-    ignore = None
-    if leave_out_of_dot_discopop:
-        left_out = os.path.join(os.path.abspath(arguments.project_root), ".discopop")
-
-        def ignore(directory: str, names: List[str]) -> List[str]:  # type: ignore[misc]
-            return list(leave_out_of_dot_discopop) if os.path.abspath(directory) == left_out else []
-
+    exclusions = CopyExclusions(
+        arguments.project_root, listed=load_copy_exclude(arguments.project_dir), dot_discopop=leave_out_of_dot_discopop
+    )
     # a symbolic link that points nowhere (submodules of large codes have some) is skipped instead of failing the copy
-    shutil.copytree(arguments.project_root, project_copy_path, ignore=ignore, ignore_dangling_symlinks=True)
+    shutil.copytree(
+        arguments.project_root, project_copy_path, ignore=exclusions.ignore(), ignore_dangling_symlinks=True
+    )
+    report = exclusions.report()
+    if report is not None:
+        (on_left_out or logger.info)(report)
     # correct paths in Filemapping.txt
-    fmap_path = os.path.join(project_copy_path, ".discopop", "FileMapping.txt")
-    if os.path.exists(fmap_path):
-        fmap_lines = []
-        with open(fmap_path, "r") as f:
-            fmap_lines = f.readlines()
-        for idx, line in enumerate(fmap_lines):
-            # only paths below the project root move into the copy; a plain substring replacement would also
-            # rewrite a directory outside the project that merely starts with the root ("/p/proj2" for "/p/proj")
-            file_id, separator, file_path = line.partition("\t")
-            stripped_path = file_path.rstrip("\n")
-            line_ending = file_path[len(stripped_path) :]
-            if separator and (
-                stripped_path == arguments.project_root or stripped_path.startswith(arguments.project_root + os.sep)
-            ):
-                moved_path = project_copy_path + stripped_path[len(arguments.project_root) :]
-                fmap_lines[idx] = file_id + separator + moved_path + line_ending
-        with open(fmap_path, "w") as f:
-            for line in fmap_lines:
-                f.write(line)
+    rewrite_file_mapping(
+        os.path.join(project_copy_path, ".discopop", "FileMapping.txt"), arguments.project_root, project_copy_path
+    )
 
     # apply the specified parallelization suggestions if requested
     if arguments.apply_suggestions is not None:

@@ -8,14 +8,14 @@
 
 """The workflow sidebar: the stages of the pipeline with what each one has done, instead of a row of equal tabs.
 
-Every stage shows its title, a badge (✓ done, ! stale, ○ not run, 🔒 locked) and a line of detail ("12
-suggestions", "sources changed", "needs profiling data"); the stages are grouped into setup, pipeline and results.
-A locked stage cannot be selected; its reason is its detail line and tooltip.
+Every stage shows its title, a badge (✓ done, ! stale, ○ not run, a crossed-out circle: locked) and a line of
+detail ("12 suggestions", "sources changed", "needs profiling data"); the stages are grouped into setup, pipeline
+and results. A locked stage cannot be selected; its reason is its detail line and tooltip.
 """
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -44,12 +44,14 @@ _SPINNER_STEP = 30
 _SPINNER_INTERVAL_MS = 80
 RUNNING_TEXT = "running…"
 
-# glyph and color of the badge; a stage that was not run gets an outlined circle, the others a filled one
+# glyph and color of the badge; a stage that was not run gets an outlined circle, a locked one an outlined circle
+# crossed out at 45 degrees (drawn, not a glyph: a lock emoji needs an emoji font on the host running the GUI, which
+# e.g. a host reached by X forwarding often lacks), the others a filled one
 BADGES: Dict[Optional[StageState], Tuple[str, str]] = {
     StageState.DONE: ("✓", widgets.STATUS_OK),
     StageState.STALE: ("!", widgets.STATUS_STOP),
     StageState.NOT_RUN: ("", "#9a9a9a"),
-    StageState.LOCKED: ("🔒", "#9a9a9a"),
+    StageState.LOCKED: ("", "#9a9a9a"),
     None: ("", "#9a9a9a"),
 }
 _BADGE_DIAMETER = 18
@@ -152,9 +154,19 @@ class _StageDelegate(QStyledItemDelegate):
                 # drawArc takes sixteenths of a degree, counter-clockwise: negative angles turn clockwise
                 painter.drawArc(circle.adjusted(2, 2, -2, -2), -self.angle * 16, -_SPINNER_SPAN * 16)
             elif state_value == StageState.LOCKED:
-                # the lock glyph is its own symbol: no circle
-                painter.setPen(text_color if selected else color)
-                painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), badge)
+                # blocked: the outlined circle of a stage that was not run, crossed out from top left to bottom right
+                pen = QPen(text_color if selected else color)
+                pen.setWidthF(1.6)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                ring = QRectF(circle.adjusted(2, 2, -2, -2))
+                painter.drawEllipse(ring)
+                offset = ring.width() / 2 * 0.7071  # cos(45°): the line ends on the circle
+                center = ring.center()
+                painter.drawLine(
+                    QPointF(center.x() - offset, center.y() - offset), QPointF(center.x() + offset, center.y() + offset)
+                )
             elif badge:
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(color)

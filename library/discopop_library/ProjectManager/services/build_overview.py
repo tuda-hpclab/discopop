@@ -24,11 +24,13 @@ from discopop_library.ProjectManager.configurations.builds import (
     BuildKey,
     BuildRecord,
     BuildState,
+    ROLE_VALIDATE,
     accept_build,
     accepted_changes_text,
     build_status,
     build_trees_dir_of,
     delete_builds,
+    key_of,
     list_builds,
 )
 from discopop_library.ProjectManager.configurations.compile_script import resolve_compile_script_path
@@ -68,7 +70,7 @@ def _status_inputs(arguments: ProjectManagerArguments, record: BuildRecord) -> O
     config_dir = os.path.join(arguments.project_config_dir, record.configuration)
     if settings is None or not os.path.isdir(config_dir):
         return None
-    key = BuildKey(record.configuration, record.mode, tuple(record.suggestions))
+    key = key_of(record)
     return key, resolve_compile_script_path(arguments.project_config_dir, record.configuration), settings
 
 
@@ -282,7 +284,11 @@ def run_rows(
 def last_build_text(arguments: ProjectManagerArguments, configuration: Optional[str], mode: str) -> str:
     """One line about the builds of ``configuration`` in ``mode`` for a panel (reads the manifests only)."""
     owner = build_owner_of(arguments.project_config_dir, configuration) if configuration else configuration
-    records = [r for r in list_builds(arguments.project_dir) if r.configuration == owner and r.mode == mode]
+    records = [
+        r
+        for r in list_builds(arguments.project_dir)
+        if r.configuration == owner and r.mode == mode and r.role != ROLE_VALIDATE
+    ]
     if not records:
         return "No build yet."
     newest = max(records, key=lambda r: r.built_at)

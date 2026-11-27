@@ -62,6 +62,8 @@ def autotuner_command(request: AutotunerRequest, dot_dp_path: str, python: Optio
     # repetition option existed.
     if request.repetitions > 1:
         command += ["-xr", str(request.repetitions)]
+    if not request.kept_build_trees:
+        command.append("--no-kept-build-trees")
     if request.mode == "evaluate":
         if request.evaluate_ids:
             command += ["-s", ",".join(request.evaluate_ids)]
