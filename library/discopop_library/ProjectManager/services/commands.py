@@ -145,6 +145,8 @@ def suggestion_check_command(
         command.append("--reject-rounding")
     if not request.discopop_tools:
         command.append("--no-discopop-tools")
+    if not request.use_approved:
+        command.append("--no-use-approved")
     if request.max_suggestions > 0:
         command += ["--max-suggestions", str(request.max_suggestions)]
     if request.suggestion_ids is not None:

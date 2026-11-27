@@ -133,6 +133,8 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self._unsure: Dict[str, view.UnsureEntry] = {}
         self._file_mapping: Dict[int, str] = {}
         self._published: List[str] = []
+        # whether the running check puts its approvals into use
+        self._used_approvals = True
         # the number of suggestions the running check announced
         self._total = 0
 
@@ -185,6 +187,8 @@ class SuggestionCheckPanel(LlmAgentPanel):
         self.review_check.setChecked(True)
         self.rounding_check = QCheckBox("Accept rounding differences")
         self.rounding_check.setChecked(True)
+        self.use_check = QCheckBox("Use approvals right away")
+        self.use_check.setChecked(True)
         self.tools_check = QCheckBox("Give the agent DiscoPoP's data (MCP)")
         self.tools_check.setChecked(True)
         self.review_check.toggled.connect(lambda _checked: self._update_budget())
@@ -203,6 +207,12 @@ class SuggestionCheckPanel(LlmAgentPanel):
             self.tools_check,
             "The side effects of functions and why DiscoPoP did not parallelize the lines, through "
             "discopop_mcp_server (read-only), if it is installed.",
+        )
+        section.add_widget(
+            self.use_check,
+            "Approved suggestions are put into use when the run ends (their patches go to patch_generator/, marked "
+            "with the assumption they rest on). Withdraw takes one back. Off: nothing is used until "
+            '"Use approved suggestions".',
         )
         self._check_box = section
 
@@ -449,6 +459,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
             dialogs.show_error(self, "LLM Connection", self._connection_problem)
             return
         request = self._snapshot_request()
+        self._used_approvals = request.use_approved
         if request.suggestion_ids is not None and not request.suggestion_ids:
             dialogs.show_error(
                 self,
@@ -507,6 +518,7 @@ class SuggestionCheckPanel(LlmAgentPanel):
             review=self.review_check.isChecked(),
             accept_rounding=self.rounding_check.isChecked(),
             discopop_tools=self.tools_check.isChecked(),
+            use_approved=self.use_check.isChecked(),
             max_suggestions=self.max_spin.value(),
             suggestion_ids=view.parse_scope(self.scope_edit.text(), self._available_ids()),
             hotspot_types=self._hotspot_types(),
@@ -610,7 +622,16 @@ class SuggestionCheckPanel(LlmAgentPanel):
             self.header.chip.set_status(widgets.CHIP_OK, "Completed")
 
         approved = len(view.approved_ids(self._records))
-        if approved:
+        in_use = set(view.published_suggestions(self.arguments.dot_dp))
+        if approved and self._used_approvals and in_use & set(view.approved_ids(self._records)):
+            # the run put its approvals into use: the other stages show them as suggestions now
+            self._after_publishing(True)
+            self.status.set(
+                "Suggestion check completed - " + str(approved) + " approved, in use (Withdraw takes them back)",
+                widgets.STATUS_OK,
+                reset_ms=6000,
+            )
+        elif approved:
             self.status.set(
                 "Suggestion check completed - " + str(approved) + " approved (not in use yet)",
                 widgets.STATUS_OK,

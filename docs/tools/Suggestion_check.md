@@ -56,7 +56,7 @@ discopop_suggestion_check --publish-approved -s 12,15 # only these
 discopop_suggestion_check --withdraw-published        # take them back (all, or those of -s)
 ```
 
-`--publish-approved` copies the patches of the approved suggestions to `patch_generator/<id>/` and writes a marker, `agent_approved.json`, with the assumption the approval rests on and its declared result differences. The patch applicator, patch repair and the GUI then treat them as suggestions; the autotuner searches them only with `--include-agent-approved`; the GUI labels them *agent-approved*. A directory the patch generator wrote is never replaced, and approvals of an earlier explorer run are not published (check them again). `--withdraw-published` removes only directories with the marker. Neither option checks anything.
+By default a check run puts its own approvals into use when it ends (as `--publish-approved` does); `--no-use-approved` leaves them unused, `--withdraw-published` takes them back. `--publish-approved` copies the patches of the approved suggestions to `patch_generator/<id>/` and writes a marker, `agent_approved.json`, with the assumption the approval rests on and its declared result differences. The patch applicator, patch repair and the GUI then treat them as suggestions; the autotuner searches them only with `--include-agent-approved`; the GUI labels them *agent-approved*. A directory the patch generator wrote is never replaced, and approvals of an earlier explorer run are not published (check them again). `--withdraw-published` removes only directories with the marker. Neither option checks anything.
 
 In the GUI, the *Suggestion Check* stage runs the check and shows its results; **Use approved suggestions** and **Withdraw** do the same as these options (see [GUI](GUI.md#suggestion-check)).
 
@@ -83,6 +83,7 @@ discopop_suggestion_check --backend opencode --model <provider/model>
 | `--reject-rounding` | accepted | Reject approvals whose results may differ by rounding. |
 | `--no-discopop-tools` | on, if `discopop_mcp_server` is found | Do not give the agents DiscoPoP's data through the MCP server. |
 | `--prompt-dir <path>` | `.discopop/project/prompts/suggestion_check` | The project's own prompt templates (`check.md`, `review.md`, `retry.md`); a template not found there is the shipped one. The GUI edits them under Settings > Suggestion check prompts. `results.json` records per template whether the project's version was used, and a fingerprint of it. |
+| `--no-use-approved` | off | Do not publish the approvals of this run when it ends. By default they are put into use; each carries its assumption in `agent_approved.json`. |
 | `--publish-approved` | | Check nothing; make the approvals (all, or those of `-s`) usable by the other tools (see above). |
 | `--withdraw-published` | | Check nothing; remove published approvals again (all, or those of `-s`). |
 | `--verify none` | `none` | `build` and `run` are not implemented yet. |

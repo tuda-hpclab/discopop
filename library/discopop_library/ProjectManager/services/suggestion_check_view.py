@@ -800,8 +800,8 @@ def progress_summary(event: Dict[str, Any], total: int) -> List[Tuple[str, str]]
                 + str(rejected)
                 + " rejected, "
                 + str(failed)
-                + " without an answer. Approvals rest on the agent's assumptions; they are used only after "
-                '"Use approved suggestions".',
+                + " without an answer. Approvals rest on the agent's assumptions; they are put into use when "
+                'the run ends unless "Use approvals right away" is off; Withdraw takes them back.',
                 tone,
             )
         ]

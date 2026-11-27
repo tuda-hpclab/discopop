@@ -53,6 +53,9 @@ class SuggestionCheckArguments(GeneralArguments):
     discopop_tools: bool = True
     # the project's own prompt templates; default: .discopop/project/prompts/suggestion_check (see prompt_store)
     prompt_dir: Optional[str] = None
+    # approvals are put into use (publish.py) at the end of the run; the user withdraws them if they do not agree with
+    # the assumption. False: they stay unused until --publish-approved
+    use_approved: bool = True
     # not a check: make approvals usable by the other tools (publish.py), or take them back
     publish_approved: bool = False
     withdraw_published: bool = False

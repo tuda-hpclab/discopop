@@ -20,6 +20,7 @@ from discopop_library.PathManagement.PathManagement import load_file_mapping
 from discopop_library.ProjectManager.services.fingerprint_ignore import load_fingerprint_ignore
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import SuggestionCheckArguments
 from discopop_library.SuggestionCheck.check import (
+    STATE_APPROVED,
     STATE_FAILED,
     Agent,
     AgentReply,
@@ -34,6 +35,7 @@ from discopop_library.SuggestionCheck.discopop_tools import DiscoPoPTools
 from discopop_library.SuggestionCheck.discopop_tools import locate as locate_discopop_tools
 from discopop_library.SuggestionCheck.prompt_store import prompt_info
 from discopop_library.SuggestionCheck.facts import SourceFiles
+from discopop_library.SuggestionCheck.publish import publish_approved
 from discopop_library.SuggestionCheck.results import Results
 from discopop_library.SuggestionCheck.workspace import ProjectChanged, ProjectGuard
 from discopop_library.SuggestionCheck.unsure import (
@@ -227,6 +229,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
         results.save()
         if skipped:
             results.progress("skipped_by_hotspot", suggestions=results.skipped_by_hotspot)
+        approved_ids: List[int] = []
         results.progress("start", suggestions=[s.pattern_id for s in suggestions])
         for suggestion in suggestions:
             results.progress("check", pattern_id=suggestion.pattern_id)
@@ -255,6 +258,8 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
                 print(message)
             results.record(suggestion, outcome, classes.get(suggestion.pattern_id))
             counts[outcome.state] = counts.get(outcome.state, 0) + 1
+            if outcome.state == STATE_APPROVED:
+                approved_ids.append(suggestion.pattern_id)
             results.progress("done", pattern_id=suggestion.pattern_id, state=outcome.state, reason=outcome.reason)
         results.progress("end", counts=counts)
     except ProjectChanged as error:
@@ -273,6 +278,16 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
         + ". Approvals rest on the agent's assumptions; see "
         + os.path.join(arguments.suggestion_check_path, "results.json")
     )
+    if arguments.use_approved and approved_ids:
+        # approvals are used unless the user withdraws them: the assumption each rests on is in the marker file
+        published = publish_approved(dot, approved_ids)
+        print(
+            "In use: "
+            + (", ".join(map(str, published.published)) or "nothing")
+            + " (withdraw with --withdraw-published)"
+        )
+        for pattern_id, reason in sorted(published.skipped.items()):
+            print("Not in use " + str(pattern_id) + ": " + reason)
     # rejections are results, not errors; a run which judged nothing is one
     if suggestions and counts.get(STATE_FAILED, 0) == len(suggestions):
         return 1

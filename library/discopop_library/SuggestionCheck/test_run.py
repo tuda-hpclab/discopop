@@ -97,6 +97,17 @@ def test_an_approved_and_a_rejected_suggestion(project: Project) -> None:
     assert "suggestion_check" not in (check / "transcripts" / "5" / "check_1_0_prompt.txt").read_text()
 
 
+def test_approvals_are_put_into_use_unless_the_user_declines(project: Project) -> None:
+    dot = _dot_discopop(project, [5, 6])
+    unused = _factory({EDIT: [edits(APPROVED_SOURCE, APPROVAL)], READ: [AGREE]})
+    assert run(_arguments(dot, suggestions="5", use_approved=False), unused) == 0
+    assert not (dot / "patch_generator" / "5").exists()
+    used = _factory({EDIT: [edits(APPROVED_SOURCE, APPROVAL)], READ: [AGREE]})
+    assert run(_arguments(dot, suggestions="5"), used) == 0
+    published = dot / "patch_generator" / "5"
+    assert (published / "1.patch").exists() and (published / "agent_approved.json").exists()
+
+
 def test_results_of_an_earlier_explorer_run_are_dropped(project: Project) -> None:
     dot = _dot_discopop(project, [5])
     run(_arguments(dot, review=False), _factory({EDIT: [edits(APPROVED_SOURCE, APPROVAL)], READ: []}))

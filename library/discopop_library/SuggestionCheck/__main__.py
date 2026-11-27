@@ -62,6 +62,10 @@ def parse_args() -> SuggestionCheckArguments:
                         "templates (check.md, review.md, retry.md). Default: "
                         ".discopop/project/prompts/suggestion_check, as edited in the GUI (Settings > Suggestion "
                         "check prompts). A template not found there is the shipped one.")
+    parser.add_argument("--no-use-approved", dest="use_approved", action="store_false", help="Do not put the "
+                        "approvals of this run into use. By default they are published to patch_generator/ when the "
+                        "run ends (as --publish-approved does), each with the assumption it rests on; "
+                        "--withdraw-published takes them back.")
     parser.add_argument("--publish-approved", action="store_true", help="Do not check anything: make the approved "
                         "suggestions (all, or those of -s) usable by the patch applicator, the autotuner and the GUI, "
                         "by copying their patches to patch_generator/. They are marked as approved by an agent and "
@@ -94,6 +98,7 @@ def parse_args() -> SuggestionCheckArguments:
             accept_rounding=arguments.accept_rounding,
             prompt_dir=arguments.prompt_dir,
             discopop_tools=arguments.discopop_tools,
+            use_approved=arguments.use_approved,
             publish_approved=arguments.publish_approved,
             withdraw_published=arguments.withdraw_published,
         )
