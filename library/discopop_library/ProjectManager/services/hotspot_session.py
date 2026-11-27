@@ -299,7 +299,7 @@ class HotspotSession:
             # that the previous runs refer to is overwritten. The analysis joins them by source location.
             ctx.output(f"Keeping the {len(log.runs)} accumulated run(s); they will be combined.\n")
 
-        ctx.status("⏳ Building...", StatusKind.BUSY)
+        ctx.status("Building...", StatusKind.BUSY)
         try:
             with build_lock(
                 args_copy,
@@ -360,7 +360,7 @@ class HotspotSession:
                         return STOPPED_REASON
 
                     label = f" ({repetition + 1}/{repetitions})" if repetitions > 1 else ""
-                    ctx.status("⏳ Measuring...", StatusKind.BUSY)
+                    ctx.status("Measuring...", StatusKind.BUSY)
                     ctx.output(f"\nExecuting '{config_name}'{label}...\n")
                     stream = OutputStream(ctx)
                     result, run = execute_in_build(
@@ -551,7 +551,7 @@ class HotspotSession:
             ctx.output(f"\nAnalysis skipped: {HOTSPOT_ANALYZER} not found on PATH.\n")
             return False
 
-        ctx.status("⏳ Analyzing...", StatusKind.BUSY)
+        ctx.status("Analyzing...", StatusKind.BUSY)
         ctx.output(f"Running hotspot analysis over {len(runs)} accumulated run(s)...\n")
 
         def on_analyzer_line(line: str) -> None:

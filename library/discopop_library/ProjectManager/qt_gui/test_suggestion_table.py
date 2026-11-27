@@ -8,6 +8,7 @@
 
 from typing import List, Optional
 
+import pytest
 from pytestqt.qtbot import QtBot
 from PySide6.QtCore import Qt
 
@@ -39,6 +40,20 @@ def test_ids_sort_numerically_and_hotness_by_heat(qtbot: QtBot) -> None:
     assert column(table, 4) == ["YES", "MAYBE", "NO", "—"]
     table.view.sortByColumn(2, Qt.SortOrder.AscendingOrder)
     assert column(table, 2) == ["a.c:5", "a.c:20", "b.c:7", "—"]
+
+
+@pytest.mark.parametrize("checkable", [False, True])
+def test_headers_have_room_for_the_sort_indicator(qtbot: QtBot, checkable: bool) -> None:
+    table = SuggestionTable(checkable=checkable)
+    qtbot.addWidget(table)
+    table.set_suggestions(INFOS)
+    header = table.view.horizontalHeader()
+    # the last column stretches; the others keep their initial widths, which must fit the title and the arrow
+    for section in range(header.count() - 1):
+        table.view.sortByColumn(section, Qt.SortOrder.AscendingOrder)
+        assert header.sectionSize(section) >= header.sectionSizeHint(section), table.model.headerData(
+            section, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole
+        )
 
 
 def test_hotness_is_colored_and_missing_values_are_dashes(qtbot: QtBot) -> None:

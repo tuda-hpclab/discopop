@@ -30,6 +30,7 @@ target_sources(
   PRIVATE
   tests.cpp
   utils/dputil/test_dot_discopop.cpp
+  utils/dputil/test_file_mapping.cpp
   utils/dputil/test_lid.cpp
   utils/dputil/test_variable_name.cpp
   utils/output/test_output.cpp

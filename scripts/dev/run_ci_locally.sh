@@ -50,4 +50,5 @@ act "$@" \
   -e "$event_file" \
   --pull=false \
   -P self-hosted=catthehacker/ubuntu:act-latest \
+  -P ubuntu-latest=catthehacker/ubuntu:act-latest \
   --container-options "--user $(id -u):$(id -g)$groups"

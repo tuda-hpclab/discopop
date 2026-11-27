@@ -654,7 +654,8 @@ def __calculate_fitness(
     logger.info("--- Executing population")
     newly_evaluated: List[CHROMOSOME] = []
     for entry in search_bar(
-        [p for p in population_wo_duplicates if p not in fitness_cache], desc="Executing population"
+        nearest_neighbour_order([p for p in population_wo_duplicates if p not in fitness_cache]),
+        desc="Executing population",
     ):
         unapplied = __application_failed(entry)
         if unapplied is not None:
@@ -674,7 +675,8 @@ def __calculate_fitness(
                 del entry_to_configuration[entry]
             continue
 
-        if entry not in compilation_successful or not compilation_successful[entry]:
+        in_kept_tree = entry in entry_to_configuration and entry_to_configuration[entry].kept_key is not None
+        if not in_kept_tree and (entry not in compilation_successful or not compilation_successful[entry]):
             # A configuration that does not build is a failed evaluation, not a
             # non-event: record it so it scores 0.0 and shows up in the search plot.
             return_code_cache[entry] = 1
@@ -685,9 +687,15 @@ def __calculate_fitness(
                 reporter.measurement(list(entry), 0.0, 1, False, False, generation=generation)
             continue
 
-        entry_to_configuration[entry].execute_only(
-            arguments, timeout=timeout_after, thread_count=arguments.thread_count
-        )
+        if in_kept_tree:
+            # compile (incrementally, after the previous candidate) and run, holding the build tree meanwhile
+            entry_to_configuration[entry].execute(arguments, timeout=timeout_after, thread_count=arguments.thread_count)
+            if entry_to_configuration[entry].execution_result is None:
+                entry_to_configuration[entry].execution_result = ExecutionResult(0.1, 1, False, False)
+        else:
+            entry_to_configuration[entry].execute_only(
+                arguments, timeout=timeout_after, thread_count=arguments.thread_count
+            )
 
         exec_res = cast(ExecutionResult, entry_to_configuration[entry].execution_result)
         return_code_cache[entry] = exec_res.return_code
@@ -726,6 +734,21 @@ def __calculate_fitness(
     logger.info("Calculated fitness:\n" + __population_to_string(population))
 
     return newly_evaluated
+
+
+def nearest_neighbour_order(population: List[CHROMOSOME]) -> List[CHROMOSOME]:
+    """``population`` in an order in which each chromosome differs little from the one before (greedy nearest
+    neighbour by the number of differing suggestions, starting with the smallest): compiled one after the other in
+    the same build tree, a candidate then recompiles only what the previous one did not have."""
+    remaining = sorted(population, key=lambda chromosome: (len(chromosome), sorted(chromosome)))
+    ordered: List[CHROMOSOME] = []
+    previous: Set[int] = set()
+    while remaining:
+        best = min(remaining, key=lambda chromosome: len(previous.symmetric_difference(chromosome)))
+        remaining.remove(best)
+        ordered.append(best)
+        previous = set(best)
+    return ordered
 
 
 def get_fitness(chromosome: CHROMOSOME, reference_runtime: float) -> FITNESS:
@@ -795,6 +818,9 @@ def __compile_population(
             continue
         if __application_failed(entry) is not None:
             continue
+        if entry in entry_to_configuration and entry_to_configuration[entry].kept_key is not None:
+            # compiled in the kept build tree right before its run (one candidate at a time), see execution
+            continue
         param_list.append((entry, copy.deepcopy(arguments), timeout_after))
     with Pool() as pool:
         # local_results = list(tqdm(pool.imap_unordered(__compile_configuration, param_list), total=len(param_list)))
@@ -819,9 +845,10 @@ def __compile_configuration(args: Tuple[CHROMOSOME, AutotunerArguments, float]) 
     tell whether the build produced a binary worth executing.
     """
     global entry_to_configuration
-    configuration, arguments, timeout_after = args
+    configuration, arguments, _timeout_after = args
+    # builds are not bounded by the runtime derived timeout (see CodeConfiguration.compile_only)
     compilation_successful = entry_to_configuration[configuration].compile_only(
-        arguments, timeout=timeout_after, thread_count=arguments.thread_count
+        arguments, thread_count=arguments.thread_count
     )
     return configuration, compilation_successful
 

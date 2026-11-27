@@ -30,7 +30,9 @@ from discopop_library.ProjectManager.reports.amdahl import generate_amdahl_repor
 logger = logging.getLogger("ProjectManager")
 
 
-def generate_full_report(arguments: ProjectManagerArguments) -> None:
+def generate_full_report(arguments: ProjectManagerArguments, allow_decode: bool = False) -> None:
+    """The report of the execution results. ``allow_decode``: the Amdahl pages may decode a detection result
+    without suggestion extents (slow, memory hungry; the command line, never the GUI)."""
     timestamp = datetime.datetime.fromtimestamp(time.time()).strftime("%Y_%m_%d_%H-%M-%S")
     # create settings page
     settings_page = plt.figure()
@@ -49,7 +51,7 @@ def generate_full_report(arguments: ProjectManagerArguments) -> None:
     generate_execution_time_report(arguments, timestamp)
     generate_speedup_report(arguments, timestamp)
     generate_efficiency_report(arguments, timestamp)
-    generate_amdahl_report(arguments, timestamp)
+    generate_amdahl_report(arguments, timestamp, allow_decode=allow_decode)
 
     # setup PDF creation
     report_path = os.path.join(arguments.project_dir, "reports", timestamp, "full_report.pdf")

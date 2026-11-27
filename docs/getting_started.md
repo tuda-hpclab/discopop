@@ -22,8 +22,18 @@ LLVM 19 to 22 are supported. For other distributions and versions, see [Installa
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install discopop
 ```
+Then install either the stable release or the pre-release:
+
+| | Stable release | Pre-release |
+|---|---|---|
+| Install | `pip install discopop` | `pip install --pre discopop` |
+| Installs | the newest final release | the newest version, pre-releases included |
+| Choose it | for a tested release | for the newest features and fixes |
+
+{: .warning }
+There is no stable release of the current version yet: `pip install discopop` installs 5.0.2, an outdated release that cannot be built. Install the pre-release until the first stable release is published.
+
 This installs all DiscoPoP packages, including the GUI. It takes a few minutes, as the profiler is compiled. To install from a checkout of the repository instead, see [Installation](setup/discopop.md).
 
 ## Start the GUI

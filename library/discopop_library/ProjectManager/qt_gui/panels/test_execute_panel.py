@@ -277,7 +277,7 @@ def test_the_buttons_during_a_run(qtbot: QtBot, panel: ExecutePanel) -> None:
         assert started.wait(20)
         assert panel.run_button.is_running() and panel.run_button.isEnabled() and panel.run_button.text() == "■ Stop"
         assert panel.header.chip.text() == "Running"
-        qtbot.waitUntil(lambda: panel.status.text() == "⏳ Compiling...", timeout=5000)
+        qtbot.waitUntil(lambda: panel.status.text() == "Compiling...", timeout=5000)
         select(panel)  # a change of the selection must not re-enable the buttons of a running job
         assert panel.run_button.is_running() and not panel.run_button.can_run()
         release.set()

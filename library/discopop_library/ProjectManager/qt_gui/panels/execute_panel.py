@@ -528,7 +528,7 @@ class ExecutePanel(Panel):
             build_policy=self.build_options.build_policy(),
             build_only=self.build_options.build_only(),
         )
-        self._begin_run("Running", "⏳ Execution in progress...")
+        self._begin_run("Running", "Execution in progress...")
         restore_logging = widgets.redirect_logging_to_console(self.console, log_level)
         logging.getLogger("Execute").info(f"Starting execution of configuration: {configuration}")
         arguments = self.arguments

@@ -1,0 +1,8 @@
+run_args = "16"
+
+# The twin of do_all/negative/conditional_scalar/stale_read with the missing else branch added: every
+# cell writes delta before reading it, so the chunk loop (13) and the loops of the border chunk (17, 18)
+# are do-all loops with delta private, as are the loops of the inner chunks (39, 40) and the
+# initialization (51). The time step loop (54) is not.
+[do_all]
+lines = ["1:13", "1:17", "1:18", "1:39", "1:40", "1:51"]

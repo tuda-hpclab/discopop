@@ -44,7 +44,7 @@ from discopop_library.ProjectManager.configurations.project_environment import (
     project_directories_of,
     record_instrumented_directories,
 )
-from discopop_library.ProjectManager.services import callpath_pruning, openmp_handling
+from discopop_library.ProjectManager.services import build_thread_count, callpath_pruning, openmp_handling
 from discopop_library.ProjectManager.configurations.repetitions import (
     SINGLE_MEASUREMENT,
     TIME_AGGREGATE_FAILED_RUN,
@@ -61,6 +61,8 @@ PATH = str
 # record carries no measurement, and treating it as a successful run would report the
 # unmodified sequential code as a parallel configuration without a speedup.
 NOT_EXECUTED_RETURN_CODE = -1
+# the exit status of coreutils' ``timeout`` when it stopped the command
+TIMEOUT_EXIT_CODE = 124
 
 logger = logging.getLogger("ConfigurationManager")
 
@@ -199,6 +201,15 @@ def _run_once(
         os.killpg(os.getpgid(p.pid), signal.SIGTERM)
         print("KILLED PROCESS: ", p.pid)
 
+    # The limit is enforced by coreutils' ``timeout``, which ends the script and exits with 124; the Python side never
+    # sees a TimeoutExpired. A script exiting with 124 by itself is indistinguishable from it, which is acceptable: it
+    # failed either way.
+    if timeout is not None and p.returncode == TIMEOUT_EXIT_CODE:
+        timeout_expired = True
+        logger.warning(
+            os.path.basename(script_path) + " was stopped after the timeout of " + str(timeout) + " s expired."
+        )
+
     # Microseconds, not milliseconds: a run shorter than half a millisecond used to
     # be recorded as 0.0s, which every consumer reads as "no measurement" (and a
     # speedup over it is a division by zero).
@@ -228,8 +239,9 @@ def _run_once(
             time_source = TIME_SOURCE_CONSOLE
             logger.debug("-> execution time reported by the program: " + str(elapsed) + "s")
 
-    decoded_stdout = stdout.decode("utf-8") if not timeout_expired else ""
-    decoded_stderr = stderr.decode("utf-8") if not timeout_expired else ""
+    # what a script printed before its timeout expired tells how far it got: kept
+    decoded_stdout = stdout.decode("utf-8", errors="replace")
+    decoded_stderr = stderr.decode("utf-8", errors="replace")
 
     logger.debug("-> return code: " + str(p.returncode))
     logger.debug("-> thread count: " + str(thread_count))
@@ -308,6 +320,7 @@ def execute_configuration(
     result_annotations: Optional[Dict[str, Any]] = None,
     output_callback: Optional[Callable[[str], None]] = None,
     callpath_pruning_environment: Optional[Dict[str, str]] = None,
+    extra_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[int, float, str, str]]:
     """Run one script of a configuration and record what it took.
 
@@ -346,6 +359,8 @@ def execute_configuration(
     in ``execution_results.json`` (which build and run it belongs to); they take no part in telling records apart.
 
     ``output_callback`` receives the output of the script (stdout and stderr, line by line) while it runs.
+
+    ``extra_environment`` is added to the environment of the script last (``DP_BUILD_KIND`` of a build).
 
     ``callpath_pruning_environment`` is the call path pruning a ``dp`` compilation gets (the variables of
     :func:`callpath_pruning.environment`); the builds compute it once for their fingerprint and the compilation. If
@@ -435,7 +450,11 @@ def execute_configuration(
         if text is not None:
             openmp_warnings.append(text)
         my_env.update(openmp_handling.environment(arguments))
-    my_env["OMP_NUM_THREADS"] = str(thread_count)
+    # nproc honors OMP_NUM_THREADS: a compile script only gets the thread count of the run if the project says so,
+    # otherwise `make -j $(nproc)` of a par:8 build would run 8 jobs. A value of the environment or the settings file
+    # is left alone
+    if not script_name.startswith("compile") or build_thread_count.passes_thread_count_to_builds(arguments):
+        my_env["OMP_NUM_THREADS"] = str(thread_count)
     if dot_discopop is not None:
         my_env[DOT_DISCOPOP_VARIABLE] = os.path.abspath(dot_discopop)
 
@@ -457,6 +476,9 @@ def execute_configuration(
         if resolved != original:
             logger.info("Resolved %s=%s to %s (no bare %s on PATH)", compiler_key, original, resolved, original)
             my_env[compiler_key] = resolved
+
+    # set by the caller last (DP_BUILD_KIND of a build, configurations/building.py)
+    my_env.update(extra_environment or {})
 
     # print("MYENV:")
     # for key in my_env:
