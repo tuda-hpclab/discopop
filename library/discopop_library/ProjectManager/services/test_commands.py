@@ -88,6 +88,11 @@ def test_patch_repair_command() -> None:
     assert command[-7:] == ["--backend", "claude", "--model", "m", "--dry-run", "-s", "3"]
     bare = patch_repair_command(PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "", "", False, None), "d", "py")
     assert bare[-2:] == ["--log", "INFO"]
+    # a stored connection decides the backend and the model
+    stored = PatchRepairRequest("tiny", "yes", 2, 1, 300, "INFO", "claude", "m", False, None, connection="fast")
+    command = patch_repair_command(stored, "d", "py")
+    assert command[-2:] == ["--connection", "fast"]
+    assert "--backend" not in command and "--model" not in command
 
 
 def _check(**changes: object) -> SuggestionCheckRequest:
@@ -125,6 +130,8 @@ def test_suggestion_check_command() -> None:
         "600",
         "--log",
         "WARNING",
+        "--hotspot-types",
+        "yes,maybe",
         "--backend",
         "claude",
         "--model",
@@ -141,11 +148,14 @@ def test_suggestion_check_command() -> None:
             discopop_tools=False,
             max_suggestions=3,
             suggestion_ids=("4", "12"),
+            hotspot_types="no",
         ),
         "d",
         "py",
     )
     assert off[off.index("WARNING") + 1 :] == [
+        "--hotspot-types",
+        "no",
         "--no-review",
         "--reject-rounding",
         "--no-discopop-tools",

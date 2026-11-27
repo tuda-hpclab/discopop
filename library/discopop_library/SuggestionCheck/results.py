@@ -35,6 +35,8 @@ class Results:
         self.fingerprint = fingerprint
         self.run_info = run_info
         self.entries: Dict[int, Dict[str, Any]] = dict()
+        # the suggestions this run skipped by the hotspot filter: [{"pattern_id", "hotspot_type"}]
+        self.skipped_by_hotspot: List[Dict[str, Any]] = []
         os.makedirs(path, exist_ok=True)
         previous = self._load(os.path.join(path, RESULTS_FILE))
         if previous is not None and previous.get("explorer_output") == fingerprint.to_dict():
@@ -66,8 +68,10 @@ class Results:
         self._progress.write(line + "\n")
         self._progress.flush()
 
-    def record(self, suggestion: UnsureSuggestion, outcome: Outcome) -> None:
+    def record(self, suggestion: UnsureSuggestion, outcome: Outcome, hotspot_type: Optional[str] = None) -> None:
         entry = outcome.to_dict()
+        if hotspot_type is not None:
+            entry["hotspot_type"] = hotspot_type
         entry["start_line"] = str(suggestion.start)
         entry["end_line"] = str(suggestion.end)
         entry["blockers"] = len(suggestion.blockers)
@@ -92,6 +96,7 @@ class Results:
                 "explorer_output": self.fingerprint.to_dict(),
                 **self.run_info,
                 "suggestions": suggestions,
+                "skipped_by_hotspot": self.skipped_by_hotspot,
             },
         )
         approved: List[Dict[str, Any]] = [

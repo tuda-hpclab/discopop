@@ -200,9 +200,32 @@ than at writing diffs against the right version of a file.
   `llm_config.py`); the default configuration file is patch repair's, so a
   connection is set up once;
 * the attempt budget (`--prompts`, `--retries`, `--agent-error-retries`) and the
-  hotspot filter (`--hotspot-types`, default `yes,maybe`);
+  hotspot filter (`--hotspot-types`, default `yes,maybe`, see below);
 * the patch generator's diffing (`get_diffs_from_modified_code`), so an approved
   patch has the same form as a generated one.
+
+**Hotspot filter** (`SuggestionCheck/hotspots.py`). A check costs agent calls; a
+loop that hardly contributes to the runtime is not worth them. The unsure
+suggestions are not patterns of the detection result, so
+`get_patterns_by_hotspot_type` cannot classify them; its loop rule is factored out
+(`HostpotLoader/utilities.py`: `hotspot_loops`, `classify_by_loops`) and applied to
+the lines of the suggestion's pattern (`start_line` to `end_line` as the explorer
+wrote them, not the loop's `region`): the hotspot loops are loaded as patch repair
+loads them, and the first of `YES`, `NO`, `MAYBE` with a loop starting in the lines
+decides. The same loop is thus classified as it would be as a suggestion. With the
+region, a loop would also take the class of the loops nested in it, e.g. `NO` for a
+`MAYBE` loop around a `NO` loop. As in patch repair:
+
+* without hotspot results every suggestion is `YES`: nothing is skipped;
+* with hotspot results, a suggestion no hotspot loop matches is `unknown` and
+  checked: there is nothing to filter it by;
+* ids given with `-s` are checked whatever their type: who names them has decided
+  they are worth the calls;
+* the filter applies before `--max-suggestions`, which is not spent on skipped loops.
+
+Skipped suggestions are printed, sent as a `skipped_by_hotspot` progress event and
+listed in `results.json` (`skipped_by_hotspot`: id and type; the last run's). Every
+checked suggestion records its `hotspot_type`.
 
 ### 5.2 The agent works in a copy, DiscoPoP computes the patch
 
@@ -379,7 +402,9 @@ keeps them; the gates (§5.4) are enforced either way.
 suggestion_check/
     results.json          per suggestion: state, verification level, verdict, reason,
                           assumption, justifications, review, attempts, backend, model,
-                          and the fingerprint of the explorer output it belongs to
+                          hotspot type, and the fingerprint of the explorer output it
+                          belongs to; the suggestions the last run skipped by the
+                          hotspot filter (skipped_by_hotspot)
     progress.jsonl        one line per event, for the GUI
     transcripts/<id>/     prompts and answers
     approved/<id>/        the approved patches, computed from the agent's copy
@@ -425,6 +450,8 @@ A Qt panel after *Patch Repair* in the workflow sidebar, built like it
 * result table: suggestion, location, hotness, state, verification level; a detail
   view with the blockers, each justification, the assumption, the review and the
   diff between the plain and the approved patch;
+* the suggestions the hotspot filter skipped, below the table (*Skipped (cold)*)
+  and in the chip; the hotspot type check boxes default as in *Patch Repair*;
 * the stage is locked without `explorer/unsure_suggestions.json`, optional
   otherwise, stale when the explorer ran after the check.
 

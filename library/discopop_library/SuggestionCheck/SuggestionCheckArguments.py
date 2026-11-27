@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from discopop_library.ArgumentClasses.GeneralArguments import GeneralArguments
+from discopop_library.HostpotLoader.HotspotType import parse_hotspot_types
+from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.SuggestionCheck.prompt_store import custom_prompt_dir
 
 VERIFY_NONE = "none"
@@ -29,6 +31,9 @@ class SuggestionCheckArguments(GeneralArguments):
     project_root: Optional[str] = None
     # explicit pattern ids, comma separated; all unsure suggestions without
     suggestions: Optional[str] = None
+    # the hotspot classes to check, comma separated (yes, maybe, no), as patch repair's; explicit ids are checked
+    # whatever their class. Without hotspot results every suggestion counts as yes.
+    hotspot_types: str = DEFAULT_HOTSPOT_TYPES
     # stop after checking this many suggestions; 0: no limit
     max_suggestions: int = 0
     prompts: int = 2
@@ -60,6 +65,10 @@ class SuggestionCheckArguments(GeneralArguments):
             problems.append("--prompts must be at least 1")
         if self.retries < 0 or self.agent_error_retries < 0 or self.max_suggestions < 0:
             problems.append("--retries, --agent-error-retries and --max-suggestions must not be negative")
+        try:
+            parse_hotspot_types(self.hotspot_types)
+        except ValueError as error:
+            problems.append("--hotspot-types: " + str(error).rstrip(".") + " (options: yes, maybe, no)")
         if self.verify not in VERIFY_CHOICES:
             problems.append("--verify must be one of " + ", ".join(VERIFY_CHOICES))
         elif self.verify != VERIFY_NONE:
@@ -81,6 +90,10 @@ class SuggestionCheckArguments(GeneralArguments):
     @property
     def effective_prompt_dir(self) -> str:
         return self.prompt_dir or custom_prompt_dir(self.dot_dp_path)
+
+    def selected_hotspot_types(self) -> List[str]:
+        """the selected classes, lower case: yes, maybe, no"""
+        return [t.name.lower() for t in parse_hotspot_types(self.hotspot_types)]
 
     def suggestion_ids(self) -> Optional[List[int]]:
         if self.suggestions is None or not self.suggestions.strip():

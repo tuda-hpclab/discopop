@@ -83,7 +83,7 @@ They are separate because they answer different questions: a connection means th
 
 For a one-off run nothing needs configuring: `--backend` and `--model` override whatever is stored, and with exactly one agent installed even those can be omitted. With several stored connections, a run names one with `--connection`; without one, `--backend` (and `--model`) ask that agent directly, with only the backend's section of the file applied.
 
-The GUI edits the file under *Settings > LLM connections…* and *Settings > LLM backends…* (see [GUI](GUI.md)). The prompts of patch repair are not part of it: they are the templates shipped in `discopop_library/PatchRepair/prompts/`, replaced with `--prompt-dir`.
+The GUI edits the file under *Settings > LLM connections…* and *Settings > LLM backends…* (see [GUI](GUI.md)). The *Patch Repair* stage offers the stored connections in its *Connection* selector (the run passes `--connection`), or a backend and a model chosen there (`--backend` / `--model`); it queries a backend's version and models with the executable of its `backends` section. The prompts of patch repair are not part of it: they are the templates shipped in `discopop_library/PatchRepair/prompts/`, replaced with `--prompt-dir`.
 
 ```text
 discopop_patch_repair --backend opencode --model openai/gpt-5.4-mini

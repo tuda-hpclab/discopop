@@ -393,10 +393,16 @@ def test_the_progress_summaries() -> None:
 
 
 def test_choosing_backend_and_model_with_stored_connections() -> None:
-    assert view.manual_choice_problem([]) == "" and view.manual_choice_problem(["a"]) == ""
-    assert view.manual_choice_problem(["a", "b"]).startswith("Several connections are stored")
     assert view.manual_choice_note([]).startswith("Stored connections are shared with patch repair")
     assert view.manual_choice_note(["a"]) == (
         "The backend and the model below override those of the only stored connection, a; its other settings "
         "apply, an empty model is its model."
     )
+
+
+def test_the_suggestions_skipped_by_the_hotspot_filter() -> None:
+    assert view.skipped_by_hotspot(None) == [] and view.skipped_by_hotspot({"suggestions": []}) == []
+    document = {"skipped_by_hotspot": [{"pattern_id": 4, "hotspot_type": "no"}, {"no": "id"}]}
+    assert view.skipped_by_hotspot(document) == [("4", "no")]
+    assert view.skipped_text([]) == ""
+    assert view.skipped_text([("4", "no")]).startswith("Skipped (cold): 4 (NO).")

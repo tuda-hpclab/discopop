@@ -35,12 +35,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from discopop_library.PatchRepair import llm_backends
+from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.ProjectManager.plots.data import split_progress_events
 from discopop_library.ProjectManager.ProjectManagerArguments import ProjectManagerArguments
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
-from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter, start_work
-from discopop_library.ProjectManager.qt_gui.panel import Panel
+from discopop_library.ProjectManager.qt_gui.job_adapter import QtJobAdapter
+from discopop_library.ProjectManager.qt_gui.llm_agent_panel import LlmAgentPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.services import suggestion_check_view as view
 from discopop_library.ProjectManager.services.commands import suggestion_check_command
@@ -52,10 +52,6 @@ from discopop_library.ProjectManager.services.jobs import (
     JobOutput,
     JobRunner,
     JobSpec,
-    WorkContext,
-    WorkEvent,
-    WorkFinished,
-    WorkRunner,
 )
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
@@ -104,7 +100,7 @@ _CHIP_LEVELS = {
 _COST_COLUMN = view.COLUMNS.index("Cost")
 
 
-class SuggestionCheckPanel(Panel):
+class SuggestionCheckPanel(LlmAgentPanel):
     """The Suggestion Check tab.
 
     Subscribes to ``PatternsChanged`` (a new pattern detection brings other unsure suggestions and makes the results
@@ -114,6 +110,7 @@ class SuggestionCheckPanel(Panel):
     """
 
     output_title = "Suggestion Check"
+    # the check refuses backend and model alone when several connections are stored
 
     def __init__(
         self,
@@ -125,17 +122,14 @@ class SuggestionCheckPanel(Panel):
         super().__init__(arguments, project_state, status, parent)
         self.running = False
         self._job: Optional[JobRunner] = None
-        self._backend_query: Optional[WorkRunner] = None
         # results.json as it currently stands, keyed by suggestion id (as a string)
         self._records: Dict[str, Dict[str, Any]] = {}
         self._stale = False
+        # (id, hotspot type) of the suggestions the last run skipped by the hotspot filter
+        self._skipped: List[Tuple[str, str]] = []
         self._unsure: Dict[str, view.UnsureEntry] = {}
         self._file_mapping: Dict[int, str] = {}
         self._published: List[str] = []
-        self._connections_error = ""
-        self._connection_names: List[str] = []
-        # why the selected connection cannot be resolved ("" if it can)
-        self._connection_problem = ""
         # the number of suggestions the running check announced
         self._total = 0
 
@@ -164,7 +158,6 @@ class SuggestionCheckPanel(Panel):
         layout.addWidget(self.splitter, 1)
 
         project_state.subscribe(PatternsChanged, lambda _event: self._on_patterns_changed())
-        self._on_backend_changed()
         self.reload_connections()
         self._update_budget()
         self._reload_unsure()
@@ -178,39 +171,9 @@ class SuggestionCheckPanel(Panel):
     # ── construction ────────────────────────────────────────────────────────
 
     def _build_agent_settings(self) -> None:
-        # built from the registry, so a newly added agent reaches the GUI without a change here
-        backends = llm_backends.available_backends()
-        installed = llm_backends.first_installed_backend()
-        self.backend_combo = QComboBox()
-        self.backend_combo.addItems(backends)
-        self.backend_combo.setCurrentText(installed or (backends[0] if backends else ""))
-        self.backend_combo.currentTextChanged.connect(lambda _text: self._on_backend_changed())
-        # Editable: a backend's model list is not always exhaustive, so a model missing from it must be typeable.
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self.model_combo.setCurrentText("")
-        # The stored connections of the LLM configuration shared with patch repair; the first entry is choosing the
-        # backend and the model here. A selected connection shows what it resolves to, read-only.
-        self.connection_combo = QComboBox()
-        self.connection_combo.currentTextChanged.connect(lambda _text: self._on_connection_changed())
-        # what was chosen by hand, restored when the connection is set back to choosing by hand
-        self._manual_choice: Optional[Tuple[str, str]] = None
-
-        section = widgets.FormSection("LLM Agent")
-        connection_hint = section.add_row("Connection:", self.connection_combo, " ")
-        assert connection_hint is not None
-        self.connection_hint = connection_hint
-        self.connection_hint.setWordWrap(True)
-        backend_hint = section.add_row("Backend:", self.backend_combo, " ")
-        assert backend_hint is not None
-        self.backend_hint = backend_hint
-        section.add_row(
-            "Model:",
-            self.model_combo,
-            "Empty: the default model. Any model the backend accepts can be typed.",
-            stretch_field=True,
+        self._agent_box = self.build_llm_agent_section(
+            "Empty: the default model. Any model the backend accepts can be typed."
         )
-        self._agent_box = section
 
     def _build_check_settings(self) -> None:
         self.review_check = QCheckBox("Have every approval reviewed by a second agent call")
@@ -246,12 +209,25 @@ class SuggestionCheckPanel(Panel):
         self.max_spin.setRange(0, 10000)
         self.max_spin.setSpecialValueText("no limit")
         self.max_spin.setValue(0)
+        # as in the Patch Repair tab: NO is unchecked by default, a cold loop is not worth the agent calls
+        default_types = [t.strip() for t in DEFAULT_HOTSPOT_TYPES.split(",")]
+        self.hotspot_checks: Dict[str, QCheckBox] = {}
+        for htype in ["yes", "maybe", "no"]:
+            check = QCheckBox(htype.upper())
+            check.setChecked(htype in default_types)
+            self.hotspot_checks[htype] = check
 
         section = widgets.FormSection("Suggestion Scope")
         scope_hint = section.add_row("Unsure suggestions:", self.scope_edit, " ", stretch_field=True)
         assert scope_hint is not None
         self.scope_caption = scope_hint
         self.scope_caption.setWordWrap(True)
+        section.add_row(
+            "Hotspot types:",
+            widgets.hbox(*self.hotspot_checks.values(), None, spacing=20),
+            "NO suggestions are skipped by default to save time and agent cost. "
+            "Without hotspot results every suggestion counts as YES. Ids named above are checked regardless.",
+        )
         section.add_row("Max. suggestions:", self.max_spin, "Check at most this many of the selected ones.")
         self._scope_box = section
 
@@ -338,7 +314,16 @@ class SuggestionCheckPanel(Panel):
         self.results_stack.addWidget(self.empty_label)
         self.results_stack.addWidget(results_page)
         self._results_page = results_page
-        notebook.addTab(self.results_stack, "Results")
+        # the suggestions the last run skipped by the hotspot filter; shown even if it checked none
+        self.skipped_label = widgets.caption_label("")
+        self.skipped_label.setWordWrap(True)
+        self.skipped_label.setVisible(False)
+        results_tab = QWidget()
+        results_tab_layout = QVBoxLayout(results_tab)
+        results_tab_layout.setContentsMargins(0, 0, 0, 0)
+        results_tab_layout.addWidget(self.results_stack, 1)
+        results_tab_layout.addWidget(self.skipped_label)
+        notebook.addTab(results_tab, "Results")
 
         # which suggestion is shown is the one selected in the Results tab
         self.details_view = widgets.CodeView(wrap=True)
@@ -376,106 +361,6 @@ class SuggestionCheckPanel(Panel):
         return self.console
 
     # ── state ───────────────────────────────────────────────────────────────
-
-    def _on_backend_changed(self) -> None:
-        """Refresh the model list and say so when the selected agent is not installed."""
-        name = self.backend_combo.currentText()
-        try:
-            module = llm_backends.get(name)
-        except KeyError:
-            self.backend_hint.setText("Unknown backend: " + name)
-            widgets.set_label_color(self.backend_hint, widgets.STATUS_FAIL)
-            return
-
-        if not module.available():
-            self.backend_hint.setText(str(getattr(module, "INSTALL_HINT", "")) or (name + " could not be run."))
-            widgets.set_label_color(self.backend_hint, widgets.STATUS_FAIL)
-            self._set_models([])
-            return
-
-        def query_backend(_ctx: WorkContext) -> Tuple[str, List[str]]:
-            # version() and list_models() run the agent's own command; they must not block the UI thread
-            return module.version() or "", module.list_models()
-
-        def apply(event: WorkEvent) -> None:
-            if not isinstance(event, WorkFinished):
-                return
-            self._backend_query = None
-            if self.backend_combo.currentText() != name:
-                return  # another backend was selected in the meantime
-            version, models = event.result if event.error is None else ("", [])
-            self.backend_hint.setText(view.backend_description(version, str(getattr(module, "DESCRIPTION", ""))))
-            widgets.set_label_color(self.backend_hint, widgets.STATUS_IDLE)
-            self._set_models(models)
-
-        self.backend_hint.setText("Querying " + name + "...")
-        widgets.set_label_color(self.backend_hint, widgets.STATUS_IDLE)
-        self._backend_query = start_work(self, query_backend, apply)
-
-    def _set_models(self, models: List[str]) -> None:
-        """Fill the model list; what is typed in the field stays."""
-        typed = self.model_combo.currentText()
-        self.model_combo.clear()
-        self.model_combo.addItems(models)
-        self.model_combo.setCurrentText(typed)
-
-    def reload_connections(self) -> None:
-        """Re-read the stored connections (call after the LLM configuration changed); the selection stays if the
-        connection still exists."""
-        selected = self.connection_combo.currentText()
-        names, error = view.load_connections(self.arguments.dot_dp)
-        choices = view.connection_choices(names)
-        self.connection_combo.blockSignals(True)
-        try:
-            self.connection_combo.clear()
-            self.connection_combo.addItems(choices)
-            self.connection_combo.setCurrentText(selected if selected in choices else view.NO_CONNECTION)
-        finally:
-            self.connection_combo.blockSignals(False)
-        self._connections_error = error
-        self._connection_names = names
-        self._on_connection_changed()
-
-    def _selected_connection(self) -> str:
-        """The stored connection the run uses; "" when the backend and the model are chosen in the panel."""
-        name = self.connection_combo.currentText()
-        return "" if name in ("", view.NO_CONNECTION) else name
-
-    def _on_connection_changed(self) -> None:
-        name = self._selected_connection()
-        if not name:
-            if self._manual_choice is not None:
-                backend, model = self._manual_choice
-                self._manual_choice = None
-                self.backend_combo.setCurrentText(backend)
-                self.model_combo.setCurrentText(model)
-            self.backend_combo.setEnabled(True)
-            self.model_combo.setEnabled(True)
-            self._connection_problem = self._connections_error or view.manual_choice_problem(self._connection_names)
-            if self._connection_problem:
-                self.connection_hint.setText(self._connection_problem)
-                widgets.set_label_color(self.connection_hint, widgets.STATUS_FAIL)
-            else:
-                self.connection_hint.setText(view.manual_choice_note(self._connection_names))
-                widgets.set_label_color(self.connection_hint, widgets.STATUS_IDLE)
-            return
-        if self._manual_choice is None:
-            self._manual_choice = (self.backend_combo.currentText(), self.model_combo.currentText())
-        info = view.resolve_connection(self.arguments.dot_dp, name)
-        self._connection_problem = info.error
-        if info.error:
-            self.connection_hint.setText(info.error)
-            widgets.set_label_color(self.connection_hint, widgets.STATUS_FAIL)
-        else:
-            if info.backend and self.backend_combo.findText(info.backend) < 0:
-                self.backend_combo.addItem(info.backend)
-            self.backend_combo.setCurrentText(info.backend)
-            self.model_combo.setCurrentText(info.model)
-            self.connection_hint.setText(info.description)
-            widgets.set_label_color(self.connection_hint, widgets.STATUS_IDLE)
-        # the connection decides: the fields only show what it resolves to
-        self.backend_combo.setEnabled(False)
-        self.model_combo.setEnabled(False)
 
     def _update_budget(self) -> None:
         self.budget_label.setText(
@@ -524,7 +409,7 @@ class SuggestionCheckPanel(Panel):
         if not view.has_unsure_suggestions(self.arguments.dot_dp) and not self._records:
             self.header.chip.set_status(widgets.CHIP_IDLE, "No unsure suggestions", NO_UNSURE_TEXT)
             return
-        if not self._records:
+        if not self._records and not self._skipped:
             self.header.chip.set_status(widgets.CHIP_IDLE, NOT_RUN_TEXT)
             return
         if self._stale:
@@ -533,7 +418,11 @@ class SuggestionCheckPanel(Panel):
         approved = len(view.approved_ids(self._records))
         self.header.chip.set_status(
             widgets.CHIP_OK if approved else widgets.CHIP_IDLE,
-            str(len(self._records)) + " checked, " + str(approved) + " approved",
+            str(len(self._records))
+            + " checked, "
+            + str(approved)
+            + " approved"
+            + (", " + str(len(self._skipped)) + " skipped (cold)" if self._skipped else ""),
             view.AGENT_NOTE,
         )
 
@@ -569,6 +458,8 @@ class SuggestionCheckPanel(Panel):
 
         self.console.clear()
         self._records = {}
+        self._skipped = []
+        self._show_skipped()
         self._stale = False
         self._total = 0
         self._refresh_table()
@@ -610,12 +501,18 @@ class SuggestionCheckPanel(Panel):
             discopop_tools=self.tools_check.isChecked(),
             max_suggestions=self.max_spin.value(),
             suggestion_ids=view.parse_scope(self.scope_edit.text(), self._available_ids()),
+            hotspot_types=self._hotspot_types(),
         )
+
+    def _hotspot_types(self) -> str:
+        selected = [name for name, check in self.hotspot_checks.items() if check.isChecked()]
+        return ",".join(selected) if selected else DEFAULT_HOTSPOT_TYPES
 
     def _announce_request(self, request: SuggestionCheckRequest) -> None:
         if request.suggestion_ids is not None:
             self.console.append_text("Restricting to unsure suggestions: " + ", ".join(request.suggestion_ids) + "\n")
         self.console.append_text("Configuration:\n")
+        self.console.append_text("  Hotspot types: " + request.hotspot_types + "\n")
         if request.connection:
             self.console.append_text("  Connection: " + request.connection + "\n")
         else:
@@ -660,7 +557,7 @@ class SuggestionCheckPanel(Panel):
         kind = str(event.get("event") or "")
         if kind == "start":
             self._total = len(event.get("suggestions") or [])
-        elif kind == "done":
+        elif kind in ("done", "skipped_by_hotspot"):
             # results.json is written before the event: it holds the whole record
             self._load_results_from_file()
         for text, tone in view.progress_summary(event, self._total):
@@ -717,8 +614,7 @@ class SuggestionCheckPanel(Panel):
     def cancel_jobs(self) -> None:
         if self._job is not None:
             self._job.cancel()
-        if self._backend_query is not None:
-            self._backend_query.cancel()
+        self._cancel_backend_query()
 
     # ── publishing ──────────────────────────────────────────────────────────
 
@@ -781,7 +677,14 @@ class SuggestionCheckPanel(Panel):
         if records is not None:
             self._records = records
             self._stale = view.results_are_stale(dot_dp, document)
+            # a suggestion checked by an earlier run keeps its row; the line names the others
+            self._skipped = [s for s in view.skipped_by_hotspot(document) if s[0] not in records and not self._stale]
+        self._show_skipped()
         self._refresh_table()
+
+    def _show_skipped(self) -> None:
+        self.skipped_label.setText(view.skipped_text(self._skipped))
+        self.skipped_label.setVisible(bool(self._skipped))
 
     def _selected_ids(self) -> List[str]:
         ids = []

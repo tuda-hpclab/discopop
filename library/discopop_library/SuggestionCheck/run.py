@@ -13,7 +13,7 @@ import copy
 import json
 import logging
 import os
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from discopop_library.PatchRepair import llm_backends, llm_config
 from discopop_library.PathManagement.PathManagement import load_file_mapping
@@ -28,6 +28,7 @@ from discopop_library.SuggestionCheck.check import (
     Outcome,
     check_suggestion,
 )
+from discopop_library.SuggestionCheck import hotspots
 from discopop_library.SuggestionCheck.discopop_tools import EXECUTABLE as DISCOPOP_TOOLS_EXECUTABLE
 from discopop_library.SuggestionCheck.discopop_tools import DiscoPoPTools
 from discopop_library.SuggestionCheck.discopop_tools import locate as locate_discopop_tools
@@ -117,23 +118,33 @@ class BackendAgent:
 AgentFactory = Callable[[str], Agent]
 
 
-def _select(suggestions: List[UnsureSuggestion], arguments: SuggestionCheckArguments) -> List[UnsureSuggestion]:
+def _select(
+    suggestions: List[UnsureSuggestion], arguments: SuggestionCheckArguments, classes: Dict[int, str]
+) -> Tuple[List[UnsureSuggestion], List[UnsureSuggestion]]:
+    """(to check, skipped by the hotspot filter). Explicit ids are checked whatever their hotspot class: whoever names
+    them has decided they are worth the agent calls. The filter applies before --max-suggestions, which must not be
+    spent on skipped loops."""
     ids = arguments.suggestion_ids()
+    skipped: List[UnsureSuggestion] = []
     if ids is not None:
         known = {s.pattern_id for s in suggestions}
         unknown = [i for i in ids if i not in known]
         if unknown:
             raise UnsureSuggestionsError("not an unsure suggestion: " + ", ".join(str(i) for i in unknown))
         suggestions = [s for s in suggestions if s.pattern_id in ids]
+    else:
+        suggestions, skipped = hotspots.split(suggestions, classes, arguments.selected_hotspot_types())
     if arguments.max_suggestions:
         suggestions = suggestions[: arguments.max_suggestions]
-    return suggestions
+    return suggestions, skipped
 
 
 def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactory] = None) -> int:
     dot = os.path.abspath(arguments.dot_dp_path)
     try:
-        suggestions = _select(load_unsure_suggestions(dot), arguments)
+        unsure = load_unsure_suggestions(dot)
+        classes = hotspots.classify(unsure, hotspots.load(dot))
+        suggestions, skipped = _select(unsure, arguments, classes)
     except UnsureSuggestionsError as error:
         logger.error(str(error))
         print(str(error))
@@ -197,6 +208,25 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
     )
     counts: Dict[str, int] = dict()
     try:
+        if skipped:
+            results.skipped_by_hotspot = [
+                {"pattern_id": s.pattern_id, "hotspot_type": classes[s.pattern_id]} for s in skipped
+            ]
+            message = (
+                "Skipped "
+                + str(len(skipped))
+                + " cold suggestion(s), whose hotspot type is not in "
+                + arguments.hotspot_types
+                + ": "
+                + ", ".join(str(s.pattern_id) for s in skipped)
+            )
+            logger.info(message)
+            print(message)
+        # written even if nothing is checked: which suggestions were skipped, and why; before the event, so that
+        # results.json holds them when it arrives
+        results.save()
+        if skipped:
+            results.progress("skipped_by_hotspot", suggestions=results.skipped_by_hotspot)
         results.progress("start", suggestions=[s.pattern_id for s in suggestions])
         for suggestion in suggestions:
             results.progress("check", pattern_id=suggestion.pattern_id)
@@ -223,7 +253,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
                 message = "DiscoPoP's MCP server failed to start: the agents worked without DiscoPoP's data."
                 logger.warning(message)
                 print(message)
-            results.record(suggestion, outcome)
+            results.record(suggestion, outcome, classes.get(suggestion.pattern_id))
             counts[outcome.state] = counts.get(outcome.state, 0) + 1
             results.progress("done", pattern_id=suggestion.pattern_id, state=outcome.state, reason=outcome.reason)
         results.progress("end", counts=counts)
@@ -237,8 +267,9 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
     print(
         "Checked "
         + str(len(suggestions))
-        + " unsure suggestion(s): "
-        + ", ".join(str(n) + " " + state for state, n in sorted(counts.items()))
+        + " unsure suggestion(s)"
+        + (", skipped " + str(len(skipped)) + " cold suggestion(s)" if skipped else "")
+        + (": " + ", ".join(str(n) + " " + state for state, n in sorted(counts.items())) if counts else "")
         + ". Approvals rest on the agent's assumptions; see "
         + os.path.join(arguments.suggestion_check_path, "results.json")
     )

@@ -253,6 +253,7 @@ class MainWindow(QMainWindow):
         state.subscribe(ResultsChanged, lambda _event: forget_build_states())
         # the connections saved under Settings > LLM connections (or edited by hand and reloaded) are offered at once
         state.subscribe(LlmConfigChanged, lambda _event: self.suggestion_check_panel.reload_connections())
+        state.subscribe(LlmConfigChanged, lambda _event: self.patch_repair_panel.reload_connections())
         QShortcut(QKeySequence.StandardKey.Save, self, self.save_shortcut)
 
     def _build_menu_bar(self) -> None:

@@ -20,6 +20,19 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from discopop_library.ProjectManager.services.selections import parse_id_ranges
+
+# the connection selector and the backend line are shared with the Patch Repair tab (llm_connection_view); the names
+# stay importable from here
+from discopop_library.ProjectManager.services.llm_connection_view import (  # noqa: F401
+    NO_CONNECTION as NO_CONNECTION,
+    ConnectionInfo as ConnectionInfo,
+    backend_description as backend_description,
+    connection_choices as connection_choices,
+    llm_config_path as llm_config_path,
+    load_connections as load_connections,
+    manual_choice_note as manual_choice_note,
+    resolve_connection as resolve_connection,
+)
 from discopop_library.SuggestionCheck.unsure import UNSURE_SUGGESTIONS_FILE, Fingerprint
 
 if TYPE_CHECKING:
@@ -42,9 +55,6 @@ STATE_LABEL_APPROVED = "Approved"
 STATE_LABEL_REJECTED = "Rejected"
 STATE_LABEL_UNSURE = "Unsure"
 STATE_LABEL_ERROR = "Error"
-
-# the first entry of the connection selector: no stored connection, the backend and the model are chosen in the panel
-NO_CONNECTION = "(choose backend and model below)"
 
 DIRECTORY = "suggestion_check"
 RESULTS_FILE = "results.json"
@@ -113,6 +123,28 @@ def records_of(document: Optional[Dict[str, Any]]) -> Optional[Dict[str, Dict[st
 def load_results(dot_dp: str) -> Optional[Dict[str, Dict[str, Any]]]:
     """The checked suggestions by id (as a string); None without a readable ``results.json``."""
     return records_of(load_document(dot_dp))
+
+
+def skipped_by_hotspot(document: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    """(suggestion id, hotspot type) of the suggestions the last run skipped by its hotspot filter."""
+    if document is None or not isinstance(document.get("skipped_by_hotspot"), list):
+        return []
+    return [
+        (str(entry["pattern_id"]), str(entry.get("hotspot_type") or ""))
+        for entry in document["skipped_by_hotspot"]
+        if isinstance(entry, dict) and "pattern_id" in entry
+    ]
+
+
+def skipped_text(skipped: Sequence[Tuple[str, str]]) -> str:
+    """The line under the results naming the suggestions the hotspot filter skipped; "" if none."""
+    if not skipped:
+        return ""
+    return (
+        "Skipped (cold): "
+        + ", ".join(i + " (" + t.upper() + ")" for i, t in skipped)
+        + ". Their hotspot type was not selected; name them in the scope to check them anyway."
+    )
 
 
 def results_are_stale(dot_dp: str, document: Optional[Dict[str, Any]] = None) -> bool:
@@ -614,78 +646,6 @@ def confirm_publish_text(records: Dict[str, Dict[str, Any]], ids: Sequence[str])
 
 
 # ── the backend, the budget and the progress ─────────────────────────────────
-
-
-def llm_config_path(dot_dp: str) -> str:
-    """The LLM configuration the check shares with patch repair (``patch_repair/llm_config.json``)."""
-    from discopop_library.PatchRepair import llm_config
-
-    return llm_config.default_config_path(os.path.join(dot_dp, "patch_repair"))
-
-
-def load_connections(dot_dp: str) -> Tuple[List[str], str]:
-    """(the names of the stored connections, "" or why the configuration cannot be read)."""
-    from discopop_library.PatchRepair import llm_config
-
-    try:
-        config = llm_config.load_config(llm_config_path(dot_dp))
-    except ValueError as error:
-        return [], str(error)
-    return llm_config.connection_names(config), ""
-
-
-def connection_choices(names: Sequence[str]) -> List[str]:
-    """The entries of the connection selector: choosing in the panel first, then the stored connections."""
-    return [NO_CONNECTION] + [str(n) for n in names]
-
-
-def manual_choice_problem(names: Sequence[str]) -> str:
-    """Why choosing the backend and the model in the panel cannot work with these stored connections ("" if it can):
-    with several, the check refuses a run that names none of them."""
-    if len(names) >= 2:
-        return "Several connections are stored: choose one. With backend and model alone, the check refuses to run."
-    return ""
-
-
-def manual_choice_note(names: Sequence[str]) -> str:
-    """What choosing the backend and the model in the panel means with these stored connections."""
-    if len(names) == 1:
-        return (
-            "The backend and the model below override those of the only stored connection, "
-            + str(names[0])
-            + "; its other settings apply, an empty model is its model."
-        )
-    return "Stored connections are shared with patch repair (patch_repair/llm_config.json)."
-
-
-@dataclass(frozen=True)
-class ConnectionInfo:
-    """What a stored connection resolves to, for the read-only backend and model fields."""
-
-    backend: str = ""
-    model: str = ""
-    description: str = ""
-    error: str = ""
-
-
-def resolve_connection(dot_dp: str, name: str) -> ConnectionInfo:
-    """The backend, model and description of the stored connection ``name``, or why it cannot be resolved."""
-    from discopop_library.PatchRepair import llm_backends, llm_config
-
-    try:
-        config = llm_config.load_config(llm_config_path(dot_dp))
-        profile = llm_config.resolve_connection(config, name=name)
-    except ValueError as error:
-        return ConnectionInfo(error=str(error))
-    return ConnectionInfo(
-        llm_backends.backend_of(profile),
-        str(profile.get("model") or "").strip(),
-        llm_config.describe_connection(profile),
-    )
-
-
-def backend_description(version: str, description: str) -> str:
-    return (version + " -- " if version else "") + description.split("\n")[0]
 
 
 def budget_text(prompts: int, retries: int, review: bool) -> str:

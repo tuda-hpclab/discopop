@@ -14,6 +14,7 @@ from argparse import ArgumentParser
 from discopop_library.GlobalLogger.setup import setup_logger
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import VERIFY_CHOICES, VERIFY_NONE
 from discopop_library.SuggestionCheck.SuggestionCheckArguments import SuggestionCheckArguments
+from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
 from discopop_library.SuggestionCheck.publish import manage_published
 from discopop_library.SuggestionCheck.run import run
 
@@ -29,7 +30,11 @@ def parse_args() -> SuggestionCheckArguments:
     parser.add_argument("--project-root", default=None, help="The project; the agent works in a copy of its files. "
                         "Default: the directory holding the .discopop folder.")
     parser.add_argument("-s", "--suggestions", default=None, help="Comma separated pattern ids of unsure suggestions "
-                        "to check. Default: all.")
+                        "to check, whatever their hotspot type. Default: all.")
+    parser.add_argument("-ht", "--hotspot-types", default=DEFAULT_HOTSPOT_TYPES, help="Hotspot types of the "
+                        "suggestions to check, comma separated (yes, maybe, no). The others are skipped to save agent "
+                        "calls on loops which do not matter for the runtime; ids given with -s are checked regardless. "
+                        "Without hotspot results every suggestion counts as yes. Default: " + DEFAULT_HOTSPOT_TYPES)
     parser.add_argument("--max-suggestions", type=int, default=0, help="Check at most this many. Default: 0, no limit.")
     parser.add_argument("--prompts", type=int, default=2, help="Independent attempts per suggestion, each with a new "
                         "conversation. Default: 2")
@@ -74,6 +79,7 @@ def parse_args() -> SuggestionCheckArguments:
             dot_dp_path=arguments.dot_dp_path,
             project_root=arguments.project_root,
             suggestions=arguments.suggestions,
+            hotspot_types=arguments.hotspot_types,
             max_suggestions=arguments.max_suggestions,
             prompts=arguments.prompts,
             retries=arguments.retries,

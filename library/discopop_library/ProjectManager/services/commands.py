@@ -90,10 +90,14 @@ def patch_repair_command(request: PatchRepairRequest, dot_dp_path: str, python: 
         "--log",
         request.log_level,
     ]
-    if request.backend:
-        command += ["--backend", request.backend]
-    if request.model:
-        command += ["--model", request.model]
+    if request.connection:
+        # the connection decides the backend and the model
+        command += ["--connection", request.connection]
+    else:
+        if request.backend:
+            command += ["--backend", request.backend]
+        if request.model:
+            command += ["--model", request.model]
     if request.dry_run:
         command.append("--dry-run")
     if request.suggestion_ids is not None:
@@ -120,6 +124,8 @@ def suggestion_check_command(
         str(request.agent_timeout),
         "--log",
         request.log_level,
+        "--hotspot-types",
+        request.hotspot_types,
     ]
     if request.connection:
         # the connection decides the backend and the model

@@ -24,6 +24,7 @@ from discopop_library.ProjectManager.qt_gui.panels import patch_repair_panel
 from discopop_library.ProjectManager.qt_gui.panels.patch_repair_panel import PatchRepairPanel
 from discopop_library.ProjectManager.qt_gui.status import StatusLine
 from discopop_library.ProjectManager.qt_gui.testing import make_arguments
+from discopop_library.ProjectManager.services import llm_connection_view as llm_view
 from discopop_library.ProjectManager.services.jobs import CancelPolicy
 from discopop_library.ProjectManager.services.project_state import (
     AutotuningChanged,
@@ -39,17 +40,27 @@ def _program(code: str) -> List[str]:
 
 
 def _backend(available: bool = True, models: Optional[List[str]] = None, gate: Optional[threading.Event] = None) -> Any:
-    def list_models() -> List[str]:
+    # the install sections (Settings > LLM backends) the backend was probed with
+    configs: List[Any] = []
+
+    def probe(config: Any = None) -> bool:
+        configs.append(config)
+        return available
+
+    def list_models(config: Any = None) -> List[str]:
+        configs.append(config)
         if gate is not None:
             gate.wait(10)
         return models if models is not None else ["m1", "m2"]
 
     return SimpleNamespace(
-        available=lambda: available,
-        version=lambda: "v1.0",
+        available=probe,
+        version=lambda config=None: "v1.0",
         list_models=list_models,
         DESCRIPTION="A fake agent.\nSecond line.",
         INSTALL_HINT="install the fake agent",
+        FIELDS=[],
+        configs=configs,
     )
 
 
@@ -60,6 +71,8 @@ def fake_backends(monkeypatch: pytest.MonkeyPatch) -> Dict[str, Any]:
     monkeypatch.setattr(llm_backends, "available_backends", lambda: list(backends))
     monkeypatch.setattr(llm_backends, "first_installed_backend", lambda: "alpha")
     monkeypatch.setattr(llm_backends, "get", lambda name: backends[name])
+    monkeypatch.setattr(llm_backends, "unknown_backends", lambda names: [n for n in names if n not in backends])
+    monkeypatch.delenv("DISCOPOP_PATCH_REPAIR_LLM_CONFIG", raising=False)
     return backends
 
 
@@ -168,7 +181,7 @@ def test_a_typed_model_survives_the_arrival_of_the_list(
 
 
 def test_a_failing_query_leaves_the_field_typeable(qtbot: QtBot, tmp_path: Path, fake_backends: Dict[str, Any]) -> None:
-    def broken() -> List[str]:
+    def broken(_config: Any = None) -> List[str]:
         raise RuntimeError("no network")
 
     fake_backends["alpha"].list_models = broken
@@ -209,6 +222,99 @@ def test_an_unknown_backend_is_reported(panel: PatchRepairPanel, fake_backends: 
     assert panel.backend_hint.text() == "Unknown backend: gone"
 
 
+def write_llm_config(tmp_path: Path, connections: Dict[str, Any], backends: Optional[Dict[str, Any]] = None) -> None:
+    directory = Path(make_arguments(tmp_path).dot_dp) / "patch_repair"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "llm_config.json").write_text(json.dumps({"connections": connections, "backends": backends or {}}))
+
+
+def test_the_backend_is_queried_with_its_configured_executable(
+    qtbot: QtBot, tmp_path: Path, fake_backends: Dict[str, Any]
+) -> None:
+    write_llm_config(tmp_path, {}, {"alpha": {"binary": "/opt/alpha"}})
+    panel = make_panel(qtbot, tmp_path)
+    qtbot.waitUntil(lambda: panel.model_combo.count() == 2, timeout=20000)
+    # the probe and the model list use the section of Settings > LLM backends, not the name on PATH
+    assert fake_backends["alpha"].configs == [{"binary": "/opt/alpha"}, {"binary": "/opt/alpha"}]
+    # a changed executable is used after the configuration was reloaded
+    write_llm_config(tmp_path, {}, {"alpha": {"binary": "/usr/local/alpha"}})
+    panel.reload_connections()
+    qtbot.waitUntil(lambda: len(fake_backends["alpha"].configs) == 4, timeout=20000)
+    assert fake_backends["alpha"].configs[-1] == {"binary": "/usr/local/alpha"}
+
+
+def test_a_stored_connection_shows_its_backend_and_model_read_only(qtbot: QtBot, tmp_path: Path) -> None:
+    write_llm_config(tmp_path, {"fast": {"backend": "beta", "model": "m2"}, "plain": {"backend": "alpha"}})
+    panel = make_panel(qtbot, tmp_path)
+    assert [panel.connection_combo.itemText(i) for i in range(panel.connection_combo.count())] == [
+        llm_view.NO_CONNECTION,
+        "fast",
+        "plain",
+    ]
+    # several connections do not stop patch repair from asking the backend chosen here
+    assert panel.connection_hint.text() == (
+        "Stored connections are shared with the suggestion check (patch_repair/llm_config.json)."
+    )
+    assert panel._connection_problem == ""
+    panel.model_combo.setCurrentText("typed")
+    panel.connection_combo.setCurrentText("fast")
+    assert panel.backend_combo.currentText() == "beta" and panel.model_combo.currentText() == "m2"
+    assert not panel.backend_combo.isEnabled() and not panel.model_combo.isEnabled()
+    assert panel.connection_hint.text() == "fast: beta / m2"
+    assert panel._snapshot_request().connection == "fast"
+    panel.connection_combo.setCurrentText("plain")
+    assert panel.connection_hint.text() == "plain: alpha / (backend default)"
+    # back to choosing by hand: what was chosen before comes back
+    panel.connection_combo.setCurrentText(llm_view.NO_CONNECTION)
+    assert panel.backend_combo.isEnabled() and panel.model_combo.isEnabled()
+    assert panel.backend_combo.currentText() == "alpha" and panel.model_combo.currentText() == "typed"
+    assert panel._snapshot_request().connection is None
+
+
+def test_the_only_stored_connection_is_named(qtbot: QtBot, tmp_path: Path) -> None:
+    write_llm_config(tmp_path, {"solo": {"backend": "beta", "model": "m2"}})
+    panel = make_panel(qtbot, tmp_path)
+    assert panel.connection_hint.text().startswith(
+        "The backend and the model below override those of the only stored connection, solo"
+    )
+
+
+def test_reloading_the_connections_keeps_the_selection(qtbot: QtBot, tmp_path: Path) -> None:
+    write_llm_config(tmp_path, {"a": {"backend": "alpha"}, "b": {"backend": "beta"}})
+    panel = make_panel(qtbot, tmp_path)
+    panel.connection_combo.setCurrentText("b")
+    write_llm_config(tmp_path, {"b": {"backend": "beta", "model": "new"}, "c": {"backend": "alpha"}})
+    panel.reload_connections()
+    assert [panel.connection_combo.itemText(i) for i in range(panel.connection_combo.count())] == [
+        llm_view.NO_CONNECTION,
+        "b",
+        "c",
+    ]
+    assert panel.connection_combo.currentText() == "b" and panel.model_combo.currentText() == "new"
+    # a connection that was deleted: back to choosing by hand
+    write_llm_config(tmp_path, {"c": {"backend": "alpha"}})
+    panel.reload_connections()
+    assert panel.connection_combo.currentText() == llm_view.NO_CONNECTION and panel.backend_combo.isEnabled()
+
+
+def test_an_unreadable_configuration_is_reported(qtbot: QtBot, tmp_path: Path) -> None:
+    directory = Path(make_arguments(tmp_path).dot_dp) / "patch_repair"
+    directory.mkdir(parents=True)
+    (directory / "llm_config.json").write_text("{broken")
+    panel = make_panel(qtbot, tmp_path)
+    assert panel.connection_hint.text().startswith("Could not read the LLM configuration")
+    assert "c62828" in panel.connection_hint.styleSheet()
+    assert panel.connection_combo.count() == 1
+
+
+def test_a_connection_that_cannot_be_resolved_is_reported(qtbot: QtBot, tmp_path: Path) -> None:
+    write_llm_config(tmp_path, {"odd": {"backend": "nonexistent"}})
+    panel = make_panel(qtbot, tmp_path)
+    panel.connection_combo.setCurrentText("odd")
+    assert panel.connection_hint.text().startswith("Unknown backend: nonexistent")
+    assert not panel.backend_combo.isEnabled()
+
+
 # ── enabling the run button ──────────────────────────────────────────────────
 
 
@@ -237,6 +343,33 @@ def test_running_twice_is_refused(panel: PatchRepairPanel, dialog_answers: Dialo
     panel.running = True
     panel._run()
     assert dialog_answers.titles("show_error") == ["Already Running"]
+
+
+def test_an_unresolvable_connection_cannot_run(qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder) -> None:
+    write_llm_config(tmp_path, {"odd": {"backend": "nonexistent"}})
+    panel = make_panel(qtbot, tmp_path)
+    ready(panel)
+    panel.connection_combo.setCurrentText("odd")
+    panel.run_button.click()
+    assert dialog_answers.titles("show_error") == ["LLM Connection"] and not panel.running
+
+
+def test_a_selected_connection_is_passed_to_patch_repair(qtbot: QtBot, tmp_path: Path) -> None:
+    write_llm_config(tmp_path, {"a": {"backend": "alpha"}, "b": {"backend": "beta", "model": "m2"}})
+    panel = make_panel(qtbot, tmp_path)
+    ready(panel)
+    started: List[Any] = []
+
+    def recording_runner(spec: Any, _events: Any) -> Any:
+        started.append(spec)
+        return mock.MagicMock()
+
+    panel.connection_combo.setCurrentText("b")
+    with mock.patch.object(patch_repair_panel, "JobRunner", recording_runner):
+        panel.run_button.click()
+    assert len(started) == 1 and started[0].command[-2:] == ["--connection", "b"]
+    assert "--backend" not in started[0].command
+    assert "  Connection: b" in panel.console.text() and "  Backend:" not in panel.console.text()
 
 
 # ── the request ──────────────────────────────────────────────────────────────

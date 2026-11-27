@@ -42,18 +42,27 @@ def _program(code: str) -> List[str]:
 
 
 def _backend(available: bool = True, models: Optional[List[str]] = None, gate: Optional[threading.Event] = None) -> Any:
-    def list_models() -> List[str]:
+    # the install sections (Settings > LLM backends) the backend was probed with
+    configs: List[Any] = []
+
+    def probe(config: Any = None) -> bool:
+        configs.append(config)
+        return available
+
+    def list_models(config: Any = None) -> List[str]:
+        configs.append(config)
         if gate is not None:
             gate.wait(10)
         return models if models is not None else ["m1", "m2"]
 
     return SimpleNamespace(
-        available=lambda: available,
-        version=lambda: "v1.0",
+        available=probe,
+        version=lambda config=None: "v1.0",
         list_models=list_models,
         DESCRIPTION="A fake agent.\nSecond line.",
         INSTALL_HINT="install the fake agent",
         FIELDS=[],
+        configs=configs,
     )
 
 
@@ -260,7 +269,7 @@ def test_a_typed_model_survives_the_arrival_of_the_list(
 
 
 def test_a_failing_query_leaves_the_field_typeable(qtbot: QtBot, tmp_path: Path, fake_backends: Dict[str, Any]) -> None:
-    def broken() -> List[str]:
+    def broken(_config: Any = None) -> List[str]:
         raise RuntimeError("no network")
 
     fake_backends["alpha"].list_models = broken
@@ -301,10 +310,20 @@ def test_an_unknown_backend_is_reported(panel: SuggestionCheckPanel) -> None:
     assert panel.backend_hint.text() == "Unknown backend: gone"
 
 
-def write_llm_config(tmp_path: Path, connections: Dict[str, Any]) -> None:
+def write_llm_config(tmp_path: Path, connections: Dict[str, Any], backends: Optional[Dict[str, Any]] = None) -> None:
     directory = dot_dp_of(tmp_path) / "patch_repair"
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "llm_config.json").write_text(json.dumps({"connections": connections}))
+    (directory / "llm_config.json").write_text(json.dumps({"connections": connections, "backends": backends or {}}))
+
+
+def test_the_backend_is_queried_with_its_configured_executable(
+    qtbot: QtBot, tmp_path: Path, fake_backends: Dict[str, Any]
+) -> None:
+    write_llm_config(tmp_path, {}, {"alpha": {"binary": "/opt/alpha"}})
+    panel = make_panel(qtbot, tmp_path)
+    qtbot.waitUntil(lambda: panel.model_combo.count() == 2, timeout=20000)
+    # the probe and the model list use the section of Settings > LLM backends, not the name on PATH
+    assert fake_backends["alpha"].configs == [{"binary": "/opt/alpha"}, {"binary": "/opt/alpha"}]
 
 
 def test_a_stored_connection_shows_its_backend_and_model_read_only(qtbot: QtBot, tmp_path: Path) -> None:
@@ -809,25 +828,24 @@ def test_several_rows_can_be_selected(checked: SuggestionCheckPanel) -> None:
     )
 
 
-def test_several_stored_connections_need_a_choice(qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder) -> None:
+def test_several_stored_connections_allow_backend_and_model_alone(
+    qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder
+) -> None:
     write_llm_config(tmp_path, {"a": {"backend": "alpha"}, "b": {"backend": "beta"}})
     panel = make_panel(qtbot, tmp_path)
     ready(panel)
-    # the check refuses backend and model alone when several connections are stored
-    assert panel.connection_hint.text().startswith("Several connections are stored: choose one")
-    assert "c62828" in panel.connection_hint.styleSheet()
-    panel.run_button.click()
-    assert dialog_answers.titles("show_error") == ["LLM Connection"] and not panel.running
+    # backend and model alone resolve through that backend's own section of the file, whatever is stored
+    assert "refuse" not in panel.connection_hint.text()
+    assert "c62828" not in panel.connection_hint.styleSheet()
     started: List[Any] = []
 
     def recording_runner(spec: Any, _events: Any) -> Any:
         started.append(spec)
         return mock.MagicMock()
 
-    panel.connection_combo.setCurrentText("b")
     with mock.patch.object(suggestion_check_panel, "JobRunner", recording_runner):
         panel.run_button.click()
-    assert len(started) == 1 and started[0].command[-2:] == ["--connection", "b"]
+    assert len(started) == 1 and "--backend" in started[0].command and "--connection" not in started[0].command
 
 
 def test_the_only_stored_connection_is_named(qtbot: QtBot, tmp_path: Path) -> None:
@@ -856,3 +874,79 @@ def test_an_unreadable_configuration_cannot_run(qtbot: QtBot, tmp_path: Path, di
     panel.run_button.click()
     assert dialog_answers.titles("show_error") == ["LLM Connection"]
     assert dialog_answers.messages("show_error")[0].startswith("Could not read the LLM configuration")
+
+
+# ── the hotspot filter ───────────────────────────────────────────────────────
+
+
+def test_the_hotspot_types_default_like_patch_repairs(panel: SuggestionCheckPanel) -> None:
+    assert {name: check.isChecked() for name, check in panel.hotspot_checks.items()} == {
+        "yes": True,
+        "maybe": True,
+        "no": False,
+    }
+    ready(panel)
+    assert panel._snapshot_request().hotspot_types == "yes,maybe"
+    panel.hotspot_checks["no"].setChecked(True)
+    panel.hotspot_checks["yes"].setChecked(False)
+    assert panel._snapshot_request().hotspot_types == "maybe,no"
+    panel._announce_request(panel._snapshot_request())
+    assert "  Hotspot types: maybe,no" in panel.console.text()
+    # nothing checked: the default, as in the Patch Repair tab
+    for check in panel.hotspot_checks.values():
+        check.setChecked(False)
+    assert panel._snapshot_request().hotspot_types == "yes,maybe"
+
+
+def _with_skipped(dot: Path, skipped: List[Dict[str, Any]]) -> None:
+    path = dot / "suggestion_check" / "results.json"
+    document = json.loads(path.read_text())
+    document["skipped_by_hotspot"] = skipped
+    path.write_text(json.dumps(document))
+
+
+def test_the_suggestions_skipped_by_the_hotspot_filter_are_shown(qtbot: QtBot, tmp_path: Path) -> None:
+    dot = dot_dp_of(tmp_path)
+    write_unsure(dot, [3, 4, 5])
+    write_results(dot, {3: APPROVAL})
+    _with_skipped(dot, [{"pattern_id": 4, "hotspot_type": "no"}, {"pattern_id": 5, "hotspot_type": "no"}])
+    panel = make_panel(qtbot, tmp_path)
+    assert not panel.skipped_label.isHidden()
+    assert panel.skipped_label.text().startswith("Skipped (cold): 4 (NO), 5 (NO).")
+    assert panel.header.chip.text() == "1 checked, 1 approved, 2 skipped (cold)"
+
+
+def test_a_run_which_skipped_everything_is_no_run_without_results(qtbot: QtBot, tmp_path: Path) -> None:
+    dot = dot_dp_of(tmp_path)
+    write_unsure(dot, [4])
+    write_results(dot, {})
+    _with_skipped(dot, [{"pattern_id": 4, "hotspot_type": "no"}])
+    panel = make_panel(qtbot, tmp_path)
+    assert panel.header.chip.text() == "0 checked, 0 approved, 1 skipped (cold)"
+    # shown although the table is empty
+    assert panel.results_stack.currentWidget() is panel.empty_label
+    assert not panel.skipped_label.isHidden()
+
+
+def test_a_skipped_event_reloads_and_a_new_run_clears_the_skipped(qtbot: QtBot, panel: SuggestionCheckPanel) -> None:
+    dot = Path(panel.arguments.dot_dp)
+    write_unsure(dot, [3, 4])
+    write_results(dot, {})
+    _with_skipped(dot, [{"pattern_id": 3, "hotspot_type": "no"}])
+    assert panel.skipped_label.isHidden()
+    panel._on_progress({"event": "skipped_by_hotspot", "suggestions": [{"pattern_id": 3, "hotspot_type": "no"}]})
+    assert not panel.skipped_label.isHidden()
+    # the line of the last run is gone as soon as the next one starts
+    run_with(panel, "import time; time.sleep(30)")
+    assert panel.running and panel.skipped_label.isHidden()
+    panel._stop()
+    qtbot.waitUntil(lambda: not panel.running, timeout=20000)
+
+
+def test_a_skipped_suggestion_with_an_earlier_result_keeps_its_row_only(qtbot: QtBot, tmp_path: Path) -> None:
+    dot = dot_dp_of(tmp_path)
+    write_unsure(dot, [3, 4])
+    write_results(dot, {3: APPROVAL})
+    _with_skipped(dot, [{"pattern_id": 3, "hotspot_type": "no"}, {"pattern_id": 4, "hotspot_type": "no"}])
+    panel = make_panel(qtbot, tmp_path)
+    assert panel.skipped_label.text().startswith("Skipped (cold): 4 (NO).")

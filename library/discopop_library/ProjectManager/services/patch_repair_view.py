@@ -224,4 +224,7 @@ def progress_summary(event: Dict[str, Any]) -> List[Tuple[str, str]]:
 
 
 def backend_description(version: str, description: str) -> str:
-    return (version + " -- " if version else "") + description.split("\n")[0]
+    """The line under the backend selector (kept here for the Tk GUI; the Qt one uses ``llm_connection_view``)."""
+    from discopop_library.ProjectManager.services.llm_connection_view import backend_description as shared
+
+    return shared(version, description)

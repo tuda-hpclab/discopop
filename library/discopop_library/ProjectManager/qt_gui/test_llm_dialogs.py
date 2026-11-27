@@ -568,7 +568,11 @@ def _window(qtbot: QtBot, tmp_path: Path) -> MainWindow:
 
 def _connection_choices(window: MainWindow) -> List[str]:
     combo = window.suggestion_check_panel.connection_combo
-    return [combo.itemText(i) for i in range(combo.count())]
+    choices = [combo.itemText(i) for i in range(combo.count())]
+    # both panels that drive an agent offer the same connections
+    repair = window.patch_repair_panel.connection_combo
+    assert [repair.itemText(i) for i in range(repair.count())] == choices
+    return choices
 
 
 def test_settings_menu_entries(qtbot: QtBot, tmp_path: Path) -> None:

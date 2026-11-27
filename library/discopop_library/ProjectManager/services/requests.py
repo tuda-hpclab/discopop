@@ -15,6 +15,8 @@ the snapshot to the worker thread; the worker never touches a widget or a Tk var
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from discopop_library.PatchRepair.PatchRepairArguments import DEFAULT_HOTSPOT_TYPES
+
 
 @dataclass(frozen=True)
 class ExplorerRequest:
@@ -55,6 +57,8 @@ class PatchRepairRequest:
     dry_run: bool
     # None: all suggestions
     suggestion_ids: Optional[Tuple[str, ...]]
+    # a stored connection of the LLM configuration shared with the suggestion check; None: backend and model
+    connection: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -77,3 +81,5 @@ class SuggestionCheckRequest:
     max_suggestions: int
     # None: all unsure suggestions
     suggestion_ids: Optional[Tuple[str, ...]]
+    # comma separated (yes, maybe, no): the others are skipped, the explicit ids above are checked regardless
+    hotspot_types: str = DEFAULT_HOTSPOT_TYPES
