@@ -278,7 +278,13 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
         + ". Approvals rest on the agent's assumptions; see "
         + os.path.join(arguments.suggestion_check_path, "results.json")
     )
-    if arguments.use_approved and approved_ids:
+    if arguments.use_approved and approved_ids and not arguments.review:
+        print(
+            "Not in use: "
+            + ", ".join(map(str, approved_ids))
+            + " (approved without a review; --publish-approved uses them)"
+        )
+    elif arguments.use_approved and approved_ids:
         # approvals are used unless the user withdraws them: the assumption each rests on is in the marker file
         published = publish_approved(dot, approved_ids)
         print(

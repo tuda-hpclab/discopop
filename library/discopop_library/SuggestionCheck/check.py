@@ -229,7 +229,10 @@ def change_gates(changes: Changes, suggestion: UnsureSuggestion, files: SourceFi
             + "`) is not directly preceded by its OpenMP directive (`#pragma omp parallel for ...`), or its header "
             "line was changed. Add the directive directly before the loop and keep the header line as it is."
         )
-    return patch_of(changes.mapped, files, suggestion.pattern_id), ""
+    patch = patch_of(changes.mapped, files, suggestion.pattern_id)
+    if not patch.entries:
+        return None, "Your changes do not differ from the original code. Add the directive directly before the loop."
+    return patch, ""
 
 
 def unexplained_files(
@@ -324,6 +327,14 @@ def check_suggestion(
         outcome.reason = (
             "a blocker's line is in no file the agent can open in its copy of the project (outside the project root "
             "or without a file id): " + ", ".join(unreadable_files)
+        )
+        return outcome
+    if directive_at_loop("\n".join(files.lines(suggestion.start.file_id)), files.line_text(suggestion.start)):
+        # nothing to add: asking the agent would end in an approval without a change
+        outcome.state = STATE_REJECTED
+        outcome.reason = (
+            "the loop at " + files.where(suggestion.start) + " already has an OpenMP parallel for directive in the "
+            "source; there is nothing to add"
         )
         return outcome
     last_problem = ""

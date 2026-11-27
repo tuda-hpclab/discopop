@@ -129,6 +129,18 @@ def test_without_a_review_an_approval_is_still_only_static(project: Project) -> 
     assert (outcome.state, outcome.verification, outcome.review) == (STATE_APPROVED, VERIFICATION_STATIC, None)
 
 
+def test_a_loop_which_already_has_its_directive_is_rejected_without_asking_the_agent(project: Project) -> None:
+    source = project.root / "code.cpp"
+    source.write_text(with_line_before(SOURCE, LOOP_LINE, PARALLEL))
+    agent = ScriptedAgent([approve()])
+    project.files = SourceFiles({1: source}, str(project.root))
+    # the explorer's line numbers are those of this source: the directive shifted the header by one line
+    project.suggestion = dataclasses.replace(project.suggestion, start=Location(1, LOOP_LINE + 1))
+    outcome = run(project, agent)
+    assert outcome.state == STATE_REJECTED and "already has an OpenMP parallel for directive" in outcome.reason
+    assert agent.prompts == []
+
+
 def test_an_approval_without_the_directive_is_sent_back_and_the_changes_stay(project: Project) -> None:
     only_comment = with_line_before(SOURCE, 3, "// each thread has its own state\n")
     agent = ScriptedAgent([edits(only_comment, APPROVAL), approve()])

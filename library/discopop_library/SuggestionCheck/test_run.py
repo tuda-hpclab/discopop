@@ -108,6 +108,15 @@ def test_approvals_are_put_into_use_unless_the_user_declines(project: Project) -
     assert (published / "1.patch").exists() and (published / "agent_approved.json").exists()
 
 
+def test_approvals_without_a_review_are_not_put_into_use(project: Project) -> None:
+    dot = _dot_discopop(project, [5])
+    assert (
+        run(_arguments(dot, suggestions="5", review=False), _factory({EDIT: [edits(APPROVED_SOURCE, APPROVAL)]})) == 0
+    )
+    assert (dot / "suggestion_check" / "approved" / "5").exists()
+    assert not (dot / "patch_generator" / "5").exists()
+
+
 def test_results_of_an_earlier_explorer_run_are_dropped(project: Project) -> None:
     dot = _dot_discopop(project, [5])
     run(_arguments(dot, review=False), _factory({EDIT: [edits(APPROVED_SOURCE, APPROVAL)], READ: []}))
