@@ -88,5 +88,5 @@ class BlockerResolutionRequest:
     suggestion_ids: Optional[Tuple[str, ...]]
     # comma separated (yes, maybe, no): the others are skipped, the explicit ids above are checked regardless
     hotspot_types: str = DEFAULT_HOTSPOT_TYPES
-    # False: --no-use-approved (the approvals stay unused until "Use approved suggestions")
+    # False: --no-use-approved (the approvals stay unused until "Use approved suggestions"); True: in use when it ends
     use_approved: bool = True

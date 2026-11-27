@@ -10,8 +10,9 @@
 
 Runs ``discopop_blocker_resolution`` (``BlockerResolution``) as a subprocess, built like the Patch Repair tab; what the
 tab shows is computed by ``services/blocker_resolution_view.py``. An approval is the agent's judgement, not DiscoPoP's
-analysis: it is used by the other stages only after "Use approved suggestions" (``BlockerResolution/publish.py``), which
-the user confirms after reading the assumption it rests on, and "Withdraw" takes it back.
+analysis: it is used by the other stages once published (``BlockerResolution/publish.py``): at the end of a run unless
+"Use approvals right away" is off, or by "Use approved suggestions", which the user confirms after reading the
+assumption it rests on. "Withdraw" takes it back.
 """
 
 import queue
