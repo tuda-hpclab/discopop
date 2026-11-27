@@ -89,6 +89,18 @@ def test_evidence_by_path_or_file_name(evidence: str) -> None:
     assert answer.justifications[0].evidence == [evidence.strip("`")]
 
 
+def test_a_file_name_shared_by_several_files_must_be_cited_by_its_path() -> None:
+    files = ["a/util.h", "b/util.h"]
+    for evidence, accepted in (("util.h:3", False), ("a/util.h:3", True), ("c/util.h:3", False)):
+        fields: Dict[str, Any] = dict(approval())
+        fields["blockers"] = [{"index": 1, "justification": "j", "evidence": [evidence]}]
+        if accepted:
+            assert parse_check_answer(json_answer(**fields), 1, files).justifications[0].evidence == [evidence]
+        else:
+            with pytest.raises(AnswerError, match="cites no code"):
+                parse_check_answer(json_answer(**fields), 1, files)
+
+
 @pytest.mark.parametrize("text", ["no json here", json_answer(verdict="maybe")])
 def test_an_unreadable_answer_is_an_error(text: str) -> None:
     with pytest.raises(AnswerError):

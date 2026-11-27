@@ -7,7 +7,11 @@
 # directory for details.
 """The read-only tool set and a server bound to one project, as the agents of discopop_suggestion_check use them."""
 
+import contextlib
+import io
 import json
+import os
+import tempfile
 import unittest
 import unittest.mock
 from types import SimpleNamespace
@@ -79,6 +83,33 @@ class TestBoundServer(unittest.TestCase):
 
         anyio.run(scenario)
         self.assertEqual([a["project_path"] for a in seen], ["/the/project", "/the/project"])
+
+    def test_a_bound_or_read_only_server_writes_no_log_into_the_project(self) -> None:
+        with tempfile.TemporaryDirectory() as project:
+            os.mkdir(os.path.join(project, ".discopop"))
+            log = os.path.join(project, ".discopop", "mcp_server", "log.txt")
+            for server in (
+                DiscoPopMCPServer(tool_set="readonly", project=project),
+                DiscoPopMCPServer(tool_set="all", project=project),
+                DiscoPopMCPServer(tool_set="readonly"),
+            ):
+                ctx = server._ctx
+                ctx.log_call("get_side_effects", {"project_path": project, "function": "f"})
+                ctx.log_action(project, "get_side_effects", "described f")
+                ctx.error("failed", project, "get_side_effects")
+                self.assertFalse(os.path.exists(log))
+            # an unbound server with every tool still logs
+            DiscoPopMCPServer(tool_set="all")._ctx.log_action(project, "gather_data", "profiled")
+            self.assertTrue(os.path.exists(log))
+
+    def test_project_cannot_be_combined_with_daemon(self) -> None:
+        argv = ["discopop_mcp_server", "--daemon", "--project", "/p"]
+        with unittest.mock.patch("sys.argv", argv), unittest.mock.patch.object(server_module, "_run_daemon") as daemon:
+            with self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                server_module.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--project cannot be combined with --daemon", stderr.getvalue())
+        daemon.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -141,18 +141,26 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
     project_root = os.path.abspath(arguments.project_root or os.path.dirname(dot))
     files = SourceFiles(load_file_mapping(os.path.join(dot, "FileMapping.txt")), project_root)
     guard = ProjectGuard(project_root)
-    # what the fingerprint of a build ignores, e.g. a build directory inside the project, is not copied either
-    # DiscoPoP's data through its MCP server, bound to the project which holds the .discopop
+    # DiscoPoP's data through its MCP server, bound to the project root: the server reads <project>/.discopop
     tools: Optional[DiscoPoPTools] = None
     tools_state = "off"
     if arguments.discopop_tools:
-        tools = locate_discopop_tools(os.path.dirname(dot))
-        tools_state = "on" if tools is not None else "unavailable"
-        if tools is None:
+        message = ""
+        if os.path.realpath(dot) != os.path.realpath(os.path.join(project_root, ".discopop")):
             message = (
-                "DiscoPoP's MCP server (" + DISCOPOP_TOOLS_EXECUTABLE + ") was not found: the agents work without "
-                "DiscoPoP's data. Install it, or pass --no-discopop-tools to silence this."
+                "DiscoPoP's MCP server reads the data of <project root>/.discopop, but the data is in " + dot + " and "
+                "the project root is " + project_root + ": the agents work without DiscoPoP's data."
             )
+        else:
+            tools = locate_discopop_tools(project_root)
+            if tools is None:
+                message = (
+                    "DiscoPoP's MCP server (" + DISCOPOP_TOOLS_EXECUTABLE + ") was not found, or is too old to be "
+                    "bound read-only to a project (--tools readonly --project): the agents work without DiscoPoP's "
+                    "data. Install the current version, or pass --no-discopop-tools to silence this."
+                )
+        tools_state = "on" if tools is not None else "unavailable"
+        if message:
             logger.warning(message)
             print(message)
     options = CheckOptions(
@@ -163,7 +171,7 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
     )
 
     run_info: Dict[str, Any] = {
-        "review": arguments.review,
+        "review_enabled": arguments.review,
         "verify": arguments.verify,
         "accept_rounding": arguments.accept_rounding,
         "discopop_tools": tools_state,
@@ -209,6 +217,12 @@ def run(arguments: SuggestionCheckArguments, agent_factory: Optional[AgentFactor
             except Exception as error:  # noqa: BLE001 - one suggestion must not end the run
                 logger.exception("checking suggestion " + str(suggestion.pattern_id) + " failed")
                 outcome = Outcome(suggestion.pattern_id, STATE_FAILED, reason="internal error: " + str(error))
+            if outcome.discopop_tools_failed and run_info["discopop_tools"] == "on":
+                # the backend reported that the server did not start: recorded for this and the following results
+                run_info["discopop_tools"] = "failed"
+                message = "DiscoPoP's MCP server failed to start: the agents worked without DiscoPoP's data."
+                logger.warning(message)
+                print(message)
             results.record(suggestion, outcome)
             counts[outcome.state] = counts.get(outcome.state, 0) + 1
             results.progress("done", pattern_id=suggestion.pattern_id, state=outcome.state, reason=outcome.reason)

@@ -58,6 +58,9 @@ read, and always work on this project:
 - `explain_parallelization` (a file and lines): why DiscoPoP did or did not
   suggest a parallelization for these lines, with the dependencies.
 
+Give `file_path` relative to the project root, like the paths in this prompt (e.g.
+`src/a.cpp`): the tools do not know the path of your copy.
+
 Their answers describe the profiled runs: they are evidence, not proof, and do not
 replace reading the code. Justifications still cite code (path:line)."""
 

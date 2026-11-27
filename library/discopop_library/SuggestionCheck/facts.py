@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from discopop_library.SuggestionCheck.unsure import Blocker, Location, UnsureSuggestion
 
@@ -33,6 +33,17 @@ _ORIGIN_WORDS = {
 }
 
 
+def project_relative(path: Union[str, Path], project_root: str) -> Optional[str]:
+    """the path of a file relative to the project root, None outside it. Both sides are resolved (realpath): a project
+    root reached through a symbolic link, or a file mapping recorded under another path to the same files, still
+    match. The one rule for the paths the agent is shown and the files of its copy."""
+    try:
+        relative = os.path.relpath(os.path.realpath(str(path)), os.path.realpath(project_root))
+    except ValueError:  # another drive (Windows)
+        return None
+    return None if relative == ".." or relative.startswith(".." + os.sep) else relative
+
+
 @dataclass
 class SourceFiles:
     """the source files of the project, with the paths the agent is shown"""
@@ -41,14 +52,17 @@ class SourceFiles:
     project_root: str
 
     def display_path(self, file_id: int) -> str:
+        """the path relative to the project root, as in the agent's copy; absolute for a file outside the root"""
         path = self.file_mapping.get(file_id)
         if path is None:
             return "<file " + str(file_id) + ">"
-        try:
-            relative = os.path.relpath(str(path), self.project_root)
-        except ValueError:
-            return str(path)
-        return str(path) if relative.startswith("..") else relative
+        relative = project_relative(path, self.project_root)
+        return str(path) if relative is None else relative
+
+    def in_project(self, file_id: int) -> Optional[str]:
+        """the path of a mapped file relative to the project root, None for an unmapped file or one outside it"""
+        path = self.file_mapping.get(file_id)
+        return None if path is None else project_relative(path, self.project_root)
 
     def lines(self, file_id: int) -> List[str]:
         path = self.file_mapping.get(file_id)

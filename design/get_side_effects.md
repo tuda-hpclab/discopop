@@ -323,6 +323,17 @@ get_side_effects(project_path, function, file_path?, line?,
  "notes": ["Effects were observed on the profiled inputs only …"]}
 ```
 
+- **Copies of one definition** (same name, file and lines, e.g. an inline or
+  template function of a header compiled into several files) are one function:
+  the answer describes the union of all copies' effects (one entry per name, kind,
+  access, source, pointer and member; the sites merged; thread-local only if so in
+  every copy), never only the best-observed copy, which would drop what the other
+  copies did. Coverage: `not_executed` only if no copy ran; else the coverage of
+  the copies that ran if they agree (e.g. all `untracked`), `partial` if they
+  differ. A copy that never ran does not lower it: the definition was observed
+  through the others, and the `not_executed` caveat would deny their effects. Purity is `false` if any
+  copy that ran is impure, `true` only if all are pure and the coverage is
+  `executed`. A note says that the copies were merged.
 - One entry per (name, kind, access); `sites` capped at 3 (all sites with
   `var_name`). Files other than the function's own as `{file, line}`.
 - **Ranking** when cutting to `MAX_EFFECTS = 100`: writes before reads;

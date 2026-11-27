@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -26,6 +27,8 @@ SERVER_NAME = "discopop"
 # the tools the prompts describe; the server offers a few more read-only ones, which stay denied
 TOOLS = ("get_side_effects", "explain_parallelization")
 EXECUTABLE = "discopop_mcp_server"
+# seconds the --help of the server may take (it imports the MCP SDK)
+PROBE_TIMEOUT = 60
 
 
 @dataclass(frozen=True)
@@ -72,13 +75,34 @@ def is_discopop_tool(name: str) -> bool:
     return name.startswith("mcp__" + SERVER_NAME + "__") or name.startswith(SERVER_NAME + "_")
 
 
+def supports_binding(command: List[str], env: Optional[Dict[str, str]] = None) -> bool:
+    """whether the server started by command knows --tools readonly and --project (an older version exits on them,
+    silently for the agent): its --help names both. A server that cannot be run, or does not answer in time, does
+    not."""
+    try:
+        completed = subprocess.run(
+            command + ["--help"],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+            env={**os.environ, **env} if env else None,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0 and "readonly" in completed.stdout and "--project" in completed.stdout
+
+
 def locate(project: str) -> Optional[DiscoPoPTools]:
-    """the server, if it is installed or importable from this Python; None otherwise"""
+    """the server, if it is installed or importable from this Python and supports being bound read-only to a
+    project; None otherwise"""
+    project = os.path.abspath(project)
     executable = shutil.which(EXECUTABLE)
-    if executable:
-        return DiscoPoPTools([executable], os.path.abspath(project))
+    if executable and supports_binding([executable]):
+        return DiscoPoPTools([executable], project)
     if importlib.util.find_spec("mcp_server") is not None and importlib.util.find_spec("mcp_server.server"):
         # e.g. run from a source checkout: the same interpreter, with the same module path
         env = {"PYTHONPATH": os.environ["PYTHONPATH"]} if os.environ.get("PYTHONPATH") else {}
-        return DiscoPoPTools([sys.executable, "-m", "mcp_server.server"], os.path.abspath(project), env)
+        command = [sys.executable, "-m", "mcp_server.server"]
+        if supports_binding(command, env):
+            return DiscoPoPTools(command, project, env)
     return None

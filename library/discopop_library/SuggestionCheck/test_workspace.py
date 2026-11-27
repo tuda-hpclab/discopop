@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -109,3 +110,40 @@ def test_ignored_files_are_not_copied_but_source_files_always_are(project: Proje
         assert workspace.changes().unmapped == []
     finally:
         workspace.remove()
+
+
+def test_a_mapped_source_file_git_ignores_is_copied(project: Project, tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(project.root)], check=True)
+    (project.root / ".gitignore").write_text("generated/\n")
+    (project.root / "generated").mkdir()
+    generated = project.root / "generated" / "table.h"
+    generated.write_text("int table[4];\n")
+    (project.root / "generated" / "unmapped.h").write_text("// no file id\n")
+    subprocess.run(["git", "-C", str(project.root), "add", "-A"], check=True)
+    files = SourceFiles({1: project.root / "code.cpp", 2: generated}, str(project.root))
+    workspace = Workspace(str(project.root), files)
+    try:
+        copy = Path(workspace.root)
+        assert (copy / "generated" / "table.h").read_text() == "int table[4];\n"
+        assert not (copy / "generated" / "unmapped.h").exists()
+        (copy / "generated" / "table.h").write_text("thread_local int table[4];\n")
+        changes = workspace.changes()
+    finally:
+        workspace.remove()
+    assert (changes.mapped, changes.unmapped) == ({2: "thread_local int table[4];\n"}, [])
+
+
+def test_a_failed_copy_leaves_no_workspace_behind(
+    project: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("shutil.copy2", fail)
+    with pytest.raises(OSError, match="disk full"):
+        Workspace(str(project.root), project.files)
+    assert list(scratch.iterdir()) == []

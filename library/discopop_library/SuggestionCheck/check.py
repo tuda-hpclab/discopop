@@ -23,12 +23,14 @@ from discopop_library.SuggestionCheck.answers import (
     ROUNDING,
     AnswerError,
     Justification,
+    cited_file,
     parse_check_answer,
     parse_review_answer,
 )
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.prompts import check_prompt, retry_prompt, review_prompt
-from discopop_library.SuggestionCheck.tool_calls import opened_files, tool_calls
+from discopop_library.SuggestionCheck.discopop_tools import SERVER_NAME as DISCOPOP_SERVER_NAME
+from discopop_library.SuggestionCheck.tool_calls import mcp_server_failed, opened_files, tool_calls
 from discopop_library.SuggestionCheck.unsure import UnsureSuggestion
 from discopop_library.SuggestionCheck.workspace import Changes, Workspace, patch_of
 
@@ -100,6 +102,8 @@ class Outcome:
     # whether the agent opened every file holding a blocker's line in the attempt that decided; None if its backend
     # reports no tool calls, so that it cannot be told
     read_blocker_files: Optional[bool] = None
+    # the backend reported that DiscoPoP's MCP server failed to start (claude's init event)
+    discopop_tools_failed: bool = False
     gates: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -158,6 +162,8 @@ class _Conversation:
             if reply.events:
                 calls = tool_calls(reply.events)
                 self.outcome.tool_calls += len(calls)
+                if mcp_server_failed(reply.events, DISCOPOP_SERVER_NAME):
+                    self.outcome.discopop_tools_failed = True
                 self._write(name + "_events.jsonl", reply.events)
                 # paths relative to the copy the agent worked in
                 prefix = os.path.join(os.path.realpath(workdir), "")
@@ -224,40 +230,47 @@ def unexplained_files(
     changed: Sequence[int], suggestion: UnsureSuggestion, files: SourceFiles, justifications: List[Justification]
 ) -> List[str]:
     """the changed files which hold neither the loop nor a blocker's line, and which no justification cites: a
-    change there is explained by nothing. Evidence names a file by its path or its file name, as the answer
-    parser accepts it."""
+    change there is explained by nothing. Evidence names a file by its path, or by its file name if no other known
+    file has that name, as the answer parser accepts it."""
     expected = {suggestion.start.file_id}
     for blocker in suggestion.blockers:
         for location in (blocker.source, blocker.sink):
             if location is not None:
                 expected.add(location.file_id)
+    known = [files.display_path(i) for i in sorted(files.file_mapping)]
     cited = set()
     for justification in justifications:
         for evidence in justification.evidence:
-            name = evidence.strip("`").split(":")[0]
-            cited.add(name)
-            cited.add(os.path.basename(name))
+            name = cited_file(evidence.strip("`").split(":")[0], known)
+            if name is not None:
+                cited.add(name)
     result = []
     for file_id in sorted(changed):
         if file_id in expected:
             continue
         path = files.display_path(file_id)
-        if path not in cited and os.path.basename(path) not in cited:
+        if path not in cited:
             result.append(path)
     return result
 
 
-def blocker_files(suggestion: UnsureSuggestion, files: SourceFiles) -> List[str]:
-    """the files holding the lines of the blockers, as the agent sees them in its copy. Files outside the project are
-    not in the copy, so they cannot be required."""
-    names = set()
+def blocker_files(suggestion: UnsureSuggestion, files: SourceFiles) -> Tuple[List[str], List[str]]:
+    """(the files holding the lines of the blockers, as the agent sees them in its copy; those it cannot open). A
+    file without a file id or outside the project root is not in the copy, and a blocker without any location has no
+    file to open: the second list names them, and no approval can then be checked."""
+    names: Set[str] = set()
+    unreadable: Set[str] = set()
     for blocker in suggestion.blockers:
-        for location in (blocker.source, blocker.sink):
-            if location is not None and location.file_id in files.file_mapping:
-                name = files.display_path(location.file_id)
-                if not os.path.isabs(name):
-                    names.add(name)
-    return sorted(names)
+        locations = [location for location in (blocker.source, blocker.sink) if location is not None]
+        if not locations:
+            unreadable.add("a blocker without a location")
+        for location in locations:
+            name = files.in_project(location.file_id)
+            if name is None:
+                unreadable.add(files.display_path(location.file_id))
+            else:
+                names.add(name)
+    return sorted(names), sorted(unreadable)
 
 
 class _Reading:
@@ -297,7 +310,16 @@ def check_suggestion(
     outcome = Outcome(pattern_id=suggestion.pattern_id, state=STATE_FAILED)
     conversation = _Conversation(agent, outcome, budget, artifacts, "check", guard)
     known_files = [files.display_path(i) for i in sorted(files.file_mapping)]
-    required_files = blocker_files(suggestion, files)
+    required_files, unreadable_files = blocker_files(suggestion, files)
+    if unreadable_files:
+        # fail closed: the reading gate could require nothing for these blockers, so an approval could not be
+        # checked; asking the agent would only cost calls
+        outcome.state = STATE_REJECTED
+        outcome.reason = (
+            "a blocker's line is in no file the agent can open in its copy of the project (outside the project root "
+            "or without a file id): " + ", ".join(unreadable_files)
+        )
+        return outcome
     last_problem = ""
     try:
         for attempt in range(1, budget.prompts + 1):

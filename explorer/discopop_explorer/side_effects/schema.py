@@ -23,7 +23,7 @@ import gzip
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, TypedDict, Union
+from typing import Dict, List, NotRequired, Optional, Tuple, TypedDict, Union
 
 FORMAT_VERSION = 1
 EXPORT_FILE_NAME = "side_effects.json.gz"
@@ -52,7 +52,7 @@ class GlobalVariable(TypedDict):
     # const-qualified: reading it does not depend on mutable state
     const: bool
     # thread_local storage: one copy per thread. Absent in exports written before it was recorded
-    thread_local: bool
+    thread_local: NotRequired[bool]
 
 
 class Parameter(TypedDict):
@@ -75,7 +75,7 @@ class LocalVariable(TypedDict):
     # static or thread_local storage: persistent state, classified like a global
     static: bool
     # thread_local storage: one copy per thread. Absent in exports written before it was recorded
-    thread_local: bool
+    thread_local: NotRequired[bool]
 
 
 class GlobalReference(TypedDict):

@@ -37,21 +37,30 @@ RESULT_DIFFERENCES = (NO_DIFFERENCES, ROUNDING)
 EVIDENCE = re.compile(r"^`?(?P<file>[^\s:`]+):(?P<line>\d+)(?:-\d+)?`?$")
 
 
+def cited_file(cited: str, known_files: Collection[str]) -> Optional[str]:
+    """the known file a citation names: by its full path, or by its file name alone if exactly one known file has
+    it; None otherwise (unknown, or a file name several files share)"""
+    if cited in known_files:
+        return cited
+    if os.sep in cited or "/" in cited:
+        return None
+    matches = [f for f in known_files if os.path.basename(f) == cited]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _cited_lines(raw: Any, known_files: Optional[Collection[str]]) -> List[str]:
-    """the entries of raw which cite a line of a known file as path:line. Anything else, e.g. a string instead of a
-    list, null or "n/a", cites nothing."""
+    """the entries of raw which cite a line of a known file as path:line (a file name alone only if it is unique
+    among the known files). Anything else, e.g. a string instead of a list, null or "n/a", cites nothing."""
     if not isinstance(raw, list):
         return []
     cited: List[str] = []
-    basenames = None if known_files is None else {os.path.basename(f) for f in known_files}
     for item in raw:
         if not isinstance(item, str):
             continue
         match = EVIDENCE.match(item.strip())
         if match is None or int(match.group("line")) < 1:
             continue
-        cited_file = match.group("file")
-        if known_files is not None and cited_file not in known_files and cited_file not in (basenames or set()):
+        if known_files is not None and cited_file(match.group("file"), known_files) is None:
             continue
         cited.append(item.strip().strip("`"))
     return cited

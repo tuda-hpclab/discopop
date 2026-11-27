@@ -211,7 +211,8 @@ the appended requests, what a called function does) and to change code. It
 therefore works in a **workspace: a throwaway copy of the project sources** (the
 files git knows of, or the project directory without `.discopop` and `.git`;
 without the files the project's fingerprint ignore patterns name, e.g. a build
-directory, but always with the source files that have a file id). Every attempt gets a fresh copy; the follow-up turns of an attempt continue
+directory, but always with the source files that have a file id inside the project
+root, also those git ignores). Every attempt gets a fresh copy; the follow-up turns of an attempt continue
 in it.
 
 * **The agent changes the code itself**, including the OpenMP directive of the
@@ -238,18 +239,27 @@ in it.
     `webfetch: deny` (`OPENCODE_CONFIG_CONTENT`). Still to be verified with a real
     run.
 * **DiscoPoP's data (MCP).** The agents get DiscoPoP's MCP server, started with
-  `--tools readonly --project <project>`: only tools marked read-only can be listed,
-  every call works on the project (the agent never needs its real path), and the
-  server never forwards to a daemon of the user. For `claude`, only
+  `--tools readonly --project <project root>`: only tools marked read-only can be
+  listed, every call works on the project (the agent never needs its real path,
+  file paths are relative to the root), the server never forwards to a daemon of
+  the user and writes no log into the project. It reads `<root>/.discopop`; data
+  elsewhere means the tools are unavailable. An installed server too old for these
+  options is detected (`--help`) and not used; a server the backend reports as
+  failed to start is recorded as `failed`. For `claude`, only
   `get_side_effects` and `explain_parallelization` are allowed (`--allowedTools`);
   `--strict-mcp-config` keeps every other MCP server away. `--no-discopop-tools`
   switches it off. The answers are about the profiled runs: evidence, not proof.
 * **Reading is checked where it can be.** The prompt requires opening, per blocker,
   the declarations of the data, the called functions and the code after the loop.
-  From the reported tool calls the check knows which files were opened: an approval
-  without the files of the blockers' lines is sent back, every result records
-  `read_blocker_files` (`null` without reported tool calls). That the declaration
-  itself was read cannot be checked.
+  From the reported tool calls the check knows which files were opened: only
+  reading (`Read`, `View`) and editing (`Edit`, `MultiEdit`, which need a prior
+  read) count, not `Write`, searches, DiscoPoP's MCP tools (they answer about a
+  file, they do not show it) or calls the stream reports as failed (`tool_result`
+  with `is_error`, opencode's `status: error`). An approval without the files of
+  the blockers' lines is sent back, every result records `read_blocker_files`
+  (`null` without reported tool calls). That the declaration itself was read cannot
+  be checked. A blocker whose line is in no file of the copy (outside the root,
+  no file id) fails closed: the suggestion is rejected without asking the agent.
 * **Escape check:** the project's own source files are compared with their state
   before every agent call; a change aborts the run.
 * The reviewer (§5.5) gets a copy with the changes applied and read-only tools.

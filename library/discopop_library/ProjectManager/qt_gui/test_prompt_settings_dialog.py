@@ -9,6 +9,7 @@
 import os
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from pytestqt.qtbot import QtBot
 
 from discopop_library.ProjectManager.qt_gui import dialogs
@@ -138,3 +139,50 @@ def test_closing_the_window_asks_about_unsaved_prompt_edits(
     # Discard: the window closes, nothing is stored
     assert window.close()
     assert not os.path.isfile(os.path.join(prompt_store.custom_prompt_dir(window.arguments.dot_dp), "check.md"))
+
+
+def _press_escape(qtbot: QtBot, dialog: PromptSettingsDialog) -> None:
+    qtbot.keyClick(dialog, Qt.Key.Key_Escape)
+
+
+def test_escape_without_edits_closes_without_asking(qtbot: QtBot, tmp_path: Path) -> None:
+    dialog = _dialog(qtbot, tmp_path)
+    dialog.show()
+    with qtbot.waitSignal(dialog.finished, timeout=1000):
+        _press_escape(qtbot, dialog)
+    assert not dialog.isVisible()
+
+
+def test_escape_with_unsaved_changes_asks(qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder) -> None:
+    dialog = _dialog(qtbot, tmp_path)
+    dialog.show()
+    dialog.editor.setPlainText("changed")
+    # Cancel: the dialog stays, with the edits
+    dialog_answers.answer("ask_save_discard", None)
+    with qtbot.assertNotEmitted(dialog.finished):
+        _press_escape(qtbot, dialog)
+    assert dialog.isVisible() and dialog.editor.toPlainText() == "changed"
+    # Discard: the dialog closes and says so
+    dialog_answers.answer("ask_save_discard", dialogs.DISCARD)
+    with qtbot.waitSignal(dialog.finished, timeout=1000):
+        _press_escape(qtbot, dialog)
+    assert not dialog.isVisible()
+    assert not _stored(tmp_path, "check")
+
+
+def test_escape_and_close_let_the_window_forget_the_dialog(
+    qtbot: QtBot, tmp_path: Path, dialog_answers: DialogRecorder
+) -> None:
+    window = MainWindow(make_arguments(tmp_path))
+    qtbot.addWidget(window)
+    window.show()
+    dialog = window.open_prompt_settings()
+    _press_escape(qtbot, dialog)
+    assert window.prompt_settings_dialog is None
+    # closing the window (not the Close button or Esc) emits finished, too
+    dialog = window.open_prompt_settings()
+    dialog.editor.setPlainText("edited")
+    dialog_answers.answer("ask_save_discard", dialogs.DISCARD)
+    assert dialog.close()
+    assert window.prompt_settings_dialog is None
+    assert window.open_prompt_settings() is not dialog

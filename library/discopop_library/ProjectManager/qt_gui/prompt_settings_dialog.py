@@ -15,7 +15,6 @@ used by the next run of the check; a template equal to the shipped one is not st
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QDialog, QLabel, QListWidget, QPlainTextEdit, QWidget
 
 from discopop_library.ProjectManager.qt_gui import dialogs, widgets
@@ -160,8 +159,9 @@ class PromptSettingsDialog(QDialog):
         self.template_list.setCurrentRow(self._current_row)
         self._loading = False
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt's name)
+    def reject(self) -> None:
+        """Esc, Close and closing the window all end here (QDialog's closeEvent calls reject and keeps the window
+        open if it stays visible): unsaved edits are asked about first. QDialog.reject hides the dialog through done(),
+        which emits finished, so the main window forgets it."""
         if self._confirm_leave():
-            event.accept()
-        else:
-            event.ignore()
+            super().reject()

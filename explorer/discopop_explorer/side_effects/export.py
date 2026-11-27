@@ -732,7 +732,7 @@ class _AstFacts:
                     "name": g["name"],
                     "const": unique[g["name"]]["const"] and g["const"],
                     # thread_local only if every declaration is
-                    "thread_local": unique[g["name"]]["thread_local"] and g["thread_local"],
+                    "thread_local": unique[g["name"]].get("thread_local", False) and g.get("thread_local", False),
                 }
         self.globals = [unique[name] for name in sorted(unique)]
 

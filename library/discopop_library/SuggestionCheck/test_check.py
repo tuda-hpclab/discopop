@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 import re
 from pathlib import Path
@@ -16,13 +18,14 @@ from typing import Any, Optional
 
 import pytest
 
-from discopop_library.SuggestionCheck.answers import parse_check_answer
+from discopop_library.SuggestionCheck.answers import Justification, parse_check_answer
 from discopop_library.SuggestionCheck.facts import SourceFiles
 from discopop_library.SuggestionCheck.check import (
     STATE_APPROVED,
     STATE_FAILED,
     STATE_REJECTED,
     VERIFICATION_STATIC,
+    AgentReply,
     Budget,
     CheckOptions,
     Outcome,
@@ -43,6 +46,7 @@ from discopop_library.SuggestionCheck.conftest import (
     json_answer,
     with_line_before,
 )
+from discopop_library.SuggestionCheck.unsure import Location
 from discopop_library.SuggestionCheck.workspace import ProjectChanged, ProjectGuard
 
 
@@ -328,3 +332,68 @@ def test_files_of_the_loop_and_the_blockers_need_no_citation(project: Project) -
         json_answer(**approval(evidence=["code.cpp:8", "`other.h:1`"])), 1, ["code.cpp", "other.h"]
     ).justifications
     assert unexplained_files([1, 2], project.suggestion, project.files, by_name) == []
+
+
+def test_a_file_name_shared_by_several_changed_files_explains_neither(project: Project) -> None:
+    for directory in ("a", "b"):
+        (project.root / directory).mkdir()
+        (project.root / directory / "util.h").write_text("int x;\n")
+    files = SourceFiles(
+        {1: project.root / "code.cpp", 2: project.root / "a" / "util.h", 3: project.root / "b" / "util.h"},
+        str(project.root),
+    )
+    justification = [Justification(1, "j", ["code.cpp:8", "util.h:1"])]
+    assert unexplained_files([1, 2, 3], project.suggestion, files, justification) == ["a/util.h", "b/util.h"]
+    by_path = [Justification(1, "j", ["code.cpp:8", "a/util.h:1"])]
+    assert unexplained_files([1, 2, 3], project.suggestion, files, by_path) == ["b/util.h"]
+
+
+def _reading_agent(code: str) -> Any:
+    """approves without opening a file first, then after reading code.cpp; records its prompts"""
+    turns = iter([False, True])
+    prompts = []
+
+    def agent(prompt: str, session: Optional[str], workdir: str) -> AgentReply:
+        prompts.append(prompt)
+        read = next(turns)
+        (Path(workdir) / "code.cpp").write_text(code)
+        content = [{"type": "tool_use", "id": str(len(prompts)), "name": "Read", "input": {"file_path": "code.cpp"}}]
+        return AgentReply(APPROVAL, True, session="s", events=json.dumps({"content": content if read else []}))
+
+    agent.prompts = prompts  # type: ignore[attr-defined]
+    return agent
+
+
+@pytest.mark.parametrize("linked", ["root", "file_mapping"])
+def test_a_project_reached_through_a_symbolic_link_is_checked_like_any_other(
+    project: Project, tmp_path: Path, linked: str
+) -> None:
+    link = tmp_path / "link"
+    link.symlink_to(project.root, target_is_directory=True)
+    if linked == "root":
+        files, root = SourceFiles({1: project.root / "code.cpp"}, str(link)), str(link)
+    else:
+        files, root = SourceFiles({1: link / "code.cpp"}, str(project.root)), str(project.root)
+    agent = _reading_agent(APPROVED_SOURCE)
+    outcome = check_suggestion(project.suggestion, files, root, agent, ScriptedAgent([AGREE]), Budget())
+    # the agent is shown the paths of its copy, not absolute ones it cannot open
+    assert "`code.cpp:8`" in agent.prompts[0]
+    assert str(project.root) not in agent.prompts[0] and str(link) not in agent.prompts[0]
+    # the reading gate requires the blocker's file: the approval without reading it is sent back
+    assert "Not opened: code.cpp" in outcome.gates[0]["detail"]
+    assert (outcome.state, outcome.read_blocker_files) == (STATE_APPROVED, True)
+
+
+@pytest.mark.parametrize("where", ["outside", "unmapped", "nowhere"])
+def test_a_blocker_in_no_file_of_the_copy_rejects_without_asking(project: Project, tmp_path: Path, where: str) -> None:
+    outside = tmp_path / "outside.h"
+    outside.write_text("int state;\n")
+    files = SourceFiles({1: project.root / "code.cpp", 2: outside}, str(project.root))
+    blocker = project.suggestion.blockers[0]
+    location = {"outside": Location(2, 1), "unmapped": Location(9, 1), "nowhere": None}[where]
+    blockers = [dataclasses.replace(blocker, source=location, sink=location if where == "nowhere" else blocker.sink)]
+    suggestion = dataclasses.replace(project.suggestion, blockers=blockers)
+    agent = ScriptedAgent([])
+    outcome = check_suggestion(suggestion, files, str(project.root), agent, None, Budget())
+    assert outcome.state == STATE_REJECTED and agent.prompts == []
+    assert "no file the agent can open" in outcome.reason

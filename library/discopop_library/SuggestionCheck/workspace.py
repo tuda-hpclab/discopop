@@ -22,7 +22,7 @@ from discopop_library.PatchRepair.patching import _diff_arguments
 from discopop_library.PatchRepair.patchset import PatchEntry, PatchSet
 from discopop_library.ProjectManager.configurations.builds import source_entries
 from discopop_library.ProjectManager.services.fingerprint_ignore import is_ignored
-from discopop_library.SuggestionCheck.facts import SourceFiles
+from discopop_library.SuggestionCheck.facts import SourceFiles, project_relative
 
 
 class ProjectChanged(Exception):
@@ -58,7 +58,7 @@ class Changes:
 class Workspace:
     """a copy of the project's files (those git knows of, or all outside .discopop and .git), without those matching
     one of the ignore patterns (the project's fingerprint_ignore.json, e.g. a build directory inside the project),
-    except for source files with a file id"""
+    and every source file with a file id inside the project root (also one git ignores or a pattern names)"""
 
     def __init__(
         self,
@@ -73,8 +73,20 @@ class Workspace:
         self.files = files
         self.root = tempfile.mkdtemp(prefix=prefix)
         self._copied: Dict[str, Tuple[int, int]] = dict()
-        mapped = {name for path in files.file_mapping.values() if (name := self.relative(path)) is not None}
-        for name in sorted(source_entries(self.project_root)):
+        try:
+            self._copy(ignore)
+        except BaseException:
+            # nobody gets the workspace to remove
+            self.remove()
+            raise
+
+    def _copy(self, ignore: Sequence[str]) -> None:
+        mapped = {name for path in self.files.file_mapping.values() if (name := self.relative(path)) is not None}
+        names = set(source_entries(self.project_root))
+        # every mapped source file inside the root, also one git ignores (e.g. generated, or listed in .gitignore):
+        # the agent must be able to open and change each of them
+        names |= {name for name in mapped if name.split(os.sep)[0] not in (".discopop", ".git")}
+        for name in sorted(names):
             source = os.path.join(self.project_root, name)
             if not os.path.isfile(source):
                 continue
@@ -88,8 +100,7 @@ class Workspace:
 
     def relative(self, original: Path) -> Optional[str]:
         """the path of a project file relative to the project root, None outside it"""
-        relative = os.path.relpath(os.path.realpath(str(original)), self.project_root)
-        return None if relative == ".." or relative.startswith(".." + os.sep) else relative
+        return project_relative(original, self.project_root)
 
     def write(self, changes: Dict[int, str]) -> None:
         """puts changed contents of files with a file id into the copy, e.g. for the review"""

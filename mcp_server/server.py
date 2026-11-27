@@ -362,7 +362,9 @@ class DiscoPopMCPServer:
         # listed without project_path
         self.project = os.path.abspath(project) if project else None
         _setup_logging(debug=debug)
-        self._ctx = ToolContext(debug=debug)
+        # a server bound to a project (e.g. for the agents of the suggestion check) or offering only read-only
+        # tools writes nothing into the project, not even its log
+        self._ctx = ToolContext(debug=debug, log_to_project=self.project is None and tool_set != "readonly")
         self._limiter: Optional[anyio.CapacityLimiter] = None
         self._register_tools()
 
@@ -476,8 +478,8 @@ class DiscoPopMCPProxy:
         self._tools = TOOL_SETS[tool_set]
         _setup_logging(debug=debug)
         self._session: Optional[Any] = None  # mcp.client.session.ClientSession when connected
-        # Inline fallback components (used when daemon is unavailable)
-        self._ctx = ToolContext(debug=debug)
+        # Inline fallback components (used when daemon is unavailable); read-only tools write no log either
+        self._ctx = ToolContext(debug=debug, log_to_project=tool_set != "readonly")
         self._limiter: Optional[anyio.CapacityLimiter] = None
         self._dispatch: dict[str, Handler] = {mod.TOOL.name: mod.handle for mod in self._tools}
         self.server = Server("discopop_mcp_server", instructions=_SERVER_INSTRUCTIONS)
@@ -781,6 +783,9 @@ Available agents: {', '.join(agent_choices)}
     )
 
     args = parser.parse_args()
+    if args.daemon and args.project:
+        # a daemon serves every project of its clients; a bound server never forwards to one
+        parser.error("--project cannot be combined with --daemon")
 
     is_setup_mode = any([args.setup, args.setup_all, args.verify, args.status])
 

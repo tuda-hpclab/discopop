@@ -212,3 +212,12 @@ def test_the_results_record_the_prompts_and_whether_rounding_is_accepted(project
     assert results["accept_rounding"] is False
     assert results["prompts"]["check"]["custom"] is True
     assert results["prompts"]["review"]["custom"] is False
+
+
+def test_the_reviews_verdict_is_not_overwritten_by_the_run_settings(project: Project) -> None:
+    dot = _dot_discopop(project, [5])
+    run(_arguments(dot, suggestions="5"), _factory({EDIT: [edits(APPROVED_SOURCE, APPROVAL)], READ: [AGREE]}))
+    results = json.loads((dot / "suggestion_check" / "results.json").read_text())
+    entry = results["suggestions"][0]
+    assert isinstance(entry["review"], dict) and entry["review"]["verdict"] == "agree"
+    assert entry["review_enabled"] is True

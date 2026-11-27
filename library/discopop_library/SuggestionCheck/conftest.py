@@ -49,6 +49,14 @@ APPROVED_SOURCE = with_line_before(
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_server_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """locate() does not start the MCP server to probe it (tests of the probe use the function directly)"""
+    from discopop_library.SuggestionCheck import discopop_tools
+
+    monkeypatch.setattr(discopop_tools, "supports_binding", lambda command, env=None: True)
+
+
 @dataclass
 class Project:
     root: Path
