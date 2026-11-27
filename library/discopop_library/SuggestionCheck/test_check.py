@@ -141,14 +141,6 @@ def test_a_loop_which_already_has_its_directive_is_rejected_without_asking_the_a
     assert agent.prompts == []
 
 
-def test_an_array_section_clause_is_sent_back(project: Project) -> None:
-    section = with_line_before(SOURCE, LOOP_LINE, "  #pragma omp parallel for reduction(-:f[k*n:n])\n")
-    agent = ScriptedAgent([edits(section, APPROVAL), approve()])
-    outcome = run(project, agent)
-    assert outcome.state == STATE_APPROVED
-    assert "array section" in agent.prompts[1]
-
-
 def test_an_approval_without_the_directive_is_sent_back_and_the_changes_stay(project: Project) -> None:
     only_comment = with_line_before(SOURCE, 3, "// each thread has its own state\n")
     agent = ScriptedAgent([edits(only_comment, APPROVAL), approve()])

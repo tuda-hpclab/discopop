@@ -32,8 +32,9 @@ results; a disagreement only costs a missed speedup. Agree only if all of this h
 - The whole loop is safe, not only the blockers: indirect indices, aliasing
   pointers, writes to globals or statics, calls with side effects, jumps out of the
   loop, changes of the loop variable.
-- The clauses are needed and justified: no array sections or user-defined
-  reductions; a variable read after the loop has `lastprivate` and its last
+- The clauses are needed and justified (clauses beyond the suggested directive,
+  e.g. reductions over array sections, are fine when a blocker needs them); a
+  variable read after the loop has `lastprivate` and its last
   iteration always writes it; no floating-point reduction decides a comparison or
   branch.
 - The assumption is proven by the code or required by the sequential program.
