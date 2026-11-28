@@ -418,7 +418,7 @@ class PatternDetectionPanel(Panel):
         self.runs.set_blocked(True)  # the data the detection reads must not change meanwhile
         self._update_chip(True, len(self.table.suggestions()), False)
         self.output_requested.emit()
-        self.status.set("⏳ Pattern detection in progress...", widgets.STATUS_BUSY)
+        self.status.set("Pattern detection in progress...", widgets.STATUS_BUSY)
         self.console.set_text("")
         self._start_explorer_job(request)
 

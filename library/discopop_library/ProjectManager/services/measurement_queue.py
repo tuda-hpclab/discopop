@@ -27,7 +27,7 @@ TERMINAL = (MEASURED, FAILED, STOPPED)
 # the text of a state in the list of configurations (a failure adds its reason)
 STATE_TEXTS: Dict[str, str] = {
     QUEUED: "queued",
-    RUNNING: "⏳ measuring…",
+    RUNNING: "measuring…",
     MEASURED: "✓ measured",
     FAILED: "✗ failed",
     STOPPED: "stopped",

@@ -269,8 +269,9 @@ class SuggestionTable(QWidget):
         header.setStretchLastSection(True)
         header.setHighlightSections(False)
         offset = self.model.offset
+        # at least as wide as the header needs, sort indicator included (it would cover the end of "Hotness")
         for column, width in enumerate((50, 80, 140, 120, 70)):
-            header.resizeSection(column + offset, width)
+            header.resizeSection(column + offset, max(width, header.sectionSizeHint(column + offset)))
         if checkable:
             header.resizeSection(0, 34)
             self.view.sortByColumn(1, Qt.SortOrder.AscendingOrder)

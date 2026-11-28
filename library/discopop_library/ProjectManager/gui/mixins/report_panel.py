@@ -30,7 +30,7 @@ _PLOT_TYPES: Dict[str, Dict[str, Any]] = {
     "spbars": {"label": "Speedup / efficiency bars", "stem": "Bars"},
     "rtbars": {"label": "Runtime bars", "stem": "Runtime"},
 }
-_ADD_TAB_TEXT = "  ＋  "
+_ADD_TAB_TEXT = "  +  "
 _DETAIL_BAR_WIDTH = 280
 _DETAIL_PLACEHOLDER = "Click a point, line, or bar\nto see its details here."
 

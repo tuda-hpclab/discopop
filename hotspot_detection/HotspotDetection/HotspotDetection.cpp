@@ -72,8 +72,14 @@
 #include <iostream>
 
 
+#include <memory>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define DP_DEBUG false
 
@@ -295,6 +301,67 @@ int getFileID(string name)
 
 long int UID = 0;
 
+// An exclusive flock on a lock file, held for the lifetime of the object. flock belongs to the open file description,
+// so a lock is taken once per module and never again while it is held (a second open + flock of the file in this
+// process would wait for itself); the kernel releases it when the process ends, so a crashing compiler cannot block
+// the build. A lock that cannot be taken (a file system without flock, e.g. NFS without lockd: ENOLCK; a .discopop of
+// another user: EACCES) does not stop the compilation: it continues unlocked, as before the locks, with a warning that
+// the ids of a parallel build may collide.
+class FileLock
+{
+public:
+  explicit FileLock(const std::string &path)
+  {
+    fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
+    if (fd == -1)
+    {
+      WarnUnlocked(path, "cannot open the lock file", errno);
+      return;
+    }
+    int result;
+    do
+    {
+      result = flock(fd, LOCK_EX);
+    } while (result == -1 && errno == EINTR);
+    if (result == -1)
+    {
+      const int error = errno;
+      close(fd);
+      fd = -1;
+      WarnUnlocked(path, "cannot lock", error);
+    }
+  }
+
+  FileLock(const FileLock &) = delete;
+  FileLock &operator=(const FileLock &) = delete;
+
+  ~FileLock()
+  {
+    if (fd != -1)
+    {
+      flock(fd, LOCK_UN);
+      close(fd);
+    }
+  }
+
+  // once per compilation: a failing mkdir is followed by a failing open of the lock file in it, for both locks
+  static void WarnUnlocked(const std::string &path, const char *what, int error)
+  {
+    static bool warned = false;
+    if (warned)
+    {
+      return;
+    }
+    warned = true;
+    errs() << "WARNING: HotspotDetection: " << what << " " << path << ": " << strerror(error)
+           << ". Compiling without the lock: the region and file ids of a parallel build (make -j) may collide, "
+              "build serially if they do.\n";
+  }
+
+private:
+  int fd = -1;
+};
+
 namespace
 {
   // The nearest directory named ".discopop" in start or one of its ancestors (symbolic links resolved); empty if there
@@ -506,6 +573,15 @@ namespace
     static char ID;
     HotspotPass(){} // : FunctionPass(ID) {}
 
+    // Held while runOnModule hands out region and file ids. All compiler processes of a parallel build (make -j)
+    // continue the counter in temp.txt and append to cs_id.txt and FileMapping.txt, and the runtime, the analyzer and
+    // the project manager rely on the ids being exactly 1..N. idLock is held from reading temp.txt to writing it
+    // back, so the ids of a serial build stay the same. fileMappingLock is the lock of FileMapping.txt that the
+    // profiler pass takes as well (dputil::GetFileId), so both passes can share the file; it is always taken after
+    // idLock, and the profiler takes no other lock, so the two cannot wait for each other.
+    std::unique_ptr<FileLock> idLock;
+    std::unique_ptr<FileLock> fileMappingLock;
+
     void getAnalysisUsage(AnalysisUsage &AU) const
     {
       AU.addRequired<LoopInfoWrapperPass>();
@@ -585,6 +661,21 @@ namespace
       }
 
 
+      // the lock directory is outside of private/, whose files the project manager hands to the runs of a build
+      string lockDirectory(getenv("DOT_DISCOPOP"));
+      lockDirectory += "/hotspot_detection/locking_files";
+      if (mkdir(lockDirectory.data(), 0777) == -1 && errno != EEXIST){
+          FileLock::WarnUnlocked(lockDirectory, "cannot create", errno);
+      }
+      // held until runOnModule has written the counter back (doFinalization)
+      idLock = std::make_unique<FileLock>(lockDirectory + "/region_ids.lock");
+      string fileMappingLockDirectory(getenv("DOT_DISCOPOP"));
+      fileMappingLockDirectory += "/locking_files";
+      if (mkdir(fileMappingLockDirectory.data(), 0777) == -1 && errno != EEXIST){
+          FileLock::WarnUnlocked(fileMappingLockDirectory, "cannot create", errno);
+      }
+      fileMappingLock = std::make_unique<FileLock>(fileMappingLockDirectory + "/FileMapping.lock");
+
       string tmp5 = tmp3 + "/temp.txt";
       tempfile.open(tmp5.data(), ios::in);
       if (tempfile.is_open())
@@ -603,6 +694,29 @@ namespace
         errs() << "Temp file not exist!\n";
       }
       tempfile.close();
+      // a compilation that crashed after appending to cs_id.txt never wrote its counter back: continue after the
+      // highest id handed out, so its ids are not handed out again (they stay unused)
+      const std::string regionIdsPath = tmp3 + "/cs_id.txt";
+      std::ifstream regionIds(regionIdsPath);
+      long int recordedId;
+      std::string restOfLine;
+      while (regionIds >> recordedId)
+      {
+        UID = std::max(UID, recordedId);
+        std::getline(regionIds, restOfLine);
+      }
+      // a line cut short (e.g. a full disk) must not run into the first line of this compilation: that would merge
+      // their ids into one number
+      regionIds.clear();
+      if (regionIds.seekg(-1, std::ios::end))
+      {
+        char last = '\n';
+        regionIds.get(last);
+        if (last != '\n')
+        {
+          std::ofstream(regionIdsPath, std::ios::app) << '\n';
+        }
+      }
       errs() << "UID is: " << UID << '\n';
       return false;
     }
@@ -613,6 +727,8 @@ namespace
         runOnFunction(F, M, MAM);
       }
       doFinalization(M);
+      fileMappingLock.reset();
+      idLock.reset();
       return true;
     }
 

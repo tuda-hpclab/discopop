@@ -181,3 +181,43 @@ def test_a_failed_build_keeps_its_failure_result(
     assert result.result_valid is False
     # not flagged as compiled: the build is exactly what did not happen
     assert result.compiled_only is False
+
+
+def test_a_measured_candidate_is_built_without_the_run_timeout(
+    arguments: AutotunerArguments, calls: List[_RecordedCall], tmp_path: Any
+) -> None:
+    """The timeout is twice the reference runtime (at least 3 s): fitting for a run, far too short for a build.
+
+    With it, every build of a project that takes longer to compile than its program runs was killed, and the
+    candidates were all reported as failed builds.
+    """
+    config = _configuration(tmp_path)
+
+    config.execute(arguments, timeout=3.0, thread_count=2)
+
+    assert [(call.script_name, call.timeout) for call in calls] == [("compile.sh", None), ("execute.sh", 3.0)]
+
+
+def test_a_failed_build_is_flagged_and_reported(
+    arguments: AutotunerArguments,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(code_configuration_module, "resolve_compile_script_path", lambda *_: "/p/compile.sh")
+    monkeypatch.setattr(
+        code_configuration_module,
+        "execute_configuration",
+        lambda *a, **k: (2, 0.0, "", "error: expected ';'"),
+    )
+    config = _configuration(tmp_path)
+
+    config.execute(arguments, timeout=30.0, thread_count=2)
+
+    result = config.execution_result
+    assert result is not None
+    assert result.compilation_failed is True
+    # the headline used to be dropped whenever there was a result to report
+    output = capsys.readouterr().out
+    assert "Error during compilation of " + str(tmp_path) + " (return code 2)" in output
+    assert "STDERR: error: expected ';'" in output

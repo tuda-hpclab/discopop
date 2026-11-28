@@ -96,7 +96,8 @@ def run(arguments: ProjectManagerArguments) -> None:
         show_configurations_without_execution(arguments)
         return
     elif arguments.generate_report:
-        generate_full_report(arguments)
+        # a process of its own: an older detection result may be decoded for the Amdahl ceilings
+        generate_full_report(arguments, allow_decode=True)
     elif arguments.full_execute:
         show_configurations_with_execution(arguments)
     else:

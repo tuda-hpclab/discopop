@@ -34,6 +34,6 @@ def test_the_states_of_a_batch_and_its_tally() -> None:
 
 def test_the_text_of_a_state() -> None:
     assert state_text(QueueItem("a", FAILED, "no result")) == "✗ failed: no result"
-    assert state_text(QueueItem("a", RUNNING, "2/3")) == "⏳ measuring…: 2/3"
+    assert state_text(QueueItem("a", RUNNING, "2/3")) == "measuring…: 2/3"
     assert state_text(QueueItem("a", MEASURED, "ignored")) == "✓ measured"
     assert state_text(QueueItem("a", STOPPED)) == "stopped"

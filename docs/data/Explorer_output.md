@@ -15,6 +15,7 @@ The [explorer](../tools/Explorer.md) reads `.discopop/profiler` and writes its r
 │   ├── patterns.json
 │   ├── pattern_decisions.json
 │   ├── detection_result_dump.json
+│   ├── suggestion_extents.json
 │   └── side_effects.json.gz
 ├── patch_generator/<pattern id>/<n>.patch
 ├── patch_applicator/applied_suggestions.json
@@ -69,6 +70,16 @@ For a rejected region, `outcome` says so and `reasons` explains why.
 ## detection_result_dump.json
 
 `explorer/detection_result_dump.json` (option `--dump-detection-result`) is a jsonpickle dump of the whole detection result, including the program execution graph. It is large and meant for tools that reload the result, not for reading.
+
+Most of the dump can be the callpath tree of the program execution graph (`callpath_tree`, every callpath state the profiler recorded in `stateID_to_callpath_mapping.txt`; for a large unpruned profile 17.9 of 18.3 GB, ~160 GB of memory when decoded). Only the task detection uses it, while the explorer runs. The [autotuner](../tools/Autotuner.md) and the extraction of the suggestion extents of an older dump (see below) therefore load the dump without it (`discopop_library.result_classes.loading.load_detection_result`): the file is streamed and only the rest is decoded, and the loaded graph fails on any use of the tree. If the tree cannot be cut out safely, the whole file is decoded as before, with a warning.
+
+## suggestion_extents.json
+
+`explorer/suggestion_extents.json` is written next to the detection result dump, whenever the dump is written. It holds the source range of every suggestion (`extents`: pattern id -> `[file id, first line, last line]`; a suggestion on a loop reaches to the end of the loop) and the size and modification time of the dump it was made from (`dump`), so that a reader can tell whether it is current. The Amdahl ceilings of the [project manager](../tools/Project_manager.md) and the [GUI](../tools/GUI.md) are computed from it and `hotspot_detection/Hotspots.json` without decoding the dump. For a dump of an older explorer, `python -m discopop_library.Amdahl.regions --extract-extents <.discopop directory>` writes it.
+
+```json
+{"format": 1, "dump": {"size": 1240552796, "mtime_ns": 1795186958053583856}, "extents": {"0": [148, 49, 50]}}
+```
 
 ## side_effects.json.gz
 

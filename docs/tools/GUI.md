@@ -52,7 +52,7 @@ The window has a workflow sidebar, the stage that is selected and an output pane
   - **Pipeline**: *Hotspots*, *Profiling*, *Pattern Detection*, *Patch Repair*, *Autotuning*, *Execute*.
   - **Results**: *Report*.
 
-  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", "profiling data newer than the results", or "project directories changed" after the [excluded or included directories](Project_manager.md#project-directories) changed); ○ not run yet; 🔒 locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). Locked stages can still be opened: *Pattern Detection* explains what is missing and offers **Go to Profiling**; *Autotuning* shows a warning with the missing prerequisite (profiling data or parallelization suggestions) and a button to the stage that creates it, and **Run Autotuning** is unavailable until then.
+  Each stage shows a badge and a line of detail, for example "3 suggestions" or "sources changed". The badges are: ✓ done; ! stale, the result is out of date (for example "sources changed", "profiling data newer than the results", or "project directories changed" after the [excluded or included directories](Project_manager.md#project-directories) changed); ○ not run yet; ⊘ (a crossed-out circle) locked, the detail line says what is missing (for example "needs profiling data" for *Autotuning*). Locked stages can still be opened: *Pattern Detection* explains what is missing and offers **Go to Profiling**; *Autotuning* shows a warning with the missing prerequisite (profiling data or parallelization suggestions) and a button to the stage that creates it, and **Run Autotuning** is unavailable until then.
 - **Stage** (right): the stage that is selected.
 - **Output pane** (bottom): the output of all jobs, see [Output pane](#output-pane).
 
@@ -68,29 +68,31 @@ The output of all jobs is shown in one pane below the stages, with one tab per s
 ## Configuration assistant (wizard)
 ![First page of the configuration assistant](../assets/screenshots/gui_wizard.svg)
 
-When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has nine steps (eight in the Tk version, which has no step for the project directories):
+When the project has no usable configuration, the GUI opens the *Configuration Assistant* at start. It has ten steps (eight in the Tk version, which has no step for the project directories and none for the incremental build script):
 
 1. **Welcome**
 2. **Write Permissions Check**: the project is copied to a sibling directory for every run. Without write access to the parent directory, only in-place execution is possible.
 3. **Project Directories**: what is project code, with the same folder tree of excluded directories and list of included directories as the *Project Setup* stage; see [Project directories](Project_manager.md#project-directories). Exclude third-party code bundled with the project, include sources outside of it. Every change is saved at once.
 4. **Compilation Script**: the shared `compile.sh`. Use `$CC`/`$CXX` and `$CFLAGS`/`$CXXFLAGS` for all compile commands; the script must exit with `0`. The assistant asks for confirmation if it contains neither `$CC` nor `$CXX`.
-5. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
-6. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
-7. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
-8. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
-9. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
+5. **Incremental Build Script** (optional): the shared `compile_incremental.sh`, which continues a kept build tree and rebuilds only what changed instead of running `compile.sh` in full; worthwhile for projects whose build takes long (e.g. when the autotuner builds one candidate after the other). Leave **Use an incremental build script** unchecked to skip the step; checking it proposes a script derived from the `compile.sh` of the previous step (check it, it must only rebuild: no clean, no configure) unless you edited the text already. An existing script starts checked; unchecking it asks whether to remove it. It can also be added later in *Project Setup* or per configuration in the Editor stage.
+6. **Compilation Settings**: `CC`, `CXX`, `CFLAGS` and `CXXFLAGS` of the sequential build (`seq_settings.json`).
+7. **Test Compilation**: **Run Test Compilation** builds the project with the script and settings and shows the status and the output.
+8. **Derived Settings**: shows `dp_settings.json`, `hd_settings.json` and `par_settings.json`, which are derived from the sequential settings. You can edit them before accepting.
+9. **Execution Script**: the name of the configuration (default `default`) and its `execute.sh`, a minimal run of the program.
+10. **Validation Script**: optional `validate.sh` and, if validation needs another build, `compile_validate.sh`.
 
 After **Finish**, the new configuration is selected and the *Profiling* stage, the first one of the pipeline, opens. See [Project manager](Project_manager.md) for the meaning of the scripts and settings.
 
 ## Project Setup
 ![Project Setup stage with the shared compile.sh](../assets/screenshots/gui_setup.svg)
 
-The *Project Setup* stage edits what all configurations share: the files, each in its own tab (`compile.sh`, `compile_validate.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`), and what is project code, in two cards below them (the excluded directories and the included directories outside the project). Unsaved changes mark the stage "Project Setup *" in the sidebar.
+The *Project Setup* stage edits what all configurations share: the files, each in its own tab (`compile.sh`, `compile_validate.sh`, `compile_incremental.sh`, `seq_settings.json`, `dp_settings.json`, `hd_settings.json` and `par_settings.json`), and what is project code, in two cards below them (the excluded directories and the included directories outside the project). Unsaved changes mark the stage "Project Setup *" in the sidebar.
 
 - **Save (Ctrl+S)** writes the files.
 - **Test Compilation** (on the `compile.sh` tab) builds the project with the current script and settings, without recording a result. The output appears in the output pane, the outcome in the status chip.
 - **Derive** (on the `seq_settings.json` tab) creates `dp_settings.json`, `hd_settings.json` and `par_settings.json` from `seq_settings.json`: `discopop_cc`/`discopop_cxx` for `dp`, `discopop_hotspot_cc`/`discopop_hotspot_cxx` and `-fopenmp` for `hd`, `-fopenmp` for `par`.
 - The shared `compile_validate.sh` is optional (**Add** / **Remove**).
+- The shared `compile_incremental.sh` is optional as well: it continues the kept build tree of the modes `seq` and `par` and only rebuilds what changed, for configurations that use the shared `compile.sh` (see [Incremental builds](Project_manager.md#builds)). **Add** shows a script proposed from `compile.sh` as an unsaved draft (**Discard Draft** drops it), which is written when you save; **Remove** asks first (the overrides of single configurations stay). Its Help button explains when it is used.
 - **Excluded directories**, below the files on the left, shows the folders of the project as a tree (the subfolders of a folder are read when you open it; `.discopop` and `.git` are not shown). Check a folder that is no project code, e.g. the dependencies a CMake build fetches into `build/_deps`: it is neither instrumented nor part of `FileMapping.txt` and the AST, and neither is anything below it. The subfolders of a checked folder are shown checked and cannot be changed on their own. A toggle is saved at once, in `.discopop/project/excluded_directories.json` (kept by **Reset Project…**), and takes effect with the next build of a configuration; profile again afterwards. The project manager passes the list to every build as `DP_PROJECT_EXCLUDE_DIRS` (see [Environment variables](../setup/environment_variables.md)). The folders are read again when the stage is shown, so a build directory created meanwhile appears.
 - **Included directories outside the project** (Qt version only), at the right of the excluded directories: directories outside the project whose code is project code as well, e.g. sources shared between projects. **Add…** picks one (a directory inside the project is refused, its code is project code anyway), **Remove** drops the selected one. Every change is saved at once, in `.discopop/project/included_directories.json`, and passed to every build as `DP_PROJECT_INCLUDE_DIRS`. These directories are not copied for the runs of a configuration, so their suggestions are only applied after a separate confirmation (see *Execute*).
 - The **Danger zone** below the files, framed in red, holds the resets, as red-outlined buttons. Both ask for confirmation and are disabled while a run is in progress:
@@ -113,6 +115,7 @@ The *Configuration Setup* stage edits the scripts of the selected configuration.
 | `compile.sh (override)` | A build script used instead of the shared `compile.sh` for this configuration only. **Add Override** creates it, the button then removes it. |
 | `validate.sh` | Optional correctness check, run separately from `execute.sh`. **Add validate.sh** creates it. |
 | `compile_validate.sh (override)` | Optional build used for `validate.sh` only. |
+| `compile_incremental.sh (override)` | Optional script that continues the kept build tree (modes `seq` and `par`) instead of building from scratch, see [Incremental builds](Project_manager.md#builds). **Add Override** shows a script proposed from the configuration's `compile.sh` (CMake, make, ninja build lines without configure and clean steps); it is written only when you save it. |
 
 The scripts are executed with the project root as working directory and with the environment variables described in [Project manager](Project_manager.md#configuration-directory).
 
@@ -139,6 +142,9 @@ Further actions are buttons in the settings column:
 *Runs* lists every recorded run (runs recorded elsewhere, for example in the Execute stage, by the command line or by the MCP server, are marked `(external)`). *Regions* lists the code regions with hotness (`YES`, `MAYBE`, `NO`), kind, location, average, share, minimum, maximum, ratio and number of runs, with filters for hotness and kind. **Show in VSCode** in the detail bar of a region opens it in VS Code.
 
 Results are stored in `.discopop/hotspot_detection/` (`Hotspots.json` and the run log `measurement_runs.json`).
+
+## Build
+The *Build* stage compiles the selected configuration into a kept build per mode without running it (see [Builds](Project_manager.md#builds)). Its cards also hold project settings that are saved at once: *Call path pruning* and *Thread count in builds*. The check box *Pass the thread count to compile scripts (OMP_NUM_THREADS)* of the latter is off by default, so that `nproc` in a compile script returns the number of CPUs; when on, it returns the thread count of the run (see [Thread count in builds](Project_manager.md#thread-count-in-builds)).
 
 ## Profiling
 ![Profiling stage with the time of the last profiling run and the timeouts](../assets/screenshots/gui_profiling.svg)
@@ -222,6 +228,7 @@ The *Report* stage shows all recorded measurements. The *Table* tab lists config
 - **Generate PDF Report** and **View Report PDF** create and open `.discopop/project/reports/<timestamp>/full_report.pdf` (the folder also holds `report.csv` and single PDFs). Viewing uses `xdg-open`.
 - To delete the measured runs and the reports, use **Reset Execution Results…** in the *Danger zone* of the [Project Setup](#project-setup) stage.
 - **Reload** re-reads the results.
+- The *Amdahl ceiling* and *Amdahl limit* columns and the Amdahl charts estimate the best possible speedup of the applied suggestions from the runtimes of the hotspot detection. They need the extents of the suggestions, which the explorer writes into `explorer/suggestion_extents.json`. A detection result of an older explorer lacks them: the stage then recommends running the pattern detection again and offers **Compute Amdahl ceilings**, which extracts them from `detection_result_dump.json` in a separate process after a confirmation. That decodes the whole detection result and needs about 35 times its size in memory (41 GB and almost 5 minutes for a 1.2 GB result), which the notice estimates from the size of the dump.
 
 ## What the stages run
 

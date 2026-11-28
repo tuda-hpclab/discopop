@@ -400,7 +400,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         if self.no_suggestions_label is not None:
             self.no_suggestions_label.pack_forget()
 
-        self.status_label.config(text="⏳ Pattern detection in progress...", foreground=widgets.STATUS_BUSY)
+        self.status_label.config(text="Pattern detection in progress...", foreground=widgets.STATUS_BUSY)
 
         if self.explorer_output_text is not None:
             self.explorer_output_text.config(state=tk.NORMAL)

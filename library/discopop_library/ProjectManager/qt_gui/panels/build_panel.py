@@ -27,6 +27,7 @@ from discopop_library.ProjectManager.qt_gui import dialogs, widgets
 from discopop_library.ProjectManager.qt_gui.build_controls import BuildsAndRuns
 from discopop_library.ProjectManager.qt_gui.job_adapter import start_work
 from discopop_library.ProjectManager.qt_gui.panel import Panel, TabHost
+from discopop_library.ProjectManager.qt_gui.build_thread_count_section import BuildThreadCountSection
 from discopop_library.ProjectManager.qt_gui.callpath_pruning_section import CallpathPruningSection
 from discopop_library.ProjectManager.qt_gui.fingerprint_ignore_section import FingerprintIgnoreSection
 from discopop_library.ProjectManager.qt_gui.help_dialogs import text_help_button
@@ -131,6 +132,7 @@ class BuildPanel(Panel):
 
         self.shared_build = SharedBuildSection(arguments, project_state)
         self.callpath_pruning = CallpathPruningSection(arguments, project_state, status)
+        self.thread_count = BuildThreadCountSection(arguments, status)
         self.builds = BuildsAndRuns(arguments, changed=lambda: project_state.publish(ResultsChanged()), show_runs=False)
         self.fingerprint_ignore = FingerprintIgnoreSection(arguments, project_state, status)
 
@@ -153,7 +155,14 @@ class BuildPanel(Panel):
         column_layout = QVBoxLayout(column)
         column_layout.setContentsMargins(0, 0, 0, 0)
         column_layout.setSpacing(widgets.CARD_SPACING)
-        for section in (target, self.shared_build, self.callpath_pruning, self.builds, self.fingerprint_ignore):
+        for section in (
+            target,
+            self.shared_build,
+            self.callpath_pruning,
+            self.thread_count,
+            self.builds,
+            self.fingerprint_ignore,
+        ):
             column_layout.addWidget(section)
         column_layout.addStretch(1)
         options = QWidget()
@@ -190,6 +199,7 @@ class BuildPanel(Panel):
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt's name)
         # the setting may have been changed outside the GUI meanwhile
         self.callpath_pruning.reload()
+        self.thread_count.reload()
         self.fingerprint_ignore.reload()
         super().showEvent(event)
 
@@ -292,7 +302,7 @@ class BuildPanel(Panel):
         self.builds.set_blocked(True)
         self.shared_build.setEnabled(False)
         self.header.chip.set_status(widgets.CHIP_BUSY, "Building")
-        self.status.set("⏳ Building...", widgets.STATUS_BUSY)
+        self.status.set("Building...", widgets.STATUS_BUSY)
         self.console.clear()
         self.output_requested.emit()
         self.set_busy(True)

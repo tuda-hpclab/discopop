@@ -7,6 +7,7 @@
 # directory for details.
 
 import os
+from typing import Optional
 
 PATH = str
 
@@ -69,3 +70,28 @@ def validation_needs_separate_compile(project_config_dir: PATH, config_name: str
     return os.path.abspath(resolve_validation_compile_script_path(project_config_dir, config_name)) != os.path.abspath(
         resolve_compile_script_path(project_config_dir, config_name)
     )
+
+
+# Name of the optional script that compiles again in a tree compile.sh has built before, rebuilding only what changed.
+INCREMENTAL_COMPILE_SCRIPT_NAME = "compile_incremental.sh"
+# the value of DP_BUILD_KIND for compile.sh and for compile_incremental.sh
+FULL_BUILD = "full"
+INCREMENTAL_BUILD = "incremental"
+BUILD_KIND_VARIABLE = "DP_BUILD_KIND"
+
+
+def resolve_incremental_compile_script_path(project_config_dir: PATH, config_name: str) -> Optional[PATH]:
+    """The ``compile_incremental.sh`` of a configuration, None if it has none.
+
+    ``<config>/compile_incremental.sh`` first; the shared one only if the configuration uses the shared
+    ``compile.sh`` too (an incremental script belongs to the full script it continues).
+    """
+    per_config_path = os.path.join(project_config_dir, config_name, INCREMENTAL_COMPILE_SCRIPT_NAME)
+    if os.path.exists(per_config_path):
+        return per_config_path
+    shared_path = os.path.join(project_config_dir, INCREMENTAL_COMPILE_SCRIPT_NAME)
+    if os.path.exists(shared_path) and not os.path.exists(
+        get_per_config_compile_script_path(project_config_dir, config_name)
+    ):
+        return shared_path
+    return None
