@@ -6,8 +6,11 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import tkinter as tk
 from typing import Any, Dict, Tuple, List, TYPE_CHECKING
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPen
+from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem, QWidget
 
 from discopop_gui.Constants import TREE_NODES_SPACING, TREE_NODE_RADIUS
 from discopop_gui.Enums.ViewerMode import ViewerMode
@@ -24,18 +27,18 @@ if TYPE_CHECKING:
 class WithTrees(Base):
     def __init__(
         self,
-        parent: tk.Frame,
+        parent: QWidget | None,
         canvas_viewer: "CanvasViewerWithTrees",
         viewer_mode: ViewerMode,
-        nodes: Dict[int, TreeNode] = {},
-        highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = [],
-        *args: Any,
-        **kwargs: Any,
+        nodes: Dict[int, TreeNode] | None = None,
+        highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] | None = None,
     ) -> None:
-        super().__init__(parent, viewer_mode, *args, **kwargs)
+        super().__init__(parent, viewer_mode)
         self._canvas_viewer = canvas_viewer
-        self._nodes: Dict[int, TreeNode] = nodes
-        self._highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = highest_managed_dependencies
+        self._nodes: Dict[int, TreeNode] = nodes if nodes is not None else {}
+        self._highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = (
+            highest_managed_dependencies if highest_managed_dependencies is not None else []
+        )
         self._visual_nodes: Dict[int, VisualTreeNode] = {}
         self._highest_visual_node_ids: List[int] = []
         self._highest_visual_nodes_x_offset_data: Dict[int, Tuple[int, int, int]] = {}
@@ -163,25 +166,34 @@ class WithTrees(Base):
         label = node.metadata["label"]
         fill_color = node.metadata.get("fill", "cyan")
 
-        oval_id = self.create_oval(
+        oval = QGraphicsEllipseItem(
             x - TREE_NODE_RADIUS,
             y - TREE_NODE_RADIUS,
-            x + TREE_NODE_RADIUS,
-            y + TREE_NODE_RADIUS,
-            fill=fill_color,
-            outline="black",
-            state=state,
+            2 * TREE_NODE_RADIUS,
+            2 * TREE_NODE_RADIUS,
         )
+        oval.setBrush(QBrush(QColor(fill_color)))
+        oval.setPen(QPen(Qt.GlobalColor.black, 1))
+        oval.setZValue(1)
+        oval.setVisible(state == "normal")
 
-        text_id = self.create_text(x, y, text=label, font=("Arial", 7), anchor="center", state=state)
+        text = QGraphicsTextItem(str(label))
+        font = QFont("Arial", 7)
+        text.setFont(font)
+        text.setPos(x - text.boundingRect().width() / 2, y - text.boundingRect().height() / 2)
+        text.setZValue(2)
+        text.setVisible(state == "normal")
+
+        self.scene().addItem(oval)
+        self.scene().addItem(text)
 
         self._visual_nodes[visual_node_id] = VisualTreeNode(
             self,
             self._nodes[visual_node_id],
             True if state == "normal" else False,
             self._popup,
-            oval_id,
-            text_id,
+            oval,
+            text,
             x_offset,
             y_offset,
         )
@@ -194,42 +206,49 @@ class WithTrees(Base):
         x1, y1 = from_node.get_location()
         x2, y2 = to_node.get_location()
 
-        edge_id: int = self.create_line(x1, y1, x2, y2, fill="black", width=1, state=state, tags="tree_edge")
+        edge = QGraphicsLineItem(x1, y1, x2, y2)
+        edge.setPen(QPen(Qt.GlobalColor.black, 1))
+        edge.setZValue(0)
+        edge.setVisible(state == "normal")
+        self.scene().addItem(edge)
 
-        return VisualMainEdge[int](edge_id, from_id, to_id)
+        return VisualMainEdge[int](edge, from_id, to_id)
 
-    def create_visual_dependency_edge(self, from_id: int, to_id: int, state: str = "hidden") -> int:
+    def create_visual_dependency_edge(self, from_id: int, to_id: int, state: str = "hidden") -> QGraphicsLineItem:
         from_node = self.get_visual_node(from_id)
         to_node = self.get_visual_node(to_id)
         x1, y1 = from_node.get_location()
         x2, y2 = to_node.get_location()
 
-        return self.create_line(x1, y1, x2, y2, fill="red", width=1, dash=(4, 4), state=state, tags="tree_edge")
+        edge = QGraphicsLineItem(x1, y1, x2, y2)
+        pen = QPen(Qt.GlobalColor.red, 1)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        edge.setPen(pen)
+        edge.setZValue(0)
+        edge.setVisible(state == "normal")
+        self.scene().addItem(edge)
+        return edge
 
     def add_clone_to_canvas_viewer(self, starting_tree_node_id: int) -> None:
         starting_tree_node = self.get_visual_node(starting_tree_node_id)
 
         def canvas_builder(
-            parent: tk.Frame,
+            parent: QWidget,
             canvas_viewer: "CanvasViewerWithTrees",
             canvas_viewer_mode: ViewerMode,
             nodes: Dict[int, TreeNode],
             highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]],
         ) -> "WithTrees":
-            return WithTrees(
-                parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies, bg=self["bg"]
-            )
+            return WithTrees(parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies)
 
         cloned_canvas = self._canvas_viewer.get_canvas(self._canvas_viewer.add_canvas(canvas_builder))
         starting_tree_node.recursive_copy_to_canvas(cloned_canvas)
         cloned_canvas.update_visual_node_offsets()
 
     def build_initial(self) -> None:
-        self.delete("all")
+        self.scene().clear()
         self._visual_nodes.clear()
-        self._transform_scale = 1
-        self._transform_x = 0.0
-        self._transform_y = 0.0
+        self.reset_view()
         self._highest_visual_node_ids.clear()
         self._highest_visual_nodes_x_offset_data.clear()
 

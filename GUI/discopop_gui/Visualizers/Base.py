@@ -6,23 +6,35 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-from abc import abstractmethod, ABC
-import tkinter as tk
+from abc import ABC, abstractmethod
 from typing import Any, Dict, Callable, Optional
+
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 from discopop_gui.Types.FrameT import FrameT
 from discopop_gui.Objects.Frames.Base import Base as BaseFrame
 
 
 class Base(ABC):
-    def __init__(self, visualize_on: Optional[tk.Frame] = None) -> None:
-        self._root: tk.Tk | tk.Frame
+    def __init__(self, visualize_on: Optional[QWidget] = None) -> None:
         self._visualizing_on: bool = False
+        self._application: QApplication | None = None
+        self._window: QMainWindow | None = None
 
-        if not visualize_on:
-            self._root = tk.Tk()
-            self._root.title("DiscoPoP")
-            self._root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if visualize_on is None:
+            existing_application = QApplication.instance()
+
+            if existing_application is None:
+                self._application = QApplication([])
+            elif isinstance(existing_application, QApplication):
+                self._application = existing_application
+            else:
+                raise RuntimeError("A QApplication is required before creating a standalone visualizer.")
+
+            self._window = QMainWindow()
+            self._window.setWindowTitle("DiscoPoP")
+            self._root = QWidget(self._window)
+            self._window.setCentralWidget(self._root)
         else:
             self._root = visualize_on
             self._visualizing_on = True
@@ -34,11 +46,13 @@ class Base(ABC):
         self._current_frame_id: int | None = None
 
     def _on_close(self) -> None:
-        self._root.quit()
-        self._root.destroy()
+        if self._window is not None:
+            self._window.close()
+        else:
+            self._root.close()
 
     @abstractmethod
-    def create_frame(self, name: str, frame_builder: Callable[[tk.Misc], FrameT]) -> FrameT:
+    def create_frame(self, name: str, frame_builder: Callable[[QWidget], FrameT]) -> FrameT:
         pass
 
     def get_frame(self, frame_id: int) -> BaseFrame:
@@ -49,12 +63,13 @@ class Base(ABC):
 
     def show_frame(self, frame_id: int) -> None:
         frame = self.get_frame(frame_id)
-        frame.tkraise()
+        frame.raise_()
+        frame.show()
         self._current_frame_id = frame_id
 
     def delete_frame(self, frame_id: int) -> None:
         frame = self.get_frame(frame_id)
-        frame.destroy()
+        frame.deleteLater()
         del self._frames[frame_id]
         del self._frame_names[frame_id]
 
@@ -65,8 +80,8 @@ class Base(ABC):
             self._current_frame_id = None
 
             if self._frames:
-                first_name = next(iter(self._frames))
-                self.show_frame(first_name)
+                next_frame_id = next(iter(self._frames))
+                self.show_frame(next_frame_id)
 
     @abstractmethod
     def set_filter_callback(self, callback: Callable[[str], None]) -> None:
@@ -80,11 +95,15 @@ class Base(ABC):
         if self._visualizing_on:
             return
 
-        self._root.mainloop()
+        if self._window is None or self._application is None:
+            raise RuntimeError("A standalone visualizer has no application window.")
+
+        self._window.show()
+        self._application.exec()
 
     def clear(self) -> None:
         for frame in self._frames.values():
-            frame.destroy()
+            frame.deleteLater()
 
         self._frame_id_counter = 0
         self._frames.clear()

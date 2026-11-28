@@ -9,9 +9,19 @@
 from __future__ import annotations
 
 import json
-import tkinter as tk
-from tkinter import filedialog
 from typing import Any, Dict, Callable, Optional
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from discopop_gui.Types.FrameT import FrameT
 from discopop_gui.Visualizers.Base import Base
@@ -23,89 +33,67 @@ from discopop_gui.Objects.Frames.CanvasViewerWithTrees import CanvasViewerWithTr
 
 
 class WithSidebar(Base):
-    def __init__(self, visualize_on: Optional[tk.Frame] = None) -> None:
+    def __init__(self, visualize_on: Optional[QWidget] = None) -> None:
         super().__init__(visualize_on)
 
-        self._root.grid_rowconfigure(0, weight=1)
-        self._root.grid_columnconfigure(0, weight=1)
-
         # Draggable split: sidebar | content | filter
-        self._pane = tk.PanedWindow(
-            self._root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, opaqueresize=False, bg="black"
-        )
-        self._pane.grid(row=0, column=0, sticky="nsew")
+        self._pane = QSplitter(Qt.Orientation.Horizontal, self._root)
+        root_layout = QVBoxLayout(self._root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.addWidget(self._pane)
 
         # Sidebar
-        self._sidebar_container = tk.Frame(self._pane)
-        self._sidebar_container.grid_rowconfigure(0, weight=1)
-        self._sidebar_container.grid_columnconfigure(0, weight=1)
+        self._sidebar_container = QWidget(self._pane)
+        sidebar_container_layout = QVBoxLayout(self._sidebar_container)
+        sidebar_container_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._sidebar_canvas = tk.Canvas(self._sidebar_container, highlightthickness=0, width=220)
-
-        self._sidebar_scrollbar = tk.Scrollbar(
-            self._sidebar_container, orient="vertical", command=self._sidebar_canvas.yview
-        )
-
-        self._sidebar_canvas.grid(row=0, column=0, sticky="nsew")
-        self._sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
-
-        self._sidebar = tk.Frame(self._sidebar_canvas)
-        self._sidebar.grid_columnconfigure(0, weight=1)
-
-        self._sidebar_window = self._sidebar_canvas.create_window((0, 0), window=self._sidebar, anchor="nw")
-
-        self._sidebar_canvas.configure(yscrollcommand=self._sidebar_scrollbar.set)
-
-        self._sidebar.bind("<Configure>", self._sidebar_configure)
-        self._sidebar_canvas.bind("<Configure>", self._canvas_configure)
+        self._sidebar_scroll_area = QScrollArea(self._sidebar_container)
+        self._sidebar_scroll_area.setWidgetResizable(True)
+        self._sidebar = QWidget()
+        self._sidebar_layout = QVBoxLayout(self._sidebar)
+        self._sidebar_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._sidebar_scroll_area.setWidget(self._sidebar)
+        sidebar_container_layout.addWidget(self._sidebar_scroll_area)
 
         # Save Frame button
-        self._save_frame_button = tk.Button(self._sidebar_container, text="Save Frame", command=self._save_frame)
-        self._save_frame_button.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+        self._save_frame_button = QPushButton("Save Frame", self._sidebar_container)
+        self._save_frame_button.clicked.connect(self._save_frame)
+        sidebar_container_layout.addWidget(self._save_frame_button)
 
         # Load Frame button
-        self._load_frame_button = tk.Button(self._sidebar_container, text="Load Frame", command=self._load_frame)
-        self._load_frame_button.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=2)
+        self._load_frame_button = QPushButton("Load Frame", self._sidebar_container)
+        self._load_frame_button.clicked.connect(self._load_frame)
+        sidebar_container_layout.addWidget(self._load_frame_button)
 
         # Content area
-        self._frame_container = tk.Frame(self._pane)
-        self._frame_container.grid_rowconfigure(0, weight=1)
-        self._frame_container.grid_columnconfigure(0, weight=1)
+        self._frame_container = QStackedWidget(self._pane)
 
         # Filter area
-        self._filter_container = tk.Frame(self._pane)
-        self._filter_container.grid_rowconfigure(0, weight=1)
-        self._filter_container.grid_columnconfigure(0, weight=1)
+        self._filter_container = QWidget(self._pane)
+        filter_layout = QVBoxLayout(self._filter_container)
 
-        self._filter_scrollbar = tk.Scrollbar(self._filter_container, orient="vertical")
-
-        self._filter = tk.Text(self._filter_container, wrap="word", yscrollcommand=self._filter_scrollbar.set, width=30)
-
-        self._filter_scrollbar.config(command=self._filter.yview)
-        self._filter.grid(row=0, column=0, sticky="nsew", padx=5, pady=(5, 2))
-        self._filter_scrollbar.grid(row=0, column=1, sticky="ns", pady=(5, 2))
-
-        self._filter_button = tk.Button(self._filter_container, text="Apply Filter", command=self._filter_button_click)
-
-        self._filter_button.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5, pady=(2, 5))
+        self._filter = QPlainTextEdit(self._filter_container)
+        self._filter.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._filter_button = QPushButton("Apply Filter", self._filter_container)
+        self._filter_button.clicked.connect(self._filter_button_click)
+        filter_layout.addWidget(self._filter)
+        filter_layout.addWidget(self._filter_button)
         self._filter_callback: Callable[[str], None] | None = None
 
         # Add all parts to the Pane
-        self._pane.add(self._sidebar_container, minsize=150, width=220, stretch="never")
-        self._pane.add(self._frame_container, minsize=300, stretch="always")
-        self._pane.add(self._filter_container, minsize=180, width=250, stretch="never")
+        self._pane.addWidget(self._sidebar_container)
+        self._pane.addWidget(self._frame_container)
+        self._pane.addWidget(self._filter_container)
+        self._pane.setMinimumWidth(630)
+        self._pane.setSizes([220, 300, 250])
+        self._pane.setStretchFactor(0, 0)
+        self._pane.setStretchFactor(1, 1)
+        self._pane.setStretchFactor(2, 0)
 
-        self._frame_selectors: Dict[int, tk.Button] = {}
-
-    def _sidebar_configure(self, _: tk.Event[tk.Widget]) -> None:
-        self._sidebar_canvas.configure(scrollregion=self._sidebar_canvas.bbox("all"))
-
-    def _canvas_configure(self, event: tk.Event[tk.Widget]) -> None:
-        self._sidebar_canvas.itemconfigure(self._sidebar_window, width=event.width)
+        self._frame_selectors: Dict[int, QPushButton] = {}
 
     def _rebuild_selector_layout(self) -> None:
-        for row_index, frame_id in enumerate(self._frame_selectors):
-            self._frame_selectors[frame_id].grid_configure(row=row_index)
+        self._sidebar_layout.invalidate()
 
     def _save_frame(self) -> None:
         data = self.serialize_current_frame()
@@ -113,15 +101,7 @@ class WithSidebar(Base):
         if data is None:
             return
 
-        file_path = filedialog.asksaveasfilename(
-            parent=self._root,
-            title="Save Frame",
-            defaultextension=".json",
-            filetypes=[
-                ("JSON files", "*.json"),
-                ("All files", "*.*"),
-            ],
-        )
+        file_path, _ = QFileDialog.getSaveFileName(self._root, "Save Frame", "", "JSON files (*.json);;All files (*)")
 
         if not file_path:
             return
@@ -130,20 +110,14 @@ class WithSidebar(Base):
             json.dump(data, file, indent=4)
 
     def _load_frame(self) -> None:
-        file_path = filedialog.askopenfilename(
-            parent=self._root,
-            title="Load Frame",
-            filetypes=[
-                ("JSON files", "*.json"),
-                ("All files", "*.*"),
-            ],
-        )
+        file_path, _ = QFileDialog.getOpenFileName(self._root, "Load Frame", "", "JSON files (*.json);;All files (*)")
 
         if not file_path:
             return
 
         with open(file_path, "r", encoding="utf-8") as file:
             data = json.load(file)
+
             match FrameType(data["type"]):
                 case FrameType.CANVAS_VIEWER_WITH_TREES:
                     canvas_frame_with_trees = self.create_frame(data["frame_name"], CanvasViewerWithTrees)
@@ -157,25 +131,30 @@ class WithSidebar(Base):
 
     def _filter_button_click(self) -> None:
         if self._filter_callback is not None:
-            filter_text = self._filter.get("1.0", tk.END).rstrip()
+            filter_text = self._filter.toPlainText().rstrip()
             self._filter_callback(filter_text)
 
-    def create_frame(self, name: str, frame_builder: Callable[[tk.Misc], FrameT]) -> FrameT:
+    def show_frame(self, frame_id: int) -> None:
+        frame = self.get_frame(frame_id)
+        self._frame_container.setCurrentWidget(frame)
+        self._current_frame_id = frame_id
+
+    def create_frame(self, name: str, frame_builder: Callable[[QWidget], FrameT]) -> FrameT:
         frame = frame_builder(self._frame_container)
         frame_id = self._frame_id_counter
         self._frames[frame_id] = frame
         self._frame_names[frame_id] = name
         self._frame_id_counter += 1
-        frame.grid(row=0, column=0, sticky="nsew")
+        self._frame_container.addWidget(frame)
 
-        def selector_click(frame_name: str = name) -> None:
+        def selector_click() -> None:
             self.show_frame(frame_id)
 
-        frame_selector = tk.Button(self._sidebar, text=name, command=selector_click)
+        frame_selector = QPushButton(name, self._sidebar)
+        frame_selector.clicked.connect(selector_click)
 
         self._frame_selectors[frame_id] = frame_selector
-
-        frame_selector.grid(row=len(self._frame_selectors) - 1, column=0, sticky="ew", padx=5, pady=2)
+        self._sidebar_layout.insertWidget(len(self._frame_selectors) - 1, frame_selector)
 
         if self._current_frame_id is None:
             self.show_frame(frame_id)
@@ -184,37 +163,41 @@ class WithSidebar(Base):
 
         return frame
 
-    def get_frame_selector(self, frame_id: int) -> tk.Button:
+    def get_frame_selector(self, frame_id: int) -> QPushButton:
         try:
             return self._frame_selectors[frame_id]
         except KeyError as e:
             raise KeyError(f"No selector button for frame '{frame_id}'.") from e
 
     def delete_frame(self, frame_id: int) -> None:
+        frame = self.get_frame(frame_id)
+        self._frame_container.removeWidget(frame)
         super().delete_frame(frame_id)
 
         selector = self.get_frame_selector(frame_id)
-
-        selector.destroy()
+        self._sidebar_layout.removeWidget(selector)
+        selector.deleteLater()
         del self._frame_selectors[frame_id]
-
         self._rebuild_selector_layout()
 
     def set_filter_callback(self, callback: Callable[[str], None]) -> None:
         self._filter_callback = callback
 
     def set_filter_text(self, text: str) -> None:
-        self._filter.delete("1.0", tk.END)
-        self._filter.insert("1.0", text)
+        self._filter.setPlainText(text)
 
     def clear(self) -> None:
+        for frame in self._frames.values():
+            self._frame_container.removeWidget(frame)
+
         super().clear()
 
         for selector in self._frame_selectors.values():
-            selector.destroy()
+            self._sidebar_layout.removeWidget(selector)
+            selector.deleteLater()
 
         self._frame_selectors.clear()
-        self._filter.delete("1.0", tk.END)
+        self._filter.clear()
 
     def serialize_current_frame(self) -> Dict[str, Any] | None:
         if self._current_frame_id is None:

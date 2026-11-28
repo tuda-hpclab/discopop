@@ -8,7 +8,9 @@
 
 from typing import List, Tuple, Dict, Set, TYPE_CHECKING, Any
 from copy import deepcopy
-import tkinter as tk
+
+from PySide6.QtCore import QPoint, QRectF
+from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsTextItem
 
 from discopop_gui.Constants import TREE_NODES_SPACING, TREE_NODE_RADIUS
 from discopop_gui.Enums.ViewerMode import ViewerMode
@@ -28,8 +30,8 @@ class TreeNode:
         base_node: BaseTreeNode,
         visible: bool,
         popup: Popup,
-        oval_id: int,
-        text_id: int,
+        oval: QGraphicsEllipseItem,
+        text: QGraphicsTextItem,
         x_offset: int,
         y_offset: int,
     ):
@@ -37,26 +39,24 @@ class TreeNode:
         self._visible = visible
         self._canvas = canvas
         self._popup = popup
-        self._oval_id: int = oval_id
-        self._text_id: int = text_id
+        self._oval = oval
+        self._text = text
         self._higher_order_connections_shown: bool = False
         self._lower_order_connections_shown: bool = False
         self._higher_order_main_connection: MainEdge[int] | None = None
         self._lower_order_main_connections: Dict[int, MainEdge[int]] = {}
-        self._higher_order_dependency_connections: Dict[int, Tuple[int, List[DependencyEdge[int]]]] = {}
-        self._lower_order_dependency_connections: Dict[int, Tuple[int, List[DependencyEdge[int]]]] = {}
+        self._higher_order_dependency_connections: Dict[int, Tuple[QGraphicsLineItem, List[DependencyEdge[int]]]] = {}
+        self._lower_order_dependency_connections: Dict[int, Tuple[QGraphicsLineItem, List[DependencyEdge[int]]]] = {}
         self._higher_order_main_hide_request: bool = True
         self._lower_order_main_hide_requests: Set[int] = set()
         self._lower_order_main_x_offset_data: Dict[int, Tuple[int, Tuple[int, int] | None]] = {}
         self._x_offset: int = x_offset
         self._y_offset: int = y_offset
 
-        self._canvas.addtag_withtag("tree_node", self._oval_id)
-        self._canvas.addtag_withtag("tree_node", self._text_id)
-        self._canvas.tag_bind(self._oval_id, "<Button-1>", self._on_left_press)
-        self._canvas.tag_bind(self._oval_id, "<Button-3>", self._on_right_press)
-        self._canvas.tag_bind(self._text_id, "<Button-1>", self._on_left_press)
-        self._canvas.tag_bind(self._text_id, "<Button-3>", self._on_right_press)
+        self._canvas.bind_item(self._oval, 1, self._on_left_press)
+        self._canvas.bind_item(self._oval, 3, self._on_right_press)
+        self._canvas.bind_item(self._text, 1, self._on_left_press)
+        self._canvas.bind_item(self._text, 3, self._on_right_press)
 
     def serialize(self) -> Dict[str, Any]:
         return {
@@ -65,7 +65,7 @@ class TreeNode:
             "lower_order_connections_shown": self._lower_order_connections_shown,
             "higher_order_main_connection": (
                 {
-                    "state": self._canvas.itemcget(self._higher_order_main_connection.get_canvas_edge_id(), "state"),
+                    "state": "normal" if self._higher_order_main_connection.get_canvas_edge().isVisible() else "hidden",
                     "data": self._higher_order_main_connection.serialize(),
                 }
                 if self._higher_order_main_connection is not None
@@ -73,7 +73,7 @@ class TreeNode:
             ),
             "higher_order_dependency_connections": {
                 str(higher_order_dependency_connection_id): {
-                    "state": self._canvas.itemcget(edge_data[0], "state"),
+                    "state": "normal" if edge_data[0].isVisible() else "hidden",
                     "data": [edge.serialize() for edge in edge_data[1]],
                 }
                 for (
@@ -97,12 +97,8 @@ class TreeNode:
     def deserialize(self, data: Dict[str, Any]) -> None:
         self._visible = data["visible"]
 
-        if self._visible:
-            self._canvas.itemconfigure(self._oval_id, state="normal")
-            self._canvas.itemconfigure(self._text_id, state="normal")
-        else:
-            self._canvas.itemconfigure(self._oval_id, state="hidden")
-            self._canvas.itemconfigure(self._text_id, state="hidden")
+        self._oval.setVisible(self._visible)
+        self._text.setVisible(self._visible)
 
         self._higher_order_connections_shown = data["higher_order_connections_shown"]
         self._lower_order_connections_shown = data["lower_order_connections_shown"]
@@ -119,10 +115,10 @@ class TreeNode:
             )._lower_order_main_connections[self._base_node.id] = self._higher_order_main_connection
 
         for higher_order_dependency_connection_id, edge_data in data["higher_order_dependency_connections"].items():
-            canvas_edge_id = self._canvas.create_visual_dependency_edge(
+            canvas_edge = self._canvas.create_visual_dependency_edge(
                 self._base_node.id, self._base_node.id, state=edge_data["state"]
             )
-            self._higher_order_dependency_connections[int(higher_order_dependency_connection_id)] = (canvas_edge_id, [])
+            self._higher_order_dependency_connections[int(higher_order_dependency_connection_id)] = (canvas_edge, [])
 
             for edge_serialized in edge_data["data"]:
                 edge = DependencyEdge[int](0, 0, 0)
@@ -148,9 +144,8 @@ class TreeNode:
         }
         self._x_offset = int(data["x_offset"])
         self._y_offset = int(data["y_offset"])
-        self._canvas.tag_lower("tree_edge", "tree_node")
 
-    def _on_show_or_hide_higher_order(self, _: tk.Event) -> str | None:
+    def _on_show_or_hide_higher_order(self) -> None:
         if (self._higher_order_main_connection is None) and (self._base_node.higher_order_main_connection is not None):
             base_node_connection = self._base_node.higher_order_main_connection
             self._canvas.create_visual_node(base_node_connection.id, state="hidden")
@@ -159,7 +154,6 @@ class TreeNode:
             connection.add_lower_order_main_connection(edge)
             self._higher_order_main_connection = edge
             self._higher_order_main_hide_request = True
-            self._canvas.tag_lower("tree_edge", "tree_node")
 
         if self._higher_order_main_hide_request:
             self.visualize_higher_order_connections()
@@ -196,7 +190,7 @@ class TreeNode:
         self._canvas.update_visual_node_offsets()
         return None
 
-    def _on_left_press(self, _: tk.Event) -> str | None:
+    def _on_left_press(self, _: Any) -> str | None:
         if not (self._canvas.get_viewer_mode() == ViewerMode.MAIN):
             return None
 
@@ -279,8 +273,6 @@ class TreeNode:
                 source_node.add_lower_order_dependency_connection(dependency_edge)
                 target_node.add_higher_order_dependency_connection(dependency_edge)
 
-            self._canvas.tag_lower("tree_edge", "tree_node")
-
         if len(self._lower_order_main_hide_requests) > 0:
             self.visualize_lower_order_connections()
             self._lower_order_connections_shown = True
@@ -304,11 +296,11 @@ class TreeNode:
         self._canvas.update_visual_node_offsets()
         return None
 
-    def _on_new_canvas(self, _: tk.Event) -> str | None:
+    def _on_new_canvas(self) -> None:
         self._canvas.add_clone_to_canvas_viewer(self._base_node.id)
         return None
 
-    def _on_right_press(self, event: tk.Event) -> str | None:
+    def _on_right_press(self, event: Any) -> str | None:
         if not (self._canvas.get_viewer_mode() == ViewerMode.MAIN):
             return None
 
@@ -321,9 +313,7 @@ class TreeNode:
                 self._popup.add_button("Hide higher order", self._on_show_or_hide_higher_order)
 
         self._popup.add_button("New canvas", self._on_new_canvas)
-        x = self._canvas.canvasx(event.x)
-        y = self._canvas.canvasy(event.y)
-        self._popup.visualize(x, y)
+        self._popup.show_at(QPoint(int(event.x), int(event.y)))
         return None
 
     def get_id(self) -> int:
@@ -341,13 +331,13 @@ class TreeNode:
 
         return None
 
-    def get_higher_order_dependency_canvas_edge_id(self, base_node_id: int) -> int | None:
+    def get_higher_order_dependency_canvas_edge(self, base_node_id: int) -> QGraphicsLineItem | None:
         if self._higher_order_dependency_connections.get(base_node_id) is not None:
             return self._higher_order_dependency_connections[base_node_id][0]
 
         return None
 
-    def get_lower_order_dependency_canvas_edge_id(self, base_node_id: int) -> int | None:
+    def get_lower_order_dependency_canvas_edge(self, base_node_id: int) -> QGraphicsLineItem | None:
         if self._lower_order_dependency_connections.get(base_node_id) is not None:
             return self._lower_order_dependency_connections[base_node_id][0]
 
@@ -425,14 +415,20 @@ class TreeNode:
         if self._visible:
             self._x_offset = x_offset
             self._y_offset = y_offset
-            self._canvas.coords_unscaled(
-                self._oval_id,
-                x_offset * TREE_NODES_SPACING - TREE_NODE_RADIUS,
-                y_offset * TREE_NODES_SPACING - TREE_NODE_RADIUS,
-                x_offset * TREE_NODES_SPACING + TREE_NODE_RADIUS,
-                y_offset * TREE_NODES_SPACING + TREE_NODE_RADIUS,
+            node_x = x_offset * TREE_NODES_SPACING
+            node_y = y_offset * TREE_NODES_SPACING
+            self._oval.setRect(
+                QRectF(
+                    node_x - TREE_NODE_RADIUS,
+                    node_y - TREE_NODE_RADIUS,
+                    2 * TREE_NODE_RADIUS,
+                    2 * TREE_NODE_RADIUS,
+                )
             )
-            self._canvas.coords_unscaled(self._text_id, x_offset * TREE_NODES_SPACING, y_offset * TREE_NODES_SPACING)
+            self._text.setPos(
+                node_x - self._text.boundingRect().width() / 2,
+                node_y - self._text.boundingRect().height() / 2,
+            )
 
         y_offset_increase = 1 if self._visible else 0
 
@@ -446,8 +442,7 @@ class TreeNode:
             )
 
             if self._visible:
-                self._canvas.coords_unscaled(
-                    connection.get_canvas_edge_id(),
+                connection.get_canvas_edge().setLine(
                     x_offset * TREE_NODES_SPACING,
                     y_offset * TREE_NODES_SPACING,
                     (x_offset + x_offset_data[0]) * TREE_NODES_SPACING,
@@ -458,21 +453,21 @@ class TreeNode:
             return
 
         for connection_id, edge in self._higher_order_dependency_connections.items():
-            self._canvas.coords_unscaled(
-                edge[0],
-                self._canvas.get_visual_node(connection_id).get_location()[0],
-                self._canvas.get_visual_node(connection_id).get_location()[1],
+            source_x, source_y = self._canvas.get_visual_node(connection_id).get_location()
+            edge[0].setLine(
+                source_x,
+                source_y,
                 x_offset * TREE_NODES_SPACING,
                 y_offset * TREE_NODES_SPACING,
             )
 
         for connection_id, edge in self._lower_order_dependency_connections.items():
-            self._canvas.coords_unscaled(
-                edge[0],
+            target_x, target_y = self._canvas.get_visual_node(connection_id).get_location()
+            edge[0].setLine(
                 x_offset * TREE_NODES_SPACING,
                 y_offset * TREE_NODES_SPACING,
-                self._canvas.get_visual_node(connection_id).get_location()[0],
-                self._canvas.get_visual_node(connection_id).get_location()[1],
+                target_x,
+                target_y,
             )
 
     def request_x_space_by_lower_order(self, lower_order_id: int, space_requested: Tuple[int, int] | None) -> None:
@@ -560,16 +555,16 @@ class TreeNode:
 
     def add_higher_order_dependency_connection(self, edge: DependencyEdge[int]) -> None:
         if self._higher_order_dependency_connections.get(edge.get_source_node_id()) is None:
-            canvas_edge_id = self._canvas.get_visual_node(
+            canvas_edge = self._canvas.get_visual_node(
                 edge.get_source_node_id()
-            ).get_lower_order_dependency_canvas_edge_id(self._base_node.id)
+            ).get_lower_order_dependency_canvas_edge(self._base_node.id)
 
-            if canvas_edge_id is None:
-                canvas_edge_id = self._canvas.create_visual_dependency_edge(
+            if canvas_edge is None:
+                canvas_edge = self._canvas.create_visual_dependency_edge(
                     edge.get_source_node_id(), self._base_node.id, state="hidden"
                 )
 
-            self._higher_order_dependency_connections[edge.get_source_node_id()] = (canvas_edge_id, [edge])
+            self._higher_order_dependency_connections[edge.get_source_node_id()] = (canvas_edge, [edge])
         else:
             self._higher_order_dependency_connections[edge.get_source_node_id()][1].append(edge)
 
@@ -579,7 +574,9 @@ class TreeNode:
         self._higher_order_dependency_connections[original_source_node_id][1].remove(edge)
 
         if len(self._higher_order_dependency_connections[original_source_node_id][1]) == 0:
-            self._canvas.delete(self._higher_order_dependency_connections[original_source_node_id][0])
+            visual_edge = self._higher_order_dependency_connections[original_source_node_id][0]
+            if visual_edge.scene() is not None:
+                visual_edge.scene().removeItem(visual_edge)
             self._higher_order_dependency_connections.pop(original_source_node_id)
 
     def add_lower_order_main_connection(self, edge: MainEdge[int]) -> None:
@@ -589,16 +586,16 @@ class TreeNode:
 
     def add_lower_order_dependency_connection(self, edge: DependencyEdge[int]) -> None:
         if self._lower_order_dependency_connections.get(edge.get_target_node_id()) is None:
-            canvas_edge_id = self._canvas.get_visual_node(
+            canvas_edge = self._canvas.get_visual_node(
                 edge.get_target_node_id()
-            ).get_higher_order_dependency_canvas_edge_id(self._base_node.id)
+            ).get_higher_order_dependency_canvas_edge(self._base_node.id)
 
-            if canvas_edge_id is None:
-                canvas_edge_id = self._canvas.create_visual_dependency_edge(
+            if canvas_edge is None:
+                canvas_edge = self._canvas.create_visual_dependency_edge(
                     self._base_node.id, edge.get_target_node_id(), state="hidden"
                 )
 
-            self._lower_order_dependency_connections[edge.get_target_node_id()] = (canvas_edge_id, [edge])
+            self._lower_order_dependency_connections[edge.get_target_node_id()] = (canvas_edge, [edge])
         else:
             self._lower_order_dependency_connections[edge.get_target_node_id()][1].append(edge)
 
@@ -608,7 +605,9 @@ class TreeNode:
         self._lower_order_dependency_connections[original_target_node_id][1].remove(edge)
 
         if len(self._lower_order_dependency_connections[original_target_node_id][1]) == 0:
-            self._canvas.delete(self._lower_order_dependency_connections[original_target_node_id][0])
+            visual_edge = self._lower_order_dependency_connections[original_target_node_id][0]
+            if visual_edge.scene() is not None:
+                visual_edge.scene().removeItem(visual_edge)
             self._lower_order_dependency_connections.pop(original_target_node_id)
 
     def visualize_by_higher_order(self, higher_order_id: int) -> None:
@@ -617,14 +616,14 @@ class TreeNode:
         ):
             raise ValueError("Higher order id is not a higher order connection of this node.")
 
-        self._canvas.itemconfigure(self._oval_id, state="normal")
-        self._canvas.itemconfigure(self._text_id, state="normal")
+        self._oval.setVisible(True)
+        self._text.setVisible(True)
 
         for _, edge in self._higher_order_dependency_connections.items():
-            self._canvas.itemconfigure(edge[0], state="normal")
+            edge[0].setVisible(True)
 
         for _, edge in self._lower_order_dependency_connections.items():
-            self._canvas.itemconfigure(edge[0], state="normal")
+            edge[0].setVisible(True)
 
         self._visible = True
         self._higher_order_main_hide_request = False
@@ -638,14 +637,14 @@ class TreeNode:
             raise ValueError("Lower order id is not a lower order connection of this node.")
 
         self._lower_order_main_hide_requests.remove(lower_order_id)
-        self._canvas.itemconfigure(self._oval_id, state="normal")
-        self._canvas.itemconfigure(self._text_id, state="normal")
+        self._oval.setVisible(True)
+        self._text.setVisible(True)
 
         for _, edge in self._higher_order_dependency_connections.items():
-            self._canvas.itemconfigure(edge[0], state="normal")
+            edge[0].setVisible(True)
 
         for _, edge in self._lower_order_dependency_connections.items():
-            self._canvas.itemconfigure(edge[0], state="normal")
+            edge[0].setVisible(True)
 
         self._visible = True
         self._lower_order_connections_shown = True
@@ -665,8 +664,8 @@ class TreeNode:
         self._higher_order_main_hide_request = True
 
         if self._higher_order_main_hide_request:
-            self._canvas.itemconfigure(self._oval_id, state="hidden")
-            self._canvas.itemconfigure(self._text_id, state="hidden")
+            self._oval.setVisible(False)
+            self._text.setVisible(False)
             self._visible = False
 
             if self._lower_order_connections_shown:
@@ -684,7 +683,7 @@ class TreeNode:
                         ).add_higher_order_dependency_connection(edge)
 
                 if len(edges[1]) == 0:
-                    self._canvas.delete(edges[0])
+                    edges[0].scene().removeItem(edges[0])
                     self._higher_order_dependency_connections.pop(connection_id)
 
             for connection_id, edges in self._lower_order_dependency_connections.copy().items():
@@ -699,14 +698,14 @@ class TreeNode:
                         ).add_lower_order_dependency_connection(edge)
 
                 if len(edges[1]) == 0:
-                    self._canvas.delete(edges[0])
+                    edges[0].scene().removeItem(edges[0])
                     self._lower_order_dependency_connections.pop(connection_id)
 
             for _, edges in self._higher_order_dependency_connections.items():
-                self._canvas.itemconfigure(edges[0], state="hidden")
+                edges[0].setVisible(False)
 
             for _, edges in self._lower_order_dependency_connections.items():
-                self._canvas.itemconfigure(edges[0], state="hidden")
+                edges[0].setVisible(False)
 
     def hide_by_lower_order(self, lower_order_id: int) -> None:
         if lower_order_id not in self._lower_order_main_connections:
@@ -718,8 +717,8 @@ class TreeNode:
         self._lower_order_main_hide_requests.add(lower_order_id)
 
         if len(self._lower_order_main_hide_requests) == len(self._lower_order_main_connections):
-            self._canvas.itemconfigure(self._oval_id, state="hidden")
-            self._canvas.itemconfigure(self._text_id, state="hidden")
+            self._oval.setVisible(False)
+            self._text.setVisible(False)
             self._visible = False
 
             if self._higher_order_main_connection is not None:
@@ -735,7 +734,7 @@ class TreeNode:
                             ).add_higher_order_dependency_connection(edge)
 
                     if len(edges[1]) == 0:
-                        self._canvas.delete(edges[0])
+                        edges[0].scene().removeItem(edges[0])
                         self._higher_order_dependency_connections.pop(connection_id)
 
                 for connection_id, edges in self._lower_order_dependency_connections.copy().items():
@@ -750,21 +749,21 @@ class TreeNode:
                             ).add_lower_order_dependency_connection(edge)
 
                     if len(edges[1]) == 0:
-                        self._canvas.delete(edges[0])
+                        edges[0].scene().removeItem(edges[0])
                         self._lower_order_dependency_connections.pop(connection_id)
 
                 for _, edges in self._higher_order_dependency_connections.items():
-                    self._canvas.itemconfigure(edges[0], state="hidden")
+                    edges[0].setVisible(False)
 
                 for _, edges in self._lower_order_dependency_connections.items():
-                    self._canvas.itemconfigure(edges[0], state="hidden")
+                    edges[0].setVisible(False)
 
             if self._higher_order_connections_shown:
                 self.hide_higher_order_connections()
 
     def visualize_higher_order_connections(self) -> None:
         if self._higher_order_main_hide_request and self._higher_order_main_connection is not None:
-            self._canvas.itemconfigure(self._higher_order_main_connection.get_canvas_edge_id(), state="normal")
+            self._higher_order_main_connection.get_canvas_edge().setVisible(True)
             self._canvas.get_visual_node(
                 self._higher_order_main_connection.get_source_node_id()
             ).visualize_by_lower_order(self._base_node.id)
@@ -784,7 +783,7 @@ class TreeNode:
                     self._canvas.get_visual_node(move_to_id).add_higher_order_dependency_connection(edge)
 
             if len(edges[1]) == 0:
-                self._canvas.delete(edges[0])
+                edges[0].scene().removeItem(edges[0])
                 self._higher_order_dependency_connections.pop(connection_id)
 
         for connection_id, edges in self._lower_order_dependency_connections.copy().items():
@@ -799,13 +798,11 @@ class TreeNode:
                     self._canvas.get_visual_node(move_to_id).add_lower_order_dependency_connection(edge)
 
             if len(edges[1]) == 0:
-                self._canvas.delete(edges[0])
+                edges[0].scene().removeItem(edges[0])
                 self._lower_order_dependency_connections.pop(connection_id)
 
         for connection_id in self._lower_order_main_hide_requests:
-            self._canvas.itemconfigure(
-                self._lower_order_main_connections[connection_id].get_canvas_edge_id(), state="normal"
-            )
+            self._lower_order_main_connections[connection_id].get_canvas_edge().setVisible(True)
             self._canvas.get_visual_node(connection_id).visualize_by_higher_order(self._base_node.id)
 
         self._lower_order_main_hide_requests = set()
@@ -832,7 +829,7 @@ class TreeNode:
 
     def hide_higher_order_connections(self) -> None:
         if self._higher_order_main_connection is not None and not self._higher_order_main_hide_request:
-            self._canvas.itemconfigure(self._higher_order_main_connection.get_canvas_edge_id(), state="hidden")
+            self._higher_order_main_connection.get_canvas_edge().setVisible(False)
             self._canvas.get_visual_node(self._higher_order_main_connection.get_source_node_id()).hide_by_lower_order(
                 self._base_node.id
             )
@@ -841,7 +838,7 @@ class TreeNode:
     def hide_lower_order_connections(self) -> None:
         for connection_id, edge in self._lower_order_main_connections.items():
             if connection_id not in self._lower_order_main_hide_requests:
-                self._canvas.itemconfigure(edge.get_canvas_edge_id(), state="hidden")
+                edge.get_canvas_edge().setVisible(False)
                 self._canvas.get_visual_node(connection_id).hide_by_higher_order(self._base_node.id)
                 self._lower_order_main_hide_requests.add(connection_id)
 
@@ -868,26 +865,37 @@ class TreeNode:
     def recursive_copy_to_canvas(
         self,
         canvas: "ViewableCanvasWithTrees",
-        higher_order_edges: MainEdge[int] | Tuple[int, List[DependencyEdge[int]]] | None = None,
+        higher_order_edges: MainEdge[int] | Tuple[QGraphicsLineItem, List[DependencyEdge[int]]] | None = None,
     ) -> None:
         state: str = "normal" if self._visible else "hidden"
         created = canvas.create_visual_node(self._base_node.id, state)
         cloned_node = canvas.get_visual_node(self._base_node.id)
 
         if higher_order_edges is not None:
-            canvas.tag_lower("tree_edge", "tree_node")
-
             if isinstance(higher_order_edges, MainEdge):
-                cloned_node._higher_order_main_connection = higher_order_edges
+                cloned_edge = canvas.create_visual_main_edge(
+                    higher_order_edges.get_source_node_id(),
+                    higher_order_edges.get_target_node_id(),
+                    state="normal" if higher_order_edges.get_canvas_edge().isVisible() else "hidden",
+                )
+                cloned_node._higher_order_main_connection = cloned_edge
 
                 if canvas.check_highest_visual_node(self._base_node.id):
                     canvas.remove_highest_visual_node_id(self._base_node.id)
                     cloned_node._higher_order_main_hide_request = self._higher_order_main_hide_request
                     cloned_node._higher_order_connections_shown = self._higher_order_connections_shown
             elif isinstance(higher_order_edges, tuple):
-                cloned_node._higher_order_dependency_connections[higher_order_edges[1][0].get_source_node_id()] = (
-                    higher_order_edges[0],
-                    higher_order_edges[1],
+                dependency_edges = [edge.copy() for edge in higher_order_edges[1]]
+                source_id = dependency_edges[0].get_source_node_id()
+                target_id = dependency_edges[0].get_target_node_id()
+                cloned_dependency_edge = canvas.create_visual_dependency_edge(
+                    source_id,
+                    target_id,
+                    state="normal" if higher_order_edges[0].isVisible() else "hidden",
+                )
+                cloned_node._higher_order_dependency_connections[source_id] = (
+                    cloned_dependency_edge,
+                    dependency_edges,
                 )
 
         if created:
@@ -898,17 +906,36 @@ class TreeNode:
             cloned_node._higher_order_main_hide_request = self._higher_order_main_hide_request
 
             for connection_id, edge in self._lower_order_main_connections.items():
-                cloned_canvas_edge_id = self._canvas.clone_item_to_canvas(canvas, edge.get_canvas_edge_id())
-                cloned_edge = MainEdge[int](cloned_canvas_edge_id, self._base_node.id, connection_id)
-                cloned_node._lower_order_main_connections[connection_id] = cloned_edge
-                self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(canvas, cloned_edge)
+                cloned_main_visual_edge: MainEdge[int] = canvas.create_visual_main_edge(
+                    self._base_node.id,
+                    connection_id,
+                    state="normal" if edge.get_canvas_edge().isVisible() else "hidden",
+                )
 
-            for connection_id, (canvas_edge_id, edges) in self._lower_order_dependency_connections.items():
-                cloned_canvas_edge_id = self._canvas.clone_item_to_canvas(canvas, canvas_edge_id)
-                cloned_edges = [edge.copy() for edge in edges]
-                cloned_node._lower_order_dependency_connections[connection_id] = (cloned_canvas_edge_id, cloned_edges)
+                cloned_node._lower_order_main_connections[connection_id] = cloned_main_visual_edge
+                self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(canvas, cloned_main_visual_edge)
+
+            for connection_id, (canvas_edge, edges) in self._lower_order_dependency_connections.items():
+                cloned_dependency_visual_edge: QGraphicsLineItem = canvas.create_visual_dependency_edge(
+                    self._base_node.id,
+                    connection_id,
+                    state="normal" if canvas_edge.isVisible() else "hidden",
+                )
+
+                cloned_edges: List[DependencyEdge[int]] = [edge.copy() for edge in edges]
+
+                cloned_node._lower_order_dependency_connections[connection_id] = (
+                    cloned_dependency_visual_edge,
+                    cloned_edges,
+                )
+
+                cloned_dependency_connection: Tuple[QGraphicsLineItem, List[DependencyEdge[int]]] = (
+                    cloned_dependency_visual_edge,
+                    cloned_edges,
+                )
+
                 self._canvas.get_visual_node(connection_id).recursive_copy_to_canvas(
-                    canvas, cloned_node._lower_order_dependency_connections[connection_id]
+                    canvas, cloned_dependency_connection
                 )
 
         if higher_order_edges is None or (isinstance(higher_order_edges, tuple) and created):

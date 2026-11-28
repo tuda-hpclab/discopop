@@ -599,7 +599,7 @@ class ExplorerIntegrationMixin(ConfigManagerMixinBase):
         from discopop_explorer.discopop_explorer import run as run_explorer
 
         arguments = parse_args(argv)
-        arguments.visualize_on = self.explorer_visualization_frame
+        arguments.visualize_on = self.explorer_visualization_frame  # type: ignore[assignment]
 
         class _TkConsoleWriter:
             def __init__(self, callback: Callable[[str], None], widget: Any) -> None:

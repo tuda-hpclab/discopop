@@ -3,14 +3,23 @@
 # Copyright (c) 2020, Technische Universitaet Darmstadt, Germany
 #
 # This software may be modified and distributed under the terms of
-# the 3-Clause BSD License.  See the LICENSE file in the package base
+# the 3-Clause BSD License. See the LICENSE file in the package base
 # directory for details.
 
 from __future__ import annotations
 
-import tkinter as tk
 import networkx as nx
 from typing import Any, Callable, Dict, List, Set, Tuple
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from discopop_gui.Objects.Frames.Base import Base
 from discopop_gui.Objects.Canvases.RoundedSquareButtons.Mouse import Mouse as MouseButton
@@ -24,187 +33,100 @@ from discopop_gui.Objects.Canvases.Viewables.WithTrees import WithTrees as Viewa
 
 
 class CanvasViewerWithTrees(Base):
-    def __init__(self, parent: tk.Misc, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, parent: QWidget | None = None, *args: Any, **kwargs: Any) -> None:
         super().__init__(parent, *args, **kwargs)
 
         self._selected_option: ViewerMode = ViewerMode.MAIN
         self._canvases: Dict[str, ViewableCanvasWithTrees] = {}
-        self._canvas_selectors: Dict[str, tk.Button] = {}
+        self._canvas_selectors: Dict[str, QPushButton] = {}
         self._active_canvas_id: str | None = None
         self._canvas_id_counter: int = 0
         self._nodes: Dict[int, TreeNode] = {}
         self._highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]] = []
         self._saved_canvases: List[Any] = []
-        self._saved_canvases_loaders_buttons: List[tk.Button] = []
+        self._saved_canvases_loaders_buttons: List[QPushButton] = []
         self._tab_visible = False
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=0)
-        self.grid_columnconfigure(0, weight=1)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._top_container = tk.Frame(self)
-        self._top_container.grid(row=0, column=0, sticky="nsew")
+        self._top_container = QStackedWidget(self)
+        root_layout.addWidget(self._top_container, 1)
 
-        self._top_container.grid_rowconfigure(0, weight=1)
-        self._top_container.grid_columnconfigure(0, weight=1)
+        self._canvas_container = QStackedWidget(self._top_container)
+        self._top_container.addWidget(self._canvas_container)
 
-        self._canvas_container = tk.Frame(self._top_container)
-        self._canvas_container.grid(row=0, column=0, sticky="nsew")
-        self._canvas_container.grid_rowconfigure(0, weight=1)
-        self._canvas_container.grid_columnconfigure(0, weight=1)
+        self._saved_canvases_loaders_container = QWidget(self)
+        saved_container_layout = QVBoxLayout(self._saved_canvases_loaders_container)
+        saved_container_layout.setContentsMargins(4, 2, 4, 2)
+        self._saved_canvases_loaders_container.setFixedHeight(44)
+        saved_scroll_area = QScrollArea(self._saved_canvases_loaders_container)
+        saved_scroll_area.setWidgetResizable(True)
+        self._saved_canvases_loaders_frame = QWidget()
+        self._saved_canvases_loaders_layout = QHBoxLayout(self._saved_canvases_loaders_frame)
+        self._saved_canvases_loaders_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        saved_scroll_area.setWidget(self._saved_canvases_loaders_frame)
+        saved_scroll_area.setFixedHeight(38)
+        saved_container_layout.addWidget(saved_scroll_area)
+        root_layout.addWidget(self._saved_canvases_loaders_container)
+        self._saved_canvases_loaders_container.setVisible(False)
 
-        self._saved_canvases_loaders_container = tk.Frame(self._top_container)
-        self._saved_canvases_loaders_container.place(relx=0.0, rely=1.0, relwidth=1.0, anchor="sw")
-        self._saved_canvases_loaders_container.grid_rowconfigure(0, weight=1)
-        self._saved_canvases_loaders_container.grid_columnconfigure(0, weight=1)
+        self._bottom_container = QWidget(self)
+        bottom_layout = QHBoxLayout(self._bottom_container)
+        bottom_layout.setContentsMargins(2, 2, 2, 2)
+        root_layout.addWidget(self._bottom_container)
 
-        self._saved_canvases_loaders_canvas = tk.Canvas(
-            self._saved_canvases_loaders_container, highlightthickness=0, height=50
-        )
+        self._toolbar = QWidget(self._bottom_container)
+        toolbar_layout = QHBoxLayout(self._toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        self._main = MouseButton(self._toolbar, self.select_main)
+        self._magnifier = MagnifierButton(self._toolbar, self.select_magnifier)
+        self._plus = PlusButton(self._toolbar, self._on_toggle_addable_canvases)
+        toolbar_layout.addWidget(self._main)
+        toolbar_layout.addWidget(self._magnifier)
+        toolbar_layout.addWidget(self._plus)
+        bottom_layout.addWidget(self._toolbar)
 
-        self._saved_canvases_loaders_scrollbar = tk.Scrollbar(
-            self._saved_canvases_loaders_container,
-            orient="horizontal",
-            command=self._saved_canvases_loaders_canvas.xview,
-        )
-
-        self._saved_canvases_loaders_canvas.grid(
-            row=0,
-            column=0,
-            sticky="ew",
-        )
-
-        self._saved_canvases_loaders_scrollbar.grid(
-            row=1,
-            column=0,
-            sticky="ew",
-        )
-
-        self._saved_canvases_loaders_frame = tk.Frame(self._saved_canvases_loaders_canvas)
-
-        self._saved_canvases_loaders_window = self._saved_canvases_loaders_canvas.create_window(
-            (0, 0),
-            window=self._saved_canvases_loaders_frame,
-            anchor="nw",
-        )
-
-        self._saved_canvases_loaders_canvas.configure(
-            xscrollcommand=self._saved_canvases_loaders_scrollbar.set,
-        )
-
-        self._saved_canvases_loaders_frame.bind(
-            "<Configure>",
-            self._saved_canvases_loaders_frame_configure,
-        )
-
-        self._saved_canvases_loaders_canvas.bind(
-            "<Configure>",
-            self._saved_canvases_loaders_configure,
-        )
-
-        self._saved_canvases_loaders_container.lower(self._canvas_container)
-
-        self._bottom_container = tk.Frame(self)
-        self._bottom_container.grid(row=1, column=0, sticky="ew")
-
-        self._bottom_container.grid_rowconfigure(0, weight=1)
-        self._bottom_container.grid_columnconfigure(0, weight=1, uniform="bottom_split")
-        self._bottom_container.grid_columnconfigure(1, weight=1, uniform="bottom_split")
-
-        self._toolbar = tk.Frame(self._bottom_container)
-        self._toolbar.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
-
-        self._main = MouseButton(self._toolbar, command=self.select_main)
-        self._magnifier = MagnifierButton(self._toolbar, command=self.select_magnifier)
-        self._plus = PlusButton(self._toolbar, command=self._on_toggle_addable_canvases)
-
-        self._main.grid(row=0, column=0, padx=4, pady=4)
-        self._magnifier.grid(row=0, column=1, padx=4, pady=4)
-        self._plus.grid(row=0, column=2, padx=4, pady=4)
-
-        self._switcher_container = tk.Frame(self._bottom_container)
-        self._switcher_container.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
-        self._switcher_container.grid_rowconfigure(0, weight=1)
-        self._switcher_container.grid_columnconfigure(0, weight=1)
-
-        self._switcher_canvas = tk.Canvas(self._switcher_container, highlightthickness=0, height=50)
-        self._switcher_scrollbar = tk.Scrollbar(
-            self._switcher_container, orient="horizontal", command=self._switcher_canvas.xview
-        )
-        self._delete_canvas_button = CrossButton(self._switcher_container, command=self.delete_canvas)
-
-        self._switcher_canvas.grid(
-            row=0,
-            column=0,
-            sticky="nsew",
-        )
-
-        self._switcher_scrollbar.grid(
-            row=1,
-            column=0,
-            sticky="nsew",
-        )
-
-        self._delete_canvas_button.grid(
-            row=0,
-            column=1,
-            rowspan=2,
-            padx=(4, 0),
-            pady=2,
-            sticky="nsew",
-        )
-
-        self._switcher_frame = tk.Frame(self._switcher_canvas)
-        self._switcher_frame.grid_rowconfigure(0, weight=1)
-
-        self._switcher_window = self._switcher_canvas.create_window((0, 0), window=self._switcher_frame, anchor="nw")
-        self._switcher_canvas.configure(xscrollcommand=self._switcher_scrollbar.set)
-
-        self._switcher_frame.bind("<Configure>", self._switcher_frame_configure)
-        self._switcher_canvas.bind("<Configure>", self._switcher_canvas_configure)
+        self._switcher_container = QWidget(self._bottom_container)
+        switcher_layout = QHBoxLayout(self._switcher_container)
+        switcher_layout.setContentsMargins(0, 0, 0, 0)
+        switcher_scroll_area = QScrollArea(self._switcher_container)
+        switcher_scroll_area.setWidgetResizable(True)
+        self._switcher_frame = QWidget()
+        self._switcher_layout = QHBoxLayout(self._switcher_frame)
+        self._switcher_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        switcher_scroll_area.setWidget(self._switcher_frame)
+        self._delete_canvas_button = CrossButton(self._switcher_container, self.delete_canvas)
+        switcher_layout.addWidget(switcher_scroll_area, 1)
+        switcher_layout.addWidget(self._delete_canvas_button)
+        bottom_layout.addWidget(self._switcher_container, 1)
 
         self._update_toolbar()
         self._update_switcher_visibility()
 
-    def _switcher_frame_configure(self, _: tk.Event[tk.Widget]) -> None:
-        self._switcher_canvas.configure(scrollregion=self._switcher_canvas.bbox("all"))
-
-    def _switcher_canvas_configure(self, event: tk.Event[tk.Widget]) -> None:
-        self._switcher_canvas.itemconfigure(self._switcher_window, height=event.height)
-
-    def _saved_canvases_loaders_frame_configure(self, _: tk.Event[tk.Widget]) -> None:
-        self._saved_canvases_loaders_canvas.configure(
-            scrollregion=self._saved_canvases_loaders_canvas.bbox("all"),
-        )
-
-    def _saved_canvases_loaders_configure(self, event: tk.Event[tk.Widget]) -> None:
-        self._saved_canvases_loaders_canvas.itemconfigure(
-            self._saved_canvases_loaders_window,
-            height=event.height,
+    def _build_canvas(
+        self,
+        parent: QWidget,
+        canvas_viewer: "CanvasViewerWithTrees",
+        canvas_viewer_mode: ViewerMode,
+        nodes: Dict[int, TreeNode],
+        highest_managed_dependencies: List[Tuple[TreeNode, TreeNode]],
+    ) -> ViewableCanvasWithTrees:
+        return ViewableCanvasWithTrees(
+            parent,
+            canvas_viewer,
+            canvas_viewer_mode,
+            nodes=nodes,
+            highest_managed_dependencies=highest_managed_dependencies,
         )
 
     def _on_toggle_addable_canvases(self) -> None:
-        if self._tab_visible:
-            self._saved_canvases_loaders_container.lower(self._canvas_container)
-            self._tab_visible = False
-            return
-
-        self._saved_canvases_loaders_container.lift()
-        self._tab_visible = True
+        self._tab_visible = not self._tab_visible
+        self._saved_canvases_loaders_container.setVisible(self._tab_visible)
 
     def _on_saved_canvas_loader_clicked(self, index: int) -> None:
         canvas_data = self._saved_canvases[index]
-
-        canvas_id = self.add_canvas(
-            lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(  # noqa: E501
-                parent,
-                canvas_viewer,
-                canvas_viewer_mode,
-                nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies,
-                bg="white",
-            )
-        )
+        canvas_id = self.add_canvas(self._build_canvas)
 
         self.get_canvas(canvas_id).deserialize(canvas_data)
         self._on_toggle_addable_canvases()
@@ -214,36 +136,19 @@ class CanvasViewerWithTrees(Base):
         self._magnifier.set_selected(self._selected_option == ViewerMode.ZOOM)
 
     def _update_switcher_visibility(self) -> None:
-        if len(self._canvases) <= 1:
-            self._switcher_container.grid_remove()
-        else:
-            self._switcher_container.grid(
-                row=0,
-                column=1,
-                sticky="nsew",
-                padx=2,
-                pady=2,
-            )
+        self._switcher_container.setVisible(len(self._canvases) > 1)
 
     def _update_saved_canvases_loaders(self) -> None:
         for button in self._saved_canvases_loaders_buttons:
-            button.destroy()
+            self._saved_canvases_loaders_layout.removeWidget(button)
+            button.deleteLater()
 
         self._saved_canvases_loaders_buttons.clear()
 
         for index in range(len(self._saved_canvases)):
-
-            def callback() -> None:
-                self._on_saved_canvas_loader_clicked(index)
-
-            button = tk.Button(
-                self._saved_canvases_loaders_frame,
-                text=str(index),
-                command=callback,
-            )
-
-            button.grid(row=0, column=index, sticky="ns", padx=5, pady=2)
-
+            button = QPushButton(str(index), self._saved_canvases_loaders_frame)
+            button.clicked.connect(lambda _checked=False, index=index: self._on_saved_canvas_loader_clicked(index))
+            self._saved_canvases_loaders_layout.addWidget(button)
             self._saved_canvases_loaders_buttons.append(button)
 
     def get_canvas(self, canvas_id: str | None = None) -> ViewableCanvasWithTrees:
@@ -261,7 +166,7 @@ class CanvasViewerWithTrees(Base):
     def add_canvas(
         self,
         canvas_builder: Callable[
-            [tk.Frame, "CanvasViewerWithTrees", ViewerMode, Dict[int, TreeNode], List[Tuple[TreeNode, TreeNode]]],
+            [QWidget, "CanvasViewerWithTrees", ViewerMode, Dict[int, TreeNode], List[Tuple[TreeNode, TreeNode]]],
             ViewableCanvasWithTrees,
         ],
     ) -> str:
@@ -271,46 +176,34 @@ class CanvasViewerWithTrees(Base):
             self._canvas_container, self, self._selected_option, self._nodes, self._highest_managed_dependencies
         )
         self._canvases[canvas_id] = new_canvas
-        new_canvas.grid(row=0, column=0, sticky="nsew")
+        self._canvas_container.addWidget(new_canvas)
 
-        selector_button = tk.Button(self._switcher_frame, text=canvas_id, command=lambda: self.show_canvas(canvas_id))
-
+        selector_button = QPushButton(canvas_id, self._switcher_frame)
+        selector_button.clicked.connect(lambda: self.show_canvas(canvas_id))
         self._canvas_selectors[canvas_id] = selector_button
-        selector_button.grid(row=0, column=len(self._canvas_selectors) - 1, sticky="ns", padx=5, pady=2)
+        self._switcher_layout.addWidget(selector_button)
         self._update_switcher_visibility()
         self.show_canvas(canvas_id)
-
         return canvas_id
 
     def delete_canvas(self, canvas_id: str | None = None) -> None:
         if canvas_id is None:
             canvas_id = self._active_canvas_id
 
-        if canvas_id is None:
+        if canvas_id is None or len(self._canvases) <= 1 or canvas_id not in self._canvases:
             return
 
-        if len(self._canvases) <= 1:
-            return
-
-        if canvas_id not in self._canvases:
-            return
-
-        self._canvases[canvas_id].destroy()
-        del self._canvases[canvas_id]
-
-        self._canvas_selectors[canvas_id].destroy()
-        del self._canvas_selectors[canvas_id]
-
+        canvas = self._canvases.pop(canvas_id)
+        self._canvas_container.removeWidget(canvas)
+        canvas.deleteLater()
+        selector = self._canvas_selectors.pop(canvas_id)
+        self._switcher_layout.removeWidget(selector)
+        selector.deleteLater()
         self._update_switcher_visibility()
-
-        for column_index, button_id in enumerate(self._canvas_selectors):
-            self._canvas_selectors[button_id].grid_configure(column=column_index)
 
         if self._active_canvas_id == canvas_id:
             self._active_canvas_id = None
-
-            if self._canvases:
-                self.show_canvas(next(iter(self._canvases)))
+            self.show_canvas(next(iter(self._canvases)))
 
     def delete_all_canvases(self) -> None:
         for canvas_id in list(self._canvases.keys()):
@@ -320,25 +213,23 @@ class CanvasViewerWithTrees(Base):
 
     def show_canvas(self, canvas_id: str) -> None:
         if canvas_id in self._canvases:
-            tk.Widget.lift(self._canvases[canvas_id])
+            self._canvas_container.setCurrentWidget(self._canvases[canvas_id])
             self._active_canvas_id = canvas_id
             self._canvases[canvas_id].set_viewer_mode(self._selected_option)
 
     def select_main(self) -> None:
         self._selected_option = ViewerMode.MAIN
-        active_canvas_id = self._active_canvas_id
 
-        if active_canvas_id:
-            self.get_canvas(active_canvas_id).set_viewer_mode(self._selected_option)
+        if self._active_canvas_id:
+            self.get_canvas(self._active_canvas_id).set_viewer_mode(self._selected_option)
 
         self._update_toolbar()
 
     def select_magnifier(self) -> None:
         self._selected_option = ViewerMode.ZOOM
-        active_canvas_id = self._active_canvas_id
 
-        if active_canvas_id:
-            self.get_canvas(active_canvas_id).set_viewer_mode(self._selected_option)
+        if self._active_canvas_id:
+            self.get_canvas(self._active_canvas_id).set_viewer_mode(self._selected_option)
 
         self._update_toolbar()
 
@@ -355,10 +246,7 @@ class CanvasViewerWithTrees(Base):
         self.delete_all_canvases()
         self._nodes.clear()
         self._highest_managed_dependencies.clear()
-        self._saved_canvases.clear()
-
-        for canvas_data in data["canvases"]:
-            self._saved_canvases.append(canvas_data)
+        self._saved_canvases = list(data["canvases"])
 
         for node_id in data["nodes"].keys():
             node = TreeNode(int(node_id))
@@ -368,20 +256,9 @@ class CanvasViewerWithTrees(Base):
             node.deserialize(data["nodes"][str(node.id)], self._nodes)
 
         for node1_id, node2_id in data["highest_managed_dependencies"]:
-            node1 = self._nodes[node1_id]
-            node2 = self._nodes[node2_id]
-            self._highest_managed_dependencies.append((node1, node2))
+            self._highest_managed_dependencies.append((self._nodes[node1_id], self._nodes[node2_id]))
 
-        canvas_id = self.add_canvas(
-            lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(  # noqa: E501
-                parent,
-                canvas_viewer,
-                canvas_viewer_mode,
-                nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies,
-                bg="white",
-            )
-        )
+        canvas_id = self.add_canvas(self._build_canvas)
 
         self.get_canvas(canvas_id).build_initial()
         self._update_saved_canvases_loaders()
@@ -396,7 +273,6 @@ class CanvasViewerWithTrees(Base):
             node_id = len(self._nodes)
             nodes_to_ids[node] = node_id
             self._nodes[node_id] = TreeNode(node_id)
-
             self._nodes[node_id].metadata.update({"label": node.get_label(), "fill": "cyan"})
 
         seen_edges: Set[Tuple[int, int]] = set()
@@ -438,11 +314,11 @@ class CanvasViewerWithTrees(Base):
             current_destination_node: TreeNode | None = self._nodes[destination_node_id]
 
             while current_source_node is not None and source_height > destination_height:
-                current_source_node = self._nodes[current_source_node.id].higher_order_main_connection
+                current_source_node = current_source_node.higher_order_main_connection
                 source_height -= 1
 
             while current_destination_node is not None and destination_height > source_height:
-                current_destination_node = self._nodes[current_destination_node.id].higher_order_main_connection
+                current_destination_node = current_destination_node.higher_order_main_connection
                 destination_height -= 1
 
             while (
@@ -450,8 +326,8 @@ class CanvasViewerWithTrees(Base):
                 and current_destination_node is not None
                 and current_source_node.id != current_destination_node.id
             ):
-                current_source_node = self._nodes[current_source_node.id].higher_order_main_connection
-                current_destination_node = self._nodes[current_destination_node.id].higher_order_main_connection
+                current_source_node = current_source_node.higher_order_main_connection
+                current_destination_node = current_destination_node.higher_order_main_connection
 
             if current_source_node is not None and current_destination_node is not None:
                 self._nodes[current_source_node.id].managed_dependencies.append(
@@ -462,15 +338,6 @@ class CanvasViewerWithTrees(Base):
                     (self._nodes[source_node_id], self._nodes[destination_node_id])
                 )
 
-        canvas_id = self.add_canvas(
-            lambda parent, canvas_viewer, canvas_viewer_mode, nodes, highest_managed_dependencies: ViewableCanvasWithTrees(  # noqa: E501
-                parent,
-                canvas_viewer,
-                canvas_viewer_mode,
-                nodes=nodes,
-                highest_managed_dependencies=highest_managed_dependencies,
-                bg="white",
-            )
-        )
+        canvas_id = self.add_canvas(self._build_canvas)
 
         self.get_canvas(canvas_id).build_initial()

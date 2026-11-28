@@ -6,8 +6,9 @@
 # the 3-Clause BSD License.  See the LICENSE file in the package base
 # directory for details.
 
-import tkinter as tk
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, cast
+
+from PySide6.QtWidgets import QGridLayout, QWidget
 
 from discopop_gui.Types.FrameT import FrameT
 from discopop_gui.Enums.FrameType import FrameType
@@ -17,19 +18,20 @@ from discopop_gui.Objects.Frames.CanvasViewerWithTrees import CanvasViewerWithTr
 
 
 class MultiFrame(Base):
-    def __init__(self, parent: tk.Misc, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, parent: QWidget | None = None, *args: Any, **kwargs: Any) -> None:
         super().__init__(parent, *args, **kwargs)
         self._inner_frames: list[Base] = []
+        self._layout = QGridLayout(self)
 
     def initialize(self, inner_frames: list[Base]) -> None:
         self._inner_frames = inner_frames
 
-    def get_from_inner(self, index: int) -> tk.Frame:
+    def get_from_inner(self, index: int) -> Base:
         return self._inner_frames[index]
 
-    def create_frame(self, row: int, column: int, frame_builder: Callable[[tk.Misc], FrameT]) -> FrameT:
+    def create_frame(self, row: int, column: int, frame_builder: Callable[[QWidget], FrameT]) -> FrameT:
         frame = frame_builder(self)
-        frame.grid(row=row, column=column, sticky="nsew")
+        self._layout.addWidget(frame, row, column)
         self._inner_frames.append(frame)
         return frame
 
@@ -37,12 +39,18 @@ class MultiFrame(Base):
         output: Dict[str, Any] = {"inner_frames": []}
 
         for frame in self._inner_frames:
+            layout_index = self._layout.indexOf(frame)
+
+            row, column, _, _ = cast(
+                tuple[int, int, int, int],
+                self._layout.getItemPosition(layout_index),
+            )
 
             output["inner_frames"].append(
                 {
                     "type": FramesMap[frame.__class__.__name__].value,
-                    "row": frame.grid_info()["row"],
-                    "column": frame.grid_info()["column"],
+                    "row": row,
+                    "column": column,
                     "data": frame.serialize(),
                 }
             )
@@ -50,6 +58,10 @@ class MultiFrame(Base):
         return output
 
     def deserialize(self, data: Dict[str, Any]) -> None:
+        for frame in self._inner_frames:
+            self._layout.removeWidget(frame)
+            frame.deleteLater()
+
         self._inner_frames = []
 
         for frame_data in data["inner_frames"]:
